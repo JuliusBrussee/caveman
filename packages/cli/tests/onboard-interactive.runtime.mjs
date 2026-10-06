@@ -60,6 +60,7 @@ function deps(tty, overrides = {}) {
     signIn: async () => ({ email: "you@example.com" }),
     discloseTelemetry: async () => tty.output.write("[disclosure]\n"),
     markFirstRun: async () => {},
+    markDeclined: () => tty.output.write("[declined]\n"),
     input: tty.input,
     output: tty.output,
     ...overrides,
@@ -89,7 +90,7 @@ test("answering No writes nothing", async () => {
   await tty.press(/Continue\?/, "n");
   const result = await run;
   assert.deepEqual([result.confirmed, result.cancelled], [false, false]);
-  assert.match(tty.text(), /Continue\? › No\nNothing changed\.\n$/);
+  assert.match(tty.text(), /Continue\? › No\n\[declined\]\nNothing changed · caveman setup when you want it\n$/);
   assert.equal(existsSync(configPath), false);
 });
 
@@ -170,6 +171,50 @@ function hasExpect() {
     return false;
   }
 }
+
+function expectRun(script, env) {
+  return new Promise((resolve, reject) => {
+    const child = spawn("expect", [script], { env, stdio: ["ignore", "pipe", "pipe"] });
+    let text = "";
+    child.stdout.on("data", (d) => (text += d));
+    child.stderr.on("data", (d) => (text += d));
+    child.on("exit", (code) => resolve({ code, text: text.replace(/\r/g, "") }));
+    child.on("error", reject);
+  });
+}
+
+test("end to end: a No at the agent door is remembered; caveman claude stops asking", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
+  const box = modulesFixture();
+  const env = { ...box.env, TERM: "xterm" };
+  delete env.CI;
+  const first = join(box.home, "first.exp");
+  writeFileSync(first, [
+    "set timeout 20",
+    `spawn -noecho ${process.execPath} ${cli} claude`,
+    'expect "space toggles"', "sleep 0.2", 'send "\\r"',
+    'expect "Agents"', "sleep 0.2", 'send "\\r"',
+    'expect "Continue?"', "sleep 0.6", 'send "n"',
+    "expect eof",
+    "",
+  ].join("\n"));
+  const second = join(box.home, "second.exp");
+  writeFileSync(second, [
+    "set timeout 20",
+    `spawn -noecho ${process.execPath} ${cli} claude`,
+    'expect { "space toggles" { puts "\\nASKED-AGAIN"; exit 3 } eof { exit 0 } }',
+    "",
+  ].join("\n"));
+  try {
+    const declined = await expectRun(first, env);
+    assert.match(declined.text, /Nothing changed · Claude Code runs this session only · caveman setup when you want it/);
+    assert.equal(existsSync(join(box.home, ".claude", "settings.json")), false);
+    const again = await expectRun(second, env);
+    assert.equal(again.code, 0, again.text);
+    assert.doesNotMatch(again.text, /ASKED-AGAIN|space toggles/);
+  } finally {
+    box.cleanup();
+  }
+});
 
 test("end to end: caveman setup in a terminal against a Cloud that refuses sign-in (403)", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
   const server = createServer((req, res) => {

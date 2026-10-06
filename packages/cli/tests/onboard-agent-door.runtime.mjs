@@ -19,6 +19,8 @@ function doorEnv() {
   writeFileSync(join(bin, "claude"), "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'claude 2.1.0'; exit 0; fi\nprintf 'agent:%s\\n' \"$*\"\n", { mode: 0o755 });
   writeFileSync(join(bin, "caveman-mcp"), "#!/bin/sh\nif [ \"$1\" = version ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
   writeFileSync(join(bin, "caveman-proxy"), "#!/bin/sh\nif [ \"$1\" = version ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
+  // Every module binary is stubbed so setup never downloads.
+  writeFileSync(join(bin, "noop"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
   // Proxy off so the session-only wrap launches the stub without a listener.
   writeFileSync(join(home, "cloud.json"), JSON.stringify({ wrap: { proxy: false, shrink: false, mcp: false, browse: false } }));
   const env = {
@@ -31,8 +33,12 @@ function doorEnv() {
     PATH: `${bin}:${process.env.PATH}`,
     CAVEMAN_MCP_BIN: join(bin, "caveman-mcp"),
     CAVEMAN_PROXY_BIN: join(bin, "caveman-proxy"),
+    CAVEMAN_ENGINE_BIN: join(bin, "noop"),
+    CAVEMEM_BIN: join(bin, "noop"),
+    CAVEMAN_SHRINK_BIN: join(bin, "noop"),
+    CAVEMAN_BROWSE_BIN: join(bin, "noop"),
+    CAVE_GATEWAY_URL: "http://127.0.0.1:9",
   };
-  delete env.CAVE_GATEWAY_URL;
   delete env.CLAUDE_CONFIG_DIR;
   delete env.ANTHROPIC_BASE_URL;
   return { env, home };
@@ -74,6 +80,37 @@ test("caveman claude after setup launches through the native door as before", { 
     assert.equal(out.code, 0, out.stderr);
     assert.equal(out.stdout, "agent:-p hi\n", "direct launch, no temp wrap pack");
     assert.ok(existsSync(join(home, "integrations", "claude.json")));
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("after setup, an agent setup left out runs session-only and says how to add it", { skip }, async () => {
+  const { env, home } = doorEnv();
+  try {
+    const setup = await run(env, ["setup", "--yes", "--only", "browse"]);
+    assert.equal(setup.code, 0, setup.stderr);
+    const out = await run(env, ["claude", "-p", "hi"]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stderr, /^Claude Code isn't set up for Caveman · caveman setup to add it$/m);
+    assert.match(out.stdout, /agent:--plugin-dir \S*caveman-wrap-claude-\S* -p hi/, "session-only wrap");
+    assert.equal(existsSync(join(home, ".claude", "settings.json")), false, "no Claude settings written");
+    assert.equal(existsSync(join(home, "integrations", "claude.json")), false, "no native install journaled");
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("a user from before setup existed, with a native journal and no modules, launches as before", { skip }, async () => {
+  const { env, home } = doorEnv();
+  try {
+    const enabled = await run(env, ["enable", "claude"]);
+    assert.equal(enabled.code, 0, enabled.stderr);
+    assert.equal(JSON.parse(readFileSync(join(home, "cloud.json"), "utf8")).modules, undefined, "precondition: setup never ran");
+    const out = await run(env, ["claude", "-p", "hi"]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout, "agent:-p hi\n", "the journal is consent: direct launch, no first run, no wrap");
+    assert.doesNotMatch(out.stderr, /isn't set up/);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

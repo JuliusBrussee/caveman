@@ -101,14 +101,14 @@ function runLockedClaude(routes, { harness = "pi", mutateDuringCheck = false } =
   });
 }
 
-// `caveman claude` defaults to the persistent native enable, but when the
-// native path can't hold (here: caveman-mcp/proxy binaries missing) it must
-// warn and fall back to exactly the `caveman wrap claude` behavior: launch the
-// agent with the local-proxy base URL injected.
-test("caveman claude falls back to wrap when native enable cannot hold", async () => {
+// The door never wires an agent nobody agreed to: after a setup that left
+// Claude out (no native journal), `caveman claude` says how to add it and runs
+// exactly the `caveman wrap claude` behavior: the agent with the local-proxy
+// base URL injected.
+test("caveman claude after a setup that left Claude out runs the session-only wrap", async () => {
   const out = await runShortcut("claude", ["claude"]);
   assert.equal(out.code, 0, `cli exited ${out.code}: ${out.stderr}`);
-  assert.match(out.stderr, /native enable failed: .*using session-only wrap for this run/);
+  assert.match(out.stderr, /^Claude Code isn't set up for Caveman · caveman setup to add it$/m);
   const [agentArgs, baseURL] = out.stdout.split("|");
   assert.equal(userAgentArgs(agentArgs), "", "no user args should be added");
   assert.equal(baseURL, "http://127.0.0.1:8787/w/claude", "ANTHROPIC_BASE_URL must point at the attributed local proxy");
@@ -218,13 +218,16 @@ function runWithEnv(env, cliArgs) {
   });
 }
 
-test("caveman claude enables the native integration and launches the agent directly", async () => {
+// Wiring is consented to once (`caveman setup`, or `caveman enable claude`
+// here); from then on `caveman claude` launches the host binary directly.
+test("caveman claude launches an enabled agent directly", async () => {
   const { env, home } = nativeShortcutEnv();
+  const enabled = await runWithEnv(env, ["enable", "claude"]);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  assert.match(enabled.stderr, /native Caveman enabled/);
+  assert.ok(existsSync(join(home, "integrations", "claude.json")), "enable must journal the native install");
   const out = await runWithEnv(env, ["claude", "-p", "hi"]);
   assert.equal(out.code, 0, `cli exited ${out.code}: ${out.stderr}`);
-  assert.match(out.stderr, /caveman enable claude: planned user-scoped writes/);
-  assert.match(out.stderr, /native Caveman enabled/);
-  assert.ok(existsSync(join(home, "integrations", "claude.json")), "enable must journal the native install");
   const settings = readFileSync(join(home, ".claude", "settings.json"), "utf8");
   assert.match(settings, /ANTHROPIC_BASE_URL/, "native install must own routing in Claude settings");
   const [agentArgs, baseURL] = out.stdout.split("|");
@@ -257,7 +260,7 @@ test("caveman claude --remote-control never installs routing the host will refus
 
 test("caveman claude --remote-control names the native install that still routes it (#1101)", async () => {
   const { env, home } = nativeShortcutEnv();
-  const enabled = await runWithEnv(env, ["claude", "-p", "hi"]);
+  const enabled = await runWithEnv(env, ["enable", "claude"]);
   assert.equal(enabled.code, 0, `cli exited ${enabled.code}: ${enabled.stderr}`);
   assert.ok(existsSync(join(home, "integrations", "claude.json")), "precondition: native install journaled");
 
@@ -287,7 +290,7 @@ test("caveman claude --help never installs persistent integration", async () => 
 // callers see a signal death, not a clean exit.
 test("process-directed SIGTERM reaches the child and re-raises on the launcher", async () => {
   const { env, home } = nativeShortcutEnv();
-  const setup = await runWithEnv(env, ["claude", "-p", "hi"]);
+  const setup = await runWithEnv(env, ["enable", "claude"]);
   assert.equal(setup.code, 0, `enable run exited ${setup.code}: ${setup.stderr}`);
   const pidFile = join(home, "stub.pid");
   const binDir = dirname(env.CAVEMAN_MCP_BIN);

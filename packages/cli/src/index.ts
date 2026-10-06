@@ -51,7 +51,7 @@ import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
 import { cloudConfigPath, legacyCloudDir } from "./modules/config-home.js";
 import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
-import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupRan, type OnboardAgent, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
+import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
 // RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
 export { nextDevicePollIntervalMs } from "./device-auth.generated.js";
 import {
@@ -505,7 +505,7 @@ function printDiscovery(group: CommandGroup, all = false): void {
 
 function resolveInvocation(raw: string[]): ResolvedInvocation {
   // Bare `caveman` (and `npx caveman`) in a terminal before any setup is the first run.
-  if (raw.length === 0 && onboardInteractive() && !setupRan()) return { verb: "setup", argv: [], handler: setup };
+  if (raw.length === 0 && onboardInteractive() && !setupRan() && !setupDeclined()) return { verb: "setup", argv: [], handler: setup };
   const top = raw[0] ?? "help";
   if (top === "--help") return { verb: "help", argv: [], handler: help };
   if (top === "--version") return { verb: "version", argv: [], handler: LEGACY_HANDLERS.version! };
@@ -812,7 +812,7 @@ function deferDisclosureToOnboarding(): boolean {
     const options = parseOnboardArgs(currentInvocation.argv);
     return Boolean(options && !("error" in options) && !options.dryRun);
   }
-  return currentInvocation.handler === agentShortcut && !setupRan();
+  return currentInvocation.handler === agentShortcut && !setupRan() && !setupDeclined();
 }
 
 function isHelpLikeInvocation(): boolean {
@@ -3518,6 +3518,7 @@ function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promi
       await ensureTelemetryDefault();
     },
     markFirstRun: markFirstRunDone,
+    markDeclined: () => mutateRawConfig((out) => { out.setupDeclinedAt = new Date().toISOString(); }),
     ...(launching ? { launching: agentShortName(launching) } : {}),
   });
 }
@@ -5519,11 +5520,17 @@ async function agentShortcut(rest: string[]) {
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
   if (existsSync(join(process.cwd(), ".caveman", "agent.lock.json"))) return wrap(rest);
-  // Before any setup nothing machine-wide is written without Continue: the
-  // first run asks, and declining (or no terminal to ask in) runs this session
-  // only. An agent left unticked keeps the session-only door too.
-  if (!setupRan()) {
-    if (!onboardInteractive() || !which(binOf(agent))) return wrap(rest);
+  // Nothing machine-wide is written without consent. A native journal is
+  // consent (users from before setup existed launch exactly as before). After
+  // setup, an agent it left out runs session-only until `caveman setup` adds
+  // it. Before setup the first run asks once; declining, or no terminal to ask
+  // in, runs this session only.
+  if (!readNativeJournal(native)) {
+    if (setupRan()) {
+      process.stderr.write(`${agentShortName(agent)} isn't set up for Caveman · ${invokedAs()} setup to add it\n`);
+      return wrap(rest);
+    }
+    if (setupDeclined() || !onboardInteractive() || !which(binOf(agent))) return wrap(rest);
     const result = await runOnboarding({ yes: false, dryRun: false }, agent);
     if (result.cancelled) {
       process.exitCode = 130;

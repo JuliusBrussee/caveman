@@ -24,6 +24,9 @@ export type OnboardDeps = {
   signIn(ui: SignInUi): Promise<{ email?: string }>;
   discloseTelemetry(): Promise<void>;
   markFirstRun(): Promise<void>;
+  // A No is remembered: the agent door and bare `caveman` stop asking, and
+  // `caveman setup` is the way back.
+  markDeclined(): void;
   // Set when `caveman <agent>` continues into the agent after setup.
   launching?: string;
   input?: NodeJS.ReadStream;
@@ -56,14 +59,23 @@ export function parseOnboardArgs(argv: string[]): OnboardOptions | { error: stri
   return opts;
 }
 
+function storedConfig(): Record<string, unknown> {
+  try {
+    const parsed = JSON.parse(readFileSync(cloudConfigPath(), "utf8")) as unknown;
+    return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  } catch {
+    return {};
+  }
+}
+
 // Setup has run once the module state exists in the cloud config.
 export function setupRan(): boolean {
-  try {
-    const modules = (JSON.parse(readFileSync(cloudConfigPath(), "utf8")) as { modules?: unknown }).modules;
-    return Boolean(modules) && typeof modules === "object" && !Array.isArray(modules);
-  } catch {
-    return false;
-  }
+  const modules = storedConfig().modules;
+  return Boolean(modules) && typeof modules === "object" && !Array.isArray(modules);
+}
+
+export function setupDeclined(): boolean {
+  return typeof storedConfig().setupDeclinedAt === "string";
 }
 
 export function onboardInteractive(): boolean {
@@ -123,7 +135,9 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     if (yes === null) return cancelled(out, c);
     await deps.markFirstRun();
     if (!yes) {
-      out.write(`${c.dim("Nothing changed.")}\n`);
+      deps.markDeclined();
+      const session = deps.launching ? ` · ${deps.launching} runs this session only` : "";
+      out.write(`${c.dim(`Nothing changed${session} · ${deps.cmd} setup when you want it`)}\n`);
       return { confirmed: false, cancelled: false, ok: true, plan };
     }
   }
