@@ -1662,7 +1662,10 @@ type countingWriter struct {
 	firstByteAt time.Time
 }
 
-func (c *countingWriter) Write(p []byte) (int, error) {
+// write is deliberately not io.Writer's Write: copyFlush is its only caller,
+// and satisfying io.Writer let static analysis treat any io.Writer.Write in the
+// module (e.g. the engine CLI's stdout) as a write into this HTTP response.
+func (c *countingWriter) write(p []byte) (int, error) {
 	if c.firstByteAt.IsZero() && len(p) > 0 {
 		c.firstByteAt = time.Now()
 	}
@@ -1704,7 +1707,7 @@ func copyFlush(dst *countingWriter, src io.Reader) (int64, error) {
 	for {
 		nr, er := src.Read(buf)
 		if nr > 0 {
-			nw, ew := dst.Write(buf[:nr])
+			nw, ew := dst.write(buf[:nr])
 			if f, ok := dst.w.(http.Flusher); ok {
 				f.Flush()
 			}

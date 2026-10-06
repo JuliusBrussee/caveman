@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"slices"
 )
 
 type Span struct{ Start, End int }
@@ -141,11 +142,7 @@ func ReplaceRaw(body []byte, span Span, replacement []byte) ([]byte, error) {
 	if !json.Valid(replacement) {
 		return nil, fmt.Errorf("json splice: replacement is not valid JSON")
 	}
-	out := make([]byte, 0, len(body)-(span.End-span.Start)+len(replacement))
-	out = append(out, body[:span.Start]...)
-	out = append(out, replacement...)
-	out = append(out, body[span.End:]...)
-	return out, nil
+	return slices.Concat(body[:span.Start], replacement, body[span.End:]), nil
 }
 
 // AppendObjectFields inserts fields immediately before an object's closing

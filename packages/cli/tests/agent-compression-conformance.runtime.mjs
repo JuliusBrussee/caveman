@@ -201,7 +201,8 @@ async function conformanceUpstream() {
       } catch (error) {
         errors.push(String(error.stack || error));
         response.writeHead(500, { "content-type": "application/json" });
-        response.end(JSON.stringify({ error: { message: String(error.message || error) } }));
+        // Details stay in `errors` (asserted empty below); the agent under test only needs the failure.
+        response.end(JSON.stringify({ error: { message: "conformance stub rejected the request" } }));
         return;
       }
       response.writeHead(200, { "content-type": "application/json" });
@@ -494,7 +495,7 @@ test("every shipped profile's selected supported transport preserves recovery th
       const requestsBefore = upstream.requests.length;
       upstream.expectPrompt(id, originalPrompt);
       const out = await runCli(cli, ["wrap", id], { env, cwd: suiteDir, timeoutMs: 15_000 });
-      assert.equal(out.code, 0, `${id} failed:\n${out.stderr}`);
+      assert.equal(out.code, 0, `${id} failed:\n${out.stderr}\n${upstream.errors.join("\n")}`);
       assert.match(out.stdout, new RegExp(`^${id}:${responseSentinel}`, "m"), `${id} did not receive unchanged response`);
       assert.equal(upstream.errors.length, 0, upstream.errors.join("\n"));
       assert.equal(upstream.requests.length - requestsBefore, 2, `${id} needs initial compression and an actual retrieval continuation`);

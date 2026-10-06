@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -286,7 +287,7 @@ func demoteProtectedHeadText(head []Message) []Message {
 				"type": "text",
 				"text": `[Opening turn <user t="` + strconv.Itoa(idx) + `"> of this session — PRIOR CONTEXT ONLY, ` +
 					`superseded by later turns; NOT the current request and must not be acted ` +
-					`on. Preview: "` + preview + `"]`,
+					`on. Preview: "` + strings.ReplaceAll(strings.ReplaceAll(preview, `\`, `\\`), `"`, `\"`) + `"]`,
 			}
 			if cc != nil {
 				block["cache_control"] = cc
@@ -487,7 +488,7 @@ func collapseAnthropicHistory(messages []Message, profitable func(text string, c
 		return messages, info, nil
 	}
 
-	syntheticContent := make([]any, 0, len(imageBlocks)+4)
+	syntheticContent := make([]any, 0, len(imageBlocks))
 	syntheticContent = append(syntheticContent, map[string]any{"type": "text", "text": HistorySyntheticIntro})
 	for _, b := range imageBlocks {
 		syntheticContent = append(syntheticContent, b)
@@ -509,9 +510,5 @@ func collapseAnthropicHistory(messages []Message, profitable func(text string, c
 	if carryOverOrdinal >= 0 {
 		info.CarryOverImageOrdinal = &carryOverOrdinal
 	}
-	out := make([]Message, 0, len(head)+1+len(tail))
-	out = append(out, head...)
-	out = append(out, syntheticUser)
-	out = append(out, tail...)
-	return out, info, nil
+	return slices.Concat(head, []Message{syntheticUser}, tail), info, nil
 }

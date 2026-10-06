@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,7 +123,7 @@ func geminiBillingUsage(tokens map[string]any) (fresh, cached, output int, prese
 		return 0, 0, 0, false
 	}
 	fresh64 := input64 - cached64
-	if uint64(fresh64) > uint64(^uint(0)>>1) || uint64(cached64) > uint64(^uint(0)>>1) || uint64(out64) > uint64(^uint(0)>>1) {
+	if fresh64 < 0 || cached64 < 0 || out64 < 0 || fresh64 > math.MaxInt || cached64 > math.MaxInt || out64 > math.MaxInt {
 		return 0, 0, 0, false
 	}
 	return int(fresh64), int(cached64), int(out64), true
@@ -136,7 +137,7 @@ func geminiContextTotal(tokens map[string]any) (int, bool) {
 	// total = input + output + thoughts + tool while cached remains a subset of
 	// input, so adding cached would double-count the prompt just like Codex.
 	input := int64FromAny(tokens["input"])
-	if input <= 0 || uint64(input) > uint64(^uint(0)>>1) {
+	if input <= 0 || input > math.MaxInt {
 		return 0, false
 	}
 	return int(input), true

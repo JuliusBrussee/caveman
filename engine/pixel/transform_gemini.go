@@ -309,7 +309,7 @@ func geminiGlobalMediaResolution(raw map[string]json.RawMessage) (string, bool) 
 }
 
 func marshalGeminiGenerateContent(req geminiGenerateContent) ([]byte, error) {
-	raw := make(map[string]json.RawMessage, len(req.extra)+3)
+	raw := make(map[string]json.RawMessage, len(req.extra))
 	for k, v := range req.extra {
 		raw[k] = v
 	}
@@ -527,7 +527,7 @@ func transformGeminiSystem(req *geminiGenerateContent, inst *geminiInstruction, 
 	}
 	// pxpipe src/core/transform.ts:135-136 and 1749 keep rendered images out of
 	// system; Gemini accepts text-only systemInstruction parts.
-	renderedPrefix := make([]geminiPart, 0, rendered.imageCount+len(keptParts)+3)
+	var renderedPrefix []geminiPart
 	renderedPrefix = append(renderedPrefix, rendered.parts...)
 	if facts := FactSheetText(split.staticText, 0); facts != "" {
 		renderedPrefix = append(renderedPrefix, geminiTextPart(facts))

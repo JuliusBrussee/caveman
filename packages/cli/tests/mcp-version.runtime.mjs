@@ -100,6 +100,6 @@ test("hung pre-versioned MCP is bounded, explicit, and never installed", async (
   const elapsed = Date.now() - started;
   assert.equal(out.code, 0, out.stderr);
   assert.ok(elapsed >= 1_800 && elapsed < 5_000, `probe elapsed ${elapsed}ms; want hard 2s bound`);
-  assert.match(out.stderr, new RegExp(`caveman-mcp pre-versioned is older than ${cliVersion.replace(/\./g, "\\.")} — update before compressing`));
+  assert.ok(out.stderr.includes(`caveman-mcp pre-versioned is older than ${cliVersion} — update before compressing`), out.stderr);
   assert.equal(existsSync(join(f.caveHome, "mcp", "codex.json")), false, "stale MCP must not be installed");
 });

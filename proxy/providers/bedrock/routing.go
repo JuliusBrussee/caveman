@@ -188,7 +188,7 @@ func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, rout
 		if !mantleActionAllowed(req.URL.Path) {
 			return nil, fmt.Errorf("bedrock Mantle path %q is not allowed", req.URL.Path)
 		}
-		base, err = resolveMantleBase(base, region)
+		base, err = resolveMantleBase(base)
 		if err != nil {
 			return nil, err
 		}
@@ -230,13 +230,16 @@ func mantleActionAllowed(path string) bool {
 	}
 }
 
-func resolveMantleBase(base *url.URL, region string) (*url.URL, error) {
-	if kind, _, ok := bedrockHostKind(base.Hostname()); ok {
+// resolveMantleBase derives the Mantle host only from the configured base host.
+// resolveRegion already forces any x-cave-aws-region header to equal that host's
+// region, so taking the region from the host keeps caller input out of the URL.
+func resolveMantleBase(base *url.URL) (*url.URL, error) {
+	if kind, hostRegion, ok := bedrockHostKind(base.Hostname()); ok {
 		if kind == endpointMantle {
 			clone := *base
 			return &clone, nil
 		}
-		return url.Parse(MantleBaseURL(region))
+		return url.Parse(MantleBaseURL(hostRegion))
 	}
 	// Local/self-hosted test endpoints use the configured base and only swap the
 	// path. Production rejects non-Bedrock hosts below.

@@ -193,7 +193,7 @@ window.cavemanTest={transcript(){return[...tr.querySelectorAll("div")].map(d=>d.
     const events = [];
     ws.onmessage = (m) => {
       const j = JSON.parse(m.data);
-      if (j.type === "success" || j.type === "error") { const p = pending.get(j.id); if (p) { pending.delete(j.id); p(j); } }
+      if (j.type === "success" || j.type === "error") { const p = pending.get(j.id); if (typeof p === "function") { pending.delete(j.id); p(j); } }
       else if (j.type === "event") events.push(j);
     };
     const cmd = (method, params = {}) => new Promise((res, rej) => {

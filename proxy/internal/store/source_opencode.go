@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"sort"
@@ -279,7 +280,7 @@ func opencodeBillingUsage(tokens map[string]any) (fresh, output int, present boo
 	}
 	fresh64 := int64FromAny(tokens["input"])
 	out64 := int64FromAny(tokens["output"])
-	if fresh64 < 0 || out64 < 0 || uint64(fresh64) > uint64(^uint(0)>>1) || uint64(out64) > uint64(^uint(0)>>1) {
+	if fresh64 < 0 || out64 < 0 || fresh64 > math.MaxInt || out64 > math.MaxInt {
 		return 0, 0, false
 	}
 	return int(fresh64), int(out64), true
@@ -312,7 +313,7 @@ func opencodeCacheUsage(tokens map[string]any) (read, creation int, present bool
 	}
 	read64 := int64FromAny(cache["read"])
 	write64 := int64FromAny(cache["write"])
-	if read64 < 0 || write64 < 0 || uint64(read64) > uint64(^uint(0)>>1) || uint64(write64) > uint64(^uint(0)>>1) {
+	if read64 < 0 || write64 < 0 || read64 > math.MaxInt || write64 > math.MaxInt {
 		return 0, 0, false
 	}
 	return int(read64), int(write64), true

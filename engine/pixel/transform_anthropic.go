@@ -369,7 +369,7 @@ func TransformAnthropic(body []byte, opts TransformOptions) (out []byte, info Tr
 				processedExisting = append(processedExisting, block)
 			}
 		}
-		content := make([]any, 0, len(imageBlocks)+len(processedExisting)+2)
+		var content []any
 		for _, block := range imageBlocks {
 			content = append(content, block)
 		}
@@ -442,7 +442,7 @@ func TransformAnthropic(body []byte, opts TransformOptions) (out []byte, info Tr
 				continue
 			}
 			content := normalizeContentToBlocks(reparsed.messages[i].Content)
-			next := make([]any, 0, len(content)+1)
+			next := make([]any, 0, len(content))
 			for _, block := range content {
 				next = append(next, block)
 			}

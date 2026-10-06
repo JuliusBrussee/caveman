@@ -76,7 +76,7 @@ func (c *terminalCompressor) Compress(input []byte) ([]byte, bool) {
 		ln = collapseCarriageReturns(ln) // intra-line \r redraws → final state
 		ln = ansiRe.ReplaceAll(ln, nil)  // strip display control sequences
 		if lineCR {
-			ln = append(append(make([]byte, 0, len(ln)+1), ln...), '\r')
+			ln = append(ln[:len(ln):len(ln)], '\r') // cap==len: append copies, never writes into input
 		}
 		lines[i] = ln
 	}

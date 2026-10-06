@@ -54,7 +54,7 @@ func falseyModelList(v string) bool {
 
 func modelCandidates(model string) []string {
 	segs := strings.FieldsFunc(model, func(r rune) bool { return r == '.' || r == '/' })
-	out := make([]string, 0, 1+len(segs)*4)
+	var out []string
 	out = appendModelCandidate(out, model)
 	for i := range segs {
 		if segs[i] == "" {

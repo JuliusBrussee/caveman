@@ -3,6 +3,7 @@
 package pixel
 
 import (
+	"fmt"
 	"math"
 	"regexp"
 	"strings"
@@ -700,6 +701,11 @@ func renderMultiColChunkFromLines(lines []string, cols, numCols, charsCovered, l
 	usedRows := min(len(lines), rowsPerCol)
 	if usedRows < 1 {
 		usedRows = 1
+	}
+	// The only caller clamps to the standard canvas; enforce it here before the
+	// frame-buffer size is computed so a bad caller can't overflow the allocation.
+	if width < 1 || width > MaxWidthPx || usedRows > LinesPerImage {
+		return RenderedImage{}, fmt.Errorf("pixel: multi-column canvas out of bounds (width %d, rows %d)", width, usedRows)
 	}
 	height := 2*PadY + usedRows*CellH
 	fb := make([]uint8, width*height)

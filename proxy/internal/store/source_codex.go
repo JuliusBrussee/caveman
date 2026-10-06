@@ -3,6 +3,7 @@ package store
 import (
 	"bufio"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -106,7 +107,7 @@ func codexContextTotal(usage map[string]any) (int, bool) {
 	// Codex/OpenAI input_tokens already includes cached input. Cached tokens are
 	// a subset and must never be added again.
 	ctx64 := int64FromAny(usage["input_tokens"])
-	if ctx64 <= 0 || uint64(ctx64) > uint64(^uint(0)>>1) {
+	if ctx64 <= 0 || ctx64 > math.MaxInt {
 		return 0, false
 	}
 	return int(ctx64), true
@@ -139,7 +140,7 @@ func codexBillingUsage(usage map[string]any) (fresh, cached, output int, present
 		return 0, 0, 0, false
 	}
 	fresh64 := input64 - cached64
-	if uint64(fresh64) > uint64(^uint(0)>>1) || uint64(cached64) > uint64(^uint(0)>>1) || uint64(out64) > uint64(^uint(0)>>1) {
+	if fresh64 < 0 || cached64 < 0 || out64 < 0 || fresh64 > math.MaxInt || cached64 > math.MaxInt || out64 > math.MaxInt {
 		return 0, 0, 0, false
 	}
 	return int(fresh64), int(cached64), int(out64), true

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 
@@ -243,10 +244,7 @@ func transformOpenAIResponsesPixelLiveZone(body []byte, inputSpan gatewayJSONSpa
 		if !ok {
 			return nil, pixel.TransformInfo{Reason: "not_profitable"}, nil
 		}
-		raw := make([]byte, 0, len(parts)+64)
-		raw = append(raw, `[{"type":"message","role":"user","content":[`...)
-		raw = append(raw, parts...)
-		raw = append(raw, `]}]`...)
+		raw := slices.Concat([]byte(`[{"type":"message","role":"user","content":[`), parts, []byte(`]}]`))
 		return applyPixelReplacements(body, []pixelReplacement{{span: inputSpan, raw: raw, before: before, after: after, imageCount: imageCount, imageBytes: imageBytes}})
 	}
 	if inputSpan.start >= inputSpan.end || body[inputSpan.start] != '[' {

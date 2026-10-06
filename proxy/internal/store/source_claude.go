@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -112,7 +113,7 @@ func claudeBillingUsage(obj map[string]any) (fresh, output int, present bool) {
 	}
 	fresh64 := int64FromAny(usage["input_tokens"])
 	out64 := int64FromAny(usage["output_tokens"])
-	if fresh64 < 0 || out64 < 0 || uint64(fresh64) > uint64(^uint(0)>>1) || uint64(out64) > uint64(^uint(0)>>1) {
+	if fresh64 < 0 || out64 < 0 || fresh64 > math.MaxInt || out64 > math.MaxInt {
 		return 0, 0, false
 	}
 	return int(fresh64), int(out64), true
@@ -133,7 +134,7 @@ func claudeCacheUsage(obj map[string]any) (read, creation int, present bool) {
 	}
 	read64 := int64FromAny(usage["cache_read_input_tokens"])
 	creation64 := int64FromAny(usage["cache_creation_input_tokens"])
-	if read64 < 0 || creation64 < 0 || uint64(read64) > uint64(^uint(0)>>1) || uint64(creation64) > uint64(^uint(0)>>1) {
+	if read64 < 0 || creation64 < 0 || read64 > math.MaxInt || creation64 > math.MaxInt {
 		return 0, 0, false
 	}
 	return int(read64), int(creation64), true
