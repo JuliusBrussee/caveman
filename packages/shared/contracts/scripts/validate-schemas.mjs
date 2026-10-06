@@ -133,6 +133,33 @@ for (const [ask, valid] of [
 ]) {
   if (validateRouteAsk(routeAsk(ask)) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(ask)} should be ${valid ? "valid" : "invalid"}`);
 }
+// What the request declares, what the session's previous request ran, and Cloud's state.
+const request = { endpoint: "messages", effort: "high", thinking: "adaptive", per_message_off: false };
+const last = { model: "claude-opus-5-5", effort: "low", age_s: 42, input_tokens: 52000, cache_read_tokens: 50000, cache_write_tokens: 1200, compacted: false };
+for (const [extra, valid] of [
+  [{ request }, true],
+  [{ request: { ...request, labels: { "x-claude-code-agent-id": "a1" }, tool_names: ["Read", "Bash"] }, last, state: "opaque", parent_state: "parent" }, true],
+  [{ request: { ...request, endpoint: "chat", effort: "", thinking: "" } }, true],
+  [{ request, parent_state: "s".repeat(4096) }, true],
+  [{ request: { ...request, endpoint: "embeddings" } }, false],
+  [{ request: { effort: "high", thinking: "", per_message_off: false } }, false],
+  [{ request: { ...request, thinking: "sometimes" } }, false],
+  [{ request: { ...request, model: "x" } }, false],
+  [{ request: { ...request, labels: { "X-Claude-Code-Agent-Id": "a1" } } }, false],
+  [{ request: { ...request, labels: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`x-${i}`, "v"])) } }, false],
+  [{ request: { ...request, labels: { "x-codex-turn-metadata": "v".repeat(257) } } }, false],
+  [{ request: { ...request, tool_names: Array.from({ length: 129 }, (_, i) => `t${i}`) } }, false],
+  [{ request: { ...request, tool_names: ["n".repeat(65)] } }, false],
+  [{ request, last: { ...last, compacted: undefined } }, false],
+  [{ request, last: { ...last, age_s: -1 } }, false],
+  [{ request, state: "" }, false],
+  [{ request, state: "s".repeat(4097) }, false],
+]) {
+  const body = { ...routeAsk({ text: "fix the login bug" }), ...JSON.parse(JSON.stringify(extra)) };
+  if (validateRouteAsk(body) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(extra).slice(0, 200)} should be ${valid ? "valid" : "invalid"}`);
+}
+// A compaction or side request carries no ask.
+if (!validateRouteAsk({ ...routeAsk(), request })) throw new Error("route-ask-v1: a body without the ask must be valid");
 
 // OpenAPI: every relative $ref must land on a schema file (and JSON pointer) in this package.
 const openapiPath = path.join(packageRoot, "openapi", "middleware.openapi.json");

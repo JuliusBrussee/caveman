@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- `route-ask-v1` (additive): optional, strict `request` (`endpoint`, `labels`
+  of nine allowlisted headers, `tool_names`, `effort`, `thinking`,
+  `per_message_off`), `last` (the session's previous request: `model`,
+  `effort`, `age_s`, `input_tokens`, `cache_read_tokens`,
+  `cache_write_tokens`, `compacted`), and opaque `state` / `parent_state`
+  (at most 4096 bytes). The runtime now asks for every routable request:
+  `ask` goes only on a turn's first ask and is left out for compaction and
+  side requests, which are answered per request. The description names the
+  answer's new fields: `effort`, `effort_mode` (`message` | `top` | `""`) and
+  `state`; `model` may cost more than the asked one.
 - `route-ask-v1` (additive): optional, strict `ask`
   object next to `signals` — `text` (required, non-blank, at most 131072 bytes),
   `prev_text` and `reply_tail` (at most 16384 bytes each) and `turn`
