@@ -623,3 +623,36 @@ func TestRejectedModelKeepsTheAskOnTheAskedModel(t *testing.T) {
 		t.Fatalf("next = %+v, cloud hits %d", next, hits.Load())
 	}
 }
+
+// A login rewrites cloud.json; the secret cached from the keychain is dropped
+// at once, so no ask goes out with the old login's credential.
+func TestKeychainSecretIsDroppedWhenTheLoginChanges(t *testing.T) {
+	home := t.TempDir()
+	write := func(org string) {
+		raw, _ := json.Marshal(map[string]any{"baseURL": "https://api.example.test", "tokenStore": "keychain", "organizationId": org, "modules": map[string]any{"routing": true}})
+		if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	var secret atomic.Value
+	secret.Store(`{"access_token":"login-a"}`)
+	write("org-a")
+	link := New(home, nil)
+	link.keychain = func() string { return secret.Load().(string) }
+	waitFor := func(want string) {
+		t.Helper()
+		for deadline := time.Now().Add(2 * time.Second); link.settings().access != want; time.Sleep(5 * time.Millisecond) {
+			if time.Now().After(deadline) {
+				t.Fatalf("credential = %q, want %q", link.settings().access, want)
+			}
+		}
+	}
+	waitFor("login-a")
+	secret.Store(`{"access_token":"login-b"}`)
+	time.Sleep(10 * time.Millisecond)
+	write("org-b-longer")
+	if got := link.settings().access; got == "login-a" {
+		t.Fatal("the old login's secret is still in use after cloud.json changed")
+	}
+	waitFor("login-b")
+}

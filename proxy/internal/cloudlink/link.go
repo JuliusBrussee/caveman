@@ -168,7 +168,10 @@ func (l *Link) keychainSecret(refresh bool) string {
 	l.kmu.Lock()
 	defer l.kmu.Unlock()
 	if refresh && !l.kbusy {
-		l.kbusy = true
+		// cloud.json changed (a login, logout or token refresh rewrites it): the
+		// old secret may be dead, so ask nothing with it while the read runs.
+		// ponytail: any cloud.json write blanks the credential for one read.
+		l.kcache, l.kbusy = "", true
 		go func() {
 			secret := l.keychain()
 			l.kmu.Lock()
