@@ -336,3 +336,22 @@ test("login derives the local sibling gateway when none is given", async () => {
 
   server.close();
 });
+
+// Signing in again to the same Cloud without the flag keeps the gateway chosen
+// earlier: only a different Cloud, or logout, resets the choice.
+test("signing in again keeps an explicitly chosen gateway", async () => {
+  const { server } = startStub({ gatewayUrl: "https://gateway.example.test" });
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1", CAVEMAN_OFFLINE: "1" };
+  delete env.CAVE_TOKEN;
+  delete env.CAVE_GATEWAY_URL;
+  const base = `http://127.0.0.1:${port}`;
+  assert.equal((await runCli(["login", "--no-browser", "--base-url", base, "--gateway-url", "http://127.0.0.1:9876"], env)).code, 0);
+  assert.equal((await runCli(["login", "--no-browser", "--base-url", base], env)).code, 0);
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
+  assert.equal(cfg.gatewayUrl, "http://127.0.0.1:9876");
+  assert.equal(cfg.managedGateway, true);
+  server.close();
+});

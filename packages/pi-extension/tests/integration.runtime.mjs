@@ -229,9 +229,9 @@ test("open gate: the gateway comes from $CAVEMAN_HOME/cloud.json, not the old co
   const fx = fixture(port);
   try {
     delete fx.env.CAVE_GATEWAY_URL;
-    writeFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ gatewayUrl: `http://127.0.0.1:${port}` }));
+    writeFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ gatewayUrl: `http://127.0.0.1:${port}`, managedGateway: true }));
     mkdirSync(join(fx.env.HOME, ".caveman-cloud"), { recursive: true });
-    writeFileSync(join(fx.env.HOME, ".caveman-cloud", "config.json"), JSON.stringify({ gatewayUrl: "http://127.0.0.1:1" }));
+    writeFileSync(join(fx.env.HOME, ".caveman-cloud", "config.json"), JSON.stringify({ gatewayUrl: "http://127.0.0.1:1", managedGateway: true }));
     const out = await runPi(fx.env, [
       "--extension", stubProviderExtension, "--extension", extension,
       "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",

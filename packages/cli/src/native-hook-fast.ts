@@ -45,13 +45,17 @@ function caveHome(): string {
 
 // localGatewayEndpoint resolves the gateway target and returns its host/port
 // only when it is a loopback proxy — the only case where a dead port means
-// "the local proxy needs restarting". Managed gateways (CAVE_GATEWAY_URL /
-// persisted gatewayUrl off-loopback) return undefined and never pay a
-// per-prompt delegate spawn. Default mirrors the full CLI's PROXY_ADDR.
+// "the local proxy needs restarting". Managed gateways (CAVE_GATEWAY_URL, or a
+// gatewayUrl chosen at login, managedGateway) off-loopback return undefined and
+// never pay a per-prompt delegate spawn. Signing in alone keeps the local
+// proxy. Default mirrors the full CLI's PROXY_ADDR.
 function localGatewayEndpoint(): { host: string; port: number } | undefined {
   let gw: unknown = process.env.CAVE_GATEWAY_URL;
   if (typeof gw !== "string" || !gw.trim()) {
-    try { gw = object(JSON.parse(readFileSync(cloudConfigPath(), "utf8"))).gatewayUrl; } catch { /* local default */ }
+    try {
+      const config = object(JSON.parse(readFileSync(cloudConfigPath(), "utf8")));
+      if (config.managedGateway === true) gw = config.gatewayUrl;
+    } catch { /* local default */ }
   }
   if (typeof gw !== "string" || !gw.trim()) return { host: "127.0.0.1", port: 8787 };
   try {

@@ -27,6 +27,8 @@ function cavemanHome(): string {
 
 // The CLI's config is $CAVEMAN_HOME/cloud.json; the pre-v4
 // ~/.caveman-cloud/config.json counts only while the new file does not exist.
+// Its gatewayUrl is the traffic target only when chosen at login
+// (managedGateway); signing in alone keeps the local proxy.
 function gatewayUrl(): string {
   const env = process.env.CAVE_GATEWAY_URL?.trim();
   if (env) return env;
@@ -39,7 +41,7 @@ function gatewayUrl(): string {
     }
     try {
       const config = JSON.parse(raw);
-      if (typeof config.gatewayUrl === "string" && config.gatewayUrl) return config.gatewayUrl;
+      if (config.managedGateway === true && typeof config.gatewayUrl === "string" && config.gatewayUrl) return config.gatewayUrl;
     } catch { /* unreadable config — default below */ }
     break;
   }

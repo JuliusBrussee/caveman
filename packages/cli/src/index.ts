@@ -10680,14 +10680,18 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   };
   const tokenStore = storeCredentials(credentials);
   const organizationId = orgFromToken(accessToken);
-  const gateway = instance ? "" : resolveLoginGatewayUrl(baseURL, tok, code as unknown as Record<string, unknown>, argv);
+  // Signing in again to the same Cloud keeps a gateway chosen earlier.
+  const previous = await readRawConfig();
+  const explicitGateway = Boolean(flagFrom(argv, "--gateway-url", "") || process.env.CAVE_GATEWAY_URL);
+  const kept = !instance && !explicitGateway && previous.managedGateway === true && previous.baseURL === baseURL && typeof previous.gatewayUrl === "string" ? previous.gatewayUrl : "";
+  const gateway = instance ? "" : kept || resolveLoginGatewayUrl(baseURL, tok, code as unknown as Record<string, unknown>, argv);
   const saved: Config = { baseURL, token: "", tokenStore };
   if (organizationId) saved.organizationId = organizationId;
   if (credentials.project_id) saved.projectId = credentials.project_id;
   if (gateway) saved.gatewayUrl = gateway;
   // Only an explicit gateway choice moves agent traffic; the stored gateway
   // otherwise serves Cloud calls alone.
-  if (gateway && (flagFrom(argv, "--gateway-url", "") || process.env.CAVE_GATEWAY_URL)) saved.managedGateway = true;
+  if (gateway && (explicitGateway || kept)) saved.managedGateway = true;
   // Persist the complete local login state before the server-side receipt fence:
   // an ACK may permanently purge the replay bundle, so a config write that fails
   // must leave the grant retryable rather than acknowledging an undiscoverable
