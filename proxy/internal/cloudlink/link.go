@@ -405,7 +405,8 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if text.Text == "" {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
 	}
-	key := sha256.Sum256([]byte(ask.SessionID + "\x00" + ask.Provider + "\x00" + ask.Model + "\x00" + text.Text))
+	// The turn tells a repeated short ask ("yes") apart; it holds within a tool loop.
+	key := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", ask.SessionID, ask.Provider, ask.Model, text.Turn, text.Text)))
 	// Every tool-loop turn of one ask reuses its answer, failures included, so
 	// a turn never switches model halfway; a pause only stops new asks.
 	l.mu.Lock()
@@ -496,11 +497,13 @@ type askText struct {
 
 // askTextFor reads askText out of an Anthropic Messages, OpenAI chat or OpenAI
 // Responses body in one walk over its message spans; only text blocks are
-// decoded. A human turn is a user message with text whose input group (the
-// items between two model outputs) carries no tool result: the text that rides
-// along with tool results (an agent's injected reminders) belongs to the tool
-// loop, so a loop keeps its decision. Each field is cut to its bound on a rune
-// boundary.
+// decoded. Turns are input groups, the items between two model outputs. A
+// group with a tool result belongs to the tool loop, text riding along
+// (injected reminders, an interrupt note) included, so a loop keeps its
+// decision. Any other group with user text is one human turn, read from its
+// last user message: an agent's opening context messages come before the ask.
+// Each field keeps its end within its bound, cut on a rune boundary: agents
+// put their context first and the person's words last.
 func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
 	field := "messages"
 	if strings.HasSuffix(endpoint, "/responses") {
@@ -511,45 +514,47 @@ func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
 		if strings.TrimSpace(text) == "" {
 			return askText{}
 		}
-		return askText{Text: truncate(text, askTextMax)}
+		return askText{Text: tail(text, askTextMax)}
 	}
 	items, _ := jsonsplice.Elements(body, list)
 	var out askText
 	humans, replied := 0, false
-	var group []string // the current input group's user texts, newest first
-	tooled := false    // the current input group carries a tool result
+	text, said, tooled := "", false, false // the current group's last user text; whether it has one; a tool result
 	flush := func() {
-		if !tooled {
-			for _, text := range group {
-				switch humans {
-				case 0:
-					out.Text = truncate(text, askTextMax)
-				case 1:
-					out.PrevText = truncate(text, askSideMax)
-				}
-				humans++
+		if said && !tooled {
+			switch humans {
+			case 0:
+				out.Text = tail(text, askTextMax)
+			case 1:
+				out.PrevText = tail(text, askSideMax)
 			}
+			humans++
 		}
-		group, tooled = group[:0], false
+		text, said, tooled = "", false, false
 	}
 	for i := len(items) - 1; i >= 0; i-- {
 		role, _ := jsonsplice.StringField(body, items[i], "role")
 		kind, _ := jsonsplice.StringField(body, items[i], "type")
 		switch {
 		case role == "user":
-			text, ok, tool := messageText(body, items[i], "text", "input_text")
+			if said { // an earlier user message of the group: only a tool result matters
+				_, _, tool := messageText(body, items[i])
+				tooled = tooled || tool
+				continue
+			}
+			got, ok, tool := messageText(body, items[i], "text", "input_text")
 			tooled = tooled || tool
 			if ok {
-				group = append(group, text)
+				text, said = got, true
 			}
-		case role == "tool" || strings.HasSuffix(kind, "_call_output"):
+		case role == "tool" || role == "function" || strings.HasSuffix(kind, "_output") || kind == "mcp_approval_response":
 			tooled = true
 		case role == "system" || role == "developer":
 		default: // a model output: an assistant message, a tool call, reasoning
 			flush()
 			if role == "assistant" && humans > 0 && !replied {
-				if text, ok, _ := messageText(body, items[i], "text", "output_text"); ok {
-					out.ReplyTail, replied = tail(text, askSideMax), true
+				if got, ok, _ := messageText(body, items[i], "text", "output_text"); ok {
+					out.ReplyTail, replied = tail(got, askSideMax), true
 				}
 			}
 		}
@@ -584,20 +589,24 @@ func messageText(body []byte, message jsonsplice.Span, types ...string) (text st
 }
 
 // askBody is the ask's JSON within askBodyMax. Escaping can grow text past it
-// (a control byte encodes as six), so then text keeps its longest head that
+// (a control byte encodes as six), so then text keeps its longest end that
 // fits. The other fields always fit: even escaped they stay under 200 KiB.
+// Nil when the text left is blank: Cloud refuses a blank text.
 func askBody(ask routeAsk) []byte {
 	raw := encodeAsk(ask)
-	if len(raw) <= askBodyMax {
-		return raw
+	if len(raw) > askBodyMax {
+		text := ask.Ask.Text
+		n := sort.Search(len(text)+1, func(n int) bool {
+			ask.Ask.Text = tail(text, n)
+			return len(encodeAsk(ask)) > askBodyMax
+		}) - 1
+		ask.Ask.Text = tail(text, n)
+		raw = encodeAsk(ask)
 	}
-	text := ask.Ask.Text
-	n := sort.Search(len(text)+1, func(n int) bool {
-		ask.Ask.Text = truncate(text, n)
-		return len(encodeAsk(ask)) > askBodyMax
-	}) - 1
-	ask.Ask.Text = truncate(text, n)
-	return encodeAsk(ask)
+	if strings.TrimSpace(ask.Ask.Text) == "" {
+		return nil
+	}
+	return raw
 }
 
 // encodeAsk is JSON without HTML escaping: an agent's <tags> and && stay one
@@ -636,6 +645,9 @@ func signalsFor(ask gateway.RouteAsk) signals {
 
 func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, text askText, models []string, deadline time.Time) gateway.RouteAnswer {
 	raw := askBody(routeAsk{Models: models, Signals: signalsFor(ask), Ask: text})
+	if raw == nil {
+		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
+	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.gateway+"/v1/route", bytes.NewReader(raw))

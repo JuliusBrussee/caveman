@@ -166,6 +166,75 @@ func TestAskTextFromEachShape(t *testing.T) {
 			want: askText{Text: "B", PrevText: "A", ReplyTail: "R", Turn: 1},
 		},
 		{
+			// Accepted: a redirect typed after an interrupt rides with the tool
+			// result, so it is not sent; the next human turn decides again.
+			name:     "interrupt then type",
+			endpoint: "/v1/messages",
+			body: `{"messages":[
+				{"role":"user","content":"fix the bug"},
+				{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"rejected"},{"type":"text","text":"[Request interrupted by user for tool use]"},{"type":"text","text":"do it in Go instead"}]}]}`,
+			want: askText{Text: "fix the bug"},
+		},
+		{
+			// codex-rs's opening order (no captured Codex body in this repo):
+			// permissions, AGENTS.md, environment, then the prompt. One group,
+			// one human turn: the prompt.
+			name:     "codex opening input",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>workspace-write</permissions instructions>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nrun make test\n</INSTRUCTIONS>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the flaky test"}]}]}`,
+			want: askText{Text: "fix the flaky test"},
+		},
+		{
+			name:     "codex second turn",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>workspace-write</permissions instructions>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the flaky test"}]},
+				{"type":"reasoning","summary":[]},
+				{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+				{"type":"function_call_output","call_id":"c1","output":"ok"},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixed: the test raced the clock."}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"now run the suite"}]}]}`,
+			want: askText{Text: "now run the suite", PrevText: "fix the flaky test", ReplyTail: "Fixed: the test raced the clock.", Turn: 1},
+		},
+		{
+			name:     "legacy chat function result",
+			endpoint: "/v1/chat/completions",
+			body: `{"messages":[
+				{"role":"user","content":"ask"},
+				{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{}"}},
+				{"role":"function","name":"f","content":"result"},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "responses mcp approval response",
+			endpoint: "/v1/responses",
+			body: `{"input":[
+				{"role":"user","content":"ask"},
+				{"type":"mcp_approval_request","id":"a1","name":"t","arguments":"{}","server_label":"s"},
+				{"type":"mcp_approval_response","approval_request_id":"a1","approve":true},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "responses tool search output",
+			endpoint: "/v1/responses",
+			body: `{"input":[
+				{"role":"user","content":"ask"},
+				{"type":"tool_search_call","id":"s1"},
+				{"type":"tool_search_output","call_id":"s1"},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
 			name:     "responses user message next to a tool output",
 			endpoint: "/v1/responses",
 			body: `{"input":[
@@ -235,34 +304,41 @@ func TestToolLoopKeepsTheAsk(t *testing.T) {
 	}
 }
 
-// Each field keeps its bound on a rune boundary: text and prev_text their head,
-// reply_tail its end.
-func TestAskTextCutsOnRuneBoundaries(t *testing.T) {
+// Each field keeps its end within its bound, cut on a rune boundary: Claude
+// Code puts its reminders first and the person's words last.
+func TestAskTextKeepsTheEnds(t *testing.T) {
 	long := "a" + strings.Repeat("é", 100_000) // a cut at an even offset lands mid-rune
 	body, _ := json.Marshal(map[string]any{"messages": []map[string]any{
-		{"role": "user", "content": long},
+		{"role": "user", "content": long + "PRV"},
 		{"role": "assistant", "content": long + "END"},
-		{"role": "user", "content": long},
+		{"role": "user", "content": long + "ASK"},
 	}})
 	root, _ := jsonsplice.Root(body)
 	got := askTextFor("/v1/messages", body, root)
 	for name, cut := range map[string]struct {
-		text string
-		max  int
-		head bool
-	}{"text": {got.Text, askTextMax, true}, "prev_text": {got.PrevText, askSideMax, true}, "reply_tail": {got.ReplyTail, askSideMax, false}} {
-		kept := strings.HasSuffix(long+"END", cut.text)
-		if cut.head {
-			kept = strings.HasPrefix(long, cut.text)
+		text, of string
+		max      int
+	}{"text": {got.Text, long + "ASK", askTextMax}, "prev_text": {got.PrevText, long + "PRV", askSideMax}, "reply_tail": {got.ReplyTail, long + "END", askSideMax}} {
+		if !strings.HasSuffix(cut.of, cut.text) || !utf8.ValidString(cut.text) || len(cut.text) > cut.max || len(cut.text) < cut.max-3 {
+			t.Errorf("%s: %d bytes, valid %v, kept the end %v", name, len(cut.text), utf8.ValidString(cut.text), strings.HasSuffix(cut.of, cut.text))
 		}
-		if !kept || !utf8.ValidString(cut.text) || len(cut.text) > cut.max || len(cut.text) < cut.max-3 {
-			t.Errorf("%s: %d bytes, valid %v, kept %v", name, len(cut.text), utf8.ValidString(cut.text), kept)
-		}
+	}
+	// A 21 KiB reminder before the first ask: prev_text still ends with it.
+	reminder := "<system-reminder>" + strings.Repeat("memory line\n", 1800) + "</system-reminder>"
+	body, _ = json.Marshal(map[string]any{"messages": []map[string]any{
+		{"role": "user", "content": []map[string]any{{"type": "text", "text": reminder}, {"type": "text", "text": "FIRST-ASK"}}},
+		{"role": "assistant", "content": "done"},
+		{"role": "user", "content": "now?"},
+	}})
+	root, _ = jsonsplice.Root(body)
+	if got := askTextFor("/v1/messages", body, root); !strings.HasSuffix(got.PrevText, "\nFIRST-ASK") || len(got.PrevText) > askSideMax {
+		t.Errorf("prev_text ends %q (%d bytes)", got.PrevText[max(len(got.PrevText)-20, 0):], len(got.PrevText))
 	}
 }
 
 // Escaping can make the JSON six times the text; the body still fits 256 KiB
-// and text keeps the longest head that fits.
+// and text keeps the longest end that fits. A text whose kept end is blank is
+// not sent: Cloud refuses it.
 func TestAskBodyFitsTheContract(t *testing.T) {
 	side := strings.Repeat("\x02", askSideMax) // "\u0002" in JSON
 	text := strings.Repeat("\x01", askTextMax)
@@ -274,13 +350,38 @@ func TestAskBodyFitsTheContract(t *testing.T) {
 	if len(raw) > askBodyMax || len(raw) <= askBodyMax-6 {
 		t.Errorf("body is %d bytes, want the most that fits %d", len(raw), askBodyMax)
 	}
-	if got.Ask.Text == "" || !strings.HasPrefix(text, got.Ask.Text) || got.Ask.PrevText != side || got.Ask.ReplyTail != side || got.Ask.Turn != 3 {
+	if got.Ask.Text == "" || !strings.HasSuffix(text, got.Ask.Text) || got.Ask.PrevText != side || got.Ask.ReplyTail != side || got.Ask.Turn != 3 {
 		t.Errorf("ask = text %d bytes, prev %d, reply %d, turn %d", len(got.Ask.Text), len(got.Ask.PrevText), len(got.Ask.ReplyTail), got.Ask.Turn)
+	}
+	blank := "ask" + strings.Repeat("\n", askTextMax-3)
+	if raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: askText{Text: blank, PrevText: side, ReplyTail: side}}); raw != nil {
+		t.Errorf("a blank kept end was sent: %d bytes", len(raw))
 	}
 	// An ordinary ask goes whole, its <tags> and && unescaped.
 	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: askText{Text: "<system-reminder>a && b</system-reminder>"}}
 	if raw := string(askBody(small)); !strings.HasSuffix(raw, `"ask":{"text":"<system-reminder>a && b</system-reminder>"}}`) {
 		t.Errorf("askBody = %s", raw)
+	}
+}
+
+// A repeated short ask in a later turn is a new ask, not the old decision.
+func TestRepeatedAskGetsItsOwnDecision(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	for _, messages := range []string{
+		`{"role":"user","content":"yes"}`,
+		`{"role":"user","content":"yes"},{"role":"assistant","content":"Shall I also add a test?"},{"role":"user","content":"yes"}`,
+	} {
+		body := `{"model":"claude-opus-5-5","messages":[` + messages + `]}`
+		link.Ask(t.Context(), gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: "claude-opus-5-5", SessionID: "s1", Body: []byte(body)})()
+	}
+	if hits.Load() != 2 {
+		t.Errorf("cloud asked %d times for two asks, want twice", hits.Load())
 	}
 }
 
