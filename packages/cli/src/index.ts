@@ -9406,9 +9406,13 @@ function disableNative(argv: string[]) {
   disableNativeAgent(target);
 }
 
-function nativeIntegrationStatus(agent: NativeAgent) {
+// `probe: false` runs only a journaled agent: status before setup must not
+// start agents (gemini and opencode write their home on `--version`), so the
+// others read as present or not from PATH alone.
+function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?: boolean } = {}) {
   const profile = findAgent(agent)!;
-  const host = nativeHostProbe(profile);
+  const onPath = probe || readNativeJournal(agent) || readPendingNativeJournal(agent) ? null : which(binOf(profile));
+  const host = onPath === null ? nativeHostProbe(profile) : { binary: onPath, launchable: true, version: null, error: null };
   const available = host.launchable;
   const journal = readNativeJournal(agent);
   const transactionPending = Boolean(readPendingNativeJournal(agent));
@@ -18742,7 +18746,7 @@ async function status(argv: string[]) {
     next,
   };
   const native = (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as const).map((agent) => {
-    const integration = nativeIntegrationStatus(agent);
+    const integration = nativeIntegrationStatus(agent, { probe: false });
     return {
       ...integration,
       runtime_reachable: listening,

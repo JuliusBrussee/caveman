@@ -237,8 +237,9 @@ test("end to end: a No at the agent door is remembered; caveman claude stops ask
 });
 
 // Real gemini and opencode write their home (~/.gemini, ~/.local/share/opencode)
-// on any run, `--version` included, so nothing may run an agent before Continue.
-test("end to end: before Continue nothing runs a detected agent, through a declined first run, setup, --dry-run and on", { skip: hasExpect() ? false : "expect(1) not installed", timeout: 60_000 }, async () => {
+// on any run, `--version` included, so nothing may run an agent before Continue,
+// and status before setup reads agents from PATH alone.
+test("end to end: before Continue nothing runs a detected agent, through a declined first run, setup, --dry-run, on and status", { skip: hasExpect() ? false : "expect(1) not installed", timeout: 60_000 }, async () => {
   const box = modulesFixture({ agents: [] });
   const ran = join(box.home, "agents-ran");
   for (const agent of ["claude", "codex", "gemini", "opencode"]) {
@@ -263,9 +264,13 @@ test("end to end: before Continue nothing runs a detected agent, through a decli
     assert.match(declined.text, /CREATE +~\/\.config\/opencode\/plugins\/caveman-native\.js/, "the plan still names every file");
     assert.match(declined.text, /Nothing changed · caveman setup when you want it/);
     assert.equal(agentRuns(), "", "a declined first run ran an agent");
-    for (const argv of [["setup"], ["setup", "--dry-run"], ["on", "output"]]) {
-      await runCli(argv, box.env);
+    for (const argv of [["setup"], ["setup", "--dry-run"], ["on", "output"], ["status"], ["status", "--json"]]) {
+      const out = await runCli(argv, box.env);
       assert.equal(agentRuns(), "", `caveman ${argv.join(" ")} ran an agent`);
+      if (argv[1] === "--json" && argv[0] === "status") {
+        const gemini = JSON.parse(out.stdout).native_integrations.find((item) => item.agent === "gemini");
+        assert.deepEqual([gemini.binary_present, gemini.state], [true, "available"], "an agent on PATH still shows as present");
+      }
     }
   } finally {
     box.cleanup();
