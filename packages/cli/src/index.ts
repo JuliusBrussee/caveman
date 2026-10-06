@@ -49,7 +49,7 @@ import { RECIPES, type IntegrationRecipe } from "./recipes.generated.js";
 import { PRACTICE_REGISTRY } from "./practices.generated.js";
 import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
-import { cloudConfigPath, legacyCloudDir } from "./modules/config-home.js";
+import { cloudConfigPath, legacyCloudDir, mirrorToLegacy } from "./modules/config-home.js";
 import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
 import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
 // RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
@@ -857,6 +857,8 @@ async function saveTelemetryConfig(telemetry: TelemetryConfig) {
   const raw = await readRawConfig();
   raw.telemetry = telemetry;
   await writeRawConfig(raw);
+  // An older CLI rolled back to still reads the old file; it must see an opt-out.
+  mirrorToLegacy("telemetry", telemetry);
 }
 
 async function telemetryCmd(argv: string[]) {
