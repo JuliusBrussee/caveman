@@ -76,6 +76,9 @@ func TestProcfsChmodFallbackTightensMode(t *testing.T) {
 // is only reached after the caller's Lstat rejects a symlink, so this pins the
 // caller's guard rather than the fallback's own O_NOFOLLOW.
 func TestProcfsChmodFallbackRefusesSymlink(t *testing.T) {
+	if os.Getenv("ANDROID_ROOT") != "" {
+		t.Skip("Android O_PATH symlink semantics differ; covered on Linux")
+	}
 	forceProcfsFallback(t)
 
 	dir := t.TempDir()
@@ -105,6 +108,9 @@ func TestProcfsChmodFallbackRefusesSymlink(t *testing.T) {
 // green fallback test.
 func forceProcfsFallback(t *testing.T) {
 	t.Helper()
+	if os.Getenv("ANDROID_ROOT") != "" {
+		return
+	}
 	probe := filepath.Join(t.TempDir(), "probe")
 	if err := os.WriteFile(probe, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -122,4 +128,46 @@ func forceProcfsFallback(t *testing.T) {
 	original := fchmodatEmptyPath
 	fchmodatEmptyPath = func(int) error { return unix.EOPNOTSUPP }
 	t.Cleanup(func() { fchmodatEmptyPath = original })
+}
+
+// TestAndroidGateSkipsFchmodat2 pins the testable half of the Termux report in
+// #1186. Termux builds report GOOS=linux, so a build tag cannot separate them,
+// and Android's seccomp policy answers an unknown syscall with SIGSYS — which
+// kills the process instead of returning an errno. That is why the existing
+// EOPNOTSUPP/EINVAL check could not have caught it: there is no error to
+// inspect, chmodSQLiteFile never returns, and opening the engine's store takes
+// the whole process down.
+//
+// The SIGSYS itself is not reproducible off Android. What is reproducible, and
+// what this asserts, is the gate's contract: with ANDROID_ROOT set,
+// chmodSQLiteFile must not reach fchmodat2 at all, and must still tighten the
+// mode through the procfs fallback. The spy stands in for the syscall that
+// would be fatal there; without the gate it is called, and because the spy
+// reports success the primary branch also returns early and leaves the file
+// world-readable — so this fails two ways on an ungated build.
+func TestAndroidGateSkipsFchmodat2(t *testing.T) {
+	t.Setenv("ANDROID_ROOT", "/system")
+
+	var called bool
+	original := fchmodatEmptyPath
+	fchmodatEmptyPath = func(int) error { called = true; return nil }
+	t.Cleanup(func() { fchmodatEmptyPath = original })
+
+	path := filepath.Join(t.TempDir(), "ccr.db")
+	if err := os.WriteFile(path, []byte("not yet secured"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareSQLitePath(path); err != nil {
+		t.Fatalf("prepare with ANDROID_ROOT set: %v", err)
+	}
+	if called {
+		t.Error("fchmodat2 was reached with ANDROID_ROOT set; on Android that syscall raises SIGSYS and kills the process")
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("Android procfs path left mode %v, want -rw-------", perm)
+	}
 }

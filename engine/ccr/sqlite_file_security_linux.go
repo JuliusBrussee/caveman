@@ -37,8 +37,11 @@ func chmodSQLiteFile(path string, info os.FileInfo) error {
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return fmt.Errorf("file changed while opening")
 	}
-	if err := fchmodatEmptyPath(fd); !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EINVAL) {
-		return err
+	// Termux reports GOOS=linux but Android seccomp kills fchmodat2 with SIGSYS.
+	if os.Getenv("ANDROID_ROOT") == "" {
+		if err := fchmodatEmptyPath(fd); !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EINVAL) {
+			return err
+		}
 	}
 	// Kernels before fchmodat2/AT_EMPTY_PATH require procfs. This is the pinned
 	// descriptor's kernel-controlled link, NOT the swappable database pathname.
