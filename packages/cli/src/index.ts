@@ -7623,8 +7623,8 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
   if (!binary) return { binary: null, launchable: false, version: null, error: "binary_not_found" };
   try {
     const invocation = portableInvocation(binary, ["--version"]);
-    // CAVE_BINARY_PROBE_TIMEOUT_MS may only lengthen the 3s default (a loaded test box).
-    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.max(3000, versionedBinaryProbeTimeoutMs()) });
+    // CAVE_BINARY_PROBE_TIMEOUT_MS may only lengthen the 3s default, to 10s at most (a loaded test box).
+    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.min(10_000, Math.max(3000, versionedBinaryProbeTimeoutMs())) });
     if (out.error) return { binary, launchable: false, version: null, error: boundedHookString(out.error.message, 240) ?? "version_probe_failed" };
     const value = `${out.stdout ?? ""} ${out.stderr ?? ""}`.trim();
     if (out.status !== 0) return { binary, launchable: false, version: value ? value.slice(0, 160) : null, error: `version_probe_exit_${out.status ?? "unknown"}` };
