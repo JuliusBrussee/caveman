@@ -46,6 +46,10 @@ export function runtimeDataLevel(me: CloudMe | null, telemetryOff: boolean): str
   return typeof level === "string" && LEVELS.includes(level) ? level : "counts";
 }
 
+// What routing sends, with its off switch: said at sign-in and by `caveman on
+// routing` when already signed in.
+export const ROUTING_ON_LINE = "routing is on · sends your latest ask, the one before it and the end of the agent's last reply to Caveman Cloud to pick the model · caveman off routing to stop";
+
 // After every sign-in: what routing does now and what data leaves the machine,
 // each with the way to stop it.
 export async function printSignInLines(): Promise<void> {
@@ -54,7 +58,7 @@ export async function printSignInLines(): Promise<void> {
   // The stored switch, as caveman-proxy reads it, not the registry default.
   const modules = h.readConfig().modules;
   const routing = !!modules && typeof modules === "object" && (modules as Record<string, unknown>).routing === true;
-  lines.push(routing ? "routing is on · sends your latest ask, the one before it and the end of the agent's last reply to Caveman Cloud to pick the model · caveman off routing to stop" : "routing is off · caveman on routing to turn it on");
+  lines.push(routing ? ROUTING_ON_LINE : "routing is off · caveman on routing to turn it on");
   const telemetryOff = h.telemetryOff();
   const level = runtimeDataLevel(await cloudMe(), telemetryOff);
   lines.push(telemetryOff
