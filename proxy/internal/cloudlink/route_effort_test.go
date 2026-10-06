@@ -216,12 +216,20 @@ func BenchmarkAskParts5MB(b *testing.B) {
 	result := `{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"` + strings.Repeat("lorem ipsum dolor sit amet ", 400) + `"}]},{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},`
 	body := []byte(`{"model":"claude-opus-5-5","messages":[{"role":"user","content":"go"},{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},` + strings.Repeat(result, 5<<20/len(result)) + `{"role":"user","content":"next"}],"tools":[{"name":"Bash"}],"thinking":{"type":"adaptive"},"output_config":{"effort":"high"}}`)
 	ask := gateway.RouteAsk{Endpoint: "/v1/messages", Body: body}
-	b.SetBytes(int64(len(body)))
-	for b.Loop() {
-		root, _ := jsonsplice.Root(body)
-		_ = askTextFor(ask.Endpoint, body, root)
-		_ = requestFor(ask, root)
-	}
+	root, _ := jsonsplice.Root(body)
+	b.Run("parse+text", func(b *testing.B) {
+		b.SetBytes(int64(len(body)))
+		for b.Loop() {
+			root, _ := jsonsplice.Root(body)
+			_ = askTextFor(ask.Endpoint, body, root)
+		}
+	})
+	b.Run("request", func(b *testing.B) {
+		b.SetBytes(int64(len(body)))
+		for b.Loop() {
+			_ = requestFor(ask, root)
+		}
+	})
 }
 
 // The ask's fields are route-ask-v1's: every field sent is in the schema and

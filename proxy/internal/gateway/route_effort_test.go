@@ -12,6 +12,7 @@ import (
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 )
 
 func TestRouteRunReadsLabelsAndSessionKeys(t *testing.T) {
@@ -407,6 +408,49 @@ func TestRouteAskReportsTheSessionsLastRequest(t *testing.T) {
 	post(t, srv, convo("high", uA), map[string]string{"x-claude-code-session-id": "sess-2"})
 	if cloud.asks[2].Last != nil {
 		t.Errorf("a new session carried last: %+v", cloud.asks[2].Last)
+	}
+}
+
+// OpenAI chat and Responses: the effort goes into the request's own field and
+// last reads the provider's usage object and the model it names.
+func TestRouteEffortAndLastOnOpenAI(t *testing.T) {
+	for _, c := range []struct{ path, body, answer, sent string }{
+		{
+			"/v1/chat/completions", `{"model":"gpt-6-sol","messages":[{"role":"user","content":"go"}]}`,
+			`{"id":"c","object":"chat.completion","model":"gpt-6-sol-2026-09-01","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":{"cached_tokens":800}}}`,
+			`{"model":"gpt-6-sol","messages":[{"role":"user","content":"go"}],"reasoning_effort":"low"}`,
+		},
+		{
+			"/v1/responses", `{"model":"gpt-6-sol","input":"go"}`,
+			`{"id":"r","object":"response","model":"gpt-6-sol-2026-09-01","output":[],"usage":{"input_tokens":1000,"output_tokens":5,"total_tokens":1005,"input_tokens_details":{"cached_tokens":800}}}`,
+			`{"model":"gpt-6-sol","input":"go","reasoning":{"effort":"low"}}`,
+		},
+	} {
+		var sent []byte
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			sent, _ = io.ReadAll(r.Body)
+			w.Header().Set("content-type", "application/json")
+			_, _ = io.WriteString(w, c.answer)
+		}))
+		cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low"}}
+		srv := New(Config{
+			Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+		})
+		for range 2 {
+			req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+			req.Header.Set("authorization", "Bearer sk-proj-api-key")
+			req.Header.Set("session_id", "codex-1")
+			srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		}
+		upstream.Close()
+		if string(sent) != c.sent {
+			t.Errorf("%s sent %s", c.path, sent)
+		}
+		want := RouteLast{Model: "gpt-6-sol-2026-09-01", Effort: "low", InputTokens: 1000, CacheReadTokens: 800}
+		if len(cloud.asks) != 2 || cloud.asks[1].Last == nil || *cloud.asks[1].Last != want || cloud.asks[1].SessionID != "codex-1" {
+			t.Errorf("%s: asks %d, last %+v", c.path, len(cloud.asks), cloud.asks[len(cloud.asks)-1].Last)
+		}
 	}
 }
 
