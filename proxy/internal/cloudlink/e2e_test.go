@@ -1,0 +1,112 @@
+package cloudlink
+
+import (
+	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/providers"
+	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+)
+
+type localAuth struct{}
+
+func (localAuth) Authenticate(context.Context, *http.Request) (gateway.RequestContext, error) {
+	return gateway.RequestContext{Label: "local", RuntimeMode: "compress"}, nil
+}
+
+type byok struct{}
+
+func (byok) Resolve(string, *http.Request) providers.Credential {
+	return providers.Credential{Mode: "passthrough"}
+}
+
+type nullSink struct{}
+
+func (nullSink) Record(gateway.RequestRecord) {}
+
+// The whole path in one process: the CLI's signed-in state on disk, the proxy
+// with the link, a Cloud that routes, and a provider that records the model.
+func TestSignedInProxyRoutesAndReports(t *testing.T) {
+	var mu sync.Mutex
+	var asked, upstreamModel string
+	var events []map[string]any
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		defer mu.Unlock()
+		switch r.URL.Path {
+		case "/v1/route":
+			asked = string(raw)
+			_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked","decision_id":"0b9f6e4e-3b1a-4c7e-9a4e-1d2c3b4a5f60"}`)
+		case "/api/v1/auth/me":
+			_, _ = io.WriteString(w, `{"data":{"level":"decisions"}}`)
+		case "/api/v1/runtime/events":
+			var batch struct {
+				Events []map[string]any `json:"events"`
+			}
+			_ = json.Unmarshal(raw, &batch)
+			events = append(events, batch.Events...)
+		}
+	}))
+	defer cloud.Close()
+	provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &req)
+		mu.Lock()
+		upstreamModel = req.Model
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","model":"`+req.Model+`","content":[],"usage":{"input_tokens":10,"output_tokens":2}}`)
+	}))
+	defer provider.Close()
+
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`","gateway_api_key":"cave_project_key"}`))
+	link.events.every = time.Hour
+	srv := gateway.New(gateway.Config{
+		Adapters:   []providers.Adapter{anthropic.New(provider.URL)},
+		Auth:       localAuth{},
+		Creds:      byok{},
+		Sink:       nullSink{},
+		HTTPClient: &http.Client{},
+		Cloud:      link,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"`+secretPrompt+`"}]}`))
+	req.Header.Set("x-api-key", "sk-ant-api03-test")
+	req.Header.Set("x-cave-agent", "claude")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	link.flush()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if upstreamModel != "claude-sonnet-5-5" {
+		t.Errorf("provider got model %q, want the routed claude-sonnet-5-5", upstreamModel)
+	}
+	if strings.Contains(asked, secretPrompt) || !strings.Contains(asked, `"text":"routerd features: harness=claude `) {
+		t.Errorf("ask = %s", asked)
+	}
+	if len(events) != 1 {
+		t.Fatalf("events = %v", events)
+	}
+	route, _ := events[0]["route"].(map[string]any)
+	if events[0]["model_requested"] != "claude-opus-5-5" || events[0]["model_used"] != "claude-sonnet-5-5" || route["outcome"] != "routed" {
+		t.Errorf("event = %v", events[0])
+	}
+	if raw, _ := json.Marshal(events); strings.Contains(string(raw), secretPrompt) {
+		t.Error("an event carried prompt text")
+	}
+}
