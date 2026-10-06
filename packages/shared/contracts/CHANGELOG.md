@@ -11,7 +11,8 @@
   (at most 4096 bytes). The runtime now asks for every routable request:
   `ask` goes only on a turn's first ask and is left out for compaction and
   side requests, which are answered per request. The description names the
-  answer's new fields: `effort`, `effort_mode` (`message` | `top` | `""`) and
+  answer's new fields: `effort`, `effort_mode` (`message` | `top` | `""`),
+  `default_effort` (optional, the asked model's catalog default effort) and
   `state`; `model` may cost more than the asked one.
 - `route-ask-v1` (additive): optional, strict `ask`
   object next to `signals` — `text` (required, non-blank, at most 131072 bytes),
