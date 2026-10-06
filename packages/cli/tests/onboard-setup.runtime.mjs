@@ -37,6 +37,21 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   }
 });
 
+// Signed in, setup turns routing on and it starts right away: setup says what
+// routing sends.
+test("setup --yes signed in says what routing sends", { skip }, async () => {
+  const fx = modulesFixture();
+  try {
+    const out = await runCli(["setup", "--yes"], { ...fx.env, CAVE_TOKEN: "test-token" });
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /^routing is on · sends your latest ask \(with what your agent attaches to it\), the one before it and the end of the agent's last reply to Caveman Cloud to pick the model; on the Free plan Caveman may keep them to improve routing · caveman off routing to stop$/m);
+    assert.doesNotMatch(out.stdout, /starts after you sign in/);
+    assert.equal(modules(fx).routing, true);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 // Blocks' installer talks (binary copied, one line per harness, trust notes);
 // setup says one line, plus the one thing the user still has to do.
 test("setup --yes says one line for scripts and keeps only the caveat that needs the user", { skip }, async () => {

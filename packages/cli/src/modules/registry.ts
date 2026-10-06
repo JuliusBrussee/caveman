@@ -73,7 +73,9 @@ export const MODULES: readonly ModuleDef[] = [
   {
     id: "routing",
     title: "routing",
-    summary: "the right model each turn",
+    // The onboarding picker cuts hints at the terminal width (62 characters at
+    // 80 columns): what leaves the machine comes first.
+    summary: "your asks go to Caveman Cloud to pick the model",
     defaultOn: true,
     // Decisions come from Cloud (POST /v1/route), so it acts only once signed
     // in; caveman-proxy's route stage reads `modules.routing` itself, so no
