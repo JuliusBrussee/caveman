@@ -37,6 +37,24 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   }
 });
 
+// Blocks' installer talks (binary copied, one line per harness, trust notes);
+// setup says one line, plus the one thing the user still has to do.
+test("setup --yes says one line for scripts and keeps only the caveat that needs the user", { skip }, async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /\n✓ scripts ready \(Claude Code, Codex\)\n {2}Codex asks once: open \/hooks in Codex and approve the caveman-blocks hook\n/);
+    assert.doesNotMatch(out.stdout + out.stderr, /binary:|: installed|trusts each/, "Blocks' own output stays out");
+    const again = await runCli(["off", "scripts", "--yes"], fx.env);
+    assert.equal(again.code, 0, again.stderr);
+    const on = await runCli(["on", "scripts", "--yes"], fx.env);
+    assert.match(on.stdout, /^✓ scripts ready \(Claude Code, Codex\)$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("setup without --yes and no terminal prints the plan, applies nothing, exits 0", { skip }, async () => {
   const fx = modulesFixture();
   try {

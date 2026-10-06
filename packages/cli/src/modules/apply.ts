@@ -187,20 +187,18 @@ function externalBin(name: string): string | null {
   return moduleHost().which(name) ?? (existsSync(local) ? local : null);
 }
 
-function runExternal(bin: string, args: readonly string[], capture: boolean) {
+// Output is captured: the hub says one line per step, and shows the binary's
+// own output only when the step fails.
+function runExternal(bin: string, args: readonly string[], timeout: number) {
   const invocation = portableInvocation(bin, args);
-  return spawnSync(invocation.command, invocation.args, {
-    encoding: "utf8",
-    timeout: capture ? 5000 : 120_000,
-    stdio: capture ? ["ignore", "pipe", "ignore"] : ["ignore", 2, 2],
-  });
+  return spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 // Harness name → hook installed, from `<binary> hooks status --json`
 // ({ harnesses: [{ name, installed }] }). Undefined when the binary cannot say.
 function externalStatus(def: ModuleDef, bin: string): Record<string, boolean> | undefined {
   try {
-    const out = runExternal(bin, def.external!.status, true);
+    const out = runExternal(bin, def.external!.status, 5000);
     const parsed = JSON.parse(out.stdout) as { harnesses?: { name?: unknown; installed?: unknown }[] };
     if (out.status !== 0 || !Array.isArray(parsed.harnesses)) return undefined;
     return Object.fromEntries(parsed.harnesses.filter((h) => typeof h.name === "string").map((h) => [h.name as string, h.installed === true]));
@@ -210,24 +208,53 @@ function externalStatus(def: ModuleDef, bin: string): Record<string, boolean> | 
 }
 
 // The install/uninstall an external module in scope needs. Without a status
-// answer, install runs when the module is switched on (or first recorded on).
-// `bin` is null when the binary is not installed: the run is then skipped.
+// answer, or one that lists no harness yet (wiring later in this run may
+// create the first), install runs when the module is switched on (or first
+// recorded on). `bin` is null when the binary is not installed: the run is then
+// skipped. `before` is the status ahead of the run.
 function externalRuns(selection: ModuleSelection, only: ModuleId[] | undefined) {
   const current = currentSelection();
   const stored = storedModules();
-  const runs: { def: ModuleDef; args: string[]; bin: string | null }[] = [];
+  const runs: { def: ModuleDef; args: string[]; install: boolean; bin: string | null; before?: Record<string, boolean> | undefined }[] = [];
   for (const def of MODULES) {
     if (!def.external || !inScope(def.id, only)) continue;
     const bin = externalBin(def.external.binary);
     if (selection[def.id]) {
-      const status = bin ? externalStatus(def, bin) : undefined;
-      const needed = status ? Object.values(status).some((installed) => !installed) : stored[def.id] !== true;
-      if (needed) runs.push({ def, args: def.external.install, bin });
+      const before = bin ? externalStatus(def, bin) : undefined;
+      const harnesses = Object.values(before ?? {});
+      const needed = harnesses.length ? harnesses.some((installed) => !installed) : stored[def.id] !== true;
+      if (needed) runs.push({ def, args: def.external.install, install: true, bin, before });
     } else if (current[def.id] && bin) {
-      runs.push({ def, args: def.external.uninstall, bin });
+      runs.push({ def, args: def.external.uninstall, install: false, bin });
     }
   }
   return runs;
+}
+
+// What a harness's new hook still asks of the user, from Blocks' trust notes;
+// notes that ask nothing are left out.
+const EXTERNAL_ASKS: Record<string, string> = {
+  codex: "Codex asks once: open /hooks in Codex and approve the caveman-blocks hook",
+};
+
+// One line for a finished install, built from the status it leaves, then one
+// line per new hook the user still has to approve.
+function externalReady(def: ModuleDef, bin: string, before: Record<string, boolean> | undefined): string[] {
+  const h = moduleHost();
+  const after = externalStatus(def, bin);
+  if (!after) return [`✓ ${def.id} ready`];
+  const hooked = Object.keys(after).filter((name) => after[name]);
+  if (hooked.length === 0) return [`○ ${def.id}: no agent to hook yet`];
+  // Blocks names Claude Code "claude-code"; the hub calls it "claude".
+  const agents = h.nativeAgents().map((agent) => agent.id);
+  const names = hooked.map((name) => {
+    const id = agents.find((agent) => agent === name || `${agent}-code` === name);
+    return id ? h.agentName(id) : name;
+  });
+  return [
+    `✓ ${def.id} ready (${names.join(", ")})`,
+    ...hooked.filter((name) => !before?.[name] && EXTERNAL_ASKS[name]).map((name) => `  ${EXTERNAL_ASKS[name]}`),
+  ];
 }
 
 export async function planModules(selection: ModuleSelection, agents: string[], options: { only?: ModuleId[] } = {}): Promise<ModulePlan> {
@@ -335,8 +362,10 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
       say(`○ ${run.def.id}: ${name} not installed yet`);
       continue;
     }
-    const out = runExternal(run.bin, run.args, false);
-    if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}`);
+    const out = runExternal(run.bin, run.args, 120_000);
+    const output = `${out.stdout ?? ""}${out.stderr ?? ""}`.trim();
+    if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}${output ? `\n${output}` : ""}`);
+    else if (run.install) for (const line of externalReady(run.def, run.bin, run.before)) say(line);
     else say(`✓ ${run.def.id}: ${name} ${run.args.join(" ")}`);
   }
   return { ok: problems.length === 0, problems };

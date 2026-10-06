@@ -81,6 +81,18 @@ test("on → off → on round-trips harness files byte for byte", async () => {
   }
 });
 
+test("a failed Blocks install prints Blocks' full output", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    writeFileSync(join(fx.home, ".blocks-fail"), "");
+    const out = await runCli(["on", "scripts", "--yes"], fx.env);
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /^✗ caveman-blocks hooks install failed\nbinary: copied\ncodex: cannot write ~\/\.codex\/hooks\.json: permission denied$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("off keeps agent wiring while another module needs it", async () => {
   const fx = modulesFixture({ agents: ["claude"], blocks: true });
   const journal = () => existsSync(join(fx.home, ".caveman", "integrations", "claude.json"));

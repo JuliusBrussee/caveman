@@ -36,12 +36,20 @@ esac`),
   };
   if (!binaries) for (const key of Object.keys(bins)) bins[key] = join(home, "missing", key);
   if (blocks) {
-    // Hook state lives outside the harness files so their round-trip stays exact.
-    script("caveman-blocks", `case "$1 $2" in
-  "hooks status") if [ -f "$HOME/.blocks-hooks" ]; then i=true; else i=false; fi
-    printf '{"version":"test","harnesses":[{"name":"claude-code","installed":%s},{"name":"codex","installed":%s}]}\\n' $i $i ;;
-  "hooks install") : > "$HOME/.blocks-hooks"; echo install >> "$HOME/blocks.log" ;;
-  "hooks uninstall") rm -f "$HOME/.blocks-hooks"; echo uninstall >> "$HOME/blocks.log" ;;
+    // Like the real one: a harness is listed once its home exists, install
+    // hooks every listed one and talks, and $HOME/.blocks-fail fails it. Hook
+    // state lives outside the harness files so their round-trip stays exact.
+    script("caveman-blocks", `harnesses() { for h in claude-code:.claude codex:.codex; do [ -d "$HOME/\${h#*:}" ] && echo "\${h%%:*}"; done; }
+case "$1 $2" in
+  "hooks status") sep=; printf '{"version":"test","harnesses":['
+    for n in $(harnesses); do if [ -f "$HOME/.blocks-$n" ]; then i=true; else i=false; fi; printf '%s{"name":"%s","installed":%s}' "$sep" "$n" "$i"; sep=,; done
+    printf ']}\\n' ;;
+  "hooks install") if [ -f "$HOME/.blocks-fail" ]; then echo "binary: copied"; echo "codex: cannot write ~/.codex/hooks.json: permission denied" >&2; exit 1; fi
+    echo "binary: $HOME/.local/bin/caveman-blocks (copied)"
+    for n in $(harnesses); do : > "$HOME/.blocks-$n"; echo "$n: installed"; done
+    echo "  Codex trusts each new or changed hook once: open /hooks in Codex and approve it."
+    echo install >> "$HOME/blocks.log" ;;
+  "hooks uninstall") rm -f "$HOME/.blocks-claude-code" "$HOME/.blocks-codex"; echo uninstall >> "$HOME/blocks.log" ;;
 esac`);
   }
   return {
