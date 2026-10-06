@@ -192,6 +192,11 @@ async function routingStep(opts: OnboardOptions, deps: OnboardDeps, input: NodeJ
     });
     out.write(`  ${c.green("✓")} signed in${email ? ` as ${email}` : ""}\n\n`);
   } catch (error) {
+    // Esc during the receipt step, after the credentials were saved.
+    if (skip.signal.aborted && await deps.signedIn()) {
+      out.write(`  ${c.green("✓")} signed in\n\n`);
+      return;
+    }
     if (skip.signal.aborted) return waits("starts after you sign in");
     const message = error instanceof Error ? error.message : String(error);
     if ((error as { code?: unknown }).code === "sign_in_closed") {

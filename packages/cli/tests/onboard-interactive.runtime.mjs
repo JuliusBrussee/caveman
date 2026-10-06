@@ -150,6 +150,26 @@ test("space unticks a module and esc skips sign-in", async () => {
   assert.equal(JSON.parse(readFileSync(configPath, "utf8")).modules.output, false);
 });
 
+test("esc after the credentials are saved says signed in", async () => {
+  rmSync(configPath, { force: true });
+  const tty = terminal();
+  let saved = false;
+  const run = onboard({ yes: false, dryRun: false }, deps(tty, {
+    signedIn: async () => saved,
+    signIn: (ui) => {
+      ui.code("https://app.caveman.so/activate", "ABCD-EFGH", false);
+      saved = true; // the grant arrived and was stored; the ACK is in flight
+      return new Promise((_, reject) => ui.signal.addEventListener("abort", () => reject(ui.signal.reason)));
+    },
+  }));
+  await tty.press(/space toggles/, "\r");
+  await tty.press(/Continue\?/, "\r");
+  await tty.press(/esc skips/, "\x1b");
+  await run;
+  assert.match(tty.text(), /\(esc skips\)\n {2}✓ signed in\n/);
+  assert.doesNotMatch(tty.text(), /after you sign in/);
+});
+
 test("a wired agent missing from PATH stays ticked, so the plan never unwires it silently", async () => {
   rmSync(configPath, { force: true });
   const tty = terminal();
