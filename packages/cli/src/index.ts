@@ -7046,8 +7046,11 @@ function canonicalManagedHookEntry(entry: Record<string, unknown>): string | und
 // the config said and there was no persistent way to run the native
 // integration without it (#1049). Read in ONE place so the writers and the
 // health check that judges them cannot disagree about what is expected.
+// Native hooks are machine-wide, so they follow the global think.shrink (and
+// an explicit CAVEMAN_SHRINK), never a project's .caveman/config.json: the
+// forStart resolution is the one that skips the project layer.
 function nativeShrinkEnabled(): boolean {
-  return resolveCapabilities().values["think.shrink"].value as boolean;
+  return resolveCapabilities({ forStart: true }).values["think.shrink"].value as boolean;
 }
 
 function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShrink: boolean, base: Record<string, unknown> = {}, includeRecall = false): Record<string, unknown> {

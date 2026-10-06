@@ -95,8 +95,10 @@ export function currentSelection(): ModuleSelection {
   return Object.fromEntries(MODULES.map((m) => [
     m.id,
     typeof stored[m.id] === "boolean" ? stored[m.id]
-      // A config from before modules that already switched a key off reads as off.
-      : m.capabilities.some((effect) => {
+      // A config from before modules that already switched the module's primary
+      // key off reads as off. Only the first key counts: think.toon or
+      // think.shrink off alone is a tuning of input, not input off.
+      : m.capabilities.slice(0, 1).some((effect) => {
         const capability = h.capability(effect.key);
         return capability.invalid === undefined && capability.global === effect.off;
       }) ? false

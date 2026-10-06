@@ -231,3 +231,40 @@ test("a project or env override shows the module on but inactive, with the reaso
     fx.cleanup();
   }
 });
+
+// Agent wiring is machine-wide, so it follows the global think.shrink: a
+// project that turns shrink off for itself must not strip the global hook
+// when `on`/`off` runs inside it.
+test("on and off inside a repo with project think.shrink=false keep the global shrink hook", async () => {
+  const fx = modulesFixture();
+  const project = join(fx.home, "repo");
+  mkdirSync(join(project, ".caveman"), { recursive: true });
+  writeFileSync(join(project, ".caveman", "config.json"), JSON.stringify({ think: { shrink: false } }));
+  try {
+    const on = await runCli(["on", "--all", "--yes"], fx.env, { cwd: project });
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8"), /shrink-hook/);
+    assert.equal((await runCli(["off", "input", "--yes"], fx.env, { cwd: project })).code, 0);
+    const back = await runCli(["on", "input", "--yes"], fx.env, { cwd: project });
+    assert.equal(back.code, 0, back.stderr);
+    assert.match(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8"), /shrink-hook/, "the project value never reaches global wiring");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("an old config with only think.toon or think.shrink off still reads input as on", async () => {
+  const fx = modulesFixture();
+  try {
+    mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
+    writeFileSync(join(fx.home, ".caveman-cloud", "config.json"), JSON.stringify({ think: { toon: false, shrink: false } }));
+    const tuned = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout).modules.find((state) => state.id === "input");
+    assert.equal(tuned.on, true, "input follows its primary key think.mode only");
+    writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ think: { mode: "record" } }));
+    const off = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout).modules.find((state) => state.id === "input");
+    assert.equal(off.on, false, "think.mode=record is input off");
+  } finally {
+    fx.cleanup();
+  }
+});
+
