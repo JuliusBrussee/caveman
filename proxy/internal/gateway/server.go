@@ -231,16 +231,19 @@ type RequestRecord struct {
 	CompressionEligible bool
 	// AgentSlug is the wrapped agent that produced the call (from x-cave-agent;
 	// "unlabeled-agent" when absent) — the per-agent attribution dimension.
-	AgentSlug                string
-	Provider                 string
-	Model                    string
-	RouteFrom                string
-	RouteTo                  string
+	AgentSlug string
+	Provider  string
+	Model     string
+	RouteFrom string
+	RouteTo   string
 	// The route stage's outcome for the runtime/v1 sender (see route.go); not
 	// stored. Empty when no route stage ran.
 	RouteOutcome    string
 	RouteReason     string
 	RouteDecisionID string
+	// ProviderOriginKnown: the request went to the provider's own API, so its
+	// model ids are catalog names rather than local paths. Not stored.
+	ProviderOriginKnown      bool
 	Endpoint                 string
 	Stream                   bool
 	StatusCode               int

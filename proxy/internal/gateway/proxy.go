@@ -217,11 +217,22 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	evidence.modelRequested = modelRequested
 	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
 		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
-		routable(meta.Provider, meta.Endpoint, authMode) {
-		awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
-			Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
-			SessionID: evidence.SessionID, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
-		})
+		routable(meta.Provider, meta.Endpoint) {
+		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
+		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
+		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
+		switch {
+		case authMode == AuthModeSubscription:
+			evidence.route = RouteAnswer{Outcome: "off", Reason: "subscription"}
+		case authMode != AuthModePAYG:
+		case uerr != nil || !statsPricingOriginKnown(meta.Provider, upstream):
+			evidence.route = RouteAnswer{Outcome: "off", Reason: "custom_provider_origin"}
+		default:
+			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
+				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
+				SessionID: evidence.SessionID, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+			})
+		}
 	}
 	switch effectiveRuntimeMode {
 	case "record":
@@ -494,6 +505,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if meta.Model != modelRequested {
 			meta.Model = modelRequested
 			w.Header().Del("x-caveman-routed-from")
+			if evidence.route.Reject != nil {
+				evidence.route.Reject() // the rest of this ask stays on the asked model
+			}
 			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
 		}
 		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
@@ -1435,6 +1449,7 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		RouteOutcome:                 evidence.route.Outcome,
 		RouteReason:                  evidence.route.Reason,
 		RouteDecisionID:              evidence.route.DecisionID,
+		ProviderOriginKnown:          evidence.statsPricingUnsupportedReason != "custom_provider_origin",
 		Endpoint:                     meta.Endpoint,
 		Stream:                       meta.Stream,
 		StatusCode:                   status,

@@ -454,14 +454,18 @@ func TestEventsStayWithTheLoginThatRecordedThem(t *testing.T) {
 	}
 }
 
-// Signing in turns on the Developers page: events flow with routing off, at
-// decisions when /me names no level, and say the route stage was off.
-func TestEventsFlowWithRoutingOff(t *testing.T) {
+// Events flow while signed in with routing off, and say the route stage was
+// off. The level is /me's: decisions only when /me says so, counts when /me
+// names none, and nothing at all under the CLI telemetry opt-out.
+func TestEventsFollowMeAndTheOptOut(t *testing.T) {
 	var mu sync.Mutex
 	var events []map[string]any
+	me := `{"data":{"level":"decisions"}}`
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/auth/me" {
-			_, _ = io.WriteString(w, `{"user":{"email":"a@b.c"}}`)
+			mu.Lock()
+			_, _ = io.WriteString(w, me)
+			mu.Unlock()
 			return
 		}
 		var batch struct {
@@ -474,19 +478,72 @@ func TestEventsFlowWithRoutingOff(t *testing.T) {
 		mu.Unlock()
 	}))
 	defer cloud.Close()
-	link := newLink(cloudHome(t, cloud.URL, false, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
-	link.events.every = time.Hour
-	rec := record(1)
-	rec.RouteOutcome, rec.RouteReason, rec.RouteDecisionID = "", "", ""
-	link.Observe(rec)
-	link.flush()
-	mu.Lock()
-	defer mu.Unlock()
-	if len(events) != 1 || events[0]["level"] != "decisions" {
-		t.Fatalf("events = %v", events)
+	send := func(home string) []map[string]any {
+		t.Helper()
+		mu.Lock()
+		events = nil
+		mu.Unlock()
+		link := newLink(home)
+		link.events.every = time.Hour
+		rec := record(1)
+		rec.RouteOutcome, rec.RouteReason, rec.RouteDecisionID = "", "", ""
+		rec.ProviderOriginKnown, rec.PricingKnown, rec.Model, rec.RouteFrom = false, false, "/models/llama-3.gguf", "/models/llama-3.gguf"
+		link.Observe(rec)
+		link.flush()
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]map[string]any(nil), events...)
 	}
-	if route, _ := events[0]["route"].(map[string]any); route["outcome"] != "off" {
-		t.Errorf("route = %v, want outcome off", events[0]["route"])
+	signedIn := `{"access_token":"` + token(time.Now().Add(time.Hour)) + `"}`
+
+	got := send(cloudHome(t, cloud.URL, false, signedIn))
+	if len(got) != 1 || got[0]["level"] != "decisions" || got[0]["model_used"] != "custom" {
+		t.Fatalf("routing off, level decisions: %v", got)
+	}
+	if route, _ := got[0]["route"].(map[string]any); route["outcome"] != "off" {
+		t.Errorf("route = %v, want outcome off", got[0]["route"])
+	}
+
+	mu.Lock()
+	me = `{"user":{"email":"a@b.c"}}`
+	mu.Unlock()
+	if got := send(cloudHome(t, cloud.URL, false, signedIn)); len(got) != 1 || got[0]["level"] != "counts" || got[0]["route"] != nil {
+		t.Fatalf("/me without a level: %v, want counts", got)
+	}
+
+	optedOut := cloudHome(t, cloud.URL, true, signedIn)
+	raw, _ := os.ReadFile(filepath.Join(optedOut, "cloud.json"))
+	var doc map[string]any
+	_ = json.Unmarshal(raw, &doc)
+	doc["telemetry"] = map[string]any{"enabled": false, "decidedAt": "2026-10-05T00:00:00Z", "promptVersion": 2}
+	raw, _ = json.Marshal(doc)
+	_ = os.WriteFile(filepath.Join(optedOut, "cloud.json"), raw, 0o600)
+	if got := send(optedOut); len(got) != 0 {
+		t.Fatalf("telemetry off still sent %v", got)
+	}
+	t.Setenv("DO_NOT_TRACK", "1")
+	if got := send(cloudHome(t, cloud.URL, true, signedIn)); len(got) != 0 {
+		t.Fatalf("DO_NOT_TRACK still sent %v", got)
+	}
+}
+
+// A 200 that is not JSON pauses like any other bad answer.
+func TestUnreadableAnswerPauses(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, "<html>gateway</html>")
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	if answer := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Model != "" || answer.Reason != "answer_unreadable" {
+		t.Fatalf("answer = %+v", answer)
+	}
+	next := messagesAsk("claude-opus-5-5")
+	next.SessionID = "s2"
+	link.Ask(t.Context(), next)()
+	if hits.Load() != 1 {
+		t.Errorf("cloud asked %d times, want once before the pause", hits.Load())
 	}
 }
 
@@ -541,5 +598,25 @@ func TestLimitPauseLiftsWhenMeSaysSo(t *testing.T) {
 			t.Fatal("the pause never lifted after /me stopped marking routing limited")
 		}
 		time.Sleep(20 * time.Millisecond)
+	}
+}
+
+// Once the provider refuses the routed model, the rest of the ask keeps the
+// asked one rather than failing over on every turn.
+func TestRejectedModelKeepsTheAskOnTheAskedModel(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	first := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))()
+	if first.Model != "claude-sonnet-5-5" || first.Reject == nil {
+		t.Fatalf("first = %+v", first)
+	}
+	first.Reject()
+	if next := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); next.Model != "" || next.Reason != "provider_rejected_routed_model" || hits.Load() != 1 {
+		t.Fatalf("next = %+v, cloud hits %d", next, hits.Load())
 	}
 }

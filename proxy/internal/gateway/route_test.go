@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -76,13 +77,23 @@ func routeServer(t *testing.T, cloud CloudLink, rejectModel string) (*Server, *[
 	}))
 	t.Cleanup(upstream.Close)
 	return New(Config{
-		Adapters:   []providers.Adapter{anthropic.New(upstream.URL)},
+		// The provider's own origin (routing skips any other), served by the stub.
+		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com")},
 		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
 		Creds:      stubCreds{key: "sk-byok"},
 		Sink:       &captureSink{},
-		HTTPClient: &http.Client{},
+		HTTPClient: &http.Client{Transport: toStub(upstream.URL)},
 		Cloud:      cloud,
 	}), &models
+}
+
+// toStub sends every upstream request to the stub server instead.
+func toStub(stub string) http.RoundTripper {
+	target, _ := url.Parse(stub)
+	return roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})
 }
 
 func sendMessages(t *testing.T, srv *Server, header map[string]string) *httptest.ResponseRecorder {
@@ -173,7 +184,36 @@ func TestRouteStageSkipsPassThroughAndSubscription(t *testing.T) {
 			t.Fatalf("upstream models = %v, want only the asked model", *models)
 		}
 	}
-	if len(cloud.observed) != 2 || cloud.observed[0].RouteOutcome != "" {
-		t.Errorf("observed = %d rows, first outcome %q", len(cloud.observed), cloud.observed[0].RouteOutcome)
+	if len(cloud.observed) != 2 || cloud.observed[0].RouteOutcome != "" || cloud.observed[1].RouteReason != "subscription" {
+		t.Errorf("observed = %d rows, outcomes %q / %q", len(cloud.observed), cloud.observed[0].RouteOutcome, cloud.observed[1].RouteReason)
+	}
+}
+
+// A custom upstream origin (a proxy, Azure, a local server) is never routed.
+func TestRouteStageSkipsCustomOrigins(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	srv := New(Config{
+		Adapters: []providers.Adapter{anthropic.New(upstream.URL)}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{}, Cloud: cloud,
+	})
+	sendMessages(t, srv, nil)
+	if len(cloud.asks) != 0 || cloud.observed[0].RouteReason != "custom_provider_origin" || cloud.observed[0].ProviderOriginKnown {
+		t.Fatalf("asks %d, row %+v", len(cloud.asks), cloud.observed[0])
+	}
+}
+
+// The provider refusing the routed model tells the link, once.
+func TestRouteStageReportsARejectedModel(t *testing.T) {
+	rejected := 0
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed", Reject: func() { rejected++ }}}
+	srv, _ := routeServer(t, cloud, "claude-sonnet-5-5")
+	sendMessages(t, srv, nil)
+	if rejected != 1 {
+		t.Fatalf("Reject called %d times, want once", rejected)
 	}
 }

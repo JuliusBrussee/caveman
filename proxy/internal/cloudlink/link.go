@@ -33,6 +33,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
@@ -70,6 +71,7 @@ type Link struct {
 	mu         sync.Mutex
 	stamp      string
 	loaded     bool
+	stale      bool // a background keychain read found a new secret
 	cfg        settings
 	decisions  map[string]*decision
 	pauseUntil time.Time
@@ -79,6 +81,10 @@ type Link struct {
 	pausePlan  string // the plan /me named while the limit held
 
 	events eventQueue
+
+	kmu    sync.Mutex
+	kcache string
+	kbusy  bool
 }
 
 type decision struct {
@@ -106,6 +112,9 @@ type settings struct {
 	access  string // the session access token
 	install string // opaque per-machine id
 	offline bool   // CAVEMAN_OFFLINE=1: benchmark and air-gapped runs send nothing
+	// The CLI telemetry opt-out (telemetry.enabled false, DO_NOT_TRACK,
+	// CAVEMAN_TELEMETRY=0): no runtime events.
+	noTelemetry bool
 }
 
 func (s settings) signedIn() bool { return s.cloud != "" && (s.key != "" || s.access != "") }
@@ -130,17 +139,17 @@ func (l *Link) settings() settings {
 		}
 	}
 	l.mu.Lock()
-	if l.loaded && stamp == l.stamp {
+	if l.loaded && stamp == l.stamp && !l.stale {
 		defer l.mu.Unlock()
 		return l.cfg
 	}
+	filesChanged := !l.loaded || stamp != l.stamp
+	l.stale = false
 	l.mu.Unlock()
-	// Outside the lock: a keychain read can take seconds, and pauses and
-	// Observe must not wait on it.
-	cfg := l.load(current, legacy, credentials)
+	cfg := l.load(current, legacy, credentials, filesChanged)
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if !l.loaded || stamp != l.stamp {
+	if filesChanged || cfg != l.cfg {
 		previous := l.cfg
 		l.cfg, l.stamp, l.loaded = cfg, stamp, true
 		if cfg.access != previous.access || cfg.key != previous.key {
@@ -152,8 +161,32 @@ func (l *Link) settings() settings {
 	return l.cfg
 }
 
-func (l *Link) load(current, legacy, credentials string) settings {
-	out := settings{offline: os.Getenv("CAVEMAN_OFFLINE") == "1"}
+// keychainSecret is the last keychain read; a read never runs on a request
+// goroutine. refresh starts one in the background (one at a time), and a new
+// secret marks the settings stale so the next use reloads them.
+func (l *Link) keychainSecret(refresh bool) string {
+	l.kmu.Lock()
+	defer l.kmu.Unlock()
+	if refresh && !l.kbusy {
+		l.kbusy = true
+		go func() {
+			secret := l.keychain()
+			l.kmu.Lock()
+			changed := secret != l.kcache
+			l.kcache, l.kbusy = secret, false
+			l.kmu.Unlock()
+			if changed {
+				l.mu.Lock()
+				l.stale = true
+				l.mu.Unlock()
+			}
+		}()
+	}
+	return l.kcache
+}
+
+func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) settings {
+	out := settings{offline: os.Getenv("CAVEMAN_OFFLINE") == "1", noTelemetry: telemetryEnvOff()}
 	raw, err := os.ReadFile(current)
 	if os.IsNotExist(err) {
 		raw, err = os.ReadFile(legacy)
@@ -164,6 +197,9 @@ func (l *Link) load(current, legacy, credentials string) settings {
 	}
 	if modules, ok := doc["modules"].(map[string]any); ok {
 		out.routing = modules["routing"] == true
+	}
+	if telemetry, ok := doc["telemetry"].(map[string]any); ok && telemetry["enabled"] == false {
+		out.noTelemetry = true
 	}
 	out.cloud = safeBase(stringOf(doc["baseURL"]))
 	out.gateway = safeBase(stringOf(doc["gatewayUrl"]))
@@ -177,7 +213,7 @@ func (l *Link) load(current, legacy, credentials string) settings {
 			secret = string(raw)
 		}
 	case "keychain":
-		secret = l.keychain()
+		secret = l.keychainSecret(refreshKeychain)
 	default:
 		secret = stringOf(doc["token"]) // legacy inline token
 	}
@@ -189,6 +225,16 @@ func (l *Link) load(current, legacy, credentials string) settings {
 	sum := sha256.Sum256([]byte(id))
 	out.install = hex.EncodeToString(sum[:])
 	return out
+}
+
+// telemetryEnvOff mirrors the CLI: DO_NOT_TRACK set (and not 0), or
+// CAVEMAN_TELEMETRY set to anything but 1/true/on.
+func telemetryEnvOff() bool {
+	if dnt := os.Getenv("DO_NOT_TRACK"); dnt != "" && dnt != "0" {
+		return true
+	}
+	value := strings.ToLower(strings.TrimSpace(os.Getenv("CAVEMAN_TELEMETRY")))
+	return os.Getenv("CAVEMAN_TELEMETRY") != "" && value != "1" && value != "true" && value != "on"
 }
 
 func stringOf(value any) string {
@@ -356,7 +402,22 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 		}()
 	}
 	<-d.done
-	return d.answer
+	answer := d.answer
+	if answer.Model != "" {
+		k := string(key[:])
+		answer.Reject = func() {
+			// The provider refused the routed model: the rest of this ask keeps
+			// the asked one instead of failing over on every turn.
+			done := make(chan struct{})
+			close(done)
+			l.mu.Lock()
+			if l.decisions != nil {
+				l.decisions[k] = &decision{done: done, answer: gateway.RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}}
+			}
+			l.mu.Unlock()
+		}
+	}
+	return answer
 }
 
 func statefulChain(body []byte) bool {
@@ -387,7 +448,7 @@ var (
 // turns; narrow it if the classifier ever weighs old failures wrongly.
 func features(ask gateway.RouteAsk) string {
 	harness := ask.Agent
-	if harness == "" || strings.ContainsAny(harness, " \t\r\n=") {
+	if !slugRE.MatchString(harness) {
 		harness = "unlabeled-agent"
 	}
 	return fmt.Sprintf("routerd features: harness=%s context_tokens=%d tools_declared=%d recent_tool_errors=%d images=%t",
@@ -429,7 +490,7 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []s
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	_ = json.Unmarshal(body, &answer)
+	unreadable := json.Unmarshal(body, &answer) != nil
 	limit := answer.Reason
 	for _, known := range []string{"allowance", "billing_limit"} {
 		if strings.Contains(answer.Error.Code, known) {
@@ -453,14 +514,16 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []s
 		return l.remember(l.pause(refusedPause, gateway.RouteAnswer{Outcome: "degraded", Reason: fmt.Sprintf("cloud_%d", response.StatusCode)}), "")
 	case response.StatusCode != http.StatusOK:
 		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: fmt.Sprintf("cloud_%d", response.StatusCode)})
+	case unreadable:
+		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_unreadable"})
 	case !slices.Contains(models, answer.Model):
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_outside_pool"}
 	}
 	l.forget()
 	if answer.Model == ask.Model {
-		return gateway.RouteAnswer{Outcome: "kept", Reason: bounded(answer.Reason), DecisionID: answer.DecisionID}
+		return gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
 	}
-	return gateway.RouteAnswer{Model: answer.Model, Outcome: "routed", Reason: bounded(answer.Reason), DecisionID: answer.DecisionID}
+	return gateway.RouteAnswer{Model: answer.Model, Outcome: "routed", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
 }
 
 // remember writes a pause the person can act on (a refused key, a used-up
@@ -469,9 +532,7 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []s
 func (l *Link) remember(what gateway.RouteAnswer, notice string) gateway.RouteAnswer {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if len(notice) > 240 {
-		notice = notice[:240]
-	}
+	notice = truncate(notice, 240)
 	raw, _ := json.Marshal(map[string]string{"outcome": what.Outcome, "reason": what.Reason, "notice": notice, "until": l.pauseUntil.UTC().Format(time.RFC3339)})
 	path := filepath.Join(l.home, "route-state.json")
 	if os.WriteFile(path+".tmp", raw, 0o600) == nil {
@@ -548,9 +609,13 @@ func (l *Link) recheckPause(cfg settings) {
 	}()
 }
 
-func bounded(text string) string {
-	if len(text) > 64 {
-		return text[:64]
+// truncate cuts text to at most n bytes on a rune boundary.
+func truncate(text string, n int) string {
+	if len(text) <= n {
+		return text
 	}
-	return text
+	for n > 0 && !utf8.RuneStart(text[n]) {
+		n--
+	}
+	return text[:n]
 }

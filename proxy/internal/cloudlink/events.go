@@ -23,11 +23,13 @@ import (
 // The runtime/v1 sender (packages/shared/contracts/schemas/runtime-event-v1):
 // one event per recorded model request, buffered in memory, sent in batches of
 // at most eventBatchMax, and dropped on any failure. Observe never blocks: a
-// full buffer drops the event. Events go while signed in, routing on or not:
-// signing in turns on the Developers page (ADR 0089 decision 2). They carry
-// counts and labels only, at the data level Cloud's /me names for the
-// organization (decisions when /me names none; Cloud enforces the level too).
-// Level off, or a level that cannot be read, sends nothing.
+// full buffer drops the event. Events go while signed in, routing on or not,
+// and never once the CLI telemetry opt-out is set (telemetry.enabled false,
+// DO_NOT_TRACK, CAVEMAN_TELEMETRY=0). They carry counts and labels only, at
+// the data level Cloud's /me names for the organization (ADR 0085 §5). The
+// runtime never invents a level: /me without one means counts, a /me that
+// cannot be read lowers a usage or decisions level to counts, and level off,
+// or no level read yet, sends nothing.
 const (
 	eventBatchMax   = 500
 	eventQueueMax   = 2000
@@ -91,7 +93,7 @@ var (
 // Observe queues one event for a recorded request. It never blocks.
 func (l *Link) Observe(rec gateway.RequestRecord) {
 	cfg := l.settings()
-	if cfg.offline || !cfg.signedIn() {
+	if cfg.offline || cfg.noTelemetry || !cfg.signedIn() {
 		return
 	}
 	q := &l.events
@@ -170,8 +172,8 @@ func eventFor(rec gateway.RequestRecord, install string, now time.Time) runtimeE
 			"route":    map[string]string{"status": route},
 			"meter":    map[string]string{"status": "ok"},
 		},
-		ModelRequested: bounded128(rec.RouteFrom),
-		ModelUsed:      bounded128(rec.Model),
+		ModelRequested: modelID(rec, rec.RouteFrom),
+		ModelUsed:      modelID(rec, rec.Model),
 	}
 	if rec.TokenUsageBasis == "provider_complete" || rec.TokenUsageBasis == "provider_partial" {
 		event.Tokens = &eventTokens{Label: "measured", Input: count(rec.InputTokens), Output: count(rec.OutputTokens),
@@ -181,7 +183,7 @@ func eventFor(rec gateway.RequestRecord, install string, now time.Time) runtimeE
 		event.KeptOutOfContext = &eventKeptCount{Label: "inferred", Tokens: count(kept)}
 	}
 	// No route stage ran (routing off, or a request it never routes): off.
-	event.Route = &eventRoute{Outcome: cmp.Or(rec.RouteOutcome, "off"), Reason: bounded(rec.RouteReason)}
+	event.Route = &eventRoute{Outcome: cmp.Or(rec.RouteOutcome, "off"), Reason: truncate(rec.RouteReason, 64)}
 	if uuidRE.MatchString(rec.RouteDecisionID) {
 		event.Route.DecisionID = rec.RouteDecisionID
 	}
@@ -225,7 +227,7 @@ func (l *Link) flush() {
 			batch = append(batch, <-q.ch)
 		}
 		cfg := l.settings()
-		if cfg.offline || !cfg.signedIn() {
+		if cfg.offline || cfg.noTelemetry || !cfg.signedIn() {
 			continue
 		}
 		level := l.dataLevel(cfg)
@@ -261,11 +263,14 @@ func (l *Link) dataLevel(cfg settings) string {
 				Level string `json:"level"`
 			} `json:"data"`
 		}
-		if status, err := l.call(cfg, http.MethodGet, "/api/v1/auth/me", nil, &me); err == nil && status == http.StatusOK {
-			q.level = me.Data.Level
-			if q.level == "" {
-				q.level = "decisions"
-			}
+		status, err := l.call(cfg, http.MethodGet, "/api/v1/auth/me", nil, &me)
+		switch level := me.Data.Level; {
+		case err == nil && status == http.StatusOK && level == "":
+			q.level = "counts"
+		case err == nil && status == http.StatusOK && slices.Contains([]string{"off", "counts", "usage", "decisions"}, level):
+			q.level = level
+		case q.level == "usage" || q.level == "decisions":
+			q.level = "counts" // an unreadable /me never keeps more than counts
 		}
 	}
 	return q.level
@@ -293,21 +298,25 @@ func (l *Link) call(cfg settings, method, path string, body []byte, out any) (in
 	}
 	defer response.Body.Close()
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
-	if out != nil {
-		_ = json.Unmarshal(raw, out)
+	if out != nil && response.StatusCode < 300 {
+		if err := json.Unmarshal(raw, out); err != nil {
+			return response.StatusCode, err
+		}
 	}
 	return response.StatusCode, nil
 }
 
-func count(n int) int {
-	return min(max(n, 0), 100_000_000)
+// modelID is a model name only when the request went to the provider's own
+// API or matched the price catalog; a local server's id can be a file path.
+func modelID(rec gateway.RequestRecord, id string) string {
+	if id == "" || rec.ProviderOriginKnown || rec.PricingKnown || slices.Contains(pools[rec.Provider], id) {
+		return truncate(id, 128)
+	}
+	return "custom"
 }
 
-func bounded128(text string) string {
-	if len(text) > 128 {
-		return text[:128]
-	}
-	return text
+func count(n int) int {
+	return min(max(n, 0), 100_000_000)
 }
 
 func newUUID() string {

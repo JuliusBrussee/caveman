@@ -6,6 +6,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -27,6 +28,10 @@ type byok struct{}
 func (byok) Resolve(string, *http.Request) providers.Credential {
 	return providers.Credential{Mode: "passthrough"}
 }
+
+type roundTrip func(*http.Request) (*http.Response, error)
+
+func (f roundTrip) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type nullSink struct{}
 
@@ -73,13 +78,18 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 
 	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`","gateway_api_key":"cave_project_key"}`))
 	link.events.every = time.Hour
+	target, _ := url.Parse(provider.URL)
 	srv := gateway.New(gateway.Config{
-		Adapters:   []providers.Adapter{anthropic.New(provider.URL)},
-		Auth:       localAuth{},
-		Creds:      byok{},
-		Sink:       nullSink{},
-		HTTPClient: &http.Client{},
-		Cloud:      link,
+		// The provider's own origin (the route stage skips any other), served by the stub.
+		Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")},
+		Auth:     localAuth{},
+		Creds:    byok{},
+		Sink:     nullSink{},
+		HTTPClient: &http.Client{Transport: roundTrip(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})},
+		Cloud: link,
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"`+secretPrompt+`"}]}`))
 	req.Header.Set("x-api-key", "sk-ant-api03-test")

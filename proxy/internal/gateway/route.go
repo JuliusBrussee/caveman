@@ -37,6 +37,9 @@ type RouteAnswer struct {
 	Outcome    string
 	Reason     string
 	DecisionID string
+	// Reject, when set, tells the link the provider refused the routed model,
+	// so the rest of this ask stays on the asked one.
+	Reject func()
 }
 
 // CloudLink is the optional signed-in Cloud connection: the route stage asks
@@ -49,13 +52,10 @@ type CloudLink interface {
 	Observe(rec RequestRecord)
 }
 
-// routable: API-key traffic to Anthropic Messages or OpenAI chat/responses.
-// Subscription (OAuth Pro/Max) traffic has no per-request dollar cost, so
-// routing does nothing on that main loop (ADR 0083 §7).
-func routable(provider, endpoint string, authMode AuthMode) bool {
-	if authMode != AuthModePAYG {
-		return false
-	}
+// routable: Anthropic Messages or OpenAI chat/responses. Only API-key traffic
+// to the provider's own API is asked about: subscription (OAuth Pro/Max) turns
+// have no per-request dollar cost, so routing does nothing there (ADR 0083 §7).
+func routable(provider, endpoint string) bool {
 	switch provider {
 	case "anthropic":
 		return strings.HasSuffix(endpoint, "/messages")
