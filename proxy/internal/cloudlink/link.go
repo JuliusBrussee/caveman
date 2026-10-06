@@ -41,6 +41,7 @@ import (
 const (
 	routeBudget  = 800 * time.Millisecond
 	failurePause = time.Minute      // after a timeout, network error or 5xx
+	pauseRecheck = 15 * time.Minute // how often a limit pause asks /me whether it still holds
 	refusedPause = 10 * time.Minute // after a 401/403: a stale or revoked login
 	decisionsMax = 1024
 	answerMax    = 1 << 20
@@ -73,6 +74,9 @@ type Link struct {
 	decisions  map[string]*decision
 	pauseUntil time.Time
 	paused     gateway.RouteAnswer // what an ask answers while paused
+	recheckAt  time.Time           // the last /me check of a limit pause
+	rechecking bool
+	pausePlan  string // the plan /me named while the limit held
 
 	events eventQueue
 }
@@ -160,9 +164,6 @@ func (l *Link) load(current, legacy, credentials string) settings {
 	}
 	if modules, ok := doc["modules"].(map[string]any); ok {
 		out.routing = modules["routing"] == true
-	}
-	if !out.routing {
-		return out // no credential is read for a link that will not use it
 	}
 	out.cloud = safeBase(stringOf(doc["baseURL"]))
 	out.gateway = safeBase(stringOf(doc["gatewayUrl"]))
@@ -337,6 +338,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if !seen && l.now().Before(l.pauseUntil) {
 		paused := l.paused
 		l.mu.Unlock()
+		l.recheckPause(cfg)
 		return paused
 	}
 	if !seen {
@@ -493,11 +495,57 @@ func (l *Link) forgetLocked() {
 func (l *Link) pause(d time.Duration, what gateway.RouteAnswer) gateway.RouteAnswer {
 	l.mu.Lock()
 	l.pauseUntil, l.paused = l.now().Add(d), what
+	l.recheckAt, l.pausePlan = l.now(), ""
 	l.mu.Unlock()
 	if l.logger != nil {
 		l.logger.Warn("route stage paused; requests keep the model the agent asked for", "reason", what.Reason, "for", d.Round(time.Second).String())
 	}
 	return what
+}
+
+type meProduct struct {
+	ID    string `json:"id"`
+	State string `json:"state"`
+}
+
+// recheckPause lifts an allowance or billing-limit pause early once /me says
+// routing is no longer limited or the plan changed (a card added, a limit
+// raised). At most one /me per pauseRecheck, in the background; a /me without
+// products changes nothing.
+func (l *Link) recheckPause(cfg settings) {
+	l.mu.Lock()
+	if l.paused.Outcome != "paused" || l.rechecking || l.now().Sub(l.recheckAt) < pauseRecheck {
+		l.mu.Unlock()
+		return
+	}
+	l.rechecking, l.recheckAt = true, l.now()
+	l.mu.Unlock()
+	go func() {
+		defer func() {
+			l.mu.Lock()
+			l.rechecking = false
+			l.mu.Unlock()
+		}()
+		var me struct {
+			Plan     string      `json:"plan"`
+			Products []meProduct `json:"products"`
+		}
+		if status, err := l.call(cfg, http.MethodGet, "/api/v1/auth/me", nil, &me); err != nil || status != http.StatusOK || me.Products == nil {
+			return
+		}
+		limited := slices.ContainsFunc(me.Products, func(p meProduct) bool { return p.ID == "routing" && p.State == "limited" })
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		if l.paused.Outcome != "paused" {
+			return
+		}
+		if !limited || l.pausePlan != "" && me.Plan != l.pausePlan {
+			l.pauseUntil, l.paused, l.pausePlan = time.Time{}, gateway.RouteAnswer{}, ""
+			l.forgetLocked()
+			return
+		}
+		l.pausePlan = me.Plan
+	}()
 }
 
 func bounded(text string) string {

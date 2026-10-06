@@ -2,6 +2,7 @@ package cloudlink
 
 import (
 	"bytes"
+	"cmp"
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
@@ -22,10 +23,11 @@ import (
 // The runtime/v1 sender (packages/shared/contracts/schemas/runtime-event-v1):
 // one event per recorded model request, buffered in memory, sent in batches of
 // at most eventBatchMax, and dropped on any failure. Observe never blocks: a
-// full buffer drops the event. Events go only while signed in with routing on
-// (signing in alone uploads nothing new), at the data level Cloud's /me names
-// for the organization (counts when /me names none); level off, or a level
-// that cannot be read, sends nothing.
+// full buffer drops the event. Events go while signed in, routing on or not:
+// signing in turns on the Developers page (ADR 0089 decision 2). They carry
+// counts and labels only, at the data level Cloud's /me names for the
+// organization (decisions when /me names none; Cloud enforces the level too).
+// Level off, or a level that cannot be read, sends nothing.
 const (
 	eventBatchMax   = 500
 	eventQueueMax   = 2000
@@ -89,7 +91,7 @@ var (
 // Observe queues one event for a recorded request. It never blocks.
 func (l *Link) Observe(rec gateway.RequestRecord) {
 	cfg := l.settings()
-	if !cfg.routing || cfg.offline || !cfg.signedIn() {
+	if cfg.offline || !cfg.signedIn() {
 		return
 	}
 	q := &l.events
@@ -178,11 +180,10 @@ func eventFor(rec gateway.RequestRecord, install string, now time.Time) runtimeE
 	if kept := rec.CompressionTokensBefore - rec.CompressionTokensAfter; kept > 0 {
 		event.KeptOutOfContext = &eventKeptCount{Label: "inferred", Tokens: count(kept)}
 	}
-	if rec.RouteOutcome != "" {
-		event.Route = &eventRoute{Outcome: rec.RouteOutcome, Reason: bounded(rec.RouteReason)}
-		if uuidRE.MatchString(rec.RouteDecisionID) {
-			event.Route.DecisionID = rec.RouteDecisionID
-		}
+	// No route stage ran (routing off, or a request it never routes): off.
+	event.Route = &eventRoute{Outcome: cmp.Or(rec.RouteOutcome, "off"), Reason: bounded(rec.RouteReason)}
+	if uuidRE.MatchString(rec.RouteDecisionID) {
+		event.Route.DecisionID = rec.RouteDecisionID
 	}
 	return event
 }
@@ -224,7 +225,7 @@ func (l *Link) flush() {
 			batch = append(batch, <-q.ch)
 		}
 		cfg := l.settings()
-		if !cfg.routing || cfg.offline || !cfg.signedIn() {
+		if cfg.offline || !cfg.signedIn() {
 			continue
 		}
 		level := l.dataLevel(cfg)
@@ -263,7 +264,7 @@ func (l *Link) dataLevel(cfg settings) string {
 		if status, err := l.call(cfg, http.MethodGet, "/api/v1/auth/me", nil, &me); err == nil && status == http.StatusOK {
 			q.level = me.Data.Level
 			if q.level == "" {
-				q.level = "counts"
+				q.level = "decisions"
 			}
 		}
 	}

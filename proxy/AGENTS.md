@@ -104,9 +104,12 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
   (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the
   routed model replays the original bytes on the asked model. The pass-through header and encoded bodies
-  never route; record mode does (routing is its own module). runtime/v1 events share the gate:
-  in-memory batches of at most 500, dropped on failure, trimmed to `/me`'s `data.level`; level
-  `off` or an unreadable level sends nothing. Signing in or out never changes another stage.
+  never route; record mode does (routing is its own module). A limit pause asks `/me` at most
+  every 15 min and lifts once routing is no longer limited or the plan changed. runtime/v1
+  events go whenever signed in, routing on or not (ADR 0089 decision 2; `route.outcome: off`
+  when no route stage ran): in-memory batches of at most 500, dropped on failure, trimmed to
+  `/me`'s `data.level` (`decisions` when absent); level `off` or an unreadable level sends
+  nothing. Signing in or out never changes another stage.
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
 
 See ../../CLAUDE.md (root)

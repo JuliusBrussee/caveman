@@ -453,3 +453,93 @@ func TestEventsStayWithTheLoginThatRecordedThem(t *testing.T) {
 		t.Fatalf("batches sent with %v, want one, as org A", sent)
 	}
 }
+
+// Signing in turns on the Developers page: events flow with routing off, at
+// decisions when /me names no level, and say the route stage was off.
+func TestEventsFlowWithRoutingOff(t *testing.T) {
+	var mu sync.Mutex
+	var events []map[string]any
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/auth/me" {
+			_, _ = io.WriteString(w, `{"user":{"email":"a@b.c"}}`)
+			return
+		}
+		var batch struct {
+			Events []map[string]any `json:"events"`
+		}
+		raw, _ := io.ReadAll(r.Body)
+		_ = json.Unmarshal(raw, &batch)
+		mu.Lock()
+		events = append(events, batch.Events...)
+		mu.Unlock()
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, false, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	link.events.every = time.Hour
+	rec := record(1)
+	rec.RouteOutcome, rec.RouteReason, rec.RouteDecisionID = "", "", ""
+	link.Observe(rec)
+	link.flush()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(events) != 1 || events[0]["level"] != "decisions" {
+		t.Fatalf("events = %v", events)
+	}
+	if route, _ := events[0]["route"].(map[string]any); route["outcome"] != "off" {
+		t.Errorf("route = %v, want outcome off", events[0]["route"])
+	}
+}
+
+// A limit pause asks /me at most every 15 minutes and lifts once routing is no
+// longer limited (a card added, a limit raised).
+func TestLimitPauseLiftsWhenMeSaysSo(t *testing.T) {
+	var routeHits atomic.Int32
+	var limited atomic.Bool
+	limited.Store(true)
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			state := "ok"
+			if limited.Load() {
+				state = "limited"
+			}
+			_, _ = fmt.Fprintf(w, `{"plan":"free","products":[{"id":"routing","state":%q}]}`, state)
+		case "/v1/route":
+			routeHits.Add(1)
+			if limited.Load() {
+				_, _ = io.WriteString(w, `{"model":"claude-opus-5-5","reason":"allowance"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+		}
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(48*time.Hour))+`"}`))
+	var clock atomic.Int64
+	clock.Store(time.Now().UnixNano())
+	link.now = func() time.Time { return time.Unix(0, clock.Load()) }
+	ask := func(session string) gateway.RouteAnswer {
+		next := messagesAsk("claude-opus-5-5")
+		next.SessionID = session
+		return link.Ask(t.Context(), next)()
+	}
+	if answer := ask("s1"); answer.Outcome != "paused" {
+		t.Fatalf("answer = %+v", answer)
+	}
+	limited.Store(false) // a card is added
+	if answer := ask("s2"); answer.Outcome != "paused" || routeHits.Load() != 1 {
+		t.Fatalf("within 15 minutes: answer = %+v, route asks %d", answer, routeHits.Load())
+	}
+	clock.Add(int64(16 * time.Minute))
+	ask("s3") // starts the /me check in the background and stays paused
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		if answer := ask(fmt.Sprintf("s4-%d", time.Now().UnixNano())); answer.Model == "claude-sonnet-5-5" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the pause never lifted after /me stopped marking routing limited")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+}
