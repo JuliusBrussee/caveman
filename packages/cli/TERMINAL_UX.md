@@ -51,7 +51,11 @@ Default output stays bounded. Detail never disappears; it moves behind `--all`,
 - `caveman learn implement`: select Claude Code or Codex, install missing
   `caveman-learn` guide, then launch agent with current report and optional user
   focus. Agent asks before every edit. Load-bearing findings are never edited.
-- `caveman status`: today, off states, account/config state, one next action.
+- `caveman status`: one row per module, one column per detected agent, any off
+  states, one next action. `--json` keeps every field and adds `modules`.
+- `caveman on|off <module…>`: plan lines, one question (`--yes` skips it), apply.
+- `caveman doctor`: local checks first, one failure per line with its fix,
+  non-zero exit on any failure. Choices such as routing before sign-in are notes.
 - `caveman tools`: local commands grouped by think, remember, execute, inspect.
   Default stays at 15 entries; advanced internal surfaces use
   `caveman help tools --all`.

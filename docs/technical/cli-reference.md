@@ -16,7 +16,10 @@ for accepted flags.
 | `caveman wrap <agent>` | Run one ephemeral wrapped session without persistent host config | No |
 | `caveman run -- <command>` | Run an arbitrary command through the local layer | No |
 | `caveman learn` | Rank locally observed improvements | No |
-| `caveman status` | Show local runtime, mode, and connection state | No |
+| `caveman status` | Show which modules are on, which agents they reach, and one next step | No |
+| `caveman on <module>` / `caveman off <module>` | Turn a module on or off, after showing what will change | No |
+| `caveman doctor` | Check this machine without the network: one problem per line, with its fix | No |
+| `caveman stop` | Stop the local runtime that `caveman start` or `caveman <agent>` started | No |
 | `caveman login` | Connect the installation to Caveman Cloud | Yes |
 | `caveman tools` | Open the local tool namespace | No |
 | `caveman cloud` | Open the connected-service namespace | Yes |
@@ -34,6 +37,30 @@ caveman run -- my-agent --project .
 
 Arguments after an agent name are passed to that agent. Arguments after `--`
 in `caveman run` are passed to the selected command.
+
+## Modules
+
+Caveman is six modules, each on unless you turn it off:
+
+| Module | What it does |
+|---|---|
+| `output` | the agent says less |
+| `input` | logs, JSON, code and diffs shrink before the model reads them |
+| `waste-fixes` | finds your agent's worst waste and fixes it |
+| `routing` | the right model each turn; needs a free account |
+| `scripts` | reusable scripts your agent keeps (installs `caveman-blocks`) |
+| `browse` | compressed pages for browser tools |
+
+```bash
+caveman off browse        # shows the plan, asks once, then applies
+caveman on input --yes    # no question
+caveman on --all --dry-run
+```
+
+`on` and `off` change only the modules you name and what those need. Agents
+stay wired while any of `output`, `input`, `waste-fixes` or `routing` is on.
+Without a terminal, pass `--yes` or nothing changes. Choices live in
+`modules` inside the same config file as `caveman tools config`.
 
 ## Local tool namespace
 
