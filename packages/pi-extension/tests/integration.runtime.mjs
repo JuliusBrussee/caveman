@@ -246,6 +246,27 @@ test("open gate: the gateway comes from $CAVEMAN_HOME/cloud.json, not the old co
   }
 });
 
+// Signing in stores the Cloud's gateway for Cloud calls only: without an
+// explicit choice (managedGateway) pi never sends traffic there.
+test("a gatewayUrl stored by login alone is not pi's gateway", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    delete fx.env.CAVE_GATEWAY_URL;
+    writeFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ gatewayUrl: `http://127.0.0.1:${port}` }));
+    await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "openai", "--model", "stub-model",
+      "-p", "say hi",
+    ]);
+    assert.equal(requests.filter((r) => r.method === "POST" && r.path.startsWith("/w/pi/")).length, 0, `requests: ${JSON.stringify(requests)}`);
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
 test("closed gate (no run-state): zero proxy requests and a visible direct-mode notice", { skip: !havePi && "pi devDependency missing" }, async () => {
   const { server, requests, port } = await startStub();
   const fx = fixture(port, { runState: false });
