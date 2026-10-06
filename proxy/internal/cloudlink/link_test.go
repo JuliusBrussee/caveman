@@ -190,6 +190,26 @@ func TestAskTextFromEachShape(t *testing.T) {
 			want: askText{Text: "fix the flaky test"},
 		},
 		{
+			// Only the group's last user message counts: an image-only prompt
+			// leaves the ask empty rather than sending the environment block.
+			name:     "codex image-only prompt",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>workspace-write</permissions instructions>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:"}]}]}`,
+		},
+		{
+			name:     "image-only earlier turn",
+			endpoint: "/v1/messages",
+			body: `{"messages":[
+				{"role":"user","content":[{"type":"image","source":{}}]},
+				{"role":"assistant","content":"A cat."},
+				{"role":"user","content":"crop it"}]}`,
+			want: askText{Text: "crop it", ReplyTail: "A cat.", Turn: 1},
+		},
+		{
 			name:     "codex second turn",
 			endpoint: "/v1/responses",
 			body: `{"model":"gpt-6-sol","input":[
@@ -361,6 +381,22 @@ func TestAskBodyFitsTheContract(t *testing.T) {
 	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: askText{Text: "<system-reminder>a && b</system-reminder>"}}
 	if raw := string(askBody(small)); !strings.HasSuffix(raw, `"ask":{"text":"<system-reminder>a && b</system-reminder>"}}`) {
 		t.Errorf("askBody = %s", raw)
+	}
+}
+
+// A latest turn without text keeps the model and asks nothing.
+func TestImageOnlyAskKeepsTheModel(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	body := `{"model":"gpt-6-sol","input":[{"role":"user","content":"<environment_context>x</environment_context>"},{"role":"user","content":[{"type":"input_image","image_url":"data:"}]}]}`
+	answer := link.Ask(t.Context(), gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: "gpt-6-sol", SessionID: "s1", Body: []byte(body)})()
+	if answer.Model != "" || answer.Outcome != "kept" || answer.Reason != "no_human_text" || hits.Load() != 0 {
+		t.Fatalf("answer = %+v, cloud hits %d", answer, hits.Load())
+	}
+	if got := tail("abc", -1); got != "" {
+		t.Errorf("tail with a negative bound = %q", got)
 	}
 }
 

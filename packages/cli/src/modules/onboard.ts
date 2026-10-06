@@ -196,7 +196,7 @@ async function routingStep(opts: OnboardOptions, deps: OnboardDeps, input: NodeJ
   } catch (error) {
     // Esc during the receipt step, after the credentials were saved.
     if (skip.signal.aborted && await deps.signedIn()) {
-      out.write(`  ${c.green("✓")} signed in\n\n`);
+      out.write(`  ${c.green("✓")} signed in\n\n${ROUTING_ON_LINE}\n\n`);
       return;
     }
     if (skip.signal.aborted) return waits("starts after you sign in");

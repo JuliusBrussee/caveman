@@ -500,8 +500,9 @@ type askText struct {
 // decoded. Turns are input groups, the items between two model outputs. A
 // group with a tool result belongs to the tool loop, text riding along
 // (injected reminders, an interrupt note) included, so a loop keeps its
-// decision. Any other group with user text is one human turn, read from its
-// last user message: an agent's opening context messages come before the ask.
+// decision. Any other group with a user message is one human turn, read from
+// its last user message only: an agent's opening context messages come before
+// the ask, and a last message without text (an image) leaves the turn empty.
 // Each field keeps its end within its bound, cut on a rune boundary: agents
 // put their context first and the person's words last.
 func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
@@ -519,9 +520,9 @@ func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
 	items, _ := jsonsplice.Elements(body, list)
 	var out askText
 	humans, replied := 0, false
-	text, said, tooled := "", false, false // the current group's last user text; whether it has one; a tool result
+	text, read, tooled := "", false, false // the current group's last user message: its text, whether read; a tool result
 	flush := func() {
-		if said && !tooled {
+		if read && !tooled {
 			switch humans {
 			case 0:
 				out.Text = tail(text, askTextMax)
@@ -530,22 +531,22 @@ func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
 			}
 			humans++
 		}
-		text, said, tooled = "", false, false
+		text, read, tooled = "", false, false
 	}
 	for i := len(items) - 1; i >= 0; i-- {
 		role, _ := jsonsplice.StringField(body, items[i], "role")
 		kind, _ := jsonsplice.StringField(body, items[i], "type")
 		switch {
 		case role == "user":
-			if said { // an earlier user message of the group: only a tool result matters
+			if read { // an earlier user message of the group: only a tool result matters
 				_, _, tool := messageText(body, items[i])
 				tooled = tooled || tool
 				continue
 			}
 			got, ok, tool := messageText(body, items[i], "text", "input_text")
-			tooled = tooled || tool
+			read, tooled = true, tooled || tool
 			if ok {
-				text, said = got, true
+				text = got
 			}
 		case role == "tool" || role == "function" || strings.HasSuffix(kind, "_output") || kind == "mcp_approval_response":
 			tooled = true
@@ -810,7 +811,7 @@ func tail(text string, n int) string {
 	if len(text) <= n {
 		return text
 	}
-	start := len(text) - n
+	start := len(text) - max(n, 0)
 	for start < len(text) && !utf8.RuneStart(text[start]) {
 		start++
 	}
