@@ -77,3 +77,18 @@ test("caveman billing opens the signed-in Cloud's billing page", async () => {
     fx.cleanup();
   }
 });
+
+test("status --json carries the plan from /me and no weekly cap", async () => {
+  const fx = modulesFixture();
+  const stub = await cloud(routing({ free_allowance: 100000, used: 7, state: "ok" }));
+  try {
+    const out = await runCli(["status", "--json"], { ...fx.env, CAVE_TOKEN: "test-token", CAVE_API_URL: stub.url });
+    assert.equal(out.code, 0, out.stderr);
+    const json = JSON.parse(out.stdout);
+    assert.deepEqual(json.plan, { plan: "free", products: [{ id: "routing", unit: "decision", free_allowance: 100000, used: 7, state: "ok" }] });
+    assert.ok(!json.off_states.some((state) => state.id === "weekly-cap"));
+  } finally {
+    stub.close();
+    fx.cleanup();
+  }
+});

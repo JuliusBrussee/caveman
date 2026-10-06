@@ -74,7 +74,7 @@ import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, u
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
-import { billingCommand, routingStatus, type CloudMe } from "./modules/cloud.js";
+import { billingCommand, cloudMe, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
@@ -4080,8 +4080,6 @@ export type WrapEntitlement = {
   devices_limit: number;
   evicted_device_hash: string | null;
   expires_at: string;
-  optimized_tokens_week?: number;
-  weekly_reset_at?: string;
 };
 
 type WrapEntitlementState = {
@@ -4109,7 +4107,6 @@ type OffStateID =
   | "running-gate-mismatch"
   | "invalid-mode"
   | "user-record"
-  | "weekly-cap"
   | "mcp-missing"
   | "mem-missing"
   | "zdr"
@@ -4131,11 +4128,6 @@ const MCP_MARKER_ONLY_LINE =
   "MCP surface marker-only by your config — the engine MCP tools are not injected; streaming turns and Claude Pro/Max sessions pass through uncompressed (non-streaming API-key traffic still compresses)";
 
 export const OFF_STATES = {
-  weeklyCap: (used: string, allowance: string): OffState => ({
-    id: "weekly-cap",
-    line: `weekly plan cap reached — connected traffic returns 429 until Monday 00:00 UTC; local wrap is unaffected (${used} of ${allowance} optimized tokens this week)`,
-    fix: "caveman cloud billing",
-  }),
   invalidMode: (value: string): OffState => ({
     id: "invalid-mode",
     line: `think.mode "${value}" is not a valid mode — running record (pass-through)`,
@@ -4219,7 +4211,6 @@ const OFF_STATE_PRECEDENCE: OffStateID[] = [
   "running-mode-mismatch",
   "invalid-mode",
   "user-record",
-  "weekly-cap",
   "mcp-missing",
   "mem-missing",
   "zdr",
@@ -4330,8 +4321,6 @@ function parseWrapEntitlement(raw: unknown): WrapEntitlement | null {
     devices_limit: typeof e.devices_limit === "number" ? e.devices_limit : 3,
     evicted_device_hash: typeof e.evicted_device_hash === "string" ? e.evicted_device_hash : null,
     expires_at: e.expires_at,
-    ...(typeof e.optimized_tokens_week === "number" ? { optimized_tokens_week: e.optimized_tokens_week } : {}),
-    ...(typeof e.weekly_reset_at === "string" ? { weekly_reset_at: e.weekly_reset_at } : {}),
   };
 }
 
@@ -4451,14 +4440,6 @@ function planLabel(plan: string): string {
   }
 }
 
-// planWeeklyAllowanceText mirrors the web dashboard's weekly-allowance display — the
-// parenthetical shows only for the capped tiers (free 5M / indie 50M).
-function planWeeklyAllowanceText(plan: string): string | null {
-  if (plan === "free") return "5M optimized tokens/week";
-  if (plan === "indie") return "50M optimized tokens/week";
-  return null;
-}
-
 function humanTokens(n: number): string {
   if (!Number.isFinite(n) || n <= 0) return "0";
   if (n >= 1_000_000_000) {
@@ -4546,9 +4527,7 @@ async function fetchAndStoreWrapEntitlement(baseURL: string, accessToken: string
 
 function printLoginEntitlement(e: WrapEntitlement) {
   const seatLimit = e.seats_limit == null ? "∞" : String(e.seats_limit);
-  const allowance = planWeeklyAllowanceText(e.plan);
-  const paren = allowance ? `${planLabel(e.plan)} — ${allowance}` : planLabel(e.plan);
-  process.stderr.write(dim(`→ seat ${e.seats_used} of ${seatLimit} active  (${paren})\n`));
+  process.stderr.write(dim(`→ seat ${e.seats_used} of ${seatLimit} active  (${planLabel(e.plan)})\n`));
   process.stderr.write(dim("→ compression: on locally with or without this account\n"));
   process.stderr.write(dim("→ this account adds: analytics, team/seats, cloud sync\n"));
   process.stderr.write(dim("→ telemetry: token counts only, never your prompts — caveman.so/data-use\n"));
@@ -4564,7 +4543,6 @@ function printSeatWall(body: Record<string, unknown> | null) {
   const plan = planLabel(String(pick("plan") ?? "free"));
   const usage = used !== undefined && limit !== undefined ? `${used} of ${limit}` : "all its seats";
   process.stderr.write(`${mark("bad")} no seats left — ${org} is using ${usage} (${plan})\n`);
-  process.stderr.write("  Team is $299/mo for 10 seats → app.caveman.so/billing\n");
   process.stderr.write(dim("→ local compression keeps running; only cloud sync and analytics need a seat.\n"));
 }
 
@@ -5291,7 +5269,7 @@ async function firstRunAccountStep(): Promise<boolean> {
   }
   const yes = await promptYesNo(`  do you have a Caveman account? ${dim("[y/N]")}${dim("   (adds the dashboard + auto insights — compression works without one)")}`);
   if (!yes) {
-    process.stderr.write(dim(`  when you want the dashboard: ${invokedAs()} login   (free · 1 seat · no card)\n\n`));
+    process.stderr.write(dim(`  when you want the dashboard: ${invokedAs()} login   (free account)\n\n`));
     return false;
   }
   try {
@@ -18620,12 +18598,6 @@ function localMidnightRFC3339(): string {
   return new Date(now.getFullYear(), now.getMonth(), now.getDate()).toISOString();
 }
 
-function weeklyAllowance(plan: string): number | null {
-  if (plan === "free") return 5_000_000;
-  if (plan === "indie") return 50_000_000;
-  return null;
-}
-
 function readLearnSnapshot(): { moves: number; sessions: number; stateOne: boolean } {
   try {
     const raw = JSON.parse(readFileSync(join(cavemanHome(), "reports", "caveman-learn.json"), "utf8")) as Record<string, unknown>;
@@ -18694,9 +18666,6 @@ export function renderStatus(view: StatusView): string {
   } else {
     lines.push(statusRow("seat", "not signed in"));
   }
-  if (view.plan) {
-    lines.push(statusRow("plan", `${String(view.plan.plan)} · ${humanTokens(Number(view.plan.used))} of ${humanTokens(Number(view.plan.allowance))} optimized tokens this week · resets Mon 00:00 UTC · connected traffic only`));
-  }
   lines.push(statusRow("config", `think: ${view.config_sources.think}  ·  remember: ${view.config_sources.remember}  ·  execute: ${view.config_sources.execute}`));
   lines.push(statusRow("telemetry", `${view.telemetry.state} · usage ping   ·  change: ${view.telemetry.change}`));
   if (view.next) lines.push("", `next:  ${view.next}`);
@@ -18726,10 +18695,6 @@ async function status(argv: string[]) {
   const invalid = resolution.values["think.mode"].invalid;
   if (invalid !== undefined) states.push(OFF_STATES.invalidMode(invalid));
   if (gate.reason === "user-record") states.push(fixedOffState("user-record", OFF_STATES.userRecord));
-  const allowance = entitlement ? weeklyAllowance(entitlement.plan) : null;
-  if (allowance !== null && entitlement?.optimized_tokens_week !== undefined && entitlement.optimized_tokens_week >= allowance) {
-    states.push(OFF_STATES.weeklyCap(humanTokens(entitlement.optimized_tokens_week), humanTokens(allowance)));
-  }
   const mcpCompatibility = probeMcpBinary();
   if (mcpCompatibility && !mcpCompatibility.probe.current) {
     states.push(OFF_STATES.staleBinary("caveman-mcp", mcpCompatibility.probe.version, cliVersion()));
@@ -18757,12 +18722,12 @@ async function status(argv: string[]) {
   if (!versionInfo) next = "caveman setup --install";
   else if (!signedIn) next = history && !snapshot.stateOne
     ? "caveman learn"
-    : "caveman login   (free · 1 seat · no card)";
+    : "caveman login   (free account)";
   else next = snapshot.moves < 1 ? "caveman learn" : "caveman cloud plan";
 
-  const plan = entitlement && allowance !== null && entitlement.optimized_tokens_week !== undefined
-    ? { plan: entitlement.plan, used: entitlement.optimized_tokens_week, allowance }
-    : null;
+  // Plan and limits come from Cloud's /me only; they never touch a local module.
+  const me = signedIn ? await cloudMe() : null;
+  const plan = me ? { plan: me.plan ?? null, products: Array.isArray(me.products) ? me.products : [] } : null;
   const telemetry = sessionTelemetryState();
   const view: StatusView = {
     mode: runningMode ?? resolvedMode,
@@ -20066,7 +20031,7 @@ understand
   caveman status         what the layer did today
 
 connect
-  caveman login          free · 1 seat · no card
+  caveman login          free account
 
 more
   caveman tools          local, no account   ·  caveman help tools

@@ -47,7 +47,7 @@ test("status observe block carries today-scoped basis, config, telemetry, and fo
     owner: "wrap",
     off_states: [{
       id: "observe",
-      line: "observe mode — compression off until you sign in (free · 1 seat · no card)",
+      line: "observe mode — compression off until you sign in (free account)",
       fix: "caveman login",
     }],
     today: {
@@ -63,7 +63,7 @@ test("status observe block carries today-scoped basis, config, telemetry, and fo
     plan: null,
     config_sources: sources,
     telemetry,
-    next: "caveman login   (free · 1 seat · no card)",
+    next: "caveman login   (free account)",
   });
   assert.match(text, /^caveman  ·  observe/m);
   assert.match(text, /41k tokens observed on the layer/);
@@ -107,7 +107,7 @@ test("status compress block omits honest unknowns instead of zeroing them", () =
 test("half-installed status lists every supplied reason and never invents local numbers", () => {
   const reasons = [
     "caveman-proxy not installed — agents still launch, traffic is NOT compressed or metered",
-    "observe mode — compression off until you sign in (free · 1 seat · no card)",
+    "observe mode — compression off until you sign in (free account)",
     "MCP recovery missing — streaming turns and Claude Pro/Max sessions pass through uncompressed (non-streaming API-key traffic still compresses)",
     "cavemem not installed — memory and auto-recall are off",
   ];

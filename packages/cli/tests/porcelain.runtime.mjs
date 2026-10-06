@@ -24,7 +24,7 @@ understand
   caveman status         what the layer did today
 
 connect
-  caveman login          free · 1 seat · no card
+  caveman login          free account
 
 more
   caveman tools          local, no account   ·  caveman help tools
