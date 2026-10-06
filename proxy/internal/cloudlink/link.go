@@ -230,12 +230,15 @@ func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) s
 		out.gateway = out.cloud
 	}
 	secret := ""
-	switch stringOf(doc["tokenStore"]) {
-	case "file":
+	switch store := stringOf(doc["tokenStore"]); {
+	case doc["logoutPendingLocalCleanup"] == true:
+		// A logout revoked the session, then stopped before its final save: the
+		// stored token is dead, so this is signed out (no asks, no events).
+	case store == "file":
 		if raw, err := os.ReadFile(credentials); err == nil {
 			secret = string(raw)
 		}
-	case "keychain":
+	case store == "keychain":
 		secret = l.keychainSecret(refreshKeychain)
 	default:
 		secret = stringOf(doc["token"]) // legacy inline token

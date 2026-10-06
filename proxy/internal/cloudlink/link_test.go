@@ -728,3 +728,33 @@ func TestReLoginSwapsTheKeychainSecretWithoutAPause(t *testing.T) {
 		t.Fatalf("after re-login = %+v, want routed with the new token and no pause", answer)
 	}
 }
+
+// A logout that stopped after revoking the session but before its final save
+// leaves logoutPendingLocalCleanup in cloud.json: the proxy is signed out.
+func TestLogoutPendingCleanupIsSignedOut(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	secret := token(time.Now().Add(time.Hour))
+	home := keychainHome(t, cloud.URL, nil)
+	link := New(home, nil)
+	link.keychain = func() string { return `{"access_token":"` + secret + `"}` }
+	link.events.every = time.Hour
+	waitForAccess(t, link, secret)
+	time.Sleep(5 * time.Millisecond)
+	writeKeychainConfig(t, home, cloud.URL, map[string]any{"logoutPendingLocalCleanup": true})
+	if link.settings().signedIn() {
+		t.Fatal("signed in while a logout is pending")
+	}
+	if answer := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Model != "" {
+		t.Fatalf("asked with a revoked token: %+v", answer)
+	}
+	link.Observe(record(1))
+	link.flush()
+	if hits.Load() != 0 {
+		t.Fatalf("%d calls to the cloud while a logout is pending", hits.Load())
+	}
+}
