@@ -187,9 +187,13 @@ without the entry.
 The release also carries the `caveman-blocks` binaries of the `scripts` module
 and `modules.json`, the module index. The workflow downloads the
 [caveman-ai/blocks](https://github.com/caveman-ai/blocks) release pinned in
-`packages/cli/BLOCKS_RELEASE`, checks it against Blocks' own `checksums.txt`,
-and attaches each binary as `caveman-blocks_<os>_<arch>` (targets Blocks does
-not build are left out). `packages/cli/scripts/gen-modules-index.mjs` then
+`packages/cli/BLOCKS_RELEASE`, which holds the tag and the SHA-256 of that
+release's `checksums.txt` (release pages are mutable). The workflow refuses a
+`checksums.txt` with another digest, downloads only the archives it lists for
+targets the hub builds, checks each against its listed digest, and attaches
+each binary as `caveman-blocks_<os>_<arch>` (targets Blocks does not list are
+left out). Bumping Blocks means a new tag and its `checksums.txt` digest:
+`gh release download <tag> -R caveman-ai/blocks -p checksums.txt -O - | shasum -a 256`. `packages/cli/scripts/gen-modules-index.mjs` then
 writes `modules.json` from the module registry and the manifest: per module
 its kind, defaults and every platform build's SHA-256. Both are listed in
 `checksums.txt` before it is signed. The CLI (`src/modules/index-file.ts`)

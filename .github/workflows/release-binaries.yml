@@ -129,41 +129,53 @@ jobs:
           cd dist/binaries
           node ../../scripts/build-release-binaries.mjs --list | LC_ALL=C sort | xargs sha256sum -- > checksums.txt
       # The scripts module runs caveman-blocks, released from caveman-ai/blocks
-      # (public, with its own installer). The release pinned in
-      # packages/cli/BLOCKS_RELEASE is mirrored here under hub artifact names, so
-      # the CLI downloads every module binary from one base under one signature.
-      # Blocks' published checksums are checked before anything is republished.
-      # Targets Blocks does not build are left out; modules.json shows the gap.
+      # (public, with its own installer). packages/cli/BLOCKS_RELEASE pins a tag
+      # AND the sha256 of that release's checksums.txt, because a release page
+      # is mutable. Only archives that pinned file lists, for targets the hub
+      # builds, are downloaded, each checked against its listed digest; nothing
+      # else from the release is touched. Each binary is republished under hub
+      # naming, so the CLI downloads every module binary from one base under one
+      # signature. Targets Blocks does not list are left out; modules.json shows
+      # the gap.
       - name: Mirror the pinned caveman-blocks release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          tag="$(tr -d '\r\n' < packages/cli/BLOCKS_RELEASE)"
-          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || {
-            echo "packages/cli/BLOCKS_RELEASE must be a v-semver tag of caveman-ai/blocks, got '$tag'" >&2
+          read -r tag digest < packages/cli/BLOCKS_RELEASE
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ && "${digest:-}" =~ ^[a-f0-9]{64}$ ]] || {
+            echo "packages/cli/BLOCKS_RELEASE must hold '<v-semver tag> <sha256 of its checksums.txt>'" >&2
             exit 1
           }
           version="${tag#v}"
           work="$RUNNER_TEMP/blocks"
           mkdir -p "$work" dist/blocks dist/licenses
-          gh release download "$tag" --repo caveman-ai/blocks --dir "$work" \
-            --pattern checksums.txt --pattern "caveman-blocks_${version}_*"
-          (cd "$work" && sha256sum --strict --check checksums.txt)
+          gh release download "$tag" --repo caveman-ai/blocks --dir "$work" --pattern checksums.txt
+          echo "$digest  $work/checksums.txt" | sha256sum --strict --check - || {
+            echo "caveman-blocks $tag checksums.txt does not match the pinned digest" >&2
+            exit 1
+          }
           for target in $(node scripts/build-release-binaries.mjs --list | sed -n 's/^caveman-proxy_//p'); do
             os="${target%_*}"; arch="${target#*_}"
-            goos="$os"; [[ "$os" == win32 ]] && goos=windows
-            archive="$work/caveman-blocks_${version}_${goos}_${arch}"
-            out="dist/blocks/caveman-blocks_${os}_${arch}"
-            if [[ -f "$archive.tar.gz" ]]; then
-              tar -xzOf "$archive.tar.gz" caveman-blocks > "$out"
-            elif [[ -f "$archive.zip" ]]; then
-              unzip -p "$archive.zip" caveman-blocks.exe > "$out"
+            if [[ "$os" == win32 ]]; then
+              archive="caveman-blocks_${version}_windows_${arch}.zip"; member=caveman-blocks.exe
             else
-              echo "caveman-blocks $tag has no $goos/$arch build; left out"
+              archive="caveman-blocks_${version}_${os}_${arch}.tar.gz"; member=caveman-blocks
+            fi
+            sum="$(awk -v f="$archive" '$2 == f { print $1 }' "$work/checksums.txt")"
+            if [[ -z "$sum" ]]; then
+              echo "caveman-blocks $tag lists no $os/$arch build; left out"
               continue
             fi
-            [[ -s "$out" ]] || { echo "empty caveman-blocks binary in $archive" >&2; exit 1; }
+            gh release download "$tag" --repo caveman-ai/blocks --dir "$work" --pattern "$archive"
+            echo "$sum  $work/$archive" | sha256sum --strict --check -
+            out="dist/blocks/caveman-blocks_${os}_${arch}"
+            if [[ "$os" == win32 ]]; then
+              unzip -p "$work/$archive" "$member" > "$out"
+            else
+              tar -xzOf "$work/$archive" "$member" > "$out"
+            fi
+            [[ -s "$out" ]] || { echo "empty $member in $archive" >&2; exit 1; }
           done
           tar -xzOf "$work/caveman-blocks_${version}_linux_amd64.tar.gz" LICENSE > dist/licenses/LICENSE.caveman-blocks
           (cd dist/blocks && sha256sum -- *) >> dist/binaries/checksums.txt
