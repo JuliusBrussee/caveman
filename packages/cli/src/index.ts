@@ -62,7 +62,7 @@ import {
   type JSONValue,
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
-import { readLock } from "./modules/index-file.js";
+import { ensureModuleBinaries, NoModuleIndexError, readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
@@ -424,8 +424,16 @@ setModuleHost({
   wiringKeys: ["think.shrink"],
   binaryRelease: BINARY_RELEASE,
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
-  // One place to swap for per-module downloads (ensureModuleBinaries).
-  installBinaries: () => setupInstall(false, { continuing: true }),
+  installBinaries: async (modules) => {
+    try {
+      const { problems } = await ensureModuleBinaries(modules);
+      if (problems.length > 0) throw new Error(problems.join("; "));
+    } catch (error) {
+      // A release cut before modules.json: install every signed hub binary instead.
+      if (error instanceof NoModuleIndexError) return setupInstall(false, { continuing: true });
+      throw error;
+    }
+  },
   staleBinaries: () => [
     ...(probeProxyVersion()?.capabilities.includes("run_state") === false ? ["caveman-proxy"] : []),
     ...(probeMcpBinary()?.probe.current === false ? ["caveman-mcp"] : []),

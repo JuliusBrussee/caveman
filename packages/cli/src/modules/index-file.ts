@@ -61,6 +61,11 @@ async function fetchBytes(url: string, timeoutSeconds: number): Promise<Buffer> 
 
 // Fetches modules.json of the pinned release and refuses it unless the signed
 // checksums.txt lists its exact bytes.
+// The pinned release was cut before modules.json existed. Its checksums.txt is
+// signed and simply does not list one, so callers may fall back to the full
+// signed install; every other failure here is a refusal.
+export class NoModuleIndexError extends Error {}
+
 export async function loadModuleIndex(): Promise<ModuleIndex> {
   const base = releaseBase();
   const timeout = setupTimeoutSeconds();
@@ -77,7 +82,7 @@ export async function loadModuleIndex(): Promise<ModuleIndex> {
   } catch (error) {
     throw new Error(`signature check failed for checksums.txt (${(error as Error).message}) — refusing modules.json`);
   }
-  if (!expected) throw new Error(`${BINARY_RELEASE} has no signed modules.json — refusing to read modules`);
+  if (!expected) throw new NoModuleIndexError(`${BINARY_RELEASE} has no signed modules.json — refusing to read modules`);
   const raw = await fetchBytes(`${base}/modules.json`, timeout);
   if (createHash("sha256").update(raw).digest("hex") !== expected) {
     throw new Error(`signature check failed for modules.json of ${BINARY_RELEASE} — refusing it`);

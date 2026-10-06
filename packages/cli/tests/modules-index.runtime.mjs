@@ -15,7 +15,7 @@ import { binaryBody, releaseManifest, signedReleaseCli } from "./_binary-release
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { cli, release, sign } = signedReleaseCli();
-const { ensureModuleBinaries, loadModuleIndex, readLock } = await import(
+const { ensureModuleBinaries, loadModuleIndex, NoModuleIndexError, readLock } = await import(
   pathToFileURL(join(dirname(cli), "modules", "index-file.js")).href
 );
 const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -73,7 +73,8 @@ test("signed index installs the scripts module's caveman-blocks and locks every 
     const digest = sha256(binaryBody);
     assert.deepEqual(lock.modules.scripts, { asked: release, installed: release, binaries: { "caveman-blocks": digest } });
     assert.deepEqual(lock.modules.browse.binaries, { "caveman-browse": digest });
-    assert.deepEqual(lock.modules.output.binaries, {});
+    // output needs the runtime for agent wiring (registry: caveman-proxy + caveman-mcp).
+    assert.deepEqual(lock.modules.output.binaries, { "caveman-proxy": digest, "caveman-mcp": digest });
     for (const name of ["caveman-blocks", "caveman-browse"]) {
       const path = join(home, "bin", exe(name));
       assert.equal(readFileSync(path, "utf8"), binaryBody);
@@ -115,6 +116,8 @@ test("a modules.json the signed manifest does not list is refused", async () => 
   try {
     useHome(server.base);
     await assert.rejects(loadModuleIndex(), new RegExp(`${release} has no signed modules\\.json`));
+    // An older signed release: callers may fall back to the full install.
+    await assert.rejects(loadModuleIndex(), NoModuleIndexError);
   } finally {
     await server.close();
   }
@@ -127,6 +130,8 @@ test("a manifest with a bad signature is refused", async () => {
   try {
     useHome(server.base);
     await assert.rejects(loadModuleIndex(), /signature check failed for checksums\.txt/);
+    // A refusal never looks like an older release, so nothing falls back past it.
+    await assert.rejects(loadModuleIndex(), (error) => !(error instanceof NoModuleIndexError));
   } finally {
     await server.close();
   }
