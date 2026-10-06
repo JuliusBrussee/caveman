@@ -1,5 +1,14 @@
 # Changelog
 
+## Unreleased
+
+- `route-ask-v1` (additive): optional, strict `ask`
+  object next to `signals` — `text` (required, non-blank, at most 131072 bytes),
+  `prev_text` and `reply_tail` (at most 16384 bytes each) and `turn`
+  (0..1000000). Every field keeps its end. The description now says the ask
+  carries raw conversation text. The `$id` still names `contracts-v2.0.0`;
+  moving it with the package version is due at the next release.
+
 ## 2.0.0 — 2026-09-24
 
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
