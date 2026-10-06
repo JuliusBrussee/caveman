@@ -14,6 +14,8 @@ import { homedir, setPriority } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { cloudConfigPath } from "./modules/config-home.js";
+
 export type AutopilotState = {
   last_attempt_at?: string;
   last_scan_at?: string;
@@ -78,7 +80,7 @@ export function autopilotEnabled(): { enabled: boolean; source: "env" | "config"
   const env = process.env.CAVEMAN_LEARN_AUTOPILOT?.trim().toLowerCase();
   if (env) return { enabled: !["0", "false", "off", "no"].includes(env), source: "env" };
   try {
-    const config = JSON.parse(readFileSync(join(homedir(), ".caveman-cloud", "config.json"), "utf8")) as Record<string, unknown>;
+    const config = JSON.parse(readFileSync(cloudConfigPath(), "utf8")) as Record<string, unknown>;
     if (typeof config.learnAutopilot === "boolean") return { enabled: config.learnAutopilot, source: "config" };
   } catch { /* default below */ }
   const ci = process.env.CI;

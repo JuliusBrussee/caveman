@@ -49,6 +49,7 @@ import { RECIPES, type IntegrationRecipe } from "./recipes.generated.js";
 import { PRACTICE_REGISTRY } from "./practices.generated.js";
 import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
+import { cloudConfigPath, legacyCloudDir } from "./modules/config-home.js";
 import {
   AGENT_SKILLS,
   AGENT_SKILL_METADATA,
@@ -10719,12 +10720,14 @@ function localSpendDbPath(): string {
   return process.env.CAVEMAN_DB ?? join(caveHome(), "caveman.db");
 }
 
+// Sync watermarks stay in the legacy directory: moving them apart from an older
+// CLI still reading them there would upload the same spans twice.
 function syncStatePath(): string {
-  return join(dirname(configPath()), "sync.json");
+  return join(legacyCloudDir(), "sync.json");
 }
 
 function localScanStatePath(): string {
-  return join(dirname(configPath()), "local-scan.json");
+  return join(legacyCloudDir(), "local-scan.json");
 }
 
 function localScanCounter(value: unknown): number | null {
@@ -19876,7 +19879,7 @@ async function projectId() {
 }
 
 function configPath() {
-  return join(homedir(), ".caveman-cloud", "config.json");
+  return cloudConfigPath();
 }
 
 function print(value: unknown) {

@@ -20,8 +20,8 @@ const bigPlan = {
   ],
 };
 
-// Every path lives under one temp HOME: CAVEMAN_HOME, CLAUDE_CONFIG_DIR and
-// ~/.caveman-cloud never point at the real machine config.
+// Every path lives under one temp HOME: CAVEMAN_HOME (with cloud.json),
+// CLAUDE_CONFIG_DIR and ~/.caveman-cloud never point at the real machine config.
 function sandbox(extra = {}) {
   const home = mkdtempSync(join(tmpdir(), "cave-autopilot-"));
   const bin = join(home, "bin");
@@ -56,8 +56,8 @@ cat "${planFile}"
     CAVEMAN_PROXY_BIN: proxy,
     ...extra,
   };
-  mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
-  writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify({ wrap: { proxy: false } }));
+  mkdirSync(env.CAVEMAN_HOME, { recursive: true });
+  writeFileSync(join(env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ wrap: { proxy: false } }));
   const runtime = join(env.CAVEMAN_HOME, "runtime");
   return {
     home, env, planFile, runtime,
@@ -142,7 +142,7 @@ test("opt-out: env 0, config off, and CI default all skip the spawn", { skip: !p
   ]) {
     const box = sandbox(extra);
     try {
-      if (config !== undefined) writeFileSync(join(box.home, ".caveman-cloud", "config.json"), JSON.stringify({ learnAutopilot: config }));
+      if (config !== undefined) writeFileSync(join(box.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ learnAutopilot: config }));
       const out = await hook(fastHook, "claude", { hook_event_name: "SessionEnd", session_id: "s1" }, box.env);
       assert.equal(out.code, 0, out.stderr);
       await new Promise((r) => setTimeout(r, 600));
@@ -161,7 +161,7 @@ test("learn autopilot on/off persists in config and status reports it", async ()
     assert.match(on.stdout, /learn autopilot: on \(config\)/);
     assert.match(on.stdout, /last scan:\s+never/);
     assert.match(on.stdout, /next scan:\s+next session end/);
-    const cfg = JSON.parse(readFileSync(join(box.home, ".caveman-cloud", "config.json"), "utf8"));
+    const cfg = JSON.parse(readFileSync(join(box.env.CAVEMAN_HOME, "cloud.json"), "utf8"));
     assert.equal(cfg.learnAutopilot, true);
     assert.deepEqual(cfg.wrap, { proxy: false }, "other config keys preserved");
     const off = await run([cli, "learn", "autopilot", "off"], box.env);

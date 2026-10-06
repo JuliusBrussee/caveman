@@ -17,7 +17,7 @@ function environment(t) {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home, CAVEMAN_HOME: join(home, ".caveman"), CAVE_NO_KEYCHAIN: "1", CAVE_API_URL: "https://must-not-contact.invalid", CAVE_GATEWAY_URL: "https://must-not-inherit.invalid" };
   delete env.CAVE_TOKEN;
-  return { env, credentials: join(home, ".caveman", "credentials"), config: join(home, ".caveman-cloud", "config.json") };
+  return { env, credentials: join(home, ".caveman", "credentials"), config: join(home, ".caveman", "cloud.json") };
 }
 
 function run(argv, env) {

@@ -19,13 +19,11 @@ function makeToken({ org = "org-1", exp = Math.floor(Date.now() / 1000) + 3600 }
 function isolatedEnv() {
   const home = mkdtempSync(join(tmpdir(), "cave-credentials-home-"));
   const caveHome = mkdtempSync(join(tmpdir(), "cave-credentials-store-"));
-  const configDir = join(home, ".caveman-cloud");
-  mkdirSync(configDir, { recursive: true });
   const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveHome, CAVE_NO_KEYCHAIN: "1", NO_COLOR: "1" };
   delete env.CAVE_TOKEN;
   delete env.CAVE_API_KEY;
   delete env.CAVE_GATEWAY_URL;
-  return { env, home, caveHome, configPath: join(configDir, "config.json"), credentialsPath: join(caveHome, "credentials") };
+  return { env, home, caveHome, configPath: join(caveHome, "cloud.json"), credentialsPath: join(caveHome, "credentials") };
 }
 
 function installFakeSecurity(paths, secret, deleteExit = 0) {

@@ -348,9 +348,9 @@ test("a second enable still starts the proxy when nothing is listening", async (
 test("enable does not start the proxy when the user's config disables it", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
-  mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
+  mkdirSync(fx.env.CAVEMAN_HOME, { recursive: true });
   writeFileSync(
-    join(fx.home, ".caveman-cloud", "config.json"),
+    join(fx.env.CAVEMAN_HOME, "cloud.json"),
     JSON.stringify({ wrap: { proxy: false } }, null, 2),
   );
 
@@ -513,9 +513,9 @@ test("a native install honors think.shrink=false, and a repair keeps the entry o
   const settingsPath = join(fx.home, ".claude", "settings.json");
   assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
 
-  const configDir = join(fx.home, ".caveman-cloud");
+  const configDir = fx.env.CAVEMAN_HOME;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
 
   // Turning the switch off makes the existing install genuinely out of sync,
   // and doctor says so instead of calling an unwanted entry healthy.
@@ -543,7 +543,7 @@ test("a native install honors think.shrink=false, and a repair keeps the entry o
   assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /shrink-hook/);
 
   // And turning it back on is still a one-command round trip.
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: true } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { shrink: true } }, null, 2));
   assert.equal((await run(["doctor", "claude", "--fix"], fx.env)).code, 0);
   assert.match(readFileSync(settingsPath, "utf8"), /shrink-hook/);
 });
@@ -572,9 +572,9 @@ test("a shrink entry an earlier install left behind does not survive think.shrin
   }, null, 2));
   writeFileSync(join(fx.home, ".claude", "keep.txt"), "unrelated");
 
-  const configDir = join(fx.home, ".caveman-cloud");
+  const configDir = fx.env.CAVEMAN_HOME;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
 
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
   const settings = readFileSync(settingsPath, "utf8");
@@ -594,9 +594,9 @@ test("a shrink entry an earlier install left behind does not survive think.shrin
 test("the degraded gate names the repair that actually repairs", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
-  const configDir = join(fx.home, ".caveman-cloud");
+  const configDir = fx.env.CAVEMAN_HOME;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { shrink: false } }, null, 2));
 
   // `caveman doctor claude` alone only prints JSON saying `degraded`; nothing in
   // it says how to get out. Pointing at the bare command dead-ends the user.
@@ -608,9 +608,9 @@ test("the degraded gate names the repair that actually repairs", async () => {
 test("doctor surfaces independently disabled Core without degrading native integration", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
-  const configDir = join(fx.home, ".caveman-cloud");
+  const configDir = fx.env.CAVEMAN_HOME;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { mode: "compress", core: false } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { mode: "compress", core: false } }, null, 2));
   const out = await run(["doctor", "claude"], fx.env);
   assert.equal(out.code, 0, out.stderr);
   const result = JSON.parse(out.stdout);
@@ -628,9 +628,9 @@ test("doctor surfaces independently disabled Core without degrading native integ
 test("doctor reports persisted and environment record modes as Core inactive", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
-  const configDir = join(fx.home, ".caveman-cloud");
+  const configDir = fx.env.CAVEMAN_HOME;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { mode: "record", core: true } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { mode: "record", core: true } }, null, 2));
   const out = await run(["doctor", "claude"], fx.env);
   assert.equal(out.code, 0, out.stderr);
   const result = JSON.parse(out.stdout);
@@ -641,7 +641,7 @@ test("doctor reports persisted and environment record modes as Core inactive", a
   assert.equal(result.coding_policy, "off");
   assert.equal(result.components.core, false);
 
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ think: { mode: "compress", core: true } }, null, 2));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ think: { mode: "compress", core: true } }, null, 2));
   const envMode = JSON.parse((await run(["doctor", "claude"], { ...fx.env, CAVEMAN_NATIVE_MODE: "record" })).stdout);
   assert.equal(envMode.core_active, false);
   const envProfile = JSON.parse((await run(["doctor", "claude"], { ...fx.env, CAVEMAN_NATIVE_PROFILE: "record-only" })).stdout);

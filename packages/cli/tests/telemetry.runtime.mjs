@@ -167,7 +167,7 @@ test("interactive first command persists default-on with disclosure and a stable
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const { env, home, caveDir } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
 
   const first = await runCliPty(["tools", "config", "get"], env);
   if (first === null || first.code !== 0) {
@@ -176,7 +176,7 @@ test("interactive first command persists default-on with disclosure and a stable
     return;
   }
   assert.match(first.output, /usage stats on/, "first interactive run must print the disclosure");
-  const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   assert.equal(cfg.telemetry?.enabled, true);
   assert.match(cfg.telemetry?.anonymousId ?? "", uuidRe, "persisted decision must carry a stable anonymous id");
 
@@ -197,14 +197,14 @@ test("non-TTY run never persists the default-on telemetry decision", async (t) =
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const { env, home, caveDir } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
 
   const out = await runCli(["compress"], { ...env, CAVEMAN_ENGINE_BIN: join(tmpdir(), "missing-caveman-engine") }, { input: "hello" });
   assert.equal(out.code, 0, out.stderr);
   assert.doesNotMatch(out.stderr, /usage stats on/, "disclosure line is TTY-only");
   let persisted = {};
   try {
-    persisted = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+    persisted = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   } catch {
     // no config written at all is the expected outcome
   }
@@ -219,17 +219,17 @@ test("persisted v1 opt-out survives the default-on era", async (t) => {
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
-  const configDir = join(home, ".caveman-cloud");
+  const { env, home, caveDir } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = caveDir;
   mkdirSync(configDir, { recursive: true });
   const optOut = { enabled: false, decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 1 };
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ telemetry: optOut }));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ telemetry: optOut }));
 
   const out = await runCli(["telemetry", "status"], env);
   assert.equal(out.code, 0, out.stderr);
   const status = JSON.parse(out.stdout);
   assert.equal(status.state, "off", "an old explicit No must never be flipped by the new default");
-  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8"));
   assert.deepEqual(cfg.telemetry, optOut, "the v1 decision must not be rewritten");
   await stub.settle();
   assert.equal(stub.posts.length, 0);
@@ -302,7 +302,7 @@ test("agent spawn failure books error_class exec_failed", async (t) => {
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({
+  const { env, home, caveDir } = isolatedEnv({
     CAVEMAN_TELEMETRY: "1",
     CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
     CAVE_GATEWAY_URL: "http://127.0.0.1:9",
@@ -317,9 +317,9 @@ test("agent spawn failure books error_class exec_failed", async (t) => {
     : "#!/caveman-no-such-interpreter\n";
   writeFileSync(join(binDir, "codex"), unlaunchable, { mode: 0o755 });
   env.PATH = `${binDir}:${env.PATH}`;
-  mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
+  mkdirSync(caveDir, { recursive: true });
   writeFileSync(
-    join(home, ".caveman-cloud", "config.json"),
+    join(caveDir, "cloud.json"),
     JSON.stringify({ wrap: { proxy: false, shrink: false, mcp: false } }),
   );
 
@@ -364,12 +364,12 @@ test("an interactive stale-version opt-out stays byte-identical and silent", asy
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
-  const configDir = join(home, ".caveman-cloud");
+  const { env, home, caveDir } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = caveDir;
   mkdirSync(configDir, { recursive: true });
   const optOut = { enabled: false, decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 1 };
   const raw = JSON.stringify({ telemetry: optOut });
-  writeFileSync(join(configDir, "config.json"), raw);
+  writeFileSync(join(configDir, "cloud.json"), raw);
 
   const out = await runCliPty(["tools", "config", "get"], env);
   if (out === null || out.code !== 0) {
@@ -378,7 +378,7 @@ test("an interactive stale-version opt-out stays byte-identical and silent", asy
     return;
   }
   assert.doesNotMatch(out.output, /usage stats on/, "an opt-out must never be re-disclosed");
-  assert.equal(readFileSync(join(configDir, "config.json"), "utf8"), raw, "an opt-out config must stay byte-identical");
+  assert.equal(readFileSync(join(configDir, "cloud.json"), "utf8"), raw, "an opt-out config must stay byte-identical");
   await stub.settle();
   assert.equal(stub.posts.length, 0, "an opt-out must never send");
 
@@ -419,7 +419,7 @@ test("command_run carries the proxy token delta, then stops repeating it", async
   await stub.waitForPosts(1);
   const firstEvent = JSON.parse(stub.posts[0].body)[0];
   assert.ok(!("tokens_processed" in firstEvent), "pre-existing history must not be swept up by the first event");
-  const watermark = JSON.parse(readFileSync(join(iso.home, ".caveman-cloud", "config.json"), "utf8")).telemetryTokens;
+  const watermark = JSON.parse(readFileSync(join(iso.caveDir, "cloud.json"), "utf8")).telemetryTokens;
   assert.equal(watermark.tokensIn, 184320, "the baseline is still recorded");
   assert.equal(watermark.tokensSaved, 41200);
 
@@ -449,7 +449,7 @@ test("command_run carries the proxy token delta, then stops repeating it", async
 // delayConfigWrite wires a --require preload that stalls fs.writeFileSync for
 // delayMs when the target path is this run's config.json, widening the gap
 // between reading and committing the watermark the way process jitter can.
-function delayConfigWrite(env, home, delayMs) {
+function delayConfigWrite(env, delayMs) {
   const dir = mkdtempSync(join(tmpdir(), "cave-delay-"));
   const preload = join(dir, "delay-write.cjs");
   writeFileSync(preload, [
@@ -467,7 +467,7 @@ function delayConfigWrite(env, home, delayMs) {
   return {
     ...env,
     NODE_OPTIONS: `${env.NODE_OPTIONS ? `${env.NODE_OPTIONS} ` : ""}--require ${preload}`,
-    CAVEMAN_TEST_DELAY_CONFIG_PATH: join(home, ".caveman-cloud", "config.json"),
+    CAVEMAN_TEST_DELAY_CONFIG_PATH: join(env.CAVEMAN_HOME, "cloud.json"),
     CAVEMAN_TEST_DELAY_WRITE_MS: String(delayMs),
   };
 }
@@ -487,14 +487,14 @@ test("two CLI processes racing the same watermark do not both claim the delta", 
     CAVEMAN_TELEMETRY: "1",
     CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
   });
-  const configDir = join(iso.home, ".caveman-cloud");
+  const configDir = iso.caveDir;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 5 },
     telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
   }));
   const baseEnv = stubProxyStats(iso, { tokensIn: 1500, tokensSaved: 300 });
-  const racingEnv = delayConfigWrite(baseEnv, iso.home, 1200);
+  const racingEnv = delayConfigWrite(baseEnv, 1200);
 
   const [a, b] = await Promise.all([runCli(["version"], racingEnv), runCli(["version"], racingEnv)]);
   assert.equal(a.code, 0, a.stderr);
@@ -512,7 +512,7 @@ test("two CLI processes racing the same watermark do not both claim the delta", 
   assert.equal(withTokens[0].tokens_processed, 1000);
   assert.equal(withTokens[0].tokens_saved, 200);
 
-  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  const watermark = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8")).telemetryTokens;
   assert.equal(watermark.tokensIn, 1500, "the watermark still advances to the real total");
 
   stub.close();
@@ -528,9 +528,9 @@ test("a stale lock from a crashed holder does not wedge telemetry off", async (t
     CAVEMAN_TELEMETRY: "1",
     CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
   });
-  const configDir = join(iso.home, ".caveman-cloud");
+  const configDir = iso.caveDir;
   mkdirSync(configDir, { recursive: true });
-  const configFile = join(configDir, "config.json");
+  const configFile = join(configDir, "cloud.json");
   writeFileSync(configFile, JSON.stringify({
     telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 5 },
     telemetryTokens: { tokensIn: 500, tokensSaved: 100, at: "2026-08-01T00:00:00.000Z" },
@@ -566,9 +566,9 @@ test("telemetry off drops the token watermark so re-enabling re-seeds", async (t
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
   const iso = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
-  const configDir = join(iso.home, ".caveman-cloud");
+  const configDir = iso.caveDir;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-08-01T00:00:00.000Z", promptVersion: 4 },
     telemetryTokens: { tokensIn: 1000, tokensSaved: 200, at: "2026-08-01T00:00:00.000Z" },
   }));
@@ -582,7 +582,7 @@ test("telemetry off drops the token watermark so re-enabling re-seeds", async (t
   assert.match(offOut.delete_sent_data, /SECURITY\.md#delete-sent-telemetry$/);
   const again = JSON.parse((await runCli(["telemetry", "off"], iso.env)).stdout);
   assert.equal("discarded_anonymous_id" in again, false, "an id already discarded is not reprinted");
-  const afterOff = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  const afterOff = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8"));
   assert.ok(!("telemetryTokens" in afterOff), "the watermark must not outlive the opt-out");
 
   // Traffic accumulated while off. The next run that can send must re-seed
@@ -596,7 +596,7 @@ test("telemetry off drops the token watermark so re-enabling re-seeds", async (t
   for (const event of events) {
     assert.ok(!("tokens_processed" in event), "opt-out window traffic must never be reported on re-enable");
   }
-  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  const watermark = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8")).telemetryTokens;
   assert.equal(watermark.tokensIn, 900000, "re-enabling re-seeds from the current store");
 
   stub.close();
@@ -632,9 +632,9 @@ test("a log line on the proxy's stdout does not break or poison the token read",
   writeFileSync(bin, `#!/bin/sh\ncat <<'CAVE_EOF'\n${noisy}\nCAVE_EOF\n`, { mode: 0o755 });
   chmodSync(bin, 0o755);
   writeFileSync(join(iso.caveDir, "caveman.db"), "");
-  const configDir = join(iso.home, ".caveman-cloud");
+  const configDir = iso.caveDir;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     telemetryTokens: { tokensIn: 4000, tokensSaved: 800, at: "2026-08-01T00:00:00.000Z" },
   }));
 
@@ -644,7 +644,7 @@ test("a log line on the proxy's stdout does not break or poison the token read",
   const event = JSON.parse(stub.posts[0].body)[0];
   assert.equal(event.tokens_processed, 1000, "the payload must still be found behind the log line");
   assert.equal(event.tokens_saved, 200);
-  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  const watermark = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8")).telemetryTokens;
   assert.equal(watermark.tokensIn, 5000, "the log object must never become the watermark");
 
   stub.close();
@@ -662,9 +662,9 @@ test("a rewound proxy store re-baselines instead of replaying or going negative"
     CAVEMAN_TELEMETRY: "1",
     CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`,
   });
-  const configDir = join(iso.home, ".caveman-cloud");
+  const configDir = iso.caveDir;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     telemetryTokens: { tokensIn: 500000, tokensSaved: 90000, at: "2026-08-01T00:00:00.000Z" },
   }));
   const env = stubProxyStats(iso, { tokensIn: 1200, tokensSaved: 300 });
@@ -675,7 +675,7 @@ test("a rewound proxy store re-baselines instead of replaying or going negative"
   const event = JSON.parse(stub.posts[0].body)[0];
   assert.ok(!("tokens_processed" in event), "a deleted/restored store must not report its history a second time");
   assert.ok(!("tokens_saved" in event));
-  const watermark = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8")).telemetryTokens;
+  const watermark = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8")).telemetryTokens;
   assert.equal(watermark.tokensIn, 1200, "the watermark re-baselines to the smaller store");
   assert.equal(watermark.tokensSaved, 300);
 
@@ -709,8 +709,8 @@ test("a stale-version opt-in is re-disclosed once and never re-asked", async (t)
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
-  const configDir = join(home, ".caveman-cloud");
+  const { env, home, caveDir } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = caveDir;
   mkdirSync(configDir, { recursive: true });
   const optIn = {
     enabled: true,
@@ -718,7 +718,7 @@ test("a stale-version opt-in is re-disclosed once and never re-asked", async (t)
     decidedAt: "2026-07-03T00:00:00.000Z",
     promptVersion: 4,
   };
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({ telemetry: optIn }));
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({ telemetry: optIn }));
 
   const first = await runCliPty(["tools", "config", "get"], env);
   if (first === null || first.code !== 0) {
@@ -728,7 +728,7 @@ test("a stale-version opt-in is re-disclosed once and never re-asked", async (t)
   }
   assert.match(first.output, /IP address/, "the widened scope must be disclosed");
   assert.doesNotMatch(first.output, /\[y\/N\]/, "an existing decision is never re-asked");
-  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8"));
   assert.equal(cfg.telemetry.promptVersion, 5);
   assert.equal(cfg.telemetry.anonymousId, optIn.anonymousId, "re-disclosure must not rotate the id");
   assert.equal(cfg.telemetry.decidedAt, optIn.decidedAt, "the original decision date stands");
@@ -746,10 +746,10 @@ test("a stale-version opt-in sends nothing from a command that skips the re-disc
   const stub = startTelemetryStub();
   const port = await listenOrSkip(t, stub);
   if (port === null) return;
-  const { env, home } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
-  const configDir = join(home, ".caveman-cloud");
+  const { env, home, caveDir } = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry` });
+  const configDir = caveDir;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 4 },
   }));
 
@@ -759,7 +759,7 @@ test("a stale-version opt-in sends nothing from a command that skips the re-disc
     t.skip("script(1) pty unavailable in this environment");
     return;
   }
-  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8"));
   assert.equal(cfg.telemetry.promptVersion, 4, "status must not claim the new wording was shown");
   await stub.settle();
   assert.equal(stub.posts.length, 0, "nothing sends before the current disclosure has printed");
@@ -790,10 +790,10 @@ async function waitForPosts(stub, predicate) {
 
 function nativeSessionEnv(port, telemetry, extra = {}) {
   const iso = isolatedEnv({ CAVEMAN_TELEMETRY_URL: `http://127.0.0.1:${port}/telemetry`, ...extra });
-  mkdirSync(join(iso.home, ".caveman-cloud"), { recursive: true });
+  mkdirSync(iso.caveDir, { recursive: true });
   const config = { wrap: { proxy: false } };
   if (telemetry) config.telemetry = telemetry;
-  writeFileSync(join(iso.home, ".caveman-cloud", "config.json"), JSON.stringify(config));
+  writeFileSync(join(iso.caveDir, "cloud.json"), JSON.stringify(config));
   return iso.env;
 }
 
@@ -871,10 +871,10 @@ test("a native hook never holds the host on a telemetry POST, even with CAVEMAN_
 // Native hooks run under hosts that often never read the shell rc, so an
 // env-only kill has to become a persisted opt-out the next time a terminal sees it.
 test("an interactive run under DO_NOT_TRACK persists the opt-out", async (t) => {
-  const { env, home } = isolatedEnv({ DO_NOT_TRACK: "1" });
-  const configDir = join(home, ".caveman-cloud");
+  const { env, home, caveDir } = isolatedEnv({ DO_NOT_TRACK: "1" });
+  const configDir = caveDir;
   mkdirSync(configDir, { recursive: true });
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     telemetry: { enabled: true, anonymousId: "123e4567-e89b-12d3-a456-426614174000", decidedAt: "2026-07-03T00:00:00.000Z", promptVersion: 5 },
     telemetryTokens: { tokensIn: 10, tokensSaved: 1, at: "2026-07-03T00:00:00.000Z" },
   }));
@@ -884,15 +884,15 @@ test("an interactive run under DO_NOT_TRACK persists the opt-out", async (t) => 
     t.skip("script(1) pty unavailable in this environment");
     return;
   }
-  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8"));
   assert.equal(cfg.telemetry.enabled, false);
   assert.ok(!("telemetryTokens" in cfg), "the watermark goes with the decision");
   assert.match(out.output, /old install id 123e4567-e89b-12d3-a456-426614174000/, "the discarded id is shown for deletion requests");
 });
 
 test("logout preserves telemetry config", async () => {
-  const { env, home } = isolatedEnv({ CAVE_NO_KEYCHAIN: "1" });
-  const configDir = join(home, ".caveman-cloud");
+  const { env, home, caveDir } = isolatedEnv({ CAVE_NO_KEYCHAIN: "1" });
+  const configDir = caveDir;
   mkdirSync(configDir, { recursive: true });
   const telemetry = {
     enabled: true,
@@ -900,7 +900,7 @@ test("logout preserves telemetry config", async () => {
     decidedAt: "2026-07-03T00:00:00.000Z",
     promptVersion: 1,
   };
-  writeFileSync(join(configDir, "config.json"), JSON.stringify({
+  writeFileSync(join(configDir, "cloud.json"), JSON.stringify({
     baseURL: "http://localhost:8080",
     token: "legacy-token",
     tokenStore: "file",
@@ -911,7 +911,7 @@ test("logout preserves telemetry config", async () => {
 
   const out = await runCli(["logout"], env);
   assert.equal(out.code, 0, out.stderr);
-  const cfg = JSON.parse(readFileSync(join(configDir, "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(configDir, "cloud.json"), "utf8"));
   assert.deepEqual(cfg.telemetry, telemetry, "logout must not wipe consent");
   assert.deepEqual(cfg.futureField, { keep: true }, "saveConfig must preserve unknown config fields");
   assert.ok(!("token" in cfg), "logout still clears legacy inline token");
