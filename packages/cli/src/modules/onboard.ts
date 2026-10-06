@@ -3,14 +3,15 @@
 // setup, `npx caveman`, the end of install.sh and `caveman <agent>` before any
 // setup all land here. Nothing is written before Continue.
 import { readFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { emitKeypressEvents } from "node:readline";
 
-import { applyModules, currentSelection, planModules, type ModulePlan, type ModuleSelection, type PlanLine } from "./apply.js";
+import { applyModules, currentSelection, planModules, renderPlan, type ModulePlan, type ModuleSelection } from "./apply.js";
 import { cloudConfigPath } from "./config-home.js";
 import { MODULES, findModule, type ModuleId } from "./registry.js";
 
-export type OnboardAgent = { id: string; name: string; installed: boolean; version?: string };
+// `wired`: Caveman already routes this agent. A wired agent stays ticked even
+// off PATH, because the plan unwires every agent left out of the list.
+export type OnboardAgent = { id: string; name: string; installed: boolean; wired: boolean; version?: string };
 export type OnboardOptions = { yes: boolean; dryRun: boolean; only?: ModuleId[]; skip?: ModuleId[]; agents?: string[] };
 export type SignInUi = { signal: AbortSignal; code(url: string, userCode: string, opened: boolean): void };
 export type OnboardDeps = {
@@ -78,15 +79,20 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   const c = colors(out);
   const ask = deps.interactive && !opts.yes && !opts.dryRun;
   const byId = new Map(deps.agents.map((agent) => [agent.id, agent]));
+  const usable = (agent: OnboardAgent) => agent.installed || agent.wired;
   for (const id of opts.agents ?? []) {
-    if (!byId.get(id)?.installed) {
-      throw new Error(`--agents: ${id} is not installed here · found: ${deps.agents.filter((a) => a.installed).map((a) => a.id).join(", ") || "none"}`);
+    const agent = byId.get(id);
+    if (!agent || !usable(agent)) {
+      throw new Error(`--agents: ${id} is not installed here · found: ${deps.agents.filter(usable).map((a) => a.id).join(", ") || "none"}`);
     }
   }
 
   out.write(`${c.bold("caveman")} ${c.dim("· make your coding agent cheaper")}\n\n${foundLine(deps.agents)}\n\n`);
   let selection = initialSelection(opts);
-  let agents = opts.agents ?? deps.agents.filter((agent) => agent.installed).map((agent) => agent.id);
+  // Re-runs keep what is wired; a first run takes what is installed. --agents
+  // adds to the wired ones: unwiring is `caveman off` or unticking here.
+  const wired = deps.agents.filter((agent) => agent.wired).map((agent) => agent.id);
+  let agents = [...new Set([...wired, ...(opts.agents ?? (wired.length ? [] : deps.agents.filter((agent) => agent.installed).map((agent) => agent.id)))])];
   if (ask) {
     const modules = await toggle(input, out, c, `Modules ${c.dim("· space toggles, enter continues")}`, "column",
       MODULES.map((m) => ({ label: m.title, hint: m.needsSignIn ? `${m.summary} · free account` : m.summary, on: selection[m.id] })));
@@ -94,9 +100,9 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     selection = Object.fromEntries(MODULES.map((m, i) => [m.id, modules[i]!])) as ModuleSelection;
     out.write("\n");
     if (deps.agents.length > 0) {
-      const shown = [...deps.agents.filter((a) => a.installed), ...deps.agents.filter((a) => !a.installed)];
+      const shown = [...deps.agents.filter(usable), ...deps.agents.filter((a) => !usable(a))];
       const picked = await toggle(input, out, c, "Agents", "row",
-        shown.map((a) => ({ label: a.name, on: agents.includes(a.id), disabled: !a.installed })));
+        shown.map((a) => ({ label: a.name, on: agents.includes(a.id), disabled: !usable(a) })));
       if (!picked) return cancelled(out, c);
       agents = shown.filter((_, i) => picked[i]).map((a) => a.id);
       out.write("\n");
@@ -107,7 +113,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   }
 
   const plan = await planModules(selection, agents);
-  out.write(`This will\n${plan.lines.length ? planLines(plan.lines).join("\n") : `  ${c.dim("change nothing")}`}\n`);
+  out.write(plan.lines.length ? renderPlan(plan) : `This will\n  ${c.dim("change nothing")}\n`);
   if (opts.dryRun) {
     out.write(`${c.dim("Dry run: nothing was written.")}\n`);
     return { confirmed: false, cancelled: false, ok: true, plan };
@@ -137,10 +143,10 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   return { confirmed: true, cancelled: false, ok: result.ok, plan };
 }
 
+// currentSelection is the registry defaults on a fresh home, the stored state on
+// a re-run, and off for a module whose key an older config already switched off.
 function initialSelection(opts: OnboardOptions): ModuleSelection {
-  const selection = setupRan()
-    ? currentSelection()
-    : Object.fromEntries(MODULES.map((m) => [m.id, m.defaultOn])) as ModuleSelection;
+  const selection = currentSelection();
   if (opts.only) for (const m of MODULES) selection[m.id] = opts.only.includes(m.id);
   for (const id of opts.skip ?? []) selection[id] = false;
   return selection;
@@ -186,19 +192,6 @@ function foundLine(agents: OnboardAgent[]): string {
   });
   if (found.length === 0) return "No coding agents found on this machine";
   return `Found ${found.length === 1 ? found[0] : `${found.slice(0, -1).join(", ")} and ${found.at(-1)}`}`;
-}
-
-// Plan lines read as a column of actions, with the details aligned after the
-// short targets (a long target just gets one space).
-export function planLines(lines: PlanLine[]): string[] {
-  const home = homedir();
-  const short = (target: string) => target.startsWith(`${home}/`) ? `~${target.slice(home.length)}` : target;
-  const width = Math.max(0, ...lines.filter((l) => l.detail && short(l.target).length <= 30).map((l) => short(l.target).length)) + 3;
-  return lines.map((l) => {
-    const target = short(l.target);
-    const detail = l.detail ? `${target.length < width ? target.padEnd(width) : `${target} `}${l.detail}` : target;
-    return `  ${l.action.padEnd(10)}${detail}`;
-  });
 }
 
 function cancelled(out: NodeJS.WriteStream, c: Colors): OnboardResult {

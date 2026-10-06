@@ -51,7 +51,7 @@ import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
 import { cloudConfigPath, legacyCloudDir } from "./modules/config-home.js";
 import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
-import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupRan, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
+import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupRan, type OnboardAgent, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
 // RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
 export { nextDevicePollIntervalMs } from "./device-auth.generated.js";
 import {
@@ -73,7 +73,7 @@ import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-tren
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
-import { moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
+import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
@@ -3522,14 +3522,13 @@ function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promi
   });
 }
 
-// The agents onboarding offers: every agent with native wiring (shown even when
-// missing, disabled), plus any other installed agent the skill installer covers.
-function onboardAgents() {
-  return AGENTS.flatMap((agent) => {
-    const installed = Boolean(which(binOf(agent)));
-    if (!installed && !nativeAgentId(agent.id)) return [];
-    const version = installed ? detectedAgentVersion(agent) : null;
-    return [{ id: agent.id, name: agentShortName(agent), installed, ...(version ? { version } : {}) }];
+// The agents onboarding offers are the ones module wiring supports, in its
+// order (Claude Code first); missing ones show disabled unless already wired.
+function onboardAgents(): OnboardAgent[] {
+  return moduleHost().nativeAgents().map(({ id, detected, wired }) => {
+    const agent = findAgent(id)!;
+    const version = detected ? detectedAgentVersion(agent) : null;
+    return { id, name: agentShortName(agent), installed: detected, wired, ...(version ? { version } : {}) };
   });
 }
 

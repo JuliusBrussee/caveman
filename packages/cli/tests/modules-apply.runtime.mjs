@@ -15,7 +15,7 @@ test("fresh home: on --all --dry-run prints the whole plan and writes nothing", 
     assert.match(out.stdout, /^This will\n/);
     assert.deepEqual(planLines(out.stdout).map((line) => line.join(" | ").replace(/bin-v[\d.]+/, "bin-vX")), [
       "DOWNLOAD | caveman-proxy, caveman-mcp, caveman-engine, cavemem, caveman-shrink, caveman-browse | signed, bin-vX",
-      "CREATE | ~/.caveman-cloud/config.json | modules on: output, input, waste-fixes, routing, scripts, browse",
+      "CREATE | ~/.caveman/cloud.json | modules on: output, input, waste-fixes, routing, scripts, browse",
       "CREATE | ~/.claude/settings.json | claude settings",
       "CREATE | ~/.claude.json | claude mcp",
       "CREATE | ~/.codex/hooks.json | codex hooks",
@@ -63,7 +63,7 @@ test("on → off → on round-trips harness files byte for byte", async () => {
     assert.equal(off.code, 0, off.stderr);
     assert.deepEqual(harness(fx.home), original, "off --all left harness bytes behind");
     assert.equal(readFileSync(join(fx.home, "blocks.log"), "utf8"), "install\nuninstall\n");
-    const config = JSON.parse(readFileSync(join(fx.home, ".caveman-cloud", "config.json"), "utf8"));
+    const config = JSON.parse(readFileSync(join(fx.home, ".caveman", "cloud.json"), "utf8"));
     assert.deepEqual(config.modules, { output: false, input: false, "waste-fixes": false, routing: false, scripts: false, browse: false });
     assert.deepEqual(config.think, { core: false, mode: "record", toon: false, shrink: false });
     assert.equal(config.execute.browse_tool, false);
@@ -91,7 +91,7 @@ test("off keeps agent wiring while another module needs it", async () => {
     const input = await runCli(["off", "input", "--yes"], fx.env);
     assert.equal(input.code, 0, input.stderr);
     assert.deepEqual(planLines(input.stdout), [
-      ["UPDATE", "~/.caveman-cloud/config.json", "modules off: input · think.mode = record · think.toon = false · think.shrink = false"],
+      ["UPDATE", "~/.caveman/cloud.json", "modules off: input · think.mode = record · think.toon = false · think.shrink = false"],
       ["UPDATE", "~/.claude/settings.json", "refresh claude hooks"],
       ["UPDATE", "~/.claude.json", "refresh claude hooks"],
     ]);
@@ -110,7 +110,7 @@ test("off keeps agent wiring while another module needs it", async () => {
     const dry = await runCli(["off", "routing", "--dry-run"], fx.env);
     assert.equal(dry.code, 0, dry.stderr);
     assert.deepEqual(planLines(dry.stdout), [
-      ["UPDATE", "~/.caveman-cloud/config.json", "modules off: routing"],
+      ["UPDATE", "~/.caveman/cloud.json", "modules off: routing"],
       ["UPDATE", "~/.claude/settings.json", "remove claude wiring"],
       ["UPDATE", "~/.claude.json", "remove claude wiring"],
     ]);
@@ -146,7 +146,7 @@ test("on <module> touches only that module: its key, its binary, no harness file
     assert.equal(dry.code, 0, dry.stderr);
     assert.deepEqual(planLines(dry.stdout).map((line) => line.join(" | ").replace(/bin-v[\d.]+/, "bin-vX")), [
       "DOWNLOAD | caveman-browse | signed, bin-vX",
-      "CREATE | ~/.caveman-cloud/config.json | modules on: browse",
+      "CREATE | ~/.caveman/cloud.json | modules on: browse",
     ]);
   } finally {
     missing.cleanup();
@@ -160,8 +160,8 @@ test("on <module> touches only that module: its key, its binary, no harness file
     assert.match(out.stdout, /^✓ browse on$/m);
     const after = snapshot(fx.home);
     const changed = Object.keys(after).filter((file) => after[file] !== before[file]);
-    assert.deepEqual(changed, [".caveman-cloud/config.json"]);
-    assert.deepEqual(JSON.parse(readFileSync(join(fx.home, ".caveman-cloud", "config.json"), "utf8")), { modules: { browse: true } });
+    assert.deepEqual(changed, [".caveman/cloud.json"]);
+    assert.deepEqual(JSON.parse(readFileSync(join(fx.home, ".caveman", "cloud.json"), "utf8")), { modules: { browse: true } });
 
     // A missing external binary is said in the plan and after apply, not skipped silently.
     const scripts = await runCli(["on", "scripts", "--yes"], fx.env);
@@ -176,12 +176,13 @@ test("on <module> touches only that module: its key, its binary, no harness file
 test("off <module> leaves the user's other config keys alone and reads old configs as off", async () => {
   const fx = modulesFixture();
   try {
+    // Written where a pre-v4 CLI kept it; the first read copies it to ~/.caveman/cloud.json.
     mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
-    const configPath = join(fx.home, ".caveman-cloud", "config.json");
-    writeFileSync(configPath, JSON.stringify({ think: { mode: "record" }, execute: { browse_tool: false } }));
+    writeFileSync(join(fx.home, ".caveman-cloud", "config.json"), JSON.stringify({ think: { mode: "record" }, execute: { browse_tool: false } }));
+    const configPath = join(fx.home, ".caveman", "cloud.json");
     const out = await runCli(["off", "scripts", "--yes"], fx.env);
     assert.equal(out.code, 0, out.stderr);
-    assert.deepEqual(planLines(out.stdout), [["UPDATE", "~/.caveman-cloud/config.json", "modules off: scripts"]]);
+    assert.deepEqual(planLines(out.stdout), [["UPDATE", "~/.caveman/cloud.json", "modules off: scripts"]]);
     assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
       think: { mode: "record" }, execute: { browse_tool: false }, modules: { scripts: false },
     });
