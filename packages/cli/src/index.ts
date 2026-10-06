@@ -67,6 +67,10 @@ import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-tren
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
+import { moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
+import { modulesDoctor } from "./modules/doctor.js";
+import { nextStep, renderModuleGrid } from "./modules/status.js";
+import { stopRuntime } from "./modules/stop.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -343,7 +347,10 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   login,
   logout: () => logout(),
   init,
-  doctor: (argv) => argv[0] ? nativeDoctor(argv) : doctor(),
+  doctor: (argv) => argv[0] ? nativeDoctor(argv) : modulesDoctor(),
+  on: (argv) => moduleSwitchCommand(true, argv),
+  off: (argv) => moduleSwitchCommand(false, argv),
+  stop: () => stopRuntime(),
   enable: (argv) => enableNative(argv),
   disable: (argv) => disableNative(argv),
   inspect: (argv) => nativeInspect(argv),
@@ -385,6 +392,52 @@ for (const [verb, handler] of Object.entries(TOOL_HANDLERS)) {
   if (verb !== "practices") LEGACY_HANDLERS[verb] = handler;
 }
 for (const [verb, handler] of Object.entries(CLOUD_HANDLERS)) LEGACY_HANDLERS[verb] = handler;
+
+// `caveman on|off`, status, doctor and stop (src/modules) act through these:
+// the same config writer, native wiring and journal as the verbs above.
+setModuleHost({
+  configPath,
+  readConfig: globalCapabilityDocument,
+  mutateConfig: mutateRawConfig,
+  setConfigValue: (key, value) => CAPABILITY_KEYS.includes(key as CapabilityKey)
+    ? setGlobalCapability(key as CapabilityKey, value)
+    : mutateRawConfig((out) => { out[key] = value; }),
+  configDefault: (key) => CAPABILITY_DEFAULTS[key as CapabilityKey],
+  binaryRelease: BINARY_RELEASE,
+  resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
+  installBinaries: () => setupInstall(false, { continuing: true }),
+  which,
+  nativeAgents: () => (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).map((id) => ({
+    id,
+    detected: Boolean(which(binOf(findAgent(id)!))),
+    wired: Boolean(readNativeJournal(id) || readPendingNativeJournal(id)),
+  })),
+  planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp")
+    .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
+  wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
+  wireAgent: (agent) => enableNative([agent]),
+  unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent); },
+  agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
+  coreActive: () => nativeCoreRuntimeState().active,
+  signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
+  cloudCheck: async () => {
+    const cfg = await config();
+    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) });
+    if (!response.ok) throw new Error(`${cfg.baseURL} answered ${response.status}`);
+  },
+  localRuntimes: async () => {
+    const version = probeProxyVersion();
+    const gw = gatewayURL();
+    const endpoints = [...(wrapMode(gw) === "local" ? [gatewayHostPort(gw)] : []), standaloneProxyEndpoint()]
+      .filter((endpoint, index, all) => all.findIndex((other) => other.port === endpoint.port) === index);
+    return Promise.all(endpoints.map(async ({ host, port }) => {
+      const pid = readProxyRuntimeState(port, version).pid;
+      return { host, port, listening: await portListening(host, port), ...(pid ? { pid } : {}) };
+    }));
+  },
+  interactive,
+  confirm: promptYesNo,
+});
 
 function commandUsage(suffix: string): never {
   const prefix = currentInvocation?.group ? `${invokedAs()} ${currentInvocation.group}` : invokedAs();
@@ -517,6 +570,7 @@ const TELEMETRY_COMMAND_ALLOWLIST = [
   "explore", "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem", "opportunities", "plan",
   "projects", "providers", "receipts", "retrieve", "score", "sdk", "setup", "shrink", "shrink-hook", "skills",
   "run", "snippets", "start", "stats", "status", "sync", "telemetry", "toon", "traces", "trial", "unknown", "update", "usage", "verify", "version", "welcome", "whoami", "wrap",
+  "on", "off", "stop",
 ] as const;
 const TELEMETRY_COMMANDS = new Set<string>(TELEMETRY_COMMAND_ALLOWLIST);
 const TELEMETRY_SUBCOMMANDS = new Set([
@@ -18619,40 +18673,15 @@ async function status(argv: string[]) {
     };
   });
   const integrations = [...native, { ...genericIntegrationStatus(listening), runtime_reachable: listening }];
+  const modules = await moduleStates();
   if (argv.includes("--json")) {
-    print({ ...view, native_integrations: integrations });
+    print({ ...view, native_integrations: integrations, modules });
     return;
   }
-  process.stdout.write(renderStatus(view));
-  process.stdout.write("\nnative integrations\n");
-  for (const integration of integrations) {
-    const active = Object.entries(integration.capabilities).filter(([, value]) => value.active).map(([name]) => name);
-    process.stdout.write(statusRow(integration.agent, `${integration.state} · ${integration.version_status} · ${active.join(", ") || "proxy-only/none active"}`) + "\n");
-  }
-  const degraded = native.find((integration) => integration.state === "degraded");
-  const available = native.find((integration) => integration.state === "available" && integration.components.shared_runtime);
-  const needsRuntime = native.find((integration) => integration.state === "available" && !integration.components.shared_runtime);
-  const installed = native.find((integration) => integration.state === "installed");
-  if (degraded) process.stdout.write(`\nnext native:  caveman doctor ${degraded.agent} --fix\n`);
-  else if (available) process.stdout.write(`\nnext native:  caveman enable ${available.agent}\n`);
-  else if (needsRuntime) process.stdout.write(`\nnext native:  caveman setup --install\nthen:         caveman enable ${needsRuntime.agent}\n`);
-  else if (installed) process.stdout.write(`\nnative ready: run ${installed.agent} normally\n`);
-}
-
-async function doctor() {
-  const status = await get("/api/v1/system/status");
-  const me = await get("/api/v1/auth/me");
-  print({
-    // Derived from the actual status payload, not hardcoded: a real status object
-    // (with no error envelope) means the API answered; the telemetry/cache health
-    // echo what the server reports for ClickHouse/Valkey.
-    "Cave API reachable": !!status && !status.error,
-    authenticated_as: me.user?.email,
-    "policy cache healthy": status.valkey === "ready",
-    "telemetry pipeline healthy": status.clickhouse === "ready",
-    "retention mode": "metadata-only",
-    "dead-letter jobs": status.dead_letter_jobs
-  });
+  const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
+  const notes = saved > 0 ? { input: `today: ~${humanTokens(saved)} tokens kept out of context (inferred)` } : {};
+  const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
+  process.stdout.write(renderModuleGrid(modules, notes, nextStep(modules, { degraded: degraded[0], fallback: next }), degraded));
 }
 
 // cliVersion reads the published version from package.json (next to the built
