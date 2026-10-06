@@ -128,6 +128,45 @@ jobs:
           set -euo pipefail
           cd dist/binaries
           node ../../scripts/build-release-binaries.mjs --list | LC_ALL=C sort | xargs sha256sum -- > checksums.txt
+      # The scripts module runs caveman-blocks, released from caveman-ai/blocks
+      # (public, with its own installer). The release pinned in
+      # packages/cli/BLOCKS_RELEASE is mirrored here under hub artifact names, so
+      # the CLI downloads every module binary from one base under one signature.
+      # Blocks' published checksums are checked before anything is republished.
+      # Targets Blocks does not build are left out; modules.json shows the gap.
+      - name: Mirror the pinned caveman-blocks release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(tr -d '\r\n' < packages/cli/BLOCKS_RELEASE)"
+          [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || {
+            echo "packages/cli/BLOCKS_RELEASE must be a v-semver tag of caveman-ai/blocks, got '$tag'" >&2
+            exit 1
+          }
+          version="${tag#v}"
+          work="$RUNNER_TEMP/blocks"
+          mkdir -p "$work" dist/blocks dist/licenses
+          gh release download "$tag" --repo caveman-ai/blocks --dir "$work" \
+            --pattern checksums.txt --pattern "caveman-blocks_${version}_*"
+          (cd "$work" && sha256sum --strict --check checksums.txt)
+          for target in $(node scripts/build-release-binaries.mjs --list | sed -n 's/^caveman-proxy_//p'); do
+            os="${target%_*}"; arch="${target#*_}"
+            goos="$os"; [[ "$os" == win32 ]] && goos=windows
+            archive="$work/caveman-blocks_${version}_${goos}_${arch}"
+            out="dist/blocks/caveman-blocks_${os}_${arch}"
+            if [[ -f "$archive.tar.gz" ]]; then
+              tar -xzOf "$archive.tar.gz" caveman-blocks > "$out"
+            elif [[ -f "$archive.zip" ]]; then
+              unzip -p "$archive.zip" caveman-blocks.exe > "$out"
+            else
+              echo "caveman-blocks $tag has no $goos/$arch build; left out"
+              continue
+            fi
+            [[ -s "$out" ]] || { echo "empty caveman-blocks binary in $archive" >&2; exit 1; }
+          done
+          tar -xzOf "$work/caveman-blocks_${version}_linux_amd64.tar.gz" LICENSE > dist/licenses/LICENSE.caveman-blocks
+          (cd dist/blocks && sha256sum -- *) >> dist/binaries/checksums.txt
       # License texts of every third-party Go module the six binaries link, per
       # platform (build tags differ), plus the Go runtime's. go-licenses is
       # pinned and fails on a module whose license it cannot classify.
@@ -172,6 +211,15 @@ jobs:
           mkdir -p dist/release
           printf '%s\n' "$GITHUB_REF_NAME" > dist/release/RELEASE
           (cd dist/release && sha256sum -- RELEASE) >> dist/binaries/checksums.txt
+      # modules.json: per module its kind, defaults and the sha256 of every
+      # platform build, from packages/cli/src/modules/registry.ts and the
+      # manifest above. Listed in checksums.txt before signing, so the release
+      # signature covers it; the CLI refuses an index the manifest does not list.
+      - name: Generate the module index
+        run: |
+          set -euo pipefail
+          node packages/cli/scripts/gen-modules-index.mjs dist/binaries/checksums.txt "$GITHUB_REF_NAME" > dist/release/modules.json
+          (cd dist/release && sha256sum -- modules.json) >> dist/binaries/checksums.txt
       - name: Sign checksum manifest with pinned release key
         env:
           CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM: ${{ secrets.CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM }}
@@ -235,7 +283,7 @@ jobs:
           fi
           # --latest=false: the repo's "Latest" badge belongs to the Caveman
           # product release (v*), not to a runtime companion release.
-          gh release create "$GITHUB_REF_NAME" dist/binaries/* dist/licenses/* dist/release/* \
+          gh release create "$GITHUB_REF_NAME" dist/binaries/* dist/licenses/* dist/release/* dist/blocks/* \
             --repo "$GITHUB_REPOSITORY" \
             --latest=false \
             --title "$GITHUB_REF_NAME" \
