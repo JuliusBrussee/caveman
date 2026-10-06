@@ -236,6 +236,36 @@ test("end to end: a No at the agent door is remembered; caveman claude stops ask
   }
 });
 
+test("end to end: at the agent door, unticking every wiring module never wires the agent", { skip: hasExpect() ? false : "expect(1) not installed", timeout: 60_000 }, async () => {
+  const box = modulesFixture();
+  const env = { ...box.env, TERM: "xterm" };
+  delete env.CI;
+  const script = join(box.home, "door.exp");
+  // Untick output, input, waste fixes and routing (the four that wire agents);
+  // keep scripts and browse, keep Claude Code ticked, confirm.
+  writeFileSync(script, [
+    "set timeout 20",
+    `spawn -noecho ${process.execPath} ${cli} claude`,
+    'expect "space toggles"', "sleep 0.2",
+    'send " "', "sleep 0.1", 'send "j"', "sleep 0.1",
+    'send " "', "sleep 0.1", 'send "j"', "sleep 0.1",
+    'send " "', "sleep 0.1", 'send "j"', "sleep 0.1",
+    'send " "', "sleep 0.1", 'send "\\r"',
+    'expect "Agents"', "sleep 0.2", 'send "\\r"',
+    'expect "Continue?"', "sleep 0.6", 'send "y"',
+    "expect eof",
+    "",
+  ].join("\n"));
+  try {
+    const out = await expectRun(script, env);
+    assert.doesNotMatch(out.text, /UPDATE {4}~\/\.claude|CREATE {4}~\/\.claude/, "the plan never offered to wire Claude Code");
+    assert.equal(existsSync(join(box.home, ".claude", "settings.json")), false, out.text);
+    assert.equal(existsSync(join(box.home, "integrations", "claude.json")), false, out.text);
+  } finally {
+    box.cleanup();
+  }
+});
+
 test("end to end: CI=1 in a terminal (install.sh in CI) never applies without --yes", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
   const box = modulesFixture();
   const script = join(box.home, "ci.exp");

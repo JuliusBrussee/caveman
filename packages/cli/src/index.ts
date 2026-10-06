@@ -5557,16 +5557,11 @@ async function agentShortcut(rest: string[]) {
   }
   // First-run disclosure comes before the first persistent write, mirroring wrap.
   await firstRunExperience();
-  try {
-    // An existing journal means the machine-wide install already owns routing —
-    // exactly what plain `<agent>` uses — so launch directly without re-probing
-    // (status probes spawn three subprocesses); `caveman doctor <agent>` stays
-    // the repair door for drifted installs.
-    if (!readNativeJournal(native)) enableNative([native]);
-  } catch (error) {
-    process.stderr.write(`${mark("warn")} native enable failed: ${(error as Error).message} — using session-only wrap for this run\n`);
-    return wrap(rest);
-  }
+  // Only the confirmed plan wires agents. No journal here means the user chose
+  // no module that wires this agent, so this run is session-only. An existing
+  // journal means the machine-wide install already owns routing — launch
+  // directly; `caveman doctor <agent>` stays the repair door for drift.
+  if (!readNativeJournal(native)) return wrap(rest);
   const bin = which(binOf(agent));
   if (!bin) {
     wrapNotFoundUI(rest[0]!, agent);
