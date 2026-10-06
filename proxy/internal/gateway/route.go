@@ -206,23 +206,27 @@ const routeSessionsMax = 1024
 // routeSession is what the route stage remembers about one session: the
 // previous upstream request's facts and the per-message effort marks.
 type routeSession struct {
-	key           string
-	last          *RouteLast
-	lastAt        time.Time
-	perMessageOff bool
+	key    string
+	last   *RouteLast
+	lastAt time.Time
+	// refused are the models that refused per-message effort: they get no
+	// marks, and the session reports per_message_off once there is one.
+	refused map[string]bool
+	// version counts the writes to effortState: a request writes its copy
+	// back only when nothing landed in between.
+	version int
 	effortState
 }
 
 // effortState is a session's per-message effort: top is the top-level effort,
 // fixed at its first per-message request (nil until then); salt keys the
-// anchors; models are those its marks were sent to. strip is how many of the
-// agent's messages lose their thinking blocks, from a served binding heal on
-// (stripAnchor hashes the last of them).
+// anchors. strip is how many of the agent's messages lose their thinking
+// blocks, from a served binding heal on (stripAnchor hashes the last of them).
+// Its slices are replaced, never written in place, so a copy is safe to read.
 type effortState struct {
 	salt        [16]byte
 	top         *string
 	marks       []effortMark
-	models      map[string]bool
 	strip       int
 	stripAnchor [32]byte
 }
@@ -274,11 +278,11 @@ func (rs *routeSessions) facts(key string, now time.Time) (*RouteLast, bool) {
 	defer rs.mu.Unlock()
 	session := rs.get(key, false)
 	if session == nil || session.last == nil {
-		return nil, session != nil && session.perMessageOff
+		return nil, session != nil && len(session.refused) > 0
 	}
 	last := *session.last
 	last.AgeS = int(min(max(now.Sub(session.lastAt), 0)/time.Second, 1_000_000_000))
-	return &last, session.perMessageOff
+	return &last, len(session.refused) > 0
 }
 
 func (rs *routeSessions) served(key string, last RouteLast, at time.Time) {
@@ -289,12 +293,17 @@ func (rs *routeSessions) served(key string, last RouteLast, at time.Time) {
 	}
 }
 
-// latch turns per-message effort off for key's session, for good.
-func (rs *routeSessions) latch(key string) {
+// latch records that model refused per-message effort in key's session, for
+// good: it gets no marks from here on.
+func (rs *routeSessions) latch(key, model string) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if session := rs.get(key, true); session != nil {
-		session.perMessageOff, session.marks = true, nil
+		if session.refused == nil {
+			session.refused = map[string]bool{}
+		}
+		session.refused[model] = true
+		session.version++
 	}
 }
 
@@ -308,6 +317,7 @@ func (rs *routeSessions) stripped(key string, body []byte) {
 	if session := rs.get(key, true); session != nil && ok {
 		session.marks, session.strip = nil, len(items)
 		session.stripAnchor = anchorAt(body, items, session.salt, len(items))
+		session.version++
 	}
 }
 
@@ -315,8 +325,8 @@ func (rs *routeSessions) stripped(key string, body []byte) {
 // produced, model already set) and returns what to send. Responses and chat
 // take their effort field. Anthropic takes it top-level, or as a per-message
 // mark that keeps the cached prefix. A session's marks come back on every
-// request it sends to a model that already took them, at the same places and
-// byte-identical, whatever the answer (a Cloud failure or routing off
+// request it sends to a model that has not refused them, at the same places
+// and byte-identical, whatever the answer (a Cloud failure or routing off
 // included), so its history does not change under the agent; only a top-level
 // answer leaves them out. Compaction and side requests read the session's
 // marks but never change them.
@@ -362,7 +372,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		}
 		return body
 	}
-	work, latched := session.effortState, session.perMessageOff
+	work, refused, version := session.effortState, session.refused[model], session.version
 	var parent *effortState
 	if work.top == nil {
 		if p := s.routes.get(run.parent, false); p != nil && p.top != nil {
@@ -379,34 +389,24 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		run.effort, run.applied, run.dropped = answer.Effort, true, len(work.marks) > 0
 		top := answer.Effort // the cache restarts here: later marks start from this level
 		work.top, work.marks = &top, nil
-	case latched || work.top == nil && parent == nil && (mode != "message" || run.perRequest):
+	case refused || work.top == nil && parent == nil && (mode != "message" || run.perRequest):
 		run.dropped = len(work.marks) > 0
 	default:
 		effort := ""
 		if mode == "message" {
 			effort = answer.Effort
 		}
-		// Marks go only to a model this session already sent them to, unless
-		// this answer asks for one: another model may not take them.
-		replay := mode == "message" || work.models[model] || parent != nil && parent.models[model]
 		var out []byte
-		out, run.unmarked, run.effort, run.dropped = perMessage(body, &work, parent, effort, !run.perRequest, replay)
+		out, run.unmarked, run.effort, run.dropped = perMessage(body, &work, parent, effort, !run.perRequest)
 		run.marked = run.unmarked != nil
 		run.applied = run.marked || !bytes.Equal(out, body)
 		body = out
 	}
 	if !run.perRequest {
 		s.routes.mu.Lock()
-		if live := s.routes.get(run.key, true); live != nil {
-			models := live.models
+		if live := s.routes.get(run.key, true); live != nil && live.version == version {
 			live.effortState = work
-			live.models = models
-			if run.marked {
-				if live.models == nil {
-					live.models = map[string]bool{}
-				}
-				live.models[model] = true
-			}
+			live.version++
 		}
 		s.routes.mu.Unlock()
 	}
@@ -442,7 +442,7 @@ func (state *effortState) applyStrip(body []byte) []byte {
 // carries a tool result (never between a tool_use and its tool_result), and
 // never before an earlier mark or per-message effort. A mark whose anchor no
 // longer matches (compaction rewrote history) is dropped with every later one.
-func perMessage(body []byte, state, parent *effortState, effort string, allowNew, replay bool) (out, unmarked []byte, inForce string, dropped bool) {
+func perMessage(body []byte, state, parent *effortState, effort string, allowNew bool) (out, unmarked []byte, inForce string, dropped bool) {
 	root, array, items, ok := messageSpans(body)
 	if !ok {
 		return body, nil, "", false
@@ -484,9 +484,6 @@ func perMessage(body []byte, state, parent *effortState, effort string, allowNew
 				break
 			}
 		}
-	}
-	if !replay {
-		return body, nil, inForce, len(state.marks) > 0
 	}
 	marks := state.marks[:0:0]
 	for _, mark := range state.marks {
@@ -688,6 +685,25 @@ func effortInForce(endpoint string, body []byte) string {
 	return topEffort(body, root)
 }
 
+// withoutBrotli drops br from a routed request's accept-encoding: the heal
+// and the served model read the provider's answer decoded, and there is no
+// brotli decoder here. The agent offered the others too, or gets identity.
+func withoutBrotli(header http.Header) {
+	offered := strings.Split(header.Get("accept-encoding"), ",")
+	kept := offered[:0]
+	for _, coding := range offered {
+		name, _, _ := strings.Cut(coding, ";")
+		if name = strings.TrimSpace(name); name != "" && !strings.EqualFold(name, "br") {
+			kept = append(kept, strings.TrimSpace(coding))
+		}
+	}
+	if len(kept) == 0 {
+		header.Del("accept-encoding")
+		return
+	}
+	header.Set("accept-encoding", strings.Join(kept, ", "))
+}
+
 // The per-message beta and the betas that already carry it.
 const perMessageBeta = "mid-conversation-output-config-2026-07-01"
 
@@ -742,7 +758,7 @@ var (
 // Refused marks retry with top-level effort only (marks reports that one; once
 // it is served the session's latch goes on). Refusal wording on a request
 // without marks latches the session at once. The 400's bytes are put back.
-func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, sameModel bool) (retry []byte, marks bool) {
+func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, model string, sameModel bool) (retry []byte, marks bool) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	resp.Body = struct {
 		io.Reader
@@ -768,7 +784,7 @@ func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, same
 		top, _ := setString(run.unmarked, run.effort, "output_config", "effort")
 		return top, true
 	case refusalRE.Match(head):
-		s.routes.latch(run.key)
+		s.routes.latch(run.key, model)
 	}
 	return nil, false
 }

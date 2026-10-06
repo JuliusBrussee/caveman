@@ -446,6 +446,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
+	if run != nil && !run.off {
+		withoutBrotli(upstreamHeaders)
+	}
 	healHeaders := upstreamHeaders // the heal retry carries no marks, so no per-message beta
 	if run != nil && run.marked {
 		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
@@ -487,7 +490,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// retry (route.go routeHeal); if that is refused too, the original-bytes
 	// retry below still runs.
 	if run != nil && resp.StatusCode == http.StatusBadRequest {
-		if retry, marks := s.routeHeal(run, resp, transform.Body, meta.Model == modelRequested); retry != nil {
+		if retry, marks := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
 			s.capture.record(captureMeta{
 				RequestID:   requestID,
 				Provider:    meta.Provider,
@@ -508,7 +511,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				switch {
 				case healed.StatusCode >= 300:
 				case marks:
-					s.routes.latch(run.key) // top-level effort served where the marks were not
+					s.routes.latch(run.key, meta.Model) // top-level effort served where the marks were not
 				default:
 					s.routes.stripped(run.key, retry) // later requests keep the prefix that was served
 				}

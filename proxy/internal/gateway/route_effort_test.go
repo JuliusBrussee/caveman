@@ -659,15 +659,51 @@ func TestPerMessageMarksComeBackOnEveryAnswer(t *testing.T) {
 			t.Errorf("%+v: %s", answer, sent)
 		}
 	}
-	// A model the marks never went to does not get them.
-	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	// Right after a routed turn a Cloud failure sends the asked model: it has
+	// not refused marks, so it gets them too.
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed", Effort: "low", EffortMode: "message"}}
 	srv, log := effortServer(t, cloud, nil)
 	post(t, srv, convo("high", uA, aB, uC), nil)
 	cloud.answer = RouteAnswer{Outcome: "degraded"}
-	other := strings.Replace(convo("high", uA, aB, uC, aD, uTR), "claude-opus-5-5", "claude-sonnet-5-5", 1)
-	post(t, srv, other, nil)
-	if sent, _ := log.last(); string(sent) != other {
-		t.Errorf("another model got the marks: %s", sent)
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aD, uTR) {
+		t.Errorf("the asked model after a routed turn: %s", sent)
+	}
+}
+
+// Requests of one session, its child and a side request at once share no
+// mutable state outside the lock (run with -race).
+func TestRouteSessionsUnderConcurrency(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, _ := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	var wg sync.WaitGroup
+	for i := range 24 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			switch i % 3 {
+			case 0:
+				post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+			case 1:
+				post(t, srv, convo("high", uA, aB, uC, aE, `{"role":"user","content":"child"}`), map[string]string{"x-claude-code-agent-id": "a1"})
+			default:
+				post(t, srv, convo("high", uA, aB, uC, aE, uF), map[string]string{"x-claude-code-request-class": "auxiliary"})
+			}
+		}()
+	}
+	wg.Wait()
+}
+
+// A routed request does not offer br upstream: its answer is read decoded.
+// With nothing left Go's transport offers gzip and decodes it itself.
+func TestRoutedRequestsDropBrotli(t *testing.T) {
+	srv, log := effortServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, nil)
+	for offered, want := range map[string]string{"gzip, deflate, br": "gzip, deflate", "br;q=1.0": "gzip", "zstd, gzip": "zstd, gzip"} {
+		post(t, srv, convo("high", uA), map[string]string{"accept-encoding": offered})
+		if _, header := log.last(); header.Get("accept-encoding") != want {
+			t.Errorf("%q went upstream as %q, want %q", offered, header.Get("accept-encoding"), want)
+		}
 	}
 }
 
