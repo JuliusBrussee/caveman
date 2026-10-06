@@ -6,7 +6,7 @@
   of eleven allowlisted headers, each value at most 256 bytes or 16 KiB for
   `x-codex-turn-metadata` and never cut, `tool_names`, `effort` and
   `thinking` from fixed value sets, `per_message_off`), `last` (the session's previous request: `model`,
-  `effort`, `age_s`, `input_tokens`, `cache_read_tokens`,
+  `effort` from the same set, `age_s`, `input_tokens`, `cache_read_tokens`,
   `cache_write_tokens`, `compacted`), and opaque `state` / `parent_state`
   (at most 4096 bytes). The runtime now asks for every routable request:
   `ask` goes only on a turn's first ask and is left out for compaction and

@@ -156,6 +156,7 @@ for (const [extra, valid] of [
   [{ request: { ...request, tool_names: ["n".repeat(65)] } }, false],
   [{ request, last: { ...last, compacted: undefined } }, false],
   [{ request, last: { ...last, age_s: -1 } }, false],
+  [{ request, last: { ...last, effort: "adaptive" } }, false],
   [{ request, state: "" }, false],
   [{ request, state: "s".repeat(4097) }, false],
 ]) {
