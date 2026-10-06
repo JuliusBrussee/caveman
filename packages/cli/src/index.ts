@@ -62,6 +62,7 @@ import {
   type JSONValue,
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
+import { readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
@@ -2494,6 +2495,10 @@ const GO_BINARIES = [
   { name: "cavemem", env: "CAVEMEM_BIN", required: true, powers: "remember · recall · learn offload", without: "memory and auto-recall are off" },
   { name: "caveman-browse", env: "CAVEMAN_BROWSE_BIN", required: false, powers: "browse + agent-side compressed browsing MCP tools — wrap auto-registers once present", without: "agent-side compressed browsing MCP tools unavailable; wrap auto-registers once installed" },
   { name: "caveman-shrink", env: "CAVEMAN_SHRINK_BIN", required: false, powers: "compress catalog — dedicated tool-schema compression, lint, and recovery", without: "tool-catalog compression is unavailable; command-output shrink is unaffected" },
+  // From caveman-ai/blocks, mirrored into the signed release; installed by the
+  // scripts module (modules/index-file.ts), not by setup --install. setup
+  // lists it only once present or once a module installed it.
+  { name: "caveman-blocks", env: "CAVEMAN_BLOCKS_BIN", required: false, external: true, powers: "scripts module — reusable scripts your agent keeps", without: "the scripts module cannot run until it is installed again" },
 ] as const;
 
 // resolveGoBin is cavemanBin plus an honest "is it actually there" answer: the
@@ -2574,9 +2579,9 @@ type BinaryInstallManifest = {
   artifacts: Record<string, string>;
 };
 
-const INSTALL_BINARIES = GO_BINARIES.map((binary) => binary.name);
+const INSTALL_BINARIES = GO_BINARIES.filter((binary) => !("external" in binary)).map((binary) => binary.name);
 
-function setupTimeoutSeconds(): number {
+export function setupTimeoutSeconds(): number {
   const raw = process.env.CAVE_SETUP_TIMEOUT ?? "300";
   const parsed = Number(raw);
   if (!Number.isInteger(parsed) || parsed <= 0) {
@@ -2605,7 +2610,7 @@ function binaryInstallManifestPath(): string {
   return join(cavemanHome(), "bin", ".bin-manifest.json");
 }
 
-function sha256File(path: string): string | null {
+export function sha256File(path: string): string | null {
   try {
     return createHash("sha256").update(readFileSync(path)).digest("hex");
   } catch {
@@ -2677,7 +2682,7 @@ export function parseSignedChecksums(raw: string, release: string = BINARY_RELEA
   return checksums;
 }
 
-function verifyChecksumSignature(checksums: string, signature: string): boolean {
+export function verifyChecksumSignature(checksums: string, signature: string): boolean {
   try {
     const bundle = JSON.parse(signature) as {
       mediaType?: unknown;
@@ -2714,7 +2719,7 @@ function isTimeoutError(error: unknown): boolean {
   return error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
 }
 
-async function fetchReleaseAsset(url: string, timeoutSeconds: number): Promise<Response> {
+export async function fetchReleaseAsset(url: string, timeoutSeconds: number): Promise<Response> {
   try {
     const response = await fetch(url, { signal: AbortSignal.timeout(timeoutSeconds * 1000) });
     if (!response.ok) throw new BinaryDownloadError("unreachable", `${response.status} ${response.statusText}`);
@@ -2726,7 +2731,7 @@ async function fetchReleaseAsset(url: string, timeoutSeconds: number): Promise<R
   }
 }
 
-async function downloadReleaseBinary(
+export async function downloadReleaseBinary(
   url: string,
   partPath: string,
   timeoutSeconds: number,
@@ -2756,7 +2761,7 @@ async function downloadReleaseBinary(
   return { sha256: hash.digest("hex"), bytes };
 }
 
-function cleanupPartial(path: string) {
+export function cleanupPartial(path: string) {
   try {
     unlinkSync(path);
   } catch (error) {
@@ -3442,7 +3447,9 @@ async function setup(argv: string[] = []) {
   }
   if (install) return setupInstall(json);
 
-  const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }));
+  const locked = Object.values(readLock().modules).flatMap((entry) => Object.keys(entry?.binaries ?? {}));
+  const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }))
+    .filter((row) => !("external" in row) || row.resolved || locked.includes(row.name));
   const missingRequired = rows.filter((r) => r.required && !r.resolved);
 
   if (json) {
@@ -11534,7 +11541,7 @@ export function wrapExternalWritesDisabled(env: NodeJS.ProcessEnv = process.env)
 // Headroom does it. Install writes a marker; wrap reads it (mcpInstalled) and only
 // then signals the proxy (CAVEMAN_RECOVERY=mcp) that recovery is available.
 
-function cavemanHome(): string {
+export function cavemanHome(): string {
   return process.env.CAVEMAN_HOME ?? join(homedir(), ".caveman");
 }
 
@@ -11543,7 +11550,7 @@ function cavemanHome(): string {
 // this directory is group/world writable, and recursive mkdir with a mode only
 // applies it to directories it creates — an earlier no-mode caller (login, mcp
 // install) would otherwise have already created it 0775 under umask 002.
-function ensureCavemanHome(): string {
+export function ensureCavemanHome(): string {
   const home = cavemanHome();
   mkdirSync(home, { recursive: true, mode: 0o700 });
   try { chmodSync(home, 0o700); } catch { /* not ours / Windows */ }
