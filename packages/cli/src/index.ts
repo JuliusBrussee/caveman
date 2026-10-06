@@ -11246,6 +11246,9 @@ async function syncLocalSavings(cfg: Config): Promise<SyncOutcome> {
   let rows: Record<string, unknown>[];
   let key: string;
   try {
+    // A read that meets another process mid-commit (the proxy, or a racing sync
+    // writing the marker below) waits for it instead of failing as locked.
+    db.exec("PRAGMA busy_timeout = 3000");
     key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
   } catch (err) {
     db.close();
