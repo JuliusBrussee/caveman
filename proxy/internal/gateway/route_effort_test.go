@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1251,6 +1252,10 @@ func TestUnmatchedBodiesKeepTheirMarksToThemselves(t *testing.T) {
 	if sent, _ := log.last(); string(sent) != convo("high", summary, mark("low"), uF) {
 		t.Fatalf("compacted: %s", sent)
 	}
+	// A side request in between keeps its own pending marks apart.
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	post(t, srv, convo("high", quota), nil)
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
 	post(t, srv, convo("high", summary, uF, aG, uTR2), nil)
 	if sent, _ := log.last(); string(sent) != convo("high", summary, mark("low"), uF, aG, uTR2) {
 		t.Fatalf("compacted, continued: %s", sent)
@@ -1354,6 +1359,14 @@ func TestCountTokensGetsTheSessionsMarksAndHeal(t *testing.T) {
 	if beta := header.Get("anthropic-beta"); beta != bindingBeta+","+perMessageBeta || len(cloud.asks) != asks || len(log.bodies) != 3 {
 		t.Errorf("betas %q, asks %d, attempts %d", beta, len(cloud.asks)-asks, len(log.bodies))
 	}
+	// A session never routed gets nothing and no memory.
+	req = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(convo("high", uA)))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("x-claude-code-session-id", "sess-never")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if _, ok := srv.routes.entries["sess-never"]; ok {
+		t.Error("count_tokens made a session")
+	}
 }
 
 // A forked child with its own conversation still takes its parent's refused
@@ -1408,5 +1421,115 @@ func TestDefaultEffortKeepsTheMarks(t *testing.T) {
 	post(t, srv, bare(task, aH, uF), child)
 	if sent, _ := log.last(); string(sent) != bare(mark("low"), task, aH, mark("medium"), uF) {
 		t.Fatalf("fresh child, parent's default: %s", sent)
+	}
+}
+
+// A request Cloud moves to another model without an effort goes without the
+// marks, but the session keeps them: back on the asked model they come back
+// and the history its thinking was bound to holds.
+func TestMovedRequestKeepsTheSessionsMarks(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	aH := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-h"},{"type":"text","text":"Ok."}]}`
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"claude-opus-5-5"`)) && bytes.Contains(body, []byte(`sig-h`)) && !bytes.Contains(body, []byte(mark("low"))) {
+			return http.StatusBadRequest, errorBody(bindingError)
+		}
+		return 0, ""
+	})
+	post(t, srv, bare(uA, aB, uC), nil)
+	cloud.answer = RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}
+	post(t, srv, bare(uA, aB, uC, aH, uF), nil)
+	if sent, _ := log.last(); bytes.Contains(sent, []byte(`"role":"system"`)) || !bytes.Contains(sent, []byte(`claude-sonnet-5-5`)) {
+		t.Fatalf("moved: %s", sent)
+	}
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, bare(uA, aB, uC, aH, uF, aD, uTR), nil)
+	if sent, _ := log.last(); string(sent) != bare(uA, aB, mark("low"), uC, aH, uF, aD, uTR) || len(log.bodies) != 3 {
+		t.Fatalf("back on the asked model: %d attempts, %s", len(log.bodies), sent)
+	}
+}
+
+// A prefilled side request sent twice (same length, an assistant turn of its
+// own) never takes the session over.
+func TestPrefilledSideRequestNeverTakesOver(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	extract := `{"role":"user","content":"extract the title"}`
+	prefill := `{"role":"assistant","content":"{"}`
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	for range 2 {
+		post(t, srv, convo("high", extract, prefill), nil)
+		if sent, _ := log.last(); string(sent) != convo("high", mark("medium"), extract, prefill) {
+			t.Fatalf("prefilled side request: %s", sent)
+		}
+	}
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aD, uTR) {
+		t.Fatalf("main thread: %s", sent)
+	}
+}
+
+// A strip heal leaves the marks' anchors alone (they skip thinking blocks): the
+// next request replays the mark and extends the history that was served.
+func TestStripHealKeepsTheMarks(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	reject := false
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		if reject && bytes.Contains(body, []byte(`sig-b`)) {
+			return http.StatusBadRequest, errorBody("messages.1.content.0: Invalid `signature` in `thinking` block")
+		}
+		return 0, ""
+	})
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	reject = true
+	aH := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-h"},{"type":"text","text":"Ok."}]}`
+	post(t, srv, convo("high", uA, aB, uC, aH, uF), nil)
+	healedB := `{"role":"assistant","content":[{"type":"text","text":"Three steps."}]}`
+	healedH := `{"role":"assistant","content":[{"type":"text","text":"Ok."}]}`
+	served, _ := log.last()
+	if string(served) != convo("high", uA, healedB, mark("low"), uC, healedH, uF) {
+		t.Fatalf("strip heal: %s", served)
+	}
+	post(t, srv, convo("high", uA, aB, uC, aH, uF, aD, uTR), nil)
+	sent, _ := log.last()
+	if string(sent) != convo("high", uA, healedB, mark("low"), uC, healedH, uF, aD, uTR) || !bytes.HasPrefix(sent, served[:len(served)-2]) || len(log.bodies) != 4 {
+		t.Fatalf("after the strip: %d attempts, %s", len(log.bodies), sent)
+	}
+}
+
+// A provider refusing every heal: a refused drop_block moves the session to
+// the strip path, a refused strip ends its heals, so the calls per request
+// converge to the request and the original-bytes retry.
+func TestRefusedHealsConverge(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, func([]byte) (int, string) { return http.StatusBadRequest, errorBody(bindingError) })
+	var calls []int
+	for range 4 {
+		before := len(log.bodies)
+		post(t, srv, thinking("adaptive", convo("high", uA, aB, uC)), nil)
+		calls = append(calls, len(log.bodies)-before)
+	}
+	if !slices.Equal(calls, []int{3, 3, 2, 2}) {
+		t.Fatalf("calls per request %v, want [3 3 2 2]", calls)
+	}
+}
+
+// A 429 on a request that carried the session's marks (routing off) is passed
+// on: replaying the original without them cannot help.
+func TestRateLimitWithMarksWhileOffIsNotRetried(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	limited := false
+	srv, log := effortServer(t, cloud, func([]byte) (int, string) {
+		if limited {
+			return http.StatusTooManyRequests, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`
+		}
+		return 0, ""
+	})
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	cloud.answer, limited = RouteAnswer{Outcome: "off"}, true
+	if rec := post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil); rec.Code != http.StatusTooManyRequests || len(log.bodies) != 2 {
+		t.Fatalf("status %d, attempts %d", rec.Code, len(log.bodies))
 	}
 }

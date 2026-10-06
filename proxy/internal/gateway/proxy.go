@@ -217,8 +217,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	modelRequested := meta.Model
 	evidence.modelRequested = modelRequested
 	// count_tokens runs the same thinking-binding check as Messages
-	// (preserved-thinking, read 2026-10-06): it gets the session's marks and
-	// heal, and is never asked about.
+	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
+	// and drop_block, is never asked about and gets no heal retry.
 	countTokens := meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages/count_tokens")
 	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
 		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
@@ -543,6 +543,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				// side request does not change the session.
 				switch {
 				case healed.StatusCode >= 300:
+					if kind != healMarks && !run.perRequest {
+						s.routes.healFailed(run.key, kind == healDropBlock) // the next request tries the next path
+					}
 				case kind == healMarks:
 					run.marked = false
 					s.routes.latch(run.key, meta.Model) // top-level effort served where the marks were not
@@ -559,11 +562,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// (Measured 2026-07-07: Anthropic answers subscription-OAuth requests whose
 	// first system block changed with an opaque 429; any future fingerprint check
 	// lands here too.) The retry claims no optimization and books no savings.
-	// A routed request's 429 on the asked model is the provider's rate limit,
-	// not its bytes: retrying the original (without the session's marks) cannot
-	// help. On a moved model it falls back to the asked one as before.
+	// A 429 on the asked model of a request the route stage was on for, or that
+	// carried the session's marks, is the provider's rate limit, not its bytes:
+	// retrying the original (without the marks) cannot help. On a moved model
+	// it falls back to the asked one as before.
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) &&
-		!(run != nil && !run.off && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
+		!(run != nil && (!run.off || run.marked) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
