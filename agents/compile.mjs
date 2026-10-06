@@ -425,6 +425,46 @@ function validate(p, file) {
   }
 }
 
+// pinnedVersions extracts every semver pin an install command carries, the one
+// spelling shared by npm (@x.y.z) and pip (==x.y.z). One rule for both the
+// conformance matrix and a profile's own install command, so the two cannot
+// disagree about what counts as a pin.
+function pinnedVersions(install) {
+  return [...String(install).matchAll(/(?:@|==)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=$|[^0-9A-Za-z.-])/g)]
+    .map((match) => match[1]);
+}
+
+// derivablePin reports the profile pin a matrix or install pin must equal, or
+// undefined when there is nothing to derive from (absent, "x", or a non-semver
+// pin such as a git sha).
+function derivablePin(profile) {
+  const pv = profile?.tested_agent_version;
+  if (!pv || pv === "x") return undefined;
+  return /^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pv) ? pv : undefined;
+}
+
+// checkProfileInstallPins covers the pin the conformance gate below cannot see.
+// Most profiles give an unpinned install command, but kilo and qwen pin theirs,
+// and nothing derived that pin from tested_agent_version — so a bump could ship
+// a profile that claims to test one version while telling users to install
+// another. An unpinned command stays legal; a pinned one must agree.
+function checkProfileInstallPins(agentsById) {
+  for (const id of [...agentsById.keys()].sort()) {
+    const profile = agentsById.get(id);
+    const pv = derivablePin(profile);
+    if (!pv || !profile.install) continue;
+    const versions = pinnedVersions(profile.install);
+    if (versions.length === 0) continue; // unpinned install command — nothing to derive
+    gate(
+      versions.length === 1,
+      `agents/profiles/${id}.json: install command must carry at most one version pin, matching tested_agent_version ${pv} (found ${versions.length})`,
+    );
+    if (versions.length === 1 && versions[0] !== pv) {
+      gate(false, `agents/profiles/${id}.json: ${id} install pins ${versions[0]} but profile tested_agent_version is ${pv} — a pinned install command must equal the profile pin`);
+    }
+  }
+}
+
 // checkConformancePins derives every agent-conformance matrix pin from the profile's
 // tested_agent_version so the two cannot silently diverge (issue #135). This compiler runs
 // from the source registry, where the workflow is part of the contract: a missing or
@@ -474,11 +514,10 @@ function checkConformancePins(agentsById) {
   for (const id of shippedIds) {
     const profile = agentsById.get(id);
     const entry = entryById.get(id);
-    if (!entry || !profile?.tested_agent_version || profile.tested_agent_version === "x") continue;
-    const pv = profile.tested_agent_version;
-    if (!/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(pv)) continue; // non-semver pin (e.g. a git sha) — not derivable
-    const versions = [...entry.install.matchAll(/(?:@|==)(\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?)(?=$|[^0-9A-Za-z.-])/g)]
-      .map((match) => match[1]);
+    if (!entry) continue;
+    const pv = derivablePin(profile);
+    if (!pv) continue; // absent, "x", or a non-semver pin (e.g. a git sha) — not derivable
+    const versions = pinnedVersions(entry.install);
     gate(versions.length === 1, `${wf}: pinned install for ${id} must carry exactly one parseable version pin matching tested_agent_version ${pv} (found ${versions.length})`);
     if (versions.length === 1 && versions[0] !== pv) {
       gate(false, `${wf} pins ${id}@${versions[0]} but profile tested_agent_version is ${pv} — the CI pin must equal the profile pin (issue #135)`);
@@ -515,7 +554,9 @@ for (const f of files) {
 agents.sort((a, b) => a.id.localeCompare(b.id));
 
 // The CI upstream-binary matrix pins must equal the profile pins they claim to test.
-checkConformancePins(new Map(agents.map((a) => [a.id, a])));
+const agentsById = new Map(agents.map((a) => [a.id, a]));
+checkProfileInstallPins(agentsById);
+checkConformancePins(agentsById);
 
 // agents.json — the published registry.
 const registry = { schema_version: "1", agents };
