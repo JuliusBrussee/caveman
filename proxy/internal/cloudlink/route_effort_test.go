@@ -69,32 +69,27 @@ func TestRequestFromEachShape(t *testing.T) {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
 		}
 	}
-	// Codex's turn metadata rides in the body when no header carried it; a
-	// header wins, and a value over 16 KiB is left out, never cut.
-	turn := `{"turn_id":"t-1","workspaces":{"/repo":{"has_changes":true}}}`
-	responses := `{"model":"gpt-6-sol","client_metadata":{"x-codex-turn-metadata":` + fmt.Sprintf("%q", turn) + `},"input":"go"}`
-	root, _ := jsonsplice.Root([]byte(responses))
-	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/responses", Body: []byte(responses)}, root); got.Labels["x-codex-turn-metadata"] != turn {
-		t.Errorf("body turn metadata = %v", got.Labels)
-	}
-	header := map[string]string{"x-codex-turn-metadata": "from-header"}
-	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/responses", Body: []byte(responses), Labels: header}, root); got.Labels["x-codex-turn-metadata"] != "from-header" || len(header) != 1 {
-		t.Errorf("header turn metadata = %v (asked labels %v)", got.Labels, header)
-	}
-	huge := `{"client_metadata":{"x-codex-turn-metadata":"` + strings.Repeat("x", 16<<10+1) + `"},"input":"go"}`
-	root, _ = jsonsplice.Root([]byte(huge))
-	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/responses", Body: []byte(huge)}, root); got.Labels != nil {
-		t.Errorf("an oversized turn metadata went: %d labels", len(got.Labels))
-	}
-	// A forked Claude Code child names the agent type of the call that spawned it.
-	forked := `{"messages":[{"role":"user","content":"plan it"},{"role":"assistant","content":[{"type":"text","text":"Planning."},{"type":"tool_use","id":"t","name":"Task","input":{"description":"plan","prompt":"p","subagent_type":"Plan"}}]},{"role":"user","content":"child prompt"}]}`
-	root, _ = jsonsplice.Root([]byte(forked))
+	// A forked Claude Code child names the agent type of the call that spawned
+	// it, matched by its prompt when its parent spawned several at once.
+	spawns := `{"role":"assistant","content":[{"type":"text","text":"Splitting."},` +
+		`{"type":"tool_use","id":"t1","name":"Task","input":{"description":"look","prompt":"Find every caller of checkPassword","subagent_type":"Explore"}},` +
+		`{"type":"tool_use","id":"t2","name":"Task","input":{"description":"plan","prompt":"Plan the password migration","subagent_type":"Plan"}}]}`
 	child := map[string]string{"x-claude-code-agent-id": "a1"}
-	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(forked), Labels: child}, root); got.Labels["x-caveman-agent"] != "Plan" || len(child) != 1 {
-		t.Errorf("forked child labels = %v", got.Labels)
-	}
-	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(forked)}, root); got.Labels["x-caveman-agent"] != "" {
-		t.Errorf("a main request got an agent type: %v", got.Labels)
+	for prompt, want := range map[string]string{
+		"Plan the password migration":        "Plan",
+		"Find every caller of checkPassword": "Explore",
+		"Something else entirely":            "",
+	} {
+		forked := `{"messages":[{"role":"user","content":"migrate passwords"},` + spawns + `,{"role":"user","content":` + fmt.Sprintf("%q", prompt) + `}]}`
+		root, _ := jsonsplice.Root([]byte(forked))
+		if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(forked), Labels: child}, root); got.Labels["x-caveman-agent"] != want || len(child) != 1 {
+			t.Errorf("forked child %q: labels %v, want agent %q", prompt, got.Labels, want)
+		}
+		if want != "" {
+			if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(forked)}, root); got.Labels["x-caveman-agent"] != "" {
+				t.Errorf("a main request got an agent type: %v", got.Labels)
+			}
+		}
 	}
 	labels := map[string]string{"x-claude-code-request-class": "main"}
 	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(`{}`), Labels: labels, PerMessageOff: true}, jsonsplice.Span{Start: 0, End: 2}); got.Labels["x-claude-code-request-class"] != "main" || !got.PerMessageOff {
@@ -301,5 +296,17 @@ func TestAskMatchesTheRouteAskSchema(t *testing.T) {
 	for _, part := range []string{"ask", "request", "last"} {
 		got, _ := body[part].(map[string]any)
 		check(part, got, schema.Properties[part])
+	}
+}
+
+// A last effort outside the contract's values goes as "".
+func TestLastEffortOutsideTheContractGoesEmpty(t *testing.T) {
+	cloud := &cloudRecorder{answer: func(int) string { return `{"model":"claude-opus-5-5"}` }}
+	link := newLink(cloudHome(t, cloud.server(t).URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	ask := askFor("s1", "", "go")
+	ask.Last = &gateway.RouteLast{Model: "claude-opus-5-5", Effort: "adaptive"}
+	link.Ask(t.Context(), ask)()
+	if last, _ := cloud.bodies[0]["last"].(map[string]any); last["effort"] != "" {
+		t.Errorf("last = %v", last)
 	}
 }

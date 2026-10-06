@@ -235,7 +235,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
 				exact = evidence.SessionID
 			}
-			run = newRouteRun(r.Header, exact)
+			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
 			last, perMessageOff := s.routes.facts(run.key, time.Now())
 			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
@@ -446,15 +446,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
-	if run != nil && !run.off {
+	if run != nil {
 		if meta.Model != modelRequested {
 			// An identity answer, so the agent's copy can name the model it asked for.
 			upstreamHeaders.Del("accept-encoding")
 		} else {
 			withoutBrotli(upstreamHeaders)
 		}
+		if run.dropBlocks {
+			upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
+		}
 	}
-	healHeaders := upstreamHeaders // the heal retry carries no marks, so no per-message beta
+	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
 	if run != nil && run.marked {
 		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
 	}
@@ -495,7 +498,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// retry (route.go routeHeal); if that is refused too, the original-bytes
 	// retry below still runs.
 	if run != nil && resp.StatusCode == http.StatusBadRequest {
-		if retry, marks := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
+		if retry, kind, from := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
+			headers := healHeaders
+			switch kind {
+			case healDropBlock:
+				headers = withBeta(upstreamHeaders, bindingBeta)
+			case healStrip:
+				headers = upstreamHeaders
+			}
 			s.capture.record(captureMeta{
 				RequestID:   requestID,
 				Provider:    meta.Provider,
@@ -504,24 +514,28 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				Optimizers:  strings.Join(append(slices.Clone(transform.OptimizerIDs), "route-heal"), ","),
 			}, wholeBody(body), wholeBody(retry))
 			s.inflight.Add(1)
-			healed, herr := s.doUpstream(r.Context(), buildUpstream(retry, healHeaders))
+			healed, herr := s.doUpstream(r.Context(), buildUpstream(retry, headers))
 			s.inflight.Add(-1)
 			if herr == nil {
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 				_ = resp.Body.Close()
-				resp, upstreamHeaders = healed, healHeaders
+				agent := transform.Body // the agent's own messages, for a remembered strip
+				if run.marked {
+					agent = run.unmarked
+				}
+				resp, upstreamHeaders = healed, headers
 				transform.Body, transformedHash, evidence.acceptedBody = retry, sha256.Sum256(retry), retry
 				providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, retry, meta)
-				run.marked = false
+				// Later requests keep the history that was served; a compaction or
+				// side request does not change the session.
 				switch {
 				case healed.StatusCode >= 300:
-				case marks:
+				case kind == healMarks:
+					run.marked = false
 					s.routes.latch(run.key, meta.Model) // top-level effort served where the marks were not
+				case run.perRequest:
 				default:
-					s.routes.stripped(run.key, retry) // later requests keep the prefix that was served
-				}
-				if !marks {
-					run.effort = "" // read back from the bytes sent
+					s.routes.healed(run.key, kind == healDropBlock, agent, from)
 				}
 			}
 		}
@@ -532,7 +546,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// (Measured 2026-07-07: Anthropic answers subscription-OAuth requests whose
 	// first system block changed with an opaque 429; any future fingerprint check
 	// lands here too.) The retry claims no optimization and books no savings.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) {
+	// A routed request's 429 is the provider's rate limit, not its bytes:
+	// retrying the original (without the session's marks) cannot help.
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) &&
+		!(run != nil && !run.off && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
@@ -652,6 +669,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	defer resp.Body.Close()
 
+	if moved && meta.Stream {
+		resp.Header.Del("Content-Length") // the agent's copy may be another length
+	}
 	copySafeResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("x-cave-project", rc.Label)
 	w.Header().Set("x-cave-mode", rc.RuntimeMode)

@@ -8,9 +8,12 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"io"
+	"maps"
 	"math"
 	"net/http"
 	"regexp"
+	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -25,9 +28,10 @@ import (
 // to the bytes compression produced. Same provider only in this cut: an answer
 // names another model of the provider the agent already talks to, swapped into
 // the body's top-level "model", and the effort to run at. Every failure keeps
-// the asked model and the request's own effort, apart from a session's
-// existing per-message marks, which come back so its history does not change
-// (see applyEffort); the request is never held past the link's budget. Cloud
+// the asked model and runs at the request's own top-level effort: a session
+// that has per-message state keeps its marks and fixed top-level field (so its
+// history does not change) and gets the agent's effort back with a mark (see
+// applyEffort); the request is never held past the link's budget. Cloud
 // decides; this side reports facts and applies the answer.
 
 // RouteAsk is what the route stage knows about one request. Body is read-only
@@ -161,6 +165,8 @@ type routeRun struct {
 	marked      bool // the body sent carries the session's per-message marks
 	dropped     bool // the session had marks this body does not carry
 	unmarked    []byte
+	marks       []effortMark // the marks the body sent carries, in order
+	dropBlocks  bool         // the body sent asks the provider to drop unbound thinking
 	// effort is the effort in force in the body sent, "" when the route stage
 	// did not set it (then it is read back from the bytes).
 	effort string
@@ -169,18 +175,40 @@ type routeRun struct {
 // newRouteRun reads the labels and the session keys. The session is the
 // caller's session id when it is exact, else the agent's own session header
 // (a Codex thread is its own session); a Claude Code child
-// (x-claude-code-agent-id) is that plus its agent id.
-func newRouteRun(h http.Header, sessionID string) *routeRun {
+// (x-claude-code-agent-id) is that plus its agent id. Codex's turn metadata
+// comes from the body's client_metadata when no header carried it.
+func newRouteRun(h http.Header, sessionID, endpoint string, body []byte) *routeRun {
 	run := &routeRun{labels: map[string]string{}}
-	for _, name := range routeLabelNames {
-		if value := h.Get(name); value != "" && len(value) <= RouteLabelMax(name) {
+	label := func(name, value string) {
+		if value != "" && len(value) <= RouteLabelMax(name) && utf8.ValidString(value) {
 			run.labels[name] = value
 		}
 	}
+	for _, name := range routeLabelNames {
+		label(name, h.Get(name))
+	}
+	responses := strings.HasSuffix(endpoint, "/responses")
+	if _, ok := run.labels["x-codex-turn-metadata"]; !ok && responses {
+		if root, ok := objectRoot(body); ok {
+			metadata, _ := jsonsplice.Field(body, root, "client_metadata")
+			turn, _ := jsonsplice.StringField(body, metadata, "x-codex-turn-metadata")
+			label("x-codex-turn-metadata", turn)
+		}
+	}
+	var turn struct {
+		RequestKind  string `json:"request_kind"`
+		ParentThread string `json:"parent_thread_id"`
+		SubagentKind string `json:"subagent_kind"`
+	}
+	_ = json.Unmarshal([]byte(run.labels["x-codex-turn-metadata"]), &turn)
 	for _, name := range []string{"x-claude-code-session-id", "thread-id", "session-id", "session_id"} {
 		if sessionID == "" {
 			sessionID = cutBytes(h.Get(name), 256)
 		}
+	}
+	spawner, thread := run.labels["x-codex-parent-thread-id"], run.labels["thread-id"]
+	if spawner == "" {
+		spawner = turn.ParentThread
 	}
 	if run.key = sessionID; sessionID != "" {
 		switch agent := run.labels["x-claude-code-agent-id"]; {
@@ -189,17 +217,46 @@ func newRouteRun(h http.Header, sessionID string) *routeRun {
 			if parent := run.labels["x-claude-code-parent-agent-id"]; parent != "" {
 				run.parent += "#" + parent
 			}
-		case run.labels["x-codex-parent-thread-id"] != "":
-			run.parent = run.labels["x-codex-parent-thread-id"]
+		case thread != "" && spawner != "" && spawner != thread:
+			run.parent = spawner
 		case run.labels["x-parent-session-id"] != "":
 			run.parent = run.labels["x-parent-session-id"]
 		}
 	}
-	class := strings.ToLower(run.labels["x-claude-code-request-class"])
-	compaction := run.labels["x-claude-code-compaction"] != "" || class == "compaction"
-	run.auxiliary = class == "auxiliary" && !compaction
-	run.perRequest = compaction || run.auxiliary
-	run.compacted = compaction || run.labels["x-claude-code-context-compacted"] != ""
+	// A request the agent labels a compaction or a side request is answered on
+	// its own: the same label rules Cloud's request kinds read (Claude Code's
+	// request class and compaction flag, OpenCode's agent name, Codex's
+	// subagent kind and turn metadata request kind).
+	side := ""
+	switch {
+	case responses:
+		kind := run.labels["x-openai-subagent"]
+		if kind == "" {
+			kind = turn.SubagentKind
+		}
+		switch {
+		case turn.RequestKind == "compaction" || kind == "compact" && turn.RequestKind != "memory":
+			side = "compaction"
+		case turn.RequestKind == "memory" || kind != "" && kind != "collab_spawn" && kind != "thread_spawn" && kind != "review":
+			side = "auxiliary"
+		}
+	default:
+		side = strings.ToLower(strings.TrimSpace(run.labels["x-claude-code-request-class"]))
+		if run.labels["x-claude-code-agent-id"] == "" {
+			switch strings.ToLower(strings.TrimSpace(run.labels["x-caveman-agent"])) {
+			case "title", "summary":
+				side = "auxiliary"
+			case "compaction":
+				side = "compaction"
+			}
+		}
+		if run.labels["x-claude-code-compaction"] != "" {
+			side = "compaction"
+		}
+	}
+	run.auxiliary = side == "auxiliary"
+	run.perRequest = run.auxiliary || side == "compaction"
+	run.compacted = side == "compaction" || run.labels["x-claude-code-context-compacted"] != ""
 	return run
 }
 
@@ -235,15 +292,23 @@ type routeSession struct {
 
 // effortState is a session's per-message effort: top is the top-level effort,
 // fixed at its first per-message request (nil until then); salt keys the
-// anchors. strip is how many of the agent's messages lose their thinking
-// blocks, from a served binding heal on (stripAnchor hashes the last of them).
-// Its slices are replaced, never written in place, so a copy is safe to read.
+// anchors. A served binding heal leaves either dropBlocks (later requests ask
+// the provider to drop unbound thinking) or, where that option is refused, a
+// strip: the agent's messages stripFrom up to strip lose their thinking blocks
+// (stripAnchor hashes the last of them). Its slices are replaced, never
+// written in place, so a copy is safe to read.
 type effortState struct {
 	salt        [16]byte
 	top         *string
 	marks       []effortMark
+	dropBlocks  bool
+	stripFrom   int
 	strip       int
 	stripAnchor [32]byte
+}
+
+func (state effortState) started() bool {
+	return state.top != nil || state.dropBlocks || state.strip > 0
 }
 
 // effortMark is one per-message effort mark: it goes before message at of the
@@ -322,18 +387,24 @@ func (rs *routeSessions) latch(key, model string) {
 	}
 }
 
-// stripped records a served binding heal: the thinking blocks of body's
-// messages stay stripped on later requests (so their prefix is the one that
-// was served), and the marks it went without are gone.
-func (rs *routeSessions) stripped(key string, body []byte) {
+// healed records a served binding heal so later requests keep the history
+// that was served: dropBlocks on, or the thinking blocks of the agent's
+// messages from on stripped (body is the agent's own messages, unmarked).
+func (rs *routeSessions) healed(key string, dropBlocks bool, body []byte, from int) {
 	_, _, items, ok := messageSpans(body)
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
-	if session := rs.get(key, true); session != nil && ok {
-		session.marks, session.strip = nil, len(items)
+	session := rs.get(key, true)
+	switch {
+	case session == nil:
+		return
+	case dropBlocks:
+		session.dropBlocks = true
+	case ok:
+		session.stripFrom, session.strip = from, len(items)
 		session.stripAnchor = anchorAt(body, items, session.salt, len(items))
-		session.version++
 	}
+	session.version++
 }
 
 // applyEffort applies the answer's effort to body (the bytes compression
@@ -343,24 +414,24 @@ func (rs *routeSessions) stripped(key string, body []byte) {
 // request it sends to a model that has not refused them, at the same places
 // and byte-identical, whatever the answer (a Cloud failure or routing off
 // included), so its history does not change under the agent; only a top-level
-// answer leaves them out. Compaction and side requests read the session's
-// marks but never change them.
+// answer leaves them out. Without an effort from Cloud the request's own
+// top-level effort is put back with a mark when it differs. Compaction and side
+// requests read the session's state but never change it. A forked child takes
+// its parent's whole state (marks, heal, refusals) on its first request.
 func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, body []byte, answer RouteAnswer) []byte {
 	run.off = answer.Outcome == "off"
-	if answer.Effort == "" {
-		answer.EffortMode = ""
+	if answer.Effort == "" || run.off {
+		answer.Effort, answer.EffortMode = "", ""
 	}
 	switch {
-	case run.off && answer.Reason == "model_outside_pool":
-		return body
 	case strings.HasSuffix(endpoint, "/responses"):
-		if answer.Effort != "" && !run.off {
+		if answer.Effort != "" {
 			body, _ = setString(body, answer.Effort, "reasoning", "effort")
 			run.effort, run.applied = answer.Effort, true
 		}
 		return body
 	case strings.HasSuffix(endpoint, "/chat/completions"):
-		if answer.Effort != "" && !run.off {
+		if answer.Effort != "" {
 			body, _ = setString(body, answer.Effort, "reasoning_effort")
 			run.effort, run.applied = answer.Effort, true
 		}
@@ -371,9 +442,6 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	mode := answer.EffortMode
 	if mode == "" && answer.Effort != "" {
 		mode = "top"
-	}
-	if run.off {
-		mode = ""
 	}
 	// Work on a copy so a body is never spliced under the lock; only a turn's
 	// own requests write it back.
@@ -387,45 +455,77 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		}
 		return body
 	}
-	work, refused, version := session.effortState, session.refused[model], session.version
-	var parent *effortState
-	if work.top == nil {
-		if p := s.routes.get(run.parent, false); p != nil && p.top != nil {
-			copied := p.effortState
+	work, version := session.effortState, session.version
+	refusals := maps.Clone(session.refused)
+	var parent *routeSession
+	if !work.started() {
+		if p := s.routes.get(run.parent, false); p != nil && (p.started() || len(p.refused) > 0) {
+			copied := *p
+			copied.refused = maps.Clone(p.refused)
 			parent = &copied
 		}
 	}
 	s.routes.mu.Unlock()
+	if parent != nil && !freshConversation(body) {
+		work = parent.effortState
+		for refused := range parent.refused {
+			if refusals == nil {
+				refusals = map[string]bool{}
+			}
+			refusals[refused] = true
+		}
+	}
 
 	body = work.applyStrip(body)
 	switch {
+	case refusals[model]:
+		// This model refused marks: Cloud's effort goes top-level, as the heal
+		// that found out sent it.
+		if answer.Effort != "" {
+			body, _ = setString(body, answer.Effort, "output_config", "effort")
+			run.effort, run.applied = answer.Effort, true
+		}
+		run.dropped = len(work.marks) > 0
 	case mode == "top":
 		body, _ = setString(body, answer.Effort, "output_config", "effort")
 		run.effort, run.applied, run.dropped = answer.Effort, true, len(work.marks) > 0
-		top := answer.Effort // the cache restarts here: later marks start from this level
-		work.top, work.marks = &top, nil
-	case refused || work.top == nil && parent == nil && (mode != "message" || run.perRequest):
-		run.dropped = len(work.marks) > 0
-	default:
-		effort := ""
-		if mode == "message" {
-			effort = answer.Effort
+		if !run.perRequest { // the cache restarts here: later marks start from this level
+			top := answer.Effort
+			work.top, work.marks = &top, nil
 		}
+	case work.top == nil && (mode != "message" || run.perRequest):
+	default:
 		var out []byte
-		out, run.unmarked, run.effort, run.dropped = perMessage(body, &work, parent, effort, !run.perRequest)
-		run.marked = run.unmarked != nil
+		out, run.unmarked, run.effort, run.dropped = perMessage(body, &work, answer.Effort, !run.perRequest)
+		run.marked, run.marks = run.unmarked != nil, work.marks
 		run.applied = run.marked || !bytes.Equal(out, body)
 		body = out
+	}
+	if work.dropBlocks {
+		if out, ok := withDropBlock(body); ok {
+			body, run.dropBlocks = out, true
+		}
 	}
 	if !run.perRequest {
 		s.routes.mu.Lock()
 		if live := s.routes.get(run.key, true); live != nil && live.version == version {
-			live.effortState = work
+			live.effortState, live.refused = work, refusals
 			live.version++
 		}
 		s.routes.mu.Unlock()
 	}
 	return body
+}
+
+// freshConversation reports a Messages body without an assistant turn yet.
+func freshConversation(body []byte) bool {
+	_, _, items, _ := messageSpans(body)
+	for _, item := range items {
+		if role, _ := jsonsplice.StringField(body, item, "role"); role == "assistant" {
+			return false
+		}
+	}
+	return true
 }
 
 // applyStrip strips the thinking blocks a served binding heal stripped, while
@@ -439,7 +539,7 @@ func (state *effortState) applyStrip(body []byte) []byte {
 		state.strip = 0
 		return body
 	}
-	out, _ := dropThinking(body, state.strip)
+	out, _ := dropThinking(body, state.stripFrom, state.strip)
 	return out
 }
 
@@ -450,36 +550,32 @@ func (state *effortState) applyStrip(body []byte) []byte {
 //
 // The session's top-level effort is fixed at its first per-message request:
 // the routed effort on a fresh conversation (no assistant turn yet), else the
-// request's own. A forked child resending its parent's history inherits the
-// parent's marks instead. A new mark goes in only when the effort differs from
+// request's own. Without a routed effort the request's own top-level effort
+// (as the agent sent it, before the fixed one replaced it) is the one to run
+// at, so a Cloud failure or routing off puts the agent's own effort back,
+// cache-safely. A new mark goes in only when the effort differs from
 // the one in force (the newest per-message effort, the agent's own or a mark,
 // else top-level), just before the last user turn, or at the end when that turn
 // carries a tool result (never between a tool_use and its tool_result), and
 // never before an earlier mark or per-message effort. A mark whose anchor no
-// longer matches (compaction rewrote history) is dropped with every later one.
-func perMessage(body []byte, state, parent *effortState, effort string, allowNew bool) (out, unmarked []byte, inForce string, dropped bool) {
+// longer matches (compaction rewrote history) is dropped with every later one;
+// a request matching none of them (another conversation under the key) leaves
+// them for the session unless it adds its own.
+func perMessage(body []byte, state *effortState, effort string, allowNew bool) (out, unmarked []byte, inForce string, dropped bool) {
 	root, array, items, ok := messageSpans(body)
 	if !ok {
 		return body, nil, "", false
 	}
 	own := topEffort(body, root)
+	if effort == "" && allowNew {
+		effort = own
+	}
 	if state.top == nil {
-		fresh := true
-		for _, item := range items {
-			if role, _ := jsonsplice.StringField(body, item, "role"); role == "assistant" {
-				fresh = false
-				break
-			}
+		top := own
+		if effort != "" && freshConversation(body) {
+			top = effort
 		}
-		if parent != nil && !fresh {
-			state.salt, state.top, state.marks = parent.salt, parent.top, append([]effortMark(nil), parent.marks...)
-		} else {
-			top := own
-			if fresh && effort != "" {
-				top = effort
-			}
-			state.top = &top
-		}
+		state.top = &top
 	}
 	if *state.top != "" && own != *state.top {
 		set, _ := setString(body, *state.top, "output_config", "effort")
@@ -528,7 +624,9 @@ func perMessage(body []byte, state, parent *effortState, effort string, allowNew
 		marks = append(marks, effortMark{at: at, anchor: anchorAt(body, items, state.salt, at), effort: effort})
 		inForce = effort
 	}
-	state.marks = marks
+	if len(marks) > 0 { // none matching and none added keeps the session's
+		state.marks = marks
+	}
 	if len(marks) == 0 {
 		return body, nil, inForce, dropped
 	}
@@ -719,29 +817,62 @@ func withoutBrotli(header http.Header) {
 	header.Set("accept-encoding", strings.Join(kept, ", "))
 }
 
-// The per-message beta and the betas that already carry it.
-const perMessageBeta = "mid-conversation-output-config-2026-07-01"
+// The per-message beta and the betas that already carry it, and the beta
+// that lets a request ask for unbound thinking to be dropped.
+const (
+	perMessageBeta = "mid-conversation-output-config-2026-07-01"
+	bindingBeta    = "thinking-binding-controls-2026-08-01"
+)
 
 var perMessageBetas = []string{perMessageBeta, "per-turn-control-2026-07-01", "mid-conversation-effort-2026-08-01"}
 
-// withPerMessageBeta returns header with the per-message beta appended to
-// anthropic-beta, unless a beta that carries it is already there.
-func withPerMessageBeta(header http.Header) http.Header {
+// withBeta returns header with beta appended to anthropic-beta, unless it or
+// a beta that carries it is already there.
+func withBeta(header http.Header, beta string, carriers ...string) http.Header {
 	betas := strings.Join(header.Values("anthropic-beta"), ",")
-	for _, beta := range strings.Split(betas, ",") {
-		for _, known := range perMessageBetas {
-			if strings.TrimSpace(beta) == known {
-				return header
-			}
+	for _, sent := range strings.Split(betas, ",") {
+		if sent = strings.TrimSpace(sent); sent == beta || slices.Contains(carriers, sent) {
+			return header
 		}
 	}
 	out := header.Clone()
 	if strings.TrimSpace(betas) == "" {
-		out.Set("anthropic-beta", perMessageBeta)
+		out.Set("anthropic-beta", beta)
 	} else {
-		out.Set("anthropic-beta", betas+","+perMessageBeta)
+		out.Set("anthropic-beta", betas+","+beta)
 	}
 	return out
+}
+
+func withPerMessageBeta(header http.Header) http.Header {
+	return withBeta(header, perMessageBeta, perMessageBetas...)
+}
+
+// withDropBlock asks the provider to drop thinking blocks whose prefix changed
+// instead of refusing the request: thinking.block_binding.
+// prefix_mismatch_behavior "drop_block" (with the bindingBeta header), which
+// Anthropic documents for adaptive and enabled thinking and refuses with
+// Sonnet 5.5's between_tools; once used, a session sends it on every later
+// request (platform.claude.com build-with-claude/preserved-thinking and
+// thinking-troubleshooting, read 2026-10-06). A request without a thinking
+// field gets the adaptive default spelled out. ok is false where the option
+// does not apply.
+func withDropBlock(body []byte) ([]byte, bool) {
+	root, ok := objectRoot(body)
+	if !ok {
+		return body, false
+	}
+	thinking, found := jsonsplice.Field(body, root, "thinking")
+	if !found {
+		out, err := jsonsplice.AppendObjectFields(body, root, jsonsplice.FieldInsertion{Name: "thinking",
+			Value: []byte(`{"type":"adaptive","block_binding":{"prefix_mismatch_behavior":"drop_block"}}`)})
+		return out, err == nil
+	}
+	if kind, _ := jsonsplice.StringField(body, thinking, "type"); kind != "adaptive" && kind != "enabled" {
+		return body, false
+	}
+	out, _ := setString(body, "drop_block", "thinking", "block_binding", "prefix_mismatch_behavior")
+	return out, true
 }
 
 // The provider 400s the route stage answers, matched on Anthropic's documented
@@ -760,20 +891,32 @@ func withPerMessageBeta(header http.Header) http.Header {
 // provider that rejects the field outright answers "messages.N.output_config:
 // Extra inputs are not permitted").
 var (
-	bindingRE = regexp.MustCompile("(?i)bound to a different conversation|invalid `signature` in `thinking` block")
-	refusalRE = regexp.MustCompile(`(?i)supports per-turn effort|effort cannot change`)
-	markErrRE = regexp.MustCompile(`(?i)output_config\.effort|messages\.\d+\.output_config|per-turn|mid-conversation`)
+	bindingRE     = regexp.MustCompile("(?i)bound to a different conversation|invalid `signature` in `thinking` block")
+	bindingPathRE = regexp.MustCompile(`messages\.(\d+)\.content\.\d+:`)
+	refusalRE     = regexp.MustCompile(`(?i)supports per-turn effort|effort cannot change`)
+	markErrRE     = regexp.MustCompile(`(?i)output_config\.effort|messages\.\d+\.output_config|per-turn|mid-conversation`)
+)
+
+// healKind is the retry a provider 400 earned.
+type healKind int
+
+const (
+	healNone      healKind = iota
+	healMarks              // refused marks: top-level effort only
+	healDropBlock          // broken binding: ask the provider to drop unbound thinking
+	healStrip              // broken binding where that is refused: strip thinking from the failing message on
 )
 
 // routeHeal reads a provider 400 (decoded when compressed) and returns the one
-// retry it earns, or nil. A broken thinking binding on a request whose marks
-// changed the history (marks sent, or marks the session had and this request
-// lacks) retries without thinking blocks and marks; a request the route stage
-// sent to another model is left to the original-bytes retry on the asked one.
-// Refused marks retry with top-level effort only (marks reports that one; once
-// it is served the session's latch goes on). Refusal wording on a request
-// without marks latches the session at once. The 400's bytes are put back.
-func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, model string, sameModel bool) (retry []byte, marks bool) {
+// retry it earns. A broken thinking binding on a request the route stage saw,
+// sent to the asked model, retries with drop_block, or (between_tools) without
+// the thinking blocks from the failing message on, with its marks either way;
+// from is that message among the agent's own. A request the route stage sent
+// to another model is left to the original-bytes retry on the asked one.
+// Refused marks retry with top-level effort only (once served the model is
+// latched as refused). Refusal wording on a request without marks latches the
+// model at once. The 400's bytes are put back.
+func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, model string, sameModel bool) (retry []byte, kind healKind, from int) {
 	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
 	resp.Body = struct {
 		io.Reader
@@ -781,39 +924,51 @@ func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, mode
 	}{io.MultiReader(bytes.NewReader(raw), resp.Body), resp.Body}
 	head, ok := providers.DecodeBody(raw, resp.Header.Get("Content-Encoding"), 1<<20)
 	if !ok {
-		return nil, false
+		return nil, healNone, 0
 	}
 	switch {
 	case bindingRE.Match(head):
-		if !sameModel || !run.marked && !run.dropped {
-			return nil, false
+		if !sameModel {
+			return nil, healNone, 0
 		}
-		base := sent
-		if run.marked {
-			base = run.unmarked
+		if out, ok := withDropBlock(sent); ok && !run.dropBlocks {
+			return out, healDropBlock, 0
 		}
-		if stripped, dropped := dropThinking(base, math.MaxInt); dropped || run.marked {
-			return stripped, false
+		at := 0
+		if match := bindingPathRE.FindSubmatch(head); match != nil {
+			at, _ = strconv.Atoi(string(match[1]))
+		}
+		if out, dropped := dropThinking(sent, at, math.MaxInt); dropped {
+			from = at // the sent index less the marks before it is the agent's own
+			for j, mark := range run.marks {
+				if mark.at+j < at {
+					from--
+				}
+			}
+			return out, healStrip, max(from, 0)
 		}
 	case run.marked && (refusalRE.Match(head) || markErrRE.Match(head)):
 		top, _ := setString(run.unmarked, run.effort, "output_config", "effort")
-		return top, true
+		if run.dropBlocks {
+			top, _ = withDropBlock(top)
+		}
+		return top, healMarks, 0
 	case refusalRE.Match(head):
 		s.routes.latch(run.key, model)
 	}
-	return nil, false
+	return nil, healNone, 0
 }
 
 // dropThinking removes every thinking and redacted_thinking block from the
-// assistant turns among the first upTo messages and leaves each turn's other
-// blocks in place.
-func dropThinking(body []byte, upTo int) ([]byte, bool) {
+// assistant turns among messages from up to (not including) to, and leaves
+// each turn's other blocks in place.
+func dropThinking(body []byte, from, to int) ([]byte, bool) {
 	_, _, items, ok := messageSpans(body)
 	if !ok {
 		return body, false
 	}
 	dropped := false
-	for i := min(upTo, len(items)) - 1; i >= 0; i-- { // last first: earlier spans stay valid
+	for i := min(to, len(items)) - 1; i >= max(from, 0); i-- { // last first: earlier spans stay valid
 		if role, _ := jsonsplice.StringField(body, items[i], "role"); role != "assistant" {
 			continue
 		}

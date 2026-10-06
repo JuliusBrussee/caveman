@@ -6,8 +6,8 @@
 //
 // It never touches compression or any other local stage, and every failure
 // fails open: a Cloud error, timeout, 401 or allowance answer keeps the asked
-// model and the request's own effort (the gateway still puts back a session's
-// existing per-message marks). The ask carries the caller's models, counts, what the
+// model and runs at the request's own effort (the gateway keeps a session's
+// per-message marks and puts the agent's effort back with one). The ask carries the caller's models, counts, what the
 // request declares (labels, tool names, effort), what the session's previous
 // request ran, and the conversation's text Cloud picks the model and effort
 // from: the latest human turn, the one before it and the end of the agent's
@@ -516,12 +516,10 @@ type routeRequest struct {
 }
 
 // requestFor reads routeRequest from the body: the declared tool names (at
-// most 128; a name over 64 bytes is left out), the top-level effort and
-// Anthropic's thinking.type when they are values the contract knows (else ""),
-// and two labels a body can carry: Codex's turn metadata from client_metadata
-// when no header carried it, and on a Claude Code child the agent type of the
-// spawn call it was forked from (x-caveman-agent). A label over its bound is
-// left out, never cut.
+// most 128; a name over 64 bytes is left out), the top-level
+// effort and Anthropic's thinking.type when they are values the contract knows
+// (else ""), and on a Claude Code child the agent type of the spawn call it was
+// forked from (x-caveman-agent). A label over its bound is left out, never cut.
 func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 	out := routeRequest{Endpoint: "messages", PerMessageOff: ask.PerMessageOff}
 	labels := maps.Clone(ask.Labels)
@@ -540,9 +538,6 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 		out.Endpoint = "responses"
 		reasoning, _ := jsonsplice.Field(body, root, "reasoning")
 		effort, _ = jsonsplice.StringField(body, reasoning, "effort")
-		metadata, _ := jsonsplice.Field(body, root, "client_metadata")
-		turn, _ := jsonsplice.StringField(body, metadata, "x-codex-turn-metadata")
-		label("x-codex-turn-metadata", turn)
 	case strings.HasSuffix(ask.Endpoint, "/chat/completions"):
 		out.Endpoint = "chat"
 		effort, _ = jsonsplice.StringField(body, root, "reasoning_effort")
@@ -557,7 +552,7 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 			label("x-caveman-agent", spawnedAgentType(body, root))
 		}
 	}
-	if slices.Contains([]string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, effort) {
+	if slices.Contains(contractEfforts, effort) {
 		out.Effort = effort
 	}
 	out.Labels = labels
@@ -572,34 +567,52 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 			function, _ := jsonsplice.Field(body, tool, "function")
 			name, _ = jsonsplice.StringField(body, function, "name")
 		}
-		if name != "" && len(name) <= 64 {
+		if name != "" && len(name) <= 64 { // decoded JSON: valid UTF-8 already
 			out.ToolNames = append(out.ToolNames, name)
 		}
 	}
 	return out
 }
 
-// spawnedAgentType is the subagent_type of a tool call in the newest
-// assistant message (a forked child resends its parent's history up to the
-// call that spawned it), or "". Only that message's tool_use inputs are read.
+// The effort values route-ask-v1 knows; anything else goes as "".
+var contractEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// spawnedAgentType is the subagent_type of the spawn call a forked child came
+// from: a forked child resends its parent's history up to the newest assistant
+// message, then its own prompt. The one tool_use there whose input.prompt the
+// child's prompt carries names it; none or several leave it "". Only that
+// message's tool_use inputs and the text after it are read.
 func spawnedAgentType(body []byte, root jsonsplice.Span) string {
 	list, _ := jsonsplice.Field(body, root, "messages")
 	items, _ := jsonsplice.Elements(body, list)
+	var prompt []string
 	for i := len(items) - 1; i >= 0; i-- {
 		if role, _ := jsonsplice.StringField(body, items[i], "role"); role != "assistant" {
+			if text, ok, _ := messageText(body, items[i], "text"); ok {
+				prompt = append(prompt, text)
+			}
 			continue
 		}
+		child := strings.Join(prompt, "\n")
 		content, _ := jsonsplice.Field(body, items[i], "content")
 		blocks, _ := jsonsplice.Elements(body, content)
-		for j := len(blocks) - 1; j >= 0; j-- {
-			if kind, _ := jsonsplice.StringField(body, blocks[j], "type"); kind == "tool_use" {
-				input, _ := jsonsplice.Field(body, blocks[j], "input")
-				if agentType, _ := jsonsplice.StringField(body, input, "subagent_type"); agentType != "" {
-					return agentType
-				}
+		found := ""
+		for _, block := range blocks {
+			if kind, _ := jsonsplice.StringField(body, block, "type"); kind != "tool_use" {
+				continue
 			}
+			input, _ := jsonsplice.Field(body, block, "input")
+			agentType, _ := jsonsplice.StringField(body, input, "subagent_type")
+			spawned, _ := jsonsplice.StringField(body, input, "prompt")
+			if agentType == "" || strings.TrimSpace(spawned) == "" || !strings.Contains(child, spawned) {
+				continue
+			}
+			if found != "" {
+				return "" // two spawns match: no unique one
+			}
+			found = agentType
 		}
-		return ""
+		return found
 	}
 	return ""
 }
@@ -777,7 +790,10 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	var last *gateway.RouteLast
 	if ask.Last != nil {
 		bounded := *ask.Last
-		bounded.Model, bounded.Effort = truncate(bounded.Model, 128), truncate(bounded.Effort, 32)
+		bounded.Model = truncate(bounded.Model, 128)
+		if !slices.Contains(contractEfforts, bounded.Effort) {
+			bounded.Effort = ""
+		}
 		for _, count := range []*int{&bounded.AgeS, &bounded.InputTokens, &bounded.CacheReadTokens, &bounded.CacheWriteTokens} {
 			*count = min(max(*count, 0), 1_000_000_000)
 		}

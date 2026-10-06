@@ -129,8 +129,9 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   Cloud picks the model and the effort and no routing logic lives here). Its answer is cached
   per ask (session, provider, model, turn number, latest human text; an input group carrying a
   tool result is no human turn, text riding along included) so a tool loop never switches model
-  or effort mid-turn; a request the agent labels compaction or auxiliary is asked on its own,
-  without the text. The session is `x-cave-session`, else the agent's session header (a Codex
+  or effort mid-turn; a request the agent labels compaction or auxiliary (Claude Code's request
+  class and compaction flag, OpenCode's title/summary/compaction agent, Codex's subagent kind
+  and turn-metadata request kind) is asked on its own, without the text. The session is `x-cave-session`, else the agent's session header (a Codex
   thread, `thread-id`, is its own, its parent `x-codex-parent-thread-id`); a Claude
   Code child (`x-claude-code-agent-id`) is a session of its own and sends its parent's state;
   a session id guessed from timing is not used. State, previous-request facts and marks live in
@@ -141,16 +142,22 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   user turn, or at the end after a tool result. Marks are remembered per session with a salted
   hash of the message before each (`cache_control` left out) and replayed at the same places on
   every later request to a model that already took them, whatever the answer, routing off and
-  Cloud failures included (the agent resends history without them); an anchor that no longer
-  matches drops that mark and every later one; compaction and side requests never change them.
-  A 400 naming the thinking binding on history the marks changed retries once without thinking
-  blocks and marks, and later requests strip the same blocks up front; a refused mark retries
-  once with top-level effort only and, once served, latches per-message effort off for the
-  session; compressed 400s are decoded first. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
+  Cloud failures included (the agent resends history without them); with no effort from Cloud
+  the request's own top-level effort is marked instead, so a routed mark never outlives the
+  agent's choice; an anchor that no longer matches drops that mark and every later one;
+  compaction and side requests never change them. A 400 naming the thinking binding on a routed
+  request retries once on the same model with `thinking.block_binding.prefix_mismatch_behavior:
+  "drop_block"` (beta `thinking-binding-controls-2026-08-01`), sent on every later request of the
+  session and its forked children; where Anthropic refuses that (Sonnet 5.5 `between_tools`) the
+  retry drops thinking blocks from the failing message on and later requests strip the same
+  range up front. A refused mark retries once with top-level effort only and, once served,
+  latches per-message effort off for the session (a model that refused takes Cloud's effort
+  top-level); compressed 400s are decoded first. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
   answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
   (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the
-  routed model replays the original bytes on the asked model. When the model moved, the agent's
+  routed model replays the original bytes on the asked model; a 429 on a routed request is
+  returned as is. When the model moved, the agent's
   copy of the answer names the model it asked for (Claude Code drops its thinking on another
   name): a JSON answer's top-level `model`, and in a stream every `"model":"<sent>"` pair, rewritten
   incrementally across reads; the upstream is asked for an identity answer, a compressed one is
