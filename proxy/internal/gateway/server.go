@@ -236,6 +236,11 @@ type RequestRecord struct {
 	Model                    string
 	RouteFrom                string
 	RouteTo                  string
+	// The route stage's outcome for the runtime/v1 sender (see route.go); not
+	// stored. Empty when no route stage ran.
+	RouteOutcome    string
+	RouteReason     string
+	RouteDecisionID string
 	Endpoint                 string
 	Stream                   bool
 	StatusCode               int
@@ -379,6 +384,7 @@ type Server struct {
 	// unless CAVE_CAPTURE_DIR names a writable directory, and it never affects
 	// what is sent, recorded, or claimed.
 	capture *bodyCapture
+	cloud   CloudLink
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
@@ -496,6 +502,9 @@ type Config struct {
 	// <token>`. Empty falls back to CAVEMAN_METRICS_TOKEN; unset keeps /metrics
 	// open like the health probes.
 	MetricsToken string
+	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender). Nil
+	// keeps the proxy local-only.
+	Cloud CloudLink
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -576,6 +585,7 @@ func New(cfg Config) *Server {
 		metricsToken:         strings.TrimSpace(cmp.Or(cfg.MetricsToken, env.String("CAVEMAN_METRICS_TOKEN", ""))),
 		logger:               cfg.Logger,
 		capture:              newBodyCapture(os.Getenv("CAVE_CAPTURE_DIR"), cfg.Logger),
+		cloud:                cfg.Cloud,
 	}
 }
 

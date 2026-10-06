@@ -210,6 +210,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// response/telemetry. Record behavior may still simulate an estimate on copies.
 		effectiveRuntimeMode = "record"
 	}
+	// Ask (ADR 0083 §4): the Cloud round trip runs while compression does. The
+	// request-wide opt-out and an encoded body keep the model untouched too.
+	var awaitRoute func() RouteAnswer
+	modelRequested := meta.Model
+	evidence.modelRequested = modelRequested
+	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
+		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
+		routable(meta.Provider, meta.Endpoint, authMode) {
+		awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
+			Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
+			SessionID: evidence.SessionID, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+		})
+	}
 	switch effectiveRuntimeMode {
 	case "record":
 		// always a pure pass-through. When observe-estimate is on, measure — on
@@ -355,6 +368,21 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	// Route: the answer moves the compressed request to another model of the
+	// same provider. Anything else keeps the asked model.
+	if awaitRoute != nil {
+		answer := awaitRoute()
+		if answer.Model != "" && answer.Model != meta.Model {
+			if routed, ok := setModel(transform.Body, answer.Model); ok {
+				transform.Body = routed
+				meta.Model = answer.Model
+				w.Header().Set("x-caveman-routed-from", modelRequested)
+			} else {
+				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
+			}
+		}
+		evidence.route = answer
+	}
 	transformedHash := sha256.Sum256(transform.Body)
 	evidence.acceptedBody = transform.Body
 	providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown := providerPrefixEvidence(adapter, transform.Body, meta)
@@ -463,6 +491,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		resp = retryResp
 		upstreamHeaders = retryHeaders
+		if meta.Model != modelRequested {
+			meta.Model = modelRequested
+			w.Header().Del("x-caveman-routed-from")
+			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
+		}
 		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
 		evidence.acceptedBody = body
 		transformedHash = rawHash
@@ -491,6 +524,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		resp, retrieveCalls, retrieved, replayedOriginal = s.runRetrieveLoop(r.Context(), s.httpClient, upstreamURL, upstreamHeaders, transform.Body, body, comp.recoveryHandles(), resp, adapter, meta.Provider, meta.Endpoint, requestID)
 	}
 	if replayedOriginal {
+		if meta.Model != modelRequested {
+			meta.Model = modelRequested
+			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "replayed_original"}
+		}
 		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
 		evidence.acceptedBody = body
 		transformedHash = rawHash
@@ -662,6 +699,9 @@ type requestEvidence struct {
 	TransformLocation             string
 	CacheEpoch                    string
 	CachePrefixSHA256             string
+	// route is the route stage's answer; modelRequested what the agent asked for.
+	route          RouteAnswer
+	modelRequested string
 }
 
 func requestEvidenceFromHeaders(headers http.Header) requestEvidence {
@@ -1389,8 +1429,11 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		AgentSlug:                    labelOrDefault(rc.AgentSlug, "unlabeled-agent"),
 		Provider:                     meta.Provider,
 		Model:                        meta.Model,
-		RouteFrom:                    meta.Model,
+		RouteFrom:                    labelOrDefault(evidence.modelRequested, meta.Model),
 		RouteTo:                      meta.Model,
+		RouteOutcome:                 evidence.route.Outcome,
+		RouteReason:                  evidence.route.Reason,
+		RouteDecisionID:              evidence.route.DecisionID,
 		Endpoint:                     meta.Endpoint,
 		Stream:                       meta.Stream,
 		StatusCode:                   status,
@@ -1440,6 +1483,9 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
 	}
 	s.sink.Record(row)
+	if s.cloud != nil {
+		s.cloud.Observe(row)
+	}
 }
 
 // costBreakdown prices normalized provider usage. Cache and reasoning fields are
