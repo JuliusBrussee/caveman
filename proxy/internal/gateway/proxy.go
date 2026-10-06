@@ -526,6 +526,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if replayedOriginal {
 		if meta.Model != modelRequested {
 			meta.Model = modelRequested
+			w.Header().Del("x-caveman-routed-from")
 			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "replayed_original"}
 		}
 		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}

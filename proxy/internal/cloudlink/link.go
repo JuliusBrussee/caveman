@@ -35,6 +35,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
 
 const (
@@ -67,6 +68,7 @@ type Link struct {
 
 	mu         sync.Mutex
 	stamp      string
+	loaded     bool
 	cfg        settings
 	decisions  map[string]*decision
 	pauseUntil time.Time
@@ -124,12 +126,20 @@ func (l *Link) settings() settings {
 		}
 	}
 	l.mu.Lock()
+	if l.loaded && stamp == l.stamp {
+		defer l.mu.Unlock()
+		return l.cfg
+	}
+	l.mu.Unlock()
+	// Outside the lock: a keychain read can take seconds, and pauses and
+	// Observe must not wait on it.
+	cfg := l.load(current, legacy, credentials)
+	l.mu.Lock()
 	defer l.mu.Unlock()
-	if stamp != l.stamp || l.stamp == "" {
+	if !l.loaded || stamp != l.stamp {
 		previous := l.cfg
-		l.cfg = l.load(current, legacy, credentials)
-		l.stamp = stamp
-		if l.cfg.access != previous.access || l.cfg.key != previous.key {
+		l.cfg, l.stamp, l.loaded = cfg, stamp, true
+		if cfg.access != previous.access || cfg.key != previous.key {
 			// A new login starts fresh: no pause and no decision from the old one.
 			l.pauseUntil, l.decisions = time.Time{}, nil
 			l.forgetLocked()
@@ -150,6 +160,9 @@ func (l *Link) load(current, legacy, credentials string) settings {
 	}
 	if modules, ok := doc["modules"].(map[string]any); ok {
 		out.routing = modules["routing"] == true
+	}
+	if !out.routing {
+		return out // no credential is read for a link that will not use it
 	}
 	out.cloud = safeBase(stringOf(doc["baseURL"]))
 	out.gateway = safeBase(stringOf(doc["gatewayUrl"]))
@@ -272,6 +285,11 @@ func (l *Link) Ask(_ context.Context, ask gateway.RouteAsk) func() gateway.Route
 		result <- l.decide(ask, started.Add(routeBudget))
 	}()
 	return func() gateway.RouteAnswer {
+		select { // an answer that is already here wins over a spent budget
+		case answer := <-result:
+			return answer
+		default:
+		}
 		wait := routeBudget - time.Since(started)
 		if wait < 0 {
 			wait = 0
@@ -302,6 +320,11 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if bearer == "" {
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "login_expired"}
 	}
+	if statefulChain(ask.Body) {
+		// A Responses chain's follow-ups carry no human text to key a decision
+		// on, so routing it would switch model halfway through a turn.
+		return gateway.RouteAnswer{Outcome: "off", Reason: "stateful_chain"}
+	}
 	query := gateway.LatestHumanText(ask.Provider, ask.Endpoint, ask.Body)
 	if query == "" {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
@@ -325,11 +348,22 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	}
 	l.mu.Unlock()
 	if !seen {
-		d.answer = l.ask(cfg, bearer, ask, models, deadline)
-		close(d.done)
+		func() {
+			defer close(d.done) // waiters on this ask never hang, even on a panic
+			d.answer = l.ask(cfg, bearer, ask, models, deadline)
+		}()
 	}
 	<-d.done
 	return d.answer
+}
+
+func statefulChain(body []byte) bool {
+	root, ok := jsonsplice.Root(body)
+	if !ok {
+		return false
+	}
+	span, ok := jsonsplice.Field(body, root, "previous_response_id")
+	return ok && string(body[span.Start:span.End]) != "null"
 }
 
 func poolFor(provider, model string) []string {

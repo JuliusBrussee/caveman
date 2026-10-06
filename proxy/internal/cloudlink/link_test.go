@@ -399,3 +399,57 @@ func TestBillingLimitPausesWithCloudsNotice(t *testing.T) {
 		t.Errorf("route-state.json = %s", raw)
 	}
 }
+
+// A Responses chain continued by previous_response_id is never routed: its
+// follow-ups carry no human text, so a decision could not hold for the turn.
+func TestStatefulResponsesChainsAreNotRouted(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	body := `{"model":"gpt-6-sol","previous_response_id":"resp_1","input":[{"type":"function_call_output","call_id":"c","output":"ok"}]}`
+	answer := link.Ask(t.Context(), gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: "gpt-6-sol", Body: []byte(body)})()
+	if answer.Outcome != "off" || answer.Reason != "stateful_chain" || hits.Load() != 0 {
+		t.Fatalf("answer = %+v, cloud hits %d", answer, hits.Load())
+	}
+}
+
+// Events recorded under one login are never sent with another's credential,
+// and the new login's own data level decides.
+func TestEventsStayWithTheLoginThatRecordedThem(t *testing.T) {
+	var mu sync.Mutex
+	var sent []string
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/auth/me":
+			level := "usage"
+			if strings.HasSuffix(r.Header.Get("authorization"), "org-b") {
+				level = "off"
+			}
+			_, _ = fmt.Fprintf(w, `{"data":{"level":%q}}`, level)
+		case "/api/v1/runtime/events":
+			mu.Lock()
+			sent = append(sent, r.Header.Get("authorization"))
+			mu.Unlock()
+		}
+	}))
+	defer cloud.Close()
+	home := cloudHome(t, cloud.URL, true, `{"access_token":"org-a"}`)
+	link := newLink(home)
+	link.events.every = time.Hour
+	link.Observe(record(1))
+	link.flush() // org A, level usage: sent
+	link.Observe(record(2))
+	time.Sleep(10 * time.Millisecond)
+	if err := os.WriteFile(filepath.Join(home, "credentials"), []byte(`{"access_token":"org-b"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	link.flush() // org A's queued event must not go out as org B, and B is level off
+	link.Observe(record(3))
+	link.flush()
+	mu.Lock()
+	defer mu.Unlock()
+	if len(sent) != 1 || sent[0] != "Bearer org-a" {
+		t.Fatalf("batches sent with %v, want one, as org A", sent)
+	}
+}

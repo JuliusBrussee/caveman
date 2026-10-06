@@ -4,11 +4,14 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +40,7 @@ type eventQueue struct {
 	full     chan struct{}
 	level    string
 	levelAt  time.Time
+	levelOf  string        // whose login the level was read with
 	every    time.Duration // tests shorten it
 }
 
@@ -55,6 +59,7 @@ type runtimeEvent struct {
 	Tokens           *eventTokens    `json:"tokens,omitempty"`
 	KeptOutOfContext *eventKeptCount `json:"kept_out_of_context,omitempty"`
 	Route            *eventRoute     `json:"route,omitempty"`
+	owner            string          // the login that recorded it; never sent
 }
 
 type eventTokens struct {
@@ -97,7 +102,7 @@ func (l *Link) Observe(rec gateway.RequestRecord) {
 		go l.sendLoop()
 	})
 	select {
-	case q.ch <- eventFor(rec, cfg.install, l.now()):
+	case q.ch <- withOwner(eventFor(rec, cfg.install, l.now()), cfg):
 	default: // buffer full: drop
 	}
 	if len(q.ch) >= eventBatchMax {
@@ -106,6 +111,18 @@ func (l *Link) Observe(rec gateway.RequestRecord) {
 		default:
 		}
 	}
+}
+
+// owner fingerprints a login, so one account's events and level never travel
+// with another's credential.
+func (s settings) owner() string {
+	sum := sha256.Sum256([]byte(s.cloud + "\x00" + s.access + "\x00" + s.key))
+	return hex.EncodeToString(sum[:8])
+}
+
+func withOwner(event runtimeEvent, cfg settings) runtimeEvent {
+	event.owner = cfg.owner()
+	return event
 }
 
 func eventFor(rec gateway.RequestRecord, install string, now time.Time) runtimeEvent {
@@ -214,6 +231,11 @@ func (l *Link) flush() {
 		if level != "counts" && level != "usage" && level != "decisions" {
 			continue
 		}
+		owner := cfg.owner()
+		batch = slices.DeleteFunc(batch, func(event runtimeEvent) bool { return event.owner != owner })
+		if len(batch) == 0 {
+			continue
+		}
 		for i := range batch {
 			batch[i] = batch[i].atLevel(level)
 		}
@@ -228,6 +250,9 @@ func (l *Link) flush() {
 // means counts; a /me that cannot be read keeps the last answer.
 func (l *Link) dataLevel(cfg settings) string {
 	q := &l.events
+	if owner := cfg.owner(); q.levelOf != owner {
+		q.level, q.levelAt, q.levelOf = "", time.Time{}, owner // a new login reads its own level
+	}
 	if q.levelAt.IsZero() || l.now().Sub(q.levelAt) >= levelTTL {
 		q.levelAt = l.now()
 		var me struct {
