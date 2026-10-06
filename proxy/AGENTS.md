@@ -122,10 +122,12 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   hash of the message before each (`cache_control` left out) and replayed at the same places on
   every later request to a model that already took them (the agent resends history without them),
   count_tokens included. Without an effort from Cloud (a failure, routing off, effort "") the
-  request runs at its own top-level effort: marked back when it differs from the one in force, or,
-  when it sets none, sent as the agent sent it, without the marks, which the session then forgets
-  (a routed effort never becomes the top-level field of an agent that sets none; on a fresh
-  conversation its mark goes first). An anchor that no longer matches drops that mark and every
+  request runs at its own top-level effort, or, when it sets none, at the model's default effort
+  (Cloud's `default_effort`, kept per session, a forked child taking its parent's), marked when it
+  differs from the one in force; only with no default known does a request that sets none go as
+  the agent sent it, without the marks, which the session then forgets (its later thinking blocks
+  then lose their binding). A routed effort never becomes the top-level field of an agent that sets
+  none; on a fresh conversation its mark goes first. An anchor that no longer matches drops that mark and every
   later one; compaction and side requests never change them, and a body matching none of them (an
   unlabeled side request, compacted history) gets marks of its own, which replace the session's
   only once a later request continuing that conversation matches them. A thinking-binding 400 on

@@ -1373,3 +1373,40 @@ func TestFreshChildInheritsRefusals(t *testing.T) {
 		t.Fatalf("fresh child: %s", sent)
 	}
 }
+
+// With the model's default effort known (Cloud's default_effort), a request
+// that sets no effort keeps the session's marks when Cloud gives none and gets
+// one more at the default: its history does not change, so no binding 400.
+// Compaction does the same without writing back; a fresh child inherits the
+// parent's default.
+func TestDefaultEffortKeepsTheMarks(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message", DefaultEffort: "medium"}}
+	aH := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-h"},{"type":"text","text":"Ok."}]}`
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		// The provider's binding check: aH's thinking was made after the low mark.
+		if bytes.Contains(body, []byte(`sig-h`)) && !bytes.Contains(body, []byte(mark("low"))) {
+			return http.StatusBadRequest, errorBody(bindingError)
+		}
+		return 0, ""
+	})
+	post(t, srv, bare(uA, aB, uC), nil)
+	cloud.answer = RouteAnswer{Outcome: "off"}
+	post(t, srv, bare(uA, aB, uC, aH, uF), nil)
+	if sent, _ := log.last(); string(sent) != bare(uA, aB, mark("low"), uC, aH, mark("medium"), uF) || len(log.bodies) != 2 {
+		t.Fatalf("routing off, default known: %d attempts, %s", len(log.bodies), sent)
+	}
+	summarize := `{"role":"user","content":"summarize the conversation"}`
+	post(t, srv, bare(uA, aB, uC, aH, summarize), map[string]string{"x-claude-code-compaction": "1"})
+	if sent, _ := log.last(); string(sent) != bare(uA, aB, mark("low"), uC, aH, mark("medium"), summarize) {
+		t.Fatalf("compaction: %s", sent)
+	}
+	task := `{"role":"user","content":"child task"}`
+	child := map[string]string{"x-claude-code-agent-id": "a1"}
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, bare(task), child)
+	cloud.answer = RouteAnswer{Outcome: "degraded", Reason: "timeout"}
+	post(t, srv, bare(task, aH, uF), child)
+	if sent, _ := log.last(); string(sent) != bare(mark("low"), task, aH, mark("medium"), uF) {
+		t.Fatalf("fresh child, parent's default: %s", sent)
+	}
+}

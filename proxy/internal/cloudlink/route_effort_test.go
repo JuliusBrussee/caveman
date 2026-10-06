@@ -235,6 +235,17 @@ func TestAnswerEffortIsCheckedNotGuessed(t *testing.T) {
 			t.Errorf("%s: effort %q mode %q", answer, got.Effort, got.EffortMode)
 		}
 	}
+	for answer, want := range map[string]string{
+		`{"model":"claude-opus-5-5","default_effort":"medium"}`:   "medium",
+		`{"model":"claude-opus-5-5","default_effort":"adaptive"}`: "",
+		`{"model":"claude-opus-5-5"}`:                             "",
+	} {
+		cloud := &cloudRecorder{answer: func(int) string { return answer }}
+		link := newLink(cloudHome(t, cloud.server(t).URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+		if got := link.Ask(t.Context(), askFor("s1", "", "go"))(); got.DefaultEffort != want {
+			t.Errorf("%s: default effort %q", answer, got.DefaultEffort)
+		}
+	}
 }
 
 // The link's share of the per-request work on a 5 MB body (it runs while

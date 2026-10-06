@@ -835,11 +835,13 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 		Model      string `json:"model"`
 		Effort     string `json:"effort"`
 		EffortMode string `json:"effort_mode"`
-		State      string `json:"state"`
-		Reason     string `json:"reason"`
-		DecisionID string `json:"decision_id"`
-		Notice     string `json:"notice"`
-		Error      struct {
+		// DefaultEffort is the asked model's catalog default effort, "" unknown.
+		DefaultEffort string `json:"default_effort"`
+		State         string `json:"state"`
+		Reason        string `json:"reason"`
+		DecisionID    string `json:"decision_id"`
+		Notice        string `json:"notice"`
+		Error         struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
@@ -878,6 +880,9 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	// An effort the runtime cannot splice in safely is left out, never guessed at.
 	if slices.Contains(contractEfforts, answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
 		out.Effort, out.EffortMode = answer.Effort, answer.EffortMode
+	}
+	if slices.Contains(contractEfforts, answer.DefaultEffort) {
+		out.DefaultEffort = answer.DefaultEffort
 	}
 	if answer.Model != ask.Model {
 		out.Model, out.Outcome = answer.Model, "routed"

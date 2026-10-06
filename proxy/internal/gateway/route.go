@@ -30,10 +30,10 @@ import (
 // the body's top-level "model", and the effort to run at. Every failure keeps
 // the asked model and runs at the request's own top-level effort: a session
 // that has per-message state keeps its marks and fixed top-level field (so its
-// history does not change) and gets the agent's effort back with a mark, and a
-// request that sets no effort goes as the agent sent it, without the marks
-// (see applyEffort); the request is never held past the link's budget. Cloud
-// decides; this side reports facts and applies the answer.
+// history does not change) and gets the agent's effort (or, when it sets
+// none, the model's default) back with a mark (see applyEffort); the request
+// is never held past the link's budget. Cloud decides; this side reports facts
+// and applies the answer.
 
 // RouteAsk is what the route stage knows about one request. Body is read-only
 // and never sent whole: the link derives counts, a local cache key, the ask's
@@ -78,15 +78,18 @@ type RouteLast struct {
 
 // RouteAnswer is the decision for one request. Model is set only when the
 // request moves to it. Effort ("" leaves the request's) is applied per
-// EffortMode on Anthropic: "message" (a per-message mark) or "top". Outcome is
+// EffortMode on Anthropic: "message" (a per-message mark) or "top".
+// DefaultEffort is the asked model's catalog default effort ("" unknown): the
+// session keeps it for requests that set no effort of their own. Outcome is
 // the runtime/v1 route outcome: routed, kept, degraded, paused or off.
 type RouteAnswer struct {
-	Model      string
-	Effort     string
-	EffortMode string
-	Outcome    string
-	Reason     string
-	DecisionID string
+	Model         string
+	Effort        string
+	EffortMode    string
+	DefaultEffort string
+	Outcome       string
+	Reason        string
+	DecisionID    string
 	// Reject, when set, tells the link the provider refused the routed model
 	// or effort, so the rest of this ask stays as the agent asked.
 	Reject func()
@@ -157,6 +160,7 @@ func RouteLabelMax(name string) int {
 // routeRun carries one request's route-stage facts from the ask to the response.
 type routeRun struct {
 	key, parent string
+	asked       string // the model the agent asked for
 	labels      map[string]string
 	perRequest  bool // the agent labels it compaction or auxiliary
 	auxiliary   bool // the agent labels it auxiliary (a side request, not a compaction)
@@ -305,14 +309,17 @@ type routeSession struct {
 // (stripAnchor hashes the last of them). Its slices are replaced, never
 // written in place, so a copy is safe to read.
 type effortState struct {
-	salt        [16]byte
-	top         *string
-	marks       []effortMark
-	pending     []effortMark
-	dropBlocks  bool
-	stripFrom   int
-	strip       int
-	stripAnchor [32]byte
+	salt    [16]byte
+	top     *string
+	marks   []effortMark
+	pending []effortMark
+	// defaultEffort is defaultModel's catalog default effort, from Cloud's
+	// answers: what a request that sets none runs at.
+	defaultEffort, defaultModel string
+	dropBlocks                  bool
+	stripFrom                   int
+	strip                       int
+	stripAnchor                 [32]byte
 }
 
 func (state effortState) started() bool {
@@ -426,9 +433,10 @@ func (rs *routeSessions) healed(key string, dropBlocks bool, body []byte, from i
 // request it sends to a model that has not refused them, at the same places
 // and byte-identical, so its history does not change under the agent; a
 // top-level answer leaves them out. Without an effort from Cloud (a failure,
-// routing off, effort "") the request runs at its own top-level effort: put
-// back with a mark when it differs from the one in force, or, when the request
-// sets none, sent without the marks. Compaction and side requests read the
+// routing off, effort "") the request runs at its own top-level effort, or at
+// the model's default effort (kept from Cloud's answers) when it sets none:
+// put back with a mark when it differs from the one in force; with no default
+// known a request that sets none is sent without the marks. Compaction and side requests read the
 // session's state but never change it; count_tokens (replay) gets the marks
 // and heal as they are. A forked child takes its parent's refusals, and its
 // whole state (marks, heal) when it resends the parent's history.
@@ -490,7 +498,12 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		}
 		if !freshConversation(body) {
 			work = parent.effortState
+		} else if work.defaultModel == "" {
+			work.defaultEffort, work.defaultModel = parent.defaultEffort, parent.defaultModel
 		}
+	}
+	if answer.DefaultEffort != "" {
+		work.defaultEffort, work.defaultModel = answer.DefaultEffort, run.asked
 	}
 	run.heal = (!run.off || work.started()) && !blockBinding(body)
 
@@ -521,7 +534,11 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	default:
 		var out []byte
 		restore := answer.Effort == "" && !run.replay
-		out, run.unmarked, run.marks, run.effort = perMessage(body, &work, answer.Effort, !run.perRequest, restore)
+		fallback := ""
+		if work.defaultModel == model {
+			fallback = work.defaultEffort
+		}
+		out, run.unmarked, run.marks, run.effort = perMessage(body, &work, answer.Effort, fallback, !run.perRequest, restore)
 		run.marked = run.unmarked != nil
 		run.applied = run.marked || !bytes.Equal(out, body)
 		body = out
@@ -579,19 +596,22 @@ func (state *effortState) applyStrip(body []byte) []byte {
 // then goes in as a mark, first in messages on a fresh conversation, which
 // the effort docs allow). restore (no effort from Cloud) runs the request at
 // the effort it set itself (as the agent sent it, before the fixed one
-// replaced it), cache-safely with a mark; a request that sets none goes as
-// the agent sent it, without the marks, and the session forgets them (the
-// cache restarts there). A new mark goes in only when the effort differs from
-// the one in force (the newest per-message effort, the agent's own or a mark,
-// else top-level), just before the last user turn, or at the end when that
-// turn carries a tool result (never between a tool_use and its tool_result),
-// and never before an earlier mark or per-message effort. A mark whose anchor
+// replaced it), cache-safely with a mark; a request that sets none runs at
+// fallback (the model's default effort) the same way while marks are in
+// force, and only with no fallback known goes as the agent sent it, without
+// the marks, the session forgetting them (the cache restarts there, and the
+// thinking blocks after them lose their binding). A new mark goes in only
+// when the effort differs from the one in force (the newest per-message
+// effort, the agent's own or a mark, else top-level), just before the last
+// user turn, or at the end when that turn carries a tool result (never between
+// a tool_use and its tool_result), and never before an earlier mark or
+// per-message effort. A mark whose anchor
 // no longer matches is dropped with every later one. A body matching none of
 // the session's marks (a side request, or history compaction rewrote) keeps
 // its own top-level field, and a mark it gets is its own, kept as pending: the
 // session's marks are replaced only once a later request continuing that
 // conversation (one with an assistant turn) matches them.
-func perMessage(body []byte, state *effortState, effort string, allowNew, restore bool) (out, unmarked []byte, sent []effortMark, inForce string) {
+func perMessage(body []byte, state *effortState, effort, fallback string, allowNew, restore bool) (out, unmarked []byte, sent []effortMark, inForce string) {
 	root, array, items, ok := messageSpans(body)
 	if !ok {
 		return body, nil, nil, ""
@@ -615,13 +635,16 @@ func perMessage(body []byte, state *effortState, effort string, allowNew, restor
 		}
 	}
 	if restore {
-		if own == "" {
+		effort, allowNew = own, true
+		if own == "" && (fallback == "" || len(marks) == 0) {
 			if main {
 				state.top, state.marks, state.pending = nil, nil, nil
 			}
 			return body, nil, nil, ""
 		}
-		effort, allowNew = own, true
+		if own == "" {
+			effort = fallback
+		}
 	}
 	if main {
 		if state.top == nil {

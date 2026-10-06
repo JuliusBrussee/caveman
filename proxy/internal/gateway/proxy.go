@@ -240,6 +240,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				exact = evidence.SessionID
 			}
 			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
+			run.asked = meta.Model
 			if countTokens {
 				run.perRequest, run.replay = true, true
 				break
