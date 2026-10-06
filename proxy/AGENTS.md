@@ -151,25 +151,27 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   conversation and the request's thinking is adaptive or enabled, then sent on every later request
   (count_tokens and forked children included); else (Sonnet 5.5 `between_tools`, no thinking
   field, a tampered signature) without thinking blocks from the failing message on, and later
-  requests strip the same range up front (a second strip widens it; the strip stays, the history
-  as served, even if the agent later sets its own `block_binding`). A drop_block retry refused
-  with a 400 naming the binding, `block_binding` or its beta moves the session to the strip path,
-  a strip refused that way ends its heals (both start over with new marks; a side request never
-  clears them, nor the strip; a 429, 5xx or other 400 on the retry teaches nothing). Routing
-  switched off after a restart surfaces that 400. A refused mark retries once with top-level
-  effort only and, once served, latches per-message effort off for the session (a model that
-  refused takes Cloud's effort top-level); compressed 400s are decoded first. A Cloud error,
-  timeout, 401/403, `allowance` or `billing_limit` answer keeps the asked model and pauses new
-  asks (1 min; 10 min for 401/403 and billing_limit; until the 1st for allowance). Refusals and
-  limits land in `$CAVEMAN_HOME/route-state.json` (with Cloud's notice) for `caveman status`; a
-  new login lifts the pause. A provider 4xx on the routed model replays the original bytes on the
-  asked model; a 429 on the asked model of a request whose bytes the route stage changed (effort,
-  marks, strip, drop_block, a heal retry) is returned as is. When the model moved, the agent's
-  copy of the answer names the model it asked for (Claude Code drops its thinking on another
-  name): a JSON answer's top-level `model`, and in a stream every `"model":"<sent>"` pair,
-  rewritten incrementally across reads; the upstream is asked for an identity answer, a compressed
-  one is left as it is, and usage, stats and `last` read the provider's bytes. The pass-through
-  header and encoded bodies never route, nor does any origin but the provider's own API (Azure,
+  requests on the same history (same first message, same message at its end) strip the same range
+  up front (a second strip widens it; the strip stays, the history as served, even if the agent
+  later sets its own `block_binding`). A drop_block retry refused with a 400 naming the binding,
+  `block_binding` or its beta moves the session to the strip path, a strip refused that way ends
+  its heals (the first lasts for the session, as it depends on the model and thinking type; the
+  second goes with the marks, cleared when they are forgotten; a side request never clears either,
+  nor the strip; a 429, 5xx or other 400 on the retry teaches nothing). Routing switched off after
+  a restart surfaces that 400. A refused mark retries once with top-level effort only and, once
+  served, latches per-message effort off for the session (a model that refused takes Cloud's
+  effort top-level); compressed 400s are decoded first. A Cloud error, timeout, 401/403,
+  `allowance` or `billing_limit` answer keeps the asked model and pauses new asks (1 min; 10 min
+  for 401/403 and billing_limit; until the 1st for allowance). Refusals and limits land in
+  `$CAVEMAN_HOME/route-state.json` (with Cloud's notice) for `caveman status`; a new login lifts
+  the pause. A provider 4xx on the routed model replays the original bytes on the asked model; a
+  429 on the asked model of a request whose bytes the route stage changed (effort, marks, strip,
+  drop_block, a heal retry) is returned as is. When the model moved, the agent's copy of the
+  answer names the model it asked for (Claude Code drops its thinking on another name): a JSON
+  answer's top-level `model`, and in a stream every `"model":"<sent>"` pair, rewritten
+  incrementally across reads; the upstream is asked for an identity answer, a compressed one is
+  left as it is, and usage, stats and `last` read the provider's bytes. The pass-through header
+  and encoded bodies never route, nor does any origin but the provider's own API (Azure,
   OpenRouter, LiteLLM, a custom base URL); record mode does (routing is its own module). A limit
   pause asks `/me` at most every 15 min and lifts once routing is no longer limited or the plan
   changed. runtime/v1 events go whenever signed in, routing on or not, unless the CLI telemetry

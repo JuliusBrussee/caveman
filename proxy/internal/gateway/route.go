@@ -311,12 +311,16 @@ type routeSession struct {
 // request continuing one takes the session over. A served binding heal leaves
 // either dropBlocks (later requests ask the provider to drop unbound thinking)
 // or a strip: the agent's messages stripFrom up to strip lose their thinking
-// blocks (stripAnchor hashes the last of them), even should the agent later
-// set a block_binding of its own (the history stays as served). A refused
-// drop_block retry sets noDropBlock (the strip path from then on), a refused
-// strip noHeal, both cleared when the marks start over (forgotten, or another
-// conversation takes the session over). Its slices are replaced, never
-// written in place, so a copy is safe to read.
+// blocks (stripFirst hashes the first message, stripAnchor the last of them),
+// even should the agent later set a block_binding of its own (the history
+// stays as served). A refused drop_block retry sets noDropBlock, for good (it
+// depends on the model and thinking type, not the history): the strip path
+// from then on. A refused strip sets noHeal, which goes with the marks: kept
+// in a pending set when another conversation takes the session over, cleared
+// when the marks are forgotten. In a session without marks neither ever
+// clears (noHeal lasts the session's life, and a leftover strip keeps
+// started() true). Its slices are replaced, never written in place, so a copy
+// is safe to read.
 type effortState struct {
 	salt  [16]byte
 	top   *string
@@ -330,7 +334,7 @@ type effortState struct {
 	dropBlocks                  bool
 	stripFrom                   int
 	strip                       int
-	stripAnchor                 [32]byte
+	stripFirst, stripAnchor     [32]byte
 	noDropBlock, noHeal         bool
 }
 
@@ -344,6 +348,7 @@ type pendingMarks struct {
 	n           int
 	marks       []effortMark
 	top         *string // the fixed top-level effort that went with them
+	noHeal      bool    // and the refused strip
 }
 
 const pendingMax = 4
@@ -444,11 +449,13 @@ func (rs *routeSessions) healed(key string, dropBlocks bool, body []byte, from i
 	case dropBlocks:
 		session.dropBlocks = true
 	case ok:
-		if session.strip > 0 && session.strip <= len(items) && anchorAt(body, items, session.salt, session.strip) == session.stripAnchor {
+		first := anchorAt(body, items, session.salt, 0)
+		if session.strip > 0 && session.strip <= len(items) && first == session.stripFirst &&
+			anchorAt(body, items, session.salt, session.strip) == session.stripAnchor {
 			from = min(from, session.stripFrom)
 		}
 		session.stripFrom, session.strip = from, len(items)
-		session.stripAnchor = anchorAt(body, items, session.salt, len(items))
+		session.stripFirst, session.stripAnchor = first, anchorAt(body, items, session.salt, len(items))
 	}
 	session.version++
 }
@@ -541,7 +548,6 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	}
 	s.routes.mu.Unlock()
 	if parent != nil {
-		moved = moved || parent.moved
 		for refused := range parent.refused {
 			if refusals == nil {
 				refusals = map[string]bool{}
@@ -549,7 +555,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 			refusals[refused] = true
 		}
 		if !freshConversation(body) {
-			work = parent.effortState
+			work, moved = parent.effortState, moved || parent.moved
 		} else if work.defaultModel == "" {
 			work.defaultEffort, work.defaultModel = parent.defaultEffort, parent.defaultModel
 		}
@@ -636,7 +642,8 @@ func (state *effortState) applyStrip(body []byte) (out []byte, changed bool) {
 		return body, false
 	}
 	_, _, items, ok := messageSpans(body)
-	if !ok || state.strip > len(items) || anchorAt(body, items, state.salt, state.strip) != state.stripAnchor {
+	if !ok || state.strip > len(items) || anchorAt(body, items, state.salt, 0) != state.stripFirst ||
+		anchorAt(body, items, state.salt, state.strip) != state.stripAnchor {
 		return body, false
 	}
 	return dropThinking(body, state.stripFrom, state.strip)
@@ -730,7 +737,7 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 		if own == "" {
 			if ask.fallback == "" {
 				if !ask.moved {
-					state.top, state.marks, state.pending, state.noHeal, state.noDropBlock = nil, nil, nil, false, false
+					state.top, state.marks, state.pending, state.noHeal = nil, nil, nil, false
 				}
 				return body, nil, nil, ""
 			}
@@ -741,10 +748,11 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 		pending := slices.Delete(slices.Clone(state.pending), takeover, takeover+1)
 		if len(state.marks) > 0 {
 			previous := state.marked
-			previous.marks, previous.top = state.marks, state.top
+			previous.marks, previous.top, previous.noHeal = state.marks, state.top, state.noHeal
 			pending = addPending(pending, previous)
 		}
-		state.top, state.pending, state.noHeal, state.noDropBlock = state.pending[takeover].top, pending, false, false
+		set := state.pending[takeover]
+		state.top, state.pending, state.noHeal = set.top, pending, set.noHeal
 	}
 	if main {
 		if state.top == nil {

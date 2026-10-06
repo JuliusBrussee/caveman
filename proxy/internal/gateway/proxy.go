@@ -786,7 +786,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
 			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
 			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
-		}, time.Now(), meta.Model != modelRequested)
+		}, time.Now(), meta.Model != modelRequested && !run.perRequest)
 	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {

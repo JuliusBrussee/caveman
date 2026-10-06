@@ -1781,3 +1781,59 @@ func TestRateLimitOnAHealRetryIsNotReplayed(t *testing.T) {
 		t.Fatalf("status %d after %d calls", rec.Code, len(log.bodies))
 	}
 }
+
+// refusesDropBlock is a provider that refuses drop_block and a binding on
+// any of the given signatures.
+func refusesDropBlock(signatures ...string) func([]byte) (int, string) {
+	return func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"drop_block"`)) {
+			return http.StatusBadRequest, errorBody("thinking.block_binding: Extra inputs are not permitted")
+		}
+		for _, signature := range signatures {
+			if bytes.Contains(body, []byte(signature)) {
+				return http.StatusBadRequest, errorBody(bindingError)
+			}
+		}
+		return 0, ""
+	}
+}
+
+// A remembered strip belongs to the history it was made on: a new history
+// whose message at the strip's end happens to be the same keeps its thinking.
+func TestStaleStripNeverMatchesANewHistory(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "top"}}
+	srv, log := effortServer(t, cloud, refusesDropBlock("sig-b"))
+	carryOn := `{"role":"user","content":"continue"}`
+	for range 2 { // drop_block refused, then the strip heal is served
+		post(t, srv, thinking("adaptive", convo("high", uA, aB, carryOn)), nil)
+	}
+	summary := `{"role":"user","content":"summary of the work so far"}`
+	cloud.answer = RouteAnswer{Outcome: "off"}
+	post(t, srv, thinking("adaptive", convo("high", uA, aB, carryOn, summary)), map[string]string{"x-claude-code-compaction": "1"})
+	post(t, srv, thinking("adaptive", convo("high", summary)), nil)
+	aT := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-t"},{"type":"text","text":"Next."}]}`
+	post(t, srv, thinking("adaptive", convo("high", summary, aT, carryOn)), nil)
+	if sent, _ := log.last(); !bytes.Contains(sent, []byte(`sig-t`)) {
+		t.Fatalf("a new history lost its thinking to a stale strip: %s", sent)
+	}
+}
+
+// A side loop taking the session over keeps the refused drop_block: back on
+// the main thread a new binding 400 goes straight to the strip.
+func TestTakeoverKeepsTheDropBlockRefusal(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, refusesDropBlock("sig-b", "sig-h"))
+	for range 2 { // drop_block refused, then the strip heal is served
+		post(t, srv, thinking("adaptive", convo("high", uA, aB, uC)), nil)
+	}
+	side := `{"role":"user","content":"check the build"}`
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	post(t, srv, thinking("adaptive", convo("high", side)), nil)
+	post(t, srv, thinking("adaptive", convo("high", side, aD, uTR)), nil)
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	aH := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-h"},{"type":"text","text":"Ok."}]}`
+	before := len(log.bodies)
+	if rec := post(t, srv, thinking("adaptive", convo("high", uA, aB, uC, aH, uF)), nil); rec.Code != http.StatusOK || len(log.bodies)-before != 2 {
+		t.Fatalf("main thread after a takeover: status %d after %d calls", rec.Code, len(log.bodies)-before)
+	}
+}
