@@ -31,9 +31,9 @@ import (
 // the asked model and runs at the request's own top-level effort: a session
 // that has per-message state keeps its marks and fixed top-level field (so its
 // history does not change) and gets the agent's effort (or, when it sets
-// none, the model's default) back with a mark (see applyEffort); the request
-// is never held past the link's budget. Cloud decides; this side reports facts
-// and applies the answer.
+// none, the model's default) back with a mark, and one without marks goes as
+// the agent sent it (see applyEffort); the request is never held past the
+// link's budget. Cloud decides; this side reports facts and applies the answer.
 
 // RouteAsk is what the route stage knows about one request. Body is read-only
 // and never sent whole: the link derives counts, a local cache key, the ask's
@@ -177,6 +177,7 @@ type routeRun struct {
 	// agent's body sets no thinking.block_binding of its own; noDropBlock: the
 	// session's drop_block retry was refused, so the heal strips.
 	heal, noDropBlock bool
+	stripped          bool // the body sent lost thinking blocks to a remembered strip
 	// effort is the effort in force in the body sent, "" when the route stage
 	// did not set it (then it is read back from the bytes).
 	effort string
@@ -310,12 +311,14 @@ type routeSession struct {
 // blocks (stripAnchor hashes the last of them), even should the agent later
 // set a block_binding of its own (the history stays as served). A refused
 // drop_block retry sets noDropBlock (the strip path from then on), a refused
-// strip noHeal. Its slices are replaced, never written in place, so a copy is
-// safe to read.
+// strip noHeal, both cleared when the marks or the strip start over. Its
+// slices are replaced, never written in place, so a copy is safe to read.
 type effortState struct {
-	salt    [16]byte
-	top     *string
-	marks   []effortMark
+	salt  [16]byte
+	top   *string
+	marks []effortMark
+	// marked is the request shape the marks last went into (marks unset).
+	marked  pendingMarks
 	pending []pendingMarks
 	// defaultEffort is defaultModel's catalog default effort, from Cloud's
 	// answers: what a request that sets none runs at.
@@ -463,19 +466,22 @@ func (rs *routeSessions) healFailed(key string, dropBlock bool) {
 // applyEffort applies the answer's effort to body (the bytes compression
 // produced, model already set) and returns what to send. Responses and chat
 // take their effort field. Anthropic takes it top-level, or as a per-message
-// mark that keeps the cached prefix. A session's marks come back on every
-// request it sends to a model that has not refused them, at the same places
-// and byte-identical, so its history does not change under the agent; a
-// top-level answer leaves them out. Without an effort from Cloud (a failure,
-// routing off, effort "") the request runs at its own top-level effort, or at
-// the model's default effort (kept from Cloud's answers) when it sets none:
-// put back with a mark when it differs from the one in force; with no default
-// known a request that sets none is sent without the marks, which the session
-// forgets unless the request went to another model. Compaction and side
-// requests read the session's state but never change it; count_tokens
-// (replay) gets the marks, strip and drop_block as they are, and only for a
-// session already known. A forked child takes its parent's refusals, and its
-// whole state (marks, heal) when it resends the parent's history.
+// mark that keeps the cached prefix; a mark is never introduced into a session
+// without marks unless Cloud answered effort_mode "message". A session's marks
+// come back on every request it sends to a model that has not refused them, at
+// the same places and byte-identical, so its history does not change under
+// the agent; a "top" answer then goes in as one more mark. Without an effort
+// from Cloud (a failure, routing off, effort "") a session without marks gets
+// the agent's bytes as sent (one cache restart where Cloud's top-level effort
+// was); one with marks runs at the request's own top-level effort, or at the
+// model's default effort (kept from Cloud's answers) when it sets none, put
+// back with a mark when it differs from the one in force, and with no default
+// known goes without the marks, which the session forgets unless the request
+// went to another model (see perMessage). Compaction and side requests read
+// the session's state but never change it; count_tokens (replay) gets the
+// marks, strip and drop_block as they are, of a session already known or its
+// parent. A forked child takes its parent's refusals, and its whole state
+// (marks, heal) when it resends the parent's history.
 func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, body []byte, answer RouteAnswer) []byte {
 	run.off = answer.Outcome == "off"
 	if answer.Effort == "" || run.off {
@@ -505,6 +511,9 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	// own requests write it back.
 	s.routes.mu.Lock()
 	session := s.routes.get(run.key, !run.replay)
+	if session == nil && run.replay && run.key != "" {
+		session = &routeSession{key: run.key} // a child's first count_tokens: its parent's state, nothing kept
+	}
 	if session == nil {
 		s.routes.mu.Unlock()
 		run.heal = !run.off && !blockBinding(body)
@@ -544,7 +553,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	run.heal = (!run.off || work.started()) && !blockBinding(body) && !work.noHeal
 	run.noDropBlock = work.noDropBlock
 
-	body = work.applyStrip(body)
+	body, run.stripped = work.applyStrip(body)
 	switch {
 	case refusals[model]:
 		// This model refused marks: Cloud's effort goes top-level, as the heal
@@ -553,7 +562,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 			body, _ = setString(body, answer.Effort, "output_config", "effort")
 			run.effort, run.applied = answer.Effort, true
 		}
-	case mode == "top":
+	case mode == "top" && len(work.marks) == 0:
 		root, _ := objectRoot(body)
 		own := topEffort(body, root)
 		body, _ = setString(body, answer.Effort, "output_config", "effort")
@@ -561,7 +570,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		if !run.perRequest {
 			// The cache restarts here: later marks start from this level, or
 			// from none when the agent sets none (Cloud's never becomes it).
-			work.top, work.marks, work.pending = nil, nil, nil
+			work.top = nil
 			if own != "" {
 				top := answer.Effort
 				work.top = &top
@@ -575,7 +584,10 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		if work.defaultModel == model {
 			fallback = work.defaultEffort
 		}
-		out, run.unmarked, run.marks, run.effort = perMessage(body, &work, answer.Effort, fallback, !run.perRequest, restore, model != run.asked)
+		out, run.unmarked, run.marks, run.effort = perMessage(body, &work, markAsk{
+			effort: answer.Effort, top: mode == "top", fallback: fallback,
+			allowNew: !run.perRequest, restore: restore, moved: model != run.asked,
+		})
 		run.marked = run.unmarked != nil
 		run.applied = run.marked || !bytes.Equal(out, body)
 		body = out
@@ -608,47 +620,62 @@ func freshConversation(body []byte) bool {
 }
 
 // applyStrip strips the thinking blocks a served binding heal stripped, while
-// the history still starts the same way.
-func (state *effortState) applyStrip(body []byte) []byte {
+// the history still starts the same way; changed reports a body it changed.
+func (state *effortState) applyStrip(body []byte) (out []byte, changed bool) {
 	if state.strip == 0 {
-		return body
+		return body, false
 	}
 	_, _, items, ok := messageSpans(body)
 	if !ok || state.strip > len(items) || anchorAt(body, items, state.salt, state.strip) != state.stripAnchor {
-		state.strip = 0
-		return body
+		state.strip, state.noHeal, state.noDropBlock = 0, false, false
+		return body, false
 	}
-	out, _ := dropThinking(body, state.stripFrom, state.strip)
-	return out
+	return dropThinking(body, state.stripFrom, state.strip)
+}
+
+// markAsk is what perMessage applies to one request.
+type markAsk struct {
+	effort   string // Cloud's effort, "" none
+	top      bool   // Cloud answered effort_mode "top"
+	fallback string // the model's default effort, "" unknown
+	allowNew bool   // a new mark may go in (not a compaction or side request)
+	restore  bool   // no effort from Cloud: the request runs at its own
+	moved    bool   // the request goes to another model than the asked one
 }
 
 // perMessage re-inserts the session's marks into an Anthropic Messages body
-// and, when allowed, adds one for effort. It returns the body to send, that
-// body without marks (nil when it carries none), the marks it carries and the
-// effort in force.
+// and, when allowed, adds one for an effort. It returns the body to send,
+// that body without marks (nil when it carries none), the marks it carries
+// and the effort in force. A mark is never introduced into a history that
+// has none unless Cloud answered effort_mode "message".
 //
 // The session's top-level effort is fixed at its first per-message request:
 // the routed effort on a fresh conversation (no assistant turn yet) whose
 // request sets one, else the request's own (none stays none: a routed effort
 // then goes in as a mark, first in messages on a fresh conversation, which
-// the effort docs allow). restore (no effort from Cloud) runs the request at
-// the effort it set itself (as the agent sent it, before the fixed one
-// replaced it), cache-safely with a mark; a request that sets none runs at
-// fallback (the model's default effort) the same way while marks are in
-// force, and only with no fallback known goes as the agent sent it, without
-// the marks, the session forgetting them (the cache restarts there, and the
-// thinking blocks after them lose their binding); a request moved to another
-// model (moved) goes without them and the session keeps them. A new mark goes
-// in only when the effort differs from the one in force (the newest
-// per-message effort, the agent's own or a mark, else top-level), just before
-// the last user turn, or at the end when that turn carries a tool result
-// (never between a tool_use and its tool_result), and never before an earlier
-// mark or per-message effort. A mark whose anchor no longer matches is dropped
-// with every later one. A body matching none of the session's marks (a side
-// request, or history compaction rewrote) keeps its own top-level field, and
-// a mark it gets is its own, kept as pending (see pendingMarks) until a
-// request continuing that conversation takes the session over.
-func perMessage(body []byte, state *effortState, effort, fallback string, allowNew, restore, moved bool) (out, unmarked []byte, sent []effortMark, inForce string) {
+// the effort docs allow). A "top" answer on history carrying the session's
+// marks goes in as one more mark (never wiping them); on any other history it
+// sets the top-level field of that body only.
+//
+// restore (no effort from Cloud): a history without the session's marks goes
+// as the agent sent it (top-level field included; the session's fixed one is
+// forgotten, one cache restart). With marks it runs at the effort the request
+// set itself, else at fallback (the model's default effort), cache-safely
+// with a mark; with neither it goes as the agent sent it, without the marks,
+// which the session forgets (the thinking blocks after them lose their
+// binding), unless the request went to another model (moved).
+//
+// A new mark goes in only when the effort differs from the one in force (the
+// newest per-message effort, the agent's own or a mark, else top-level), just
+// before the last user turn, or at the end when that turn carries a tool
+// result (never between a tool_use and its tool_result), and never before an
+// earlier mark or per-message effort. A mark whose anchor no longer matches is
+// dropped with every later one. A body matching none of the session's marks (a
+// side request, or history compaction rewrote) keeps its own top-level field,
+// and a mark it gets is its own, kept as pending (see pendingMarks) until a
+// request continuing that conversation takes the session over; the session's
+// marks then become pending in turn.
+func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []byte, sent []effortMark, inForce string) {
 	root, array, items, ok := messageSpans(body)
 	if !ok {
 		return body, nil, nil, ""
@@ -663,7 +690,7 @@ func perMessage(body []byte, state *effortState, effort, fallback string, allowN
 		}
 		return kept
 	}
-	own := topEffort(body, root)
+	own, effort, allowNew := topEffort(body, root), ask.effort, ask.allowNew
 	marks := matching(state.marks)
 	main := len(marks) > 0 || len(state.marks) == 0
 	var first [32]byte
@@ -679,20 +706,36 @@ func perMessage(body []byte, state *effortState, effort, fallback string, allowN
 			}
 		}
 	}
-	if restore {
-		effort, allowNew = own, true
-		if own == "" && (fallback == "" || len(marks) == 0) {
-			if main && !moved {
-				state.top, state.marks, state.pending = nil, nil, nil
+	if ask.top && len(marks) == 0 { // no marks in this history: the top-level field, this body only
+		out, _ := setString(body, effort, "output_config", "effort")
+		return out, nil, nil, effort
+	}
+	if ask.restore {
+		if len(marks) == 0 {
+			if main && !ask.moved {
+				state.top = nil
 			}
 			return body, nil, nil, ""
 		}
+		effort, allowNew = own, true
 		if own == "" {
-			effort = fallback
+			if ask.fallback == "" {
+				if !ask.moved {
+					state.top, state.marks, state.pending, state.noHeal, state.noDropBlock = nil, nil, nil, false, false
+				}
+				return body, nil, nil, ""
+			}
+			effort = ask.fallback
 		}
 	}
 	if takeover >= 0 { // that conversation continues: it takes the session over
-		state.top, state.pending = nil, slices.Delete(slices.Clone(state.pending), takeover, takeover+1)
+		pending := slices.Delete(slices.Clone(state.pending), takeover, takeover+1)
+		if len(state.marks) > 0 {
+			previous := state.marked
+			previous.marks = state.marks
+			pending = addPending(pending, previous)
+		}
+		state.top, state.pending, state.noHeal, state.noDropBlock = nil, pending, false, false
 	}
 	if main {
 		if state.top == nil {
@@ -743,21 +786,30 @@ func perMessage(body []byte, state *effortState, effort, fallback string, allowN
 		inForce = effort
 	}
 	switch {
-	case main:
+	case main && len(marks) > 0:
 		state.marks = marks
+		state.marked = pendingMarks{first: anchorAt(body, items, state.salt, 0), last: anchorAt(body, items, state.salt, len(items)), n: len(items)}
+	case main:
+		state.marks = nil
 	case len(marks) > 0:
-		pending := []pendingMarks{{first: first, last: anchorAt(body, items, state.salt, len(items)), n: len(items), marks: marks}}
-		for _, set := range state.pending {
-			if set.first != first && len(pending) < pendingMax {
-				pending = append(pending, set)
-			}
-		}
-		state.pending = pending
+		state.pending = addPending(state.pending, pendingMarks{first: first, last: anchorAt(body, items, state.salt, len(items)), n: len(items), marks: marks})
 	}
 	if len(marks) == 0 {
 		return body, nil, nil, inForce
 	}
 	return insertMarks(body, array, items, marks), body, marks, inForce
+}
+
+// addPending puts set first among pending, in place of one for the same
+// request shape (first message, length, last message), keeping pendingMax.
+func addPending(pending []pendingMarks, set pendingMarks) []pendingMarks {
+	out := []pendingMarks{set}
+	for _, other := range pending {
+		if (other.first != set.first || other.n != set.n || other.last != set.last) && len(out) < pendingMax {
+			out = append(out, other)
+		}
+	}
+	return out
 }
 
 // markBytes is one per-message effort mark, byte-identical every time.
@@ -1068,12 +1120,7 @@ const (
 // latched as refused). Refusal wording on a request without marks latches the
 // model at once. The 400's bytes are put back.
 func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, model string, sameModel bool) (retry []byte, kind healKind, from int) {
-	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
-	resp.Body = struct {
-		io.Reader
-		io.Closer
-	}{io.MultiReader(bytes.NewReader(raw), resp.Body), resp.Body}
-	head, ok := providers.DecodeBody(raw, resp.Header.Get("Content-Encoding"), 1<<20)
+	head, ok := peekError(resp)
 	if !ok {
 		return nil, healNone, 0
 	}
@@ -1109,6 +1156,30 @@ func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, mode
 	}
 	return nil, healNone, 0
 }
+
+// peekError reads the head of a provider error, decoded when compressed, and
+// puts its bytes back.
+func peekError(resp *http.Response) ([]byte, bool) {
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 64<<10))
+	resp.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(raw), resp.Body), resp.Body}
+	return providers.DecodeBody(raw, resp.Header.Get("Content-Encoding"), 1<<20)
+}
+
+// healRefused reports a heal retry the provider refused for the same reason:
+// a 400 that again names the thinking binding, block_binding or its beta. A
+// rate limit, an overload or any other 400 says nothing about the heal.
+func healRefused(resp *http.Response) bool {
+	if resp.StatusCode != http.StatusBadRequest {
+		return false
+	}
+	head, ok := peekError(resp)
+	return ok && (bindingRE.Match(head) || blockBindingRE.Match(head))
+}
+
+var blockBindingRE = regexp.MustCompile(`(?i)block_binding|thinking-binding-controls`)
 
 // dropThinking removes every thinking and redacted_thinking block from the
 // assistant turns among messages from up to (not including) to, and leaves

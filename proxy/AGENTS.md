@@ -118,43 +118,48 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   chat `reasoning_effort` or Anthropic `output_config.effort`; Anthropic `effort_mode: message`
   instead inserts the byte-identical mark `{"role":"system","content":[],"output_config":{"effort":…}}`
   (beta `mid-conversation-output-config-2026-07-01` appended to `anthropic-beta`) before the last
-  user turn, or at the end after a tool result. Marks are remembered per session with a salted
-  hash of the message before each (`cache_control` and thinking blocks left out, so a heal's strip
-  keeps them) and replayed at the same places on every later request to a model that already took
-  them (the agent resends history without them), count_tokens of a session already known included.
-  Without an effort from Cloud (a failure, routing off, effort "") the request runs at its own
-  top-level effort, or, when it sets none, at the model's default effort (Cloud's
+  user turn, or at the end after a tool result. Only `effort_mode: message` ever starts marks; a
+  "top" answer on history carrying the session's marks goes in as one more mark (never wiping
+  them), and on any other history sets the top-level field. Marks are remembered per session with
+  a salted hash of the message before each (`cache_control` and thinking blocks left out, so a
+  heal's strip keeps them) and replayed at the same places on every later request to a model that
+  already took them (the agent resends history without them), count_tokens of a known session or a
+  forked child's parent included. Without an effort from Cloud (a failure, routing off, effort "")
+  a history without the session's marks goes as the agent sent it, top-level field included (one
+  cache restart where Cloud's was, nothing inserted, no beta). One with marks runs at the
+  request's own top-level effort, or, when it sets none, at the model's default effort (Cloud's
   `default_effort`, kept per session, a forked child taking its parent's), marked when it differs
-  from the one in force; only with no default known does a request that sets none go as the agent
-  sent it, without the marks, which the session then forgets (its later thinking blocks then lose
-  their binding) unless the request went to another model. The top-level field is fixed at the
-  session's first per-message request: the routed effort on a fresh conversation whose request
-  sets one (kept there, also for later requests that set none), else the request's own; a routed
-  effort for a request that sets none goes in as a mark, first on a fresh conversation. An anchor
-  that no longer matches drops that mark and every later one; compaction and side requests never
-  change them, and a body matching none of them (an unlabeled side request, compacted history)
-  gets marks of its own, kept for up to four such conversations, which replace the session's only
-  once a longer request continuing that conversation (same first message, its last one where it
-  was) arrives. A thinking-binding 400 on the asked model of a `/messages` request retries once
-  only on a session the route stage changed (it was on for the request, or the session carries its
-  marks or heal) whose body sets no `thinking.block_binding`: with
-  `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` (beta
-  `thinking-binding-controls-2026-08-01`) when the block is bound to a different conversation and
-  the request's thinking is adaptive or enabled, then sent on every later request (count_tokens
-  and forked children included); else (Sonnet 5.5 `between_tools`, no thinking field, a tampered
-  signature) without thinking blocks from the failing message on, and later requests strip the
-  same range up front (a second strip widens it; the strip stays, the history as served, even if
-  the agent later sets its own `block_binding`). A refused drop_block retry moves the session to
-  the strip path and a refused strip ends its heals, so a provider refusing both costs the request
-  and the original-bytes retry from the third request on. Routing switched off after a restart
-  surfaces that 400. A refused mark retries once with top-level effort only and, once served,
-  latches per-message effort off for the session (a model that refused takes Cloud's effort
-  top-level); compressed 400s are decoded first. A Cloud error, timeout, 401/403, `allowance` or
+  from the one in force; only with no default known does such a request go as the agent sent it,
+  without the marks, which the session then forgets (its later thinking blocks then lose their
+  binding) unless the request went to another model. The top-level field is fixed at the session's
+  first per-message request: the routed effort on a fresh conversation whose request sets one
+  (kept there, also for later requests that set none), else the request's own; a routed effort for
+  a request that sets none goes in as a mark, first on a fresh conversation. An anchor that no
+  longer matches drops that mark and every later one; compaction and side requests never change
+  them, and a body matching none of them (an unlabeled side request, compacted history) gets marks
+  of its own, kept for up to four request shapes (first message, length, last message), which take
+  the session over only from a longer request continuing that conversation (same first message,
+  its last one where it was); the session's marks then wait there in turn. A thinking-binding 400
+  on the asked model of a `/messages` request retries once only on a session the route stage
+  changed (it was on for the request, or the session carries its marks or heal) whose body sets no
+  `thinking.block_binding`: with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`
+  (beta `thinking-binding-controls-2026-08-01`) when the block is bound to a different
+  conversation and the request's thinking is adaptive or enabled, then sent on every later request
+  (count_tokens and forked children included); else (Sonnet 5.5 `between_tools`, no thinking
+  field, a tampered signature) without thinking blocks from the failing message on, and later
+  requests strip the same range up front (a second strip widens it; the strip stays, the history
+  as served, even if the agent later sets its own `block_binding`). A drop_block retry refused
+  with a 400 naming the binding, `block_binding` or its beta moves the session to the strip path,
+  a strip refused that way ends its heals (both start over with new marks or a new strip; a 429,
+  5xx or other 400 on the retry teaches nothing). Routing switched off after a restart surfaces
+  that 400. A refused mark retries once with top-level effort only and, once served, latches
+  per-message effort off for the session (a model that refused takes Cloud's effort top-level);
+  compressed 400s are decoded first. A Cloud error, timeout, 401/403, `allowance` or
   `billing_limit` answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
   (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the
   routed model replays the original bytes on the asked model; a 429 on the asked model of a
-  request the route stage was on for, or that carried the session's marks, is returned as is. When the model moved, the agent's
+  request whose bytes the route stage changed (effort, marks, strip, drop_block) is returned as is. When the model moved, the agent's
   copy of the answer names the model it asked for (Claude Code drops its thinking on another
   name): a JSON answer's top-level `model`, and in a stream every `"model":"<sent>"` pair, rewritten
   incrementally across reads; the upstream is asked for an identity answer, a compressed one is

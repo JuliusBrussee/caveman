@@ -1533,3 +1533,137 @@ func TestRateLimitWithMarksWhileOffIsNotRetried(t *testing.T) {
 		t.Fatalf("status %d, attempts %d", rec.Code, len(log.bodies))
 	}
 }
+
+// A heal retry refused for another reason (overload, rate limit, an
+// unrelated 400) teaches nothing: the next request heals again.
+func TestHealRetryFailingForAnotherReasonDoesNotLatch(t *testing.T) {
+	for _, failure := range []struct {
+		status int
+		body   string
+	}{
+		{529, `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`},
+		{http.StatusTooManyRequests, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`},
+		{http.StatusBadRequest, errorBody("prompt is too long: 210000 tokens > 200000 maximum")},
+	} {
+		failed := false
+		cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+		srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+			if bytes.Contains(body, []byte(`"prefix_mismatch_behavior":"drop_block"`)) {
+				if !failed {
+					failed = true
+					return failure.status, failure.body
+				}
+				return 0, ""
+			}
+			return bindingUntilDropBlock(body)
+		})
+		post(t, srv, thinking("adaptive", convo("high", uA, aB, uC)), nil)
+		rec := post(t, srv, thinking("adaptive", convo("high", uA, aB, uC, aD, uTR)), nil)
+		if sent, _ := log.last(); rec.Code != http.StatusOK || !bytes.Contains(sent, []byte(`"drop_block"`)) {
+			t.Errorf("%d on the heal retry: next request %d, sent %s", failure.status, rec.Code, sent)
+		}
+	}
+}
+
+// Cloud answering "top" never brings marks or the beta: a timeout in between
+// sends the agent's own bytes (one cache restart), and no 400 path runs.
+func TestTopAnswersNeverBringMarks(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "top"}}
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"role":"system"`)) {
+			return http.StatusBadRequest, errorBody(bindingError)
+		}
+		return 0, ""
+	})
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	if sent, _ := log.last(); string(sent) != convo("low", uA, aB, uC) {
+		t.Fatalf("top: %s", sent)
+	}
+	cloud.answer = RouteAnswer{Outcome: "degraded", Reason: "timeout"}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+	if sent, header := log.last(); string(sent) != convo("high", uA, aB, uC, aD, uTR) || header.Get("anthropic-beta") != "" {
+		t.Fatalf("timeout: %s (beta %q)", sent, header.Get("anthropic-beta"))
+	}
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "top"}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR, aE, uF), nil)
+	if sent, header := log.last(); string(sent) != convo("low", uA, aB, uC, aD, uTR, aE, uF) || header.Get("anthropic-beta") != "" || len(log.bodies) != 3 {
+		t.Fatalf("top again: %d attempts, %s", len(log.bodies), sent)
+	}
+	cloud.answer = RouteAnswer{Outcome: "off"}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR, aE, uF, aG, uTR2), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, uC, aD, uTR, aE, uF, aG, uTR2) {
+		t.Fatalf("routing off after top: %s", sent)
+	}
+}
+
+// A "top" answer on a session with marks goes in as one more mark: the marks
+// stay and the history is unchanged.
+func TestTopAnswerOnAMarkedSessionAppendsAMark(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	first, _ := log.last()
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "top"}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+	sent, _ := log.last()
+	if string(sent) != convo("high", uA, aB, mark("low"), uC, aD, uTR, mark("medium")) || !bytes.HasPrefix(sent, first[:len(first)-2]) {
+		t.Fatalf("top on a marked session: %s", sent)
+	}
+}
+
+// A forked child's count_tokens before its first request gets its parent's
+// marks: it resends the parent's history.
+func TestForkedChildCountTokensGetsTheParentsMarks(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	task := `{"role":"user","content":"child task"}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(convo("high", uA, aB, uC, aE, task)))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	req.Header.Set("x-claude-code-agent-id", "a1")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aE, task) {
+		t.Fatalf("child count_tokens: %s", sent)
+	}
+	if _, ok := srv.routes.entries["sess-1#a1"]; ok {
+		t.Error("count_tokens kept a session for the child")
+	}
+}
+
+// A side request starting with the same message as a compacted conversation
+// keeps its own pending set: the continuation still takes the session over.
+func TestPendingSetsAreKeptPerRequestShape(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	summary := `{"role":"user","content":"summary of the work so far"}`
+	post(t, srv, convo("high", summary, uF), nil)
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	post(t, srv, convo("high", summary, `{"role":"user","content":"title?"}`), nil)
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, convo("high", summary, uF, aG, uTR2), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", summary, mark("low"), uF, aG, uTR2) {
+		t.Fatalf("continuation: %s", sent)
+	}
+}
+
+// An unlabeled multi-turn side loop that takes the session over leaves the
+// main thread's marks pending: the main thread takes them back.
+func TestTakeoverKeepsThePreviousMarksPending(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	side := `{"role":"user","content":"check the build"}`
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	post(t, srv, convo("high", side), nil)
+	post(t, srv, convo("high", side, aD, uTR), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", mark("medium"), side, aD, uTR) {
+		t.Fatalf("side loop: %s", sent)
+	}
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, convo("high", uA, aB, uC, aE, uF), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aE, uF) {
+		t.Fatalf("main thread back: %s", sent)
+	}
+}
