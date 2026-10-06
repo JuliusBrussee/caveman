@@ -75,6 +75,7 @@ import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } fro
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
 import { modulesDoctor } from "./modules/doctor.js";
+import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
 
@@ -434,11 +435,17 @@ setModuleHost({
       const { problems } = await ensureModuleBinaries(modules);
       if (problems.length > 0) throw new Error(problems.join("; "));
     } catch (error) {
-      // A release cut before modules.json: install every signed hub binary instead.
-      if (error instanceof NoModuleIndexError) return setupInstall(false, { continuing: true });
+      // A release cut before modules.json: install every signed hub binary
+      // instead, unless only an external one (Blocks) was missing; that
+      // release does not carry it.
+      if (error instanceof NoModuleIndexError) {
+        if (modules.some((id) => findModule(id)?.binaries.length)) await setupInstall(false, { continuing: true });
+        return;
+      }
       throw error;
     }
   },
+  lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
   staleBinaries: () => [
     ...(probeProxyVersion()?.capabilities.includes("run_state") === false ? ["caveman-proxy"] : []),
     ...(probeMcpBinary()?.probe.current === false ? ["caveman-mcp"] : []),

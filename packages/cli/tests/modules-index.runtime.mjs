@@ -2,7 +2,7 @@
 // of the built CLI with a throwaway release key against a local release server.
 import test from "node:test";
 import assert from "node:assert";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
 import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import { RELEASE_TARGETS, releaseArtifactName } from "../../../scripts/build-release-binaries.mjs";
 import { modulesIndex } from "../scripts/gen-modules-index.mjs";
 import { binaryBody, releaseManifest, signedReleaseCli } from "./_binary-release.mjs";
+import { FAKE_BLOCKS, modulesFixture } from "./_modules.mjs";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const { cli, release, sign } = signedReleaseCli();
@@ -90,6 +91,46 @@ test("signed index installs the scripts module's caveman-blocks and locks every 
     await ensureModuleBinaries(["scripts"]);
     assert.equal(server.binaries(), before);
   } finally {
+    await server.close();
+  }
+});
+
+// A Blocks older than rc.2 on PATH heals: `on scripts` fetches the signed
+// copy, the lockfile records it, and the hub runs that one from then on.
+test("on scripts replaces a pre-rc.2 Blocks on PATH with the signed one", { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+  const fake = `#!/bin/sh\n${FAKE_BLOCKS}\n`;
+  const artifact = releaseArtifactName("caveman-blocks", here.os, here.arch);
+  const blocks = RELEASE_TARGETS.map(([goos, arch]) => releaseArtifactName("caveman-blocks", goos, arch))
+    .map((name) => `${sha256(name === artifact ? fake : binaryBody)}  ${name}\n`)
+    .join("");
+  const unlisted = releaseManifest(release) + blocks;
+  const modules = `${JSON.stringify(modulesIndex(unlisted, release), null, 2)}\n`;
+  const checksums = `${unlisted}${sha256(modules)}  modules.json\n`;
+  const server = await serve({ "checksums.txt": checksums, "checksums.txt.keysig": sign(checksums), "modules.json": modules, [artifact]: fake });
+  const fx = modulesFixture();
+  try {
+    writeFileSync(join(fx.bin, "caveman-blocks"), "#!/bin/sh\ncase \"$*\" in *--json*) exit 2 ;; esac\n", { mode: 0o755 });
+    const env = { ...fx.env, CAVE_BINARY_RELEASE_BASE: server.base, CAVE_SETUP_TIMEOUT: "5" };
+    delete env.CAVEMAN_BLOCKS_BIN;
+    // Async: the release server answers from this process.
+    const run = (argv) => new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [cli, ...argv], { env, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      let stderr = "";
+      child.stdout.on("data", (d) => (stdout += d));
+      child.stderr.on("data", (d) => (stderr += d));
+      child.on("error", reject);
+      child.on("exit", (code) => resolve({ code, stdout, stderr }));
+    });
+    const on = await run(["on", "scripts", "--yes"]);
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, /^✓ downloaded caveman-blocks\n✓ scripts ready \(Claude Code, Codex\)$/m);
+    assert.equal(readFileSync(join(env.CAVEMAN_HOME, "bin", exe("caveman-blocks")), "utf8"), fake);
+    assert.ok(JSON.parse(readFileSync(join(env.CAVEMAN_HOME, "modules.lock.json"), "utf8")).modules.scripts.binaries["caveman-blocks"]);
+    const status = await run(["status", "--json"]);
+    assert.equal(JSON.parse(status.stdout).modules.find((state) => state.id === "scripts").active, true);
+  } finally {
+    fx.cleanup();
     await server.close();
   }
 });

@@ -15,7 +15,7 @@ export async function modulesDoctor(): Promise<void> {
     if (!state.on || state.active || state.reason?.includes(" has an invalid value: ")) continue;
     const fix = moduleFix(state);
     if (moduleChoice(state)) notes.push(`· ${state.id}: ${state.reason}${fix ? ` · ${fix}` : ""}`);
-    else if (findModule(state.id)?.external) failures.push(`${state.id}: ${state.reason} · fix: install it, or caveman off ${state.id}`);
+    else if (findModule(state.id)?.external) failures.push(`${state.id}: ${state.reason}${state.reason?.endsWith(" not installed") ? " · fix: install it" : ""}, or caveman off ${state.id}`);
     else failures.push(`${state.id}: ${state.reason}${fix ? ` · fix: ${fix}` : ""}`);
   }
   // Invalid values fail whether their module is on or off.
