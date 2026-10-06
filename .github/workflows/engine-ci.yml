@@ -84,6 +84,10 @@ jobs:
       - name: Prebuild caveman-proxy for conformance tests
         run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
       - run: pnpm install --frozen-lockfile
+      # The build regenerates the CLI's compiled-in device-auth copy, so check
+      # the committed one against packages/device-auth before it does.
+      - name: CLI device-auth copy matches packages/device-auth
+        run: node packages/cli/scripts/gen-device-auth.mjs --check
       - run: pnpm -r build
       # The SDK and middleware suites run in middleware-typescript below, so a
       # failure elsewhere in the workspace cannot skip them.

@@ -203,6 +203,7 @@ jobs:
             node agents/compile.mjs
             git diff --exit-code -- agents/agents.json packages/cli/src/agents.generated.ts packages/cli/src/reserved-verbs.generated.ts
             node packages/cli/scripts/gen-binaries.mjs --check
+            node packages/cli/scripts/gen-device-auth.mjs --check
             # Sandbox tests use unprivileged user namespaces (engine-ci.yml).
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
             go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
