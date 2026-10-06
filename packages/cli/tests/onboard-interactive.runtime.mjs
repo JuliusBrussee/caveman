@@ -198,7 +198,7 @@ function expectRun(script, env) {
     let text = "";
     child.stdout.on("data", (d) => (text += d));
     child.stderr.on("data", (d) => (text += d));
-    child.on("exit", (code) => resolve({ code, text: text.replace(/\r/g, "") }));
+    child.on("exit", (code) => resolve({ code, text: text.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, "") }));
     child.on("error", reject);
   });
 }
@@ -287,12 +287,14 @@ test("end to end: caveman setup in a terminal against a Cloud that refuses sign-
       let text = "";
       child.stdout.on("data", (d) => (text += d));
       child.stderr.on("data", (d) => (text += d));
-      child.on("exit", (code) => resolve({ code, text: text.replace(/\r/g, "") }));
+      child.on("exit", (code) => resolve({ code, text: text.replace(/\x1b\[[0-9;?]*[A-Za-z]|\r/g, "") }));
       child.on("error", reject);
     });
     assert.equal(out.code, 0, out.text);
     assert.match(out.text, /Found Claude Code 1\.0 and Codex 1\.0/);
-    assert.match(out.text, /Continue\? › Yes/);
+    // One line per step between Continue and sign-in; enable's own report stays out.
+    assert.match(out.text, /Continue\? › Yes\n✓ Claude Code wired\n✓ Codex wired\n○ local runtime starts with your next agent session\n○ scripts: caveman-blocks not installed yet\n\nRouting needs a free Caveman account\.\n/);
+    assert.doesNotMatch(out.text, /planned user-scoped writes|native Caveman enabled|→ /);
     assert.match(out.text, new RegExp(`! Sign-in is not open on 127\\.0\\.0\\.1:${port} yet\\.`));
     assert.match(out.text, /routing is on and starts once sign-in opens · caveman login/);
     assert.match(out.text, /✓ Ready\./);

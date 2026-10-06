@@ -47,11 +47,15 @@ export type ModuleHost = {
   // Files `enable <agent>` would write, computed without writing them.
   planWiring(agent: string): { file: string; exists: boolean; kind: string }[];
   wiredFiles(agent: string): string[];
+  agentName(agent: string): string;
+  // Wiring is quiet: applyModules reports each step through its progress line.
   wireAgent(agent: string): void;
   unwireAgent(agent: string): void;
   refreshAgent(agent: string): void;
   // True when wiring an agent will start the local runtime.
   runtimeAutostarts(): Promise<boolean>;
+  // Whether the local runtime answers, waiting up to waitMs for it.
+  runtimeListening(waitMs: number): Promise<boolean>;
   agentState(agent: string): string;
   coreActive(): boolean;
   signedIn(): boolean;
@@ -273,7 +277,9 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   return { selection: { ...selection }, agents: [...agents], lines, ...(only ? { only: [...only] } : {}), ...(notes.length ? { notes } : {}) };
 }
 
-export async function applyModules(plan: ModulePlan, opts: { yes: boolean }): Promise<{ ok: boolean; problems: string[] }> {
+// `progress` gets one line per step as it completes ("✓ Claude Code wired");
+// failures come back in `problems` with their full message.
+export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
   const h = moduleHost();
   if (plan.lines.length === 0) return { ok: true, problems: [] };
   if (!opts.yes) {
@@ -282,9 +288,13 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean }): Pr
   }
   const problems: string[] = [];
   const fail = (what: string, error: unknown) => problems.push(`${what}: ${error instanceof Error ? error.message : String(error)}`);
+  const say = opts.progress ?? (() => {});
   const needs = binaryNeeds(plan.selection, plan.only);
   if (needs.missing.length) {
-    try { await h.installBinaries(needs.modules); } catch (error) { fail("download", error); }
+    try {
+      await h.installBinaries(needs.modules);
+      say(`✓ downloaded ${needs.missing.join(", ")}`);
+    } catch (error) { fail("download", error); }
   }
   // Decide everything before the first config write: the external uninstall
   // reads the module state this run replaces.
@@ -292,25 +302,33 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean }): Pr
   const { wire, unwire } = wiringChanges(plan.selection, plan.agents, plan.only);
   const refresh = refreshAgents(effects, unwire);
   const runs = externalRuns(plan.selection, plan.only);
+  const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
 
   if (state.length) h.mutateConfig((out) => { out.modules = { ...objectOf(out.modules), ...Object.fromEntries(state) }; });
   // Effects land before wiring: enable and repair read think.shrink for hooks.
   for (const [key, value] of effects) h.setConfigValue(key, value);
-  for (const agent of unwire) {
-    try { h.unwireAgent(agent); } catch (error) { fail(agent, error); }
-  }
-  for (const agent of wire) {
-    try { h.wireAgent(agent); } catch (error) { fail(agent, error); }
-  }
-  for (const agent of refresh) {
-    try { h.refreshAgent(agent); } catch (error) { fail(agent, error); }
+  const step = (agent: string, done: string, act: () => void) => {
+    try {
+      act();
+      say(`✓ ${h.agentName(agent)} ${done}`);
+    } catch (error) { fail(agent, error); }
+  };
+  for (const agent of unwire) step(agent, "unwired", () => h.unwireAgent(agent));
+  for (const agent of wire) step(agent, "wired", () => h.wireAgent(agent));
+  for (const agent of refresh) step(agent, "hooks refreshed", () => h.refreshAgent(agent));
+  if (startsRuntime) {
+    say(await h.runtimeListening(1000) ? "✓ local runtime started" : "○ local runtime starts with your next agent session");
   }
   for (const run of runs) {
-    // Absent binary: the module stays on but inactive, and the verb says why.
-    if (!run.bin) continue;
-    const out = runExternal(run.bin, run.args, false);
     const name = run.def.external!.binary;
+    // Absent binary: the module stays on but inactive, and the verb says why.
+    if (!run.bin) {
+      say(`○ ${run.def.id}: ${name} not installed yet`);
+      continue;
+    }
+    const out = runExternal(run.bin, run.args, false);
     if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}`);
+    else say(`✓ ${run.def.id}: ${name} ${run.args.join(" ")}`);
   }
   return { ok: problems.length === 0, problems };
 }
@@ -401,7 +419,7 @@ export async function moduleSwitchCommand(on: boolean, argv: string[]): Promise<
   }
   process.stdout.write(renderPlan(plan));
   if (flags.includes("--dry-run")) return;
-  const result = await applyModules(plan, { yes: flags.includes("--yes") || flags.includes("-y") });
+  const result = await applyModules(plan, { yes: flags.includes("--yes") || flags.includes("-y"), progress: (line) => console.log(line) });
   if (!result.ok) {
     for (const problem of result.problems) console.error(`✗ ${problem}`);
     process.exitCode = 1;

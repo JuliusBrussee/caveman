@@ -452,9 +452,18 @@ setModuleHost({
   planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp")
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
-  wireAgent: (agent) => enableNative([agent]),
-  unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent); },
-  refreshAgent: (agent) => repairNativeAgent(agent as NativeAgent),
+  agentName: (agent) => agentShortName(findAgent(agent)!),
+  wireAgent: (agent) => enableNative([agent], { quiet: true }),
+  unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent, { quiet: true }); },
+  refreshAgent: (agent) => repairNativeAgent(agent as NativeAgent, { quiet: true }),
+  // Wiring starts the runtime in the background; this waits briefly to say so.
+  runtimeListening: async (waitMs) => {
+    const { host, port } = gatewayHostPort(gatewayURL());
+    for (const deadline = Date.now() + waitMs; ; await sleep(100)) {
+      if (await portListening(host, port)) return true;
+      if (Date.now() >= deadline) return false;
+    }
+  },
   runtimeAutostarts: async () => {
     const gw = gatewayURL();
     if (wrapMode(gw) !== "local" || !wrapRuntimeConfig().proxy) return false;
@@ -8953,7 +8962,9 @@ function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | 
               : aiderNativeMutations(gw);
 }
 
-function enableNative(argv: string[]) {
+// `quiet` is for module apply (onboarding, `caveman on|off`), which prints one
+// progress line per step itself; refusals still throw with their full message.
+function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {}) {
   const detected = argv.includes("--detected");
   const target = argv.find((arg) => !arg.startsWith("--"));
   if ((!detected && !target) || (detected && target) || argv.some((arg) => arg !== "--detected" && arg !== target)) {
@@ -8983,6 +8994,10 @@ function enableNative(argv: string[]) {
         throw new Error(`${profile.display_name} integration is degraded; run \`caveman doctor ${agent} --fix\` before changing it`);
       }
       const mutations = nativeMutationsFor(agent, gw, mcpBinary);
+      if (quiet) {
+        applyNativeMutations(agent, profile, mutations);
+        return "enabled" as const;
+      }
       const route = mutations.find((item) => typeof item.owned?.route === "string")?.owned?.route;
       process.stderr.write(`caveman enable ${agent}: planned user-scoped writes\n`);
       for (const mutation of mutations) process.stderr.write(`  ${mutation.kind}: ${mutation.file}\n`);
@@ -9017,6 +9032,7 @@ function enableNative(argv: string[]) {
     // command does. The integration lock is for file mutations — a liveness
     // probe and a detached spawn need no part of it.
     ensureLocalProxyForNative(agent, gw);
+    if (quiet) continue;
     if (outcome === "already") {
       process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman already enabled\n`);
       continue;
@@ -9310,7 +9326,7 @@ function cleanupNativeAgentFiles(target: NativeAgent, journal: NativeJournal): v
   }
 }
 
-function disableNativeAgent(target: NativeAgent): boolean {
+function disableNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boolean } = {}): boolean {
   const disabled = withIntegrationLock(target, () => {
     recoverPendingNativeInstallUnlocked(target);
     const journal = readNativeJournal(target);
@@ -9323,14 +9339,15 @@ function disableNativeAgent(target: NativeAgent): boolean {
     return false;
   }
   cleanupNativeAgentFiles(target, disabled);
+  if (quiet) return true;
   const name = findAgent(target)?.display_name ?? target;
   process.stderr.write(`${mark("ok")} ${name}: ${target === "aider" ? "shallow" : "native"} Caveman disabled; unrelated host edits preserved\n`);
   return true;
 }
 
-function repairNativeAgent(target: NativeAgent): void {
+function repairNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boolean } = {}): void {
   if (!readNativeJournal(target) && !readPendingNativeJournal(target)) {
-    enableNative([target]);
+    enableNative([target], { quiet });
     return;
   }
   const profile = findAgent(target)!;
@@ -9355,7 +9372,7 @@ function repairNativeAgent(target: NativeAgent): void {
       throw error;
     }
   });
-  process.stderr.write(`${mark("ok")} ${profile.display_name}: native Caveman repaired; unrelated host edits preserved\n`);
+  if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: native Caveman repaired; unrelated host edits preserved\n`);
 }
 
 function disableNative(argv: string[]) {

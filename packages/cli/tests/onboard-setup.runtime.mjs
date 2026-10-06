@@ -27,6 +27,8 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
     assert.match(out.stdout, /\nModules {2}output · input · waste fixes · routing · scripts · browse\nAgents {3}Claude Code · Codex\n/);
     assert.match(out.stdout, /\nThis will\n(?: {2}[A-Z]+ .*\n)*  CREATE +~\/\.caveman\/cloud\.json +modules on: output, input, waste-fixes, routing, scripts, browse\n/, "the plan is printed");
     assert.match(out.stdout, /\n {2}CREATE +~\/\.claude\/settings\.json +claude settings\n/);
+    assert.match(out.stdout, /\n✓ Claude Code wired\n✓ Codex wired\n/, "one progress line per step");
+    assert.doesNotMatch(out.stderr, /planned user-scoped writes|native Caveman enabled/, "enable's own report stays out of the first run");
     assert.match(out.stdout, /routing is on and starts after you sign in · caveman login/, "no sign-in prompt without a terminal");
     assert.match(out.stdout, /✓ Ready\. Try: {2}caveman claude {6}See it: {2}caveman status\n/);
     assert.deepEqual(modules(fx), { output: true, input: true, "waste-fixes": true, routing: true, scripts: true, browse: true });

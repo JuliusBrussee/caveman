@@ -268,3 +268,20 @@ test("an old config with only think.toon or think.shrink off still reads input a
   }
 });
 
+test("on and off report one line per step; enable's own report stays out", async () => {
+  const fx = modulesFixture();
+  try {
+    const on = await runCli(["on", "--all", "--yes"], fx.env);
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, /^✓ Claude Code wired\n✓ Codex wired\n/m);
+    assert.match(on.stdout, /^○ scripts: caveman-blocks not installed yet$/m);
+    assert.doesNotMatch(on.stderr, /planned user-scoped writes|native Caveman enabled|→ /);
+    const off = await runCli(["off", "--all", "--yes"], fx.env);
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stdout, /^✓ Claude Code unwired\n✓ Codex unwired$/m);
+    assert.doesNotMatch(off.stderr, /Caveman disabled/);
+  } finally {
+    fx.cleanup();
+  }
+});
+

@@ -147,7 +147,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     }
   }
 
-  const result = await applyModules(plan, { yes: true });
+  const result = await applyModules(plan, { yes: true, progress: (line) => out.write(`${line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○"))}\n`) });
   for (const problem of result.problems) out.write(`${c.red("✗")} ${problem}\n`);
   out.write("\n");
   if (selection.routing) await routingStep(opts, deps, input, out, c);
