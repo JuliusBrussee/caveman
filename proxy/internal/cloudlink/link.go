@@ -48,12 +48,11 @@ const (
 	answerMax    = 1 << 20
 )
 
-// pools are the models of one provider routing may move a request between, as
-// wire model ids. A request is routed only when the agent asked for one of them,
-// so a cheap background call never moves up a tier. The asked model goes first:
-// Cloud's fallback is models[0].
-// ponytail: static pools; take Cloud's default pool once the decision service
-// publishes one (tiers spec §3 step 3).
+// pools are the models of one provider a request may move between, as wire
+// model ids; they are the `models` an ask sends. A request is asked about only
+// when the agent asked for one of them, and the asked model goes first (Cloud's
+// fallback is models[0]).
+// ponytail: static pools; take them from Cloud once it publishes a default.
 var pools = map[string][]string{
 	"anthropic": {"claude-opus-5-5", "claude-sonnet-5-5"},
 	"openai":    {"gpt-6.1-sol", "gpt-6-sol", "gpt-6-astra", "gpt-6-luna"},
@@ -442,10 +441,8 @@ var (
 	imageRE     = regexp.MustCompile(`"type"\s*:\s*"(?:image|image_url|input_image)"`)
 )
 
-// features is the only text an ask carries: the router daemon's zero-retention
-// features line, computed from counts. No prompt text.
-// ponytail: tool errors are counted over the whole request, not the recent
-// turns; narrow it if the classifier ever weighs old failures wrongly.
+// features is the only text an ask carries: one line of counts computed on this
+// machine, never prompt text. Tool errors are counted over the whole request.
 func features(ask gateway.RouteAsk) string {
 	harness := ask.Agent
 	if !slugRE.MatchString(harness) {
