@@ -529,6 +529,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			healed, herr := s.doUpstream(r.Context(), buildUpstream(retry, headers))
 			s.inflight.Add(-1)
 			if herr == nil {
+				run.dropBlocks = run.dropBlocks || kind == healDropBlock
+				run.stripped = run.stripped || kind == healStrip
 				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 				_ = resp.Body.Close()
 				agent := transform.Body // the agent's own messages, for a remembered strip
@@ -784,7 +786,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
 			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
 			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
-		}, time.Now())
+		}, time.Now(), meta.Model != modelRequested)
 	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {

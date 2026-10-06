@@ -295,6 +295,9 @@ type routeSession struct {
 	// refused are the models that refused per-message effort: they get no
 	// marks, and the session reports per_message_off once there is one.
 	refused map[string]bool
+	// moved: a request of the session was served by another model than the
+	// asked one, so its history carries thinking that model wrote.
+	moved bool
 	// version counts the writes to effortState: a request writes its copy
 	// back only when nothing landed in between.
 	version int
@@ -311,8 +314,9 @@ type routeSession struct {
 // blocks (stripAnchor hashes the last of them), even should the agent later
 // set a block_binding of its own (the history stays as served). A refused
 // drop_block retry sets noDropBlock (the strip path from then on), a refused
-// strip noHeal, both cleared when the marks or the strip start over. Its
-// slices are replaced, never written in place, so a copy is safe to read.
+// strip noHeal, both cleared when the marks start over (forgotten, or another
+// conversation takes the session over). Its slices are replaced, never
+// written in place, so a copy is safe to read.
 type effortState struct {
 	salt  [16]byte
 	top   *string
@@ -339,6 +343,7 @@ type pendingMarks struct {
 	first, last [32]byte
 	n           int
 	marks       []effortMark
+	top         *string // the fixed top-level effort that went with them
 }
 
 const pendingMax = 4
@@ -401,11 +406,12 @@ func (rs *routeSessions) facts(key string, now time.Time) (*RouteLast, bool) {
 	return &last, len(session.refused) > 0
 }
 
-func (rs *routeSessions) served(key string, last RouteLast, at time.Time) {
+func (rs *routeSessions) served(key string, last RouteLast, at time.Time, moved bool) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if session := rs.get(key, true); session != nil {
 		session.last, session.lastAt = &last, at
+		session.moved = session.moved || moved
 	}
 }
 
@@ -490,14 +496,14 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	switch {
 	case strings.HasSuffix(endpoint, "/responses"):
 		if answer.Effort != "" {
-			body, _ = setString(body, answer.Effort, "reasoning", "effort")
-			run.effort, run.applied = answer.Effort, true
+			body, run.applied = setString(body, answer.Effort, "reasoning", "effort")
+			run.effort = answer.Effort
 		}
 		return body
 	case strings.HasSuffix(endpoint, "/chat/completions"):
 		if answer.Effort != "" {
-			body, _ = setString(body, answer.Effort, "reasoning_effort")
-			run.effort, run.applied = answer.Effort, true
+			body, run.applied = setString(body, answer.Effort, "reasoning_effort")
+			run.effort = answer.Effort
 		}
 		return body
 	case provider != "anthropic":
@@ -518,16 +524,16 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		s.routes.mu.Unlock()
 		run.heal = !run.off && !blockBinding(body)
 		if mode == "top" {
-			body, _ = setString(body, answer.Effort, "output_config", "effort")
-			run.effort, run.applied = answer.Effort, true
+			body, run.applied = setString(body, answer.Effort, "output_config", "effort")
+			run.effort = answer.Effort
 		}
 		return body
 	}
-	work, version := session.effortState, session.version
+	work, version, moved := session.effortState, session.version, session.moved
 	refusals := maps.Clone(session.refused)
 	var parent *routeSession
 	if !work.started() {
-		if p := s.routes.get(run.parent, false); p != nil && (p.started() || len(p.refused) > 0) {
+		if p := s.routes.get(run.parent, false); p != nil && (p.started() || len(p.refused) > 0 || p.moved) {
 			copied := *p
 			copied.refused = maps.Clone(p.refused)
 			parent = &copied
@@ -535,6 +541,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	}
 	s.routes.mu.Unlock()
 	if parent != nil {
+		moved = moved || parent.moved
 		for refused := range parent.refused {
 			if refusals == nil {
 				refusals = map[string]bool{}
@@ -550,7 +557,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	if answer.DefaultEffort != "" {
 		work.defaultEffort, work.defaultModel = answer.DefaultEffort, run.asked
 	}
-	run.heal = (!run.off || work.started()) && !blockBinding(body) && !work.noHeal
+	run.heal = (!run.off || work.started() || moved) && !blockBinding(body) && !work.noHeal
 	run.noDropBlock = work.noDropBlock
 
 	body, run.stripped = work.applyStrip(body)
@@ -559,14 +566,14 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		// This model refused marks: Cloud's effort goes top-level, as the heal
 		// that found out sent it.
 		if answer.Effort != "" {
-			body, _ = setString(body, answer.Effort, "output_config", "effort")
-			run.effort, run.applied = answer.Effort, true
+			body, run.applied = setString(body, answer.Effort, "output_config", "effort")
+			run.effort = answer.Effort
 		}
 	case mode == "top" && len(work.marks) == 0:
 		root, _ := objectRoot(body)
 		own := topEffort(body, root)
-		body, _ = setString(body, answer.Effort, "output_config", "effort")
-		run.effort, run.applied = answer.Effort, true
+		body, run.applied = setString(body, answer.Effort, "output_config", "effort")
+		run.effort = answer.Effort
 		if !run.perRequest {
 			// The cache restarts here: later marks start from this level, or
 			// from none when the agent sets none (Cloud's never becomes it).
@@ -577,6 +584,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 			}
 		}
 	case work.top == nil && (mode != "message" || run.perRequest):
+	case run.replay && len(work.marks) == 0: // count_tokens adds nothing to a history without marks
 	default:
 		var out []byte
 		restore := answer.Effort == "" && !run.replay
@@ -586,7 +594,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		}
 		out, run.unmarked, run.marks, run.effort = perMessage(body, &work, markAsk{
 			effort: answer.Effort, top: mode == "top", fallback: fallback,
-			allowNew: !run.perRequest, restore: restore, moved: model != run.asked,
+			allowNew: !run.perRequest || mode == "top", restore: restore, moved: model != run.asked,
 		})
 		run.marked = run.unmarked != nil
 		run.applied = run.marked || !bytes.Equal(out, body)
@@ -621,13 +629,14 @@ func freshConversation(body []byte) bool {
 
 // applyStrip strips the thinking blocks a served binding heal stripped, while
 // the history still starts the same way; changed reports a body it changed.
+// Another history (a side request, compacted history) is left alone and
+// changes nothing: the strip stays for the conversation it was made for.
 func (state *effortState) applyStrip(body []byte) (out []byte, changed bool) {
 	if state.strip == 0 {
 		return body, false
 	}
 	_, _, items, ok := messageSpans(body)
 	if !ok || state.strip > len(items) || anchorAt(body, items, state.salt, state.strip) != state.stripAnchor {
-		state.strip, state.noHeal, state.noDropBlock = 0, false, false
 		return body, false
 	}
 	return dropThinking(body, state.stripFrom, state.strip)
@@ -732,10 +741,10 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 		pending := slices.Delete(slices.Clone(state.pending), takeover, takeover+1)
 		if len(state.marks) > 0 {
 			previous := state.marked
-			previous.marks = state.marks
+			previous.marks, previous.top = state.marks, state.top
 			pending = addPending(pending, previous)
 		}
-		state.top, state.pending, state.noHeal, state.noDropBlock = nil, pending, false, false
+		state.top, state.pending, state.noHeal, state.noDropBlock = state.pending[takeover].top, pending, false, false
 	}
 	if main {
 		if state.top == nil {

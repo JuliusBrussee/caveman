@@ -1667,3 +1667,117 @@ func TestTakeoverKeepsThePreviousMarksPending(t *testing.T) {
 		t.Fatalf("main thread back: %s", sent)
 	}
 }
+
+// An unlabeled side request leaves the main thread's strip and drop_block
+// refusal alone: the next main request is stripped up front and served.
+func TestSideRequestKeepsTheMainThreadsHeal(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+		switch {
+		case bytes.Contains(body, []byte(`"drop_block"`)):
+			return http.StatusBadRequest, errorBody("thinking.block_binding: Extra inputs are not permitted")
+		case bytes.Contains(body, []byte(`sig-b`)):
+			return http.StatusBadRequest, errorBody(bindingError)
+		}
+		return 0, ""
+	})
+	post(t, srv, thinking("adaptive", convo("high", uA, aB, uC)), nil)
+	if rec := post(t, srv, thinking("adaptive", convo("high", uA, aB, uC, aD, uTR)), nil); rec.Code != http.StatusOK {
+		t.Fatalf("strip heal after a refused drop_block: %d", rec.Code)
+	}
+	post(t, srv, thinking("adaptive", convo("high", `{"role":"user","content":"title?"}`)), nil)
+	before := len(log.bodies)
+	if rec := post(t, srv, thinking("adaptive", convo("high", uA, aB, uC, aD, uTR, aE, uF)), nil); rec.Code != http.StatusOK || len(log.bodies)-before != 1 {
+		t.Fatalf("main thread after a side request: status %d after %d calls", rec.Code, len(log.bodies)-before)
+	}
+}
+
+// A served model move is remembered: with routing off afterwards, a binding
+// 400 on the asked model (thinking the other model wrote) still heals.
+func TestMovedSessionHealsWithRoutingOff(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+	aS := `{"role":"assistant","content":[{"type":"thinking","thinking":"","signature":"sig-sonnet"},{"type":"text","text":"Done."}]}`
+	srv, _ := effortServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"claude-opus-5-5"`)) && bytes.Contains(body, []byte(`sig-sonnet`)) && !bytes.Contains(body, []byte(`"drop_block"`)) {
+			return http.StatusBadRequest, errorBody(bindingError)
+		}
+		return 0, ""
+	})
+	post(t, srv, thinking("adaptive", convo("high", uA)), nil)
+	cloud.answer = RouteAnswer{Outcome: "off"}
+	for i := range 3 {
+		if rec := post(t, srv, thinking("adaptive", convo("high", uA, aS, uC)), nil); rec.Code != http.StatusOK {
+			t.Fatalf("routing off after a move, request %d: %d", i, rec.Code)
+		}
+	}
+}
+
+// A "top" answer for a compaction on a marked session goes in as a mark for
+// that request only.
+func TestTopAnswerForACompactionIsAnUnsavedMark(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	summarize := `{"role":"user","content":"summarize the conversation"}`
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "top"}
+	post(t, srv, convo("high", uA, aB, uC, aE, summarize), map[string]string{"x-claude-code-compaction": "1"})
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aE, mark("medium"), summarize) {
+		t.Fatalf("compaction: %s", sent)
+	}
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
+	if sent, _ := log.last(); string(sent) != convo("high", uA, aB, mark("low"), uC, aD, uTR) {
+		t.Fatalf("main thread: %s", sent)
+	}
+}
+
+// count_tokens adds nothing to a history without marks, whatever Cloud
+// answered before.
+func TestCountTokensInATopOnlySession(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "top"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(bare(uA, aB, uC, aD, uTR)))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if sent, _ := log.last(); string(sent) != bare(uA, aB, uC, aD, uTR) {
+		t.Fatalf("count_tokens: %s", sent)
+	}
+}
+
+// The main thread's fixed top-level effort comes back with its marks after a
+// side loop took the session over.
+func TestTakeoverKeepsTheFixedTopLevel(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA), nil)
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	post(t, srv, convo("high", uA, aB, uC), nil)
+	if sent, _ := log.last(); string(sent) != convo("low", uA, aB, mark("medium"), uC) {
+		t.Fatalf("main thread: %s", sent)
+	}
+	side := `{"role":"user","content":"check the build"}`
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	post(t, srv, convo("high", side), nil)
+	post(t, srv, convo("high", side, aD, uTR), nil)
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}
+	post(t, srv, convo("high", uA, aB, uC, aE, uF), nil)
+	if sent, _ := log.last(); string(sent) != convo("low", uA, aB, mark("medium"), uC, aE, uF) {
+		t.Fatalf("main thread back: %s", sent)
+	}
+}
+
+// A heal retry counts as the route stage changing the bytes: its 429 is
+// passed on, not replayed as the original.
+func TestRateLimitOnAHealRetryIsNotReplayed(t *testing.T) {
+	srv, log := effortServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`sig-b`)) {
+			return http.StatusBadRequest, errorBody(bindingError)
+		}
+		return http.StatusTooManyRequests, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`
+	})
+	if rec := post(t, srv, convo("high", uA, aB, uC), nil); rec.Code != http.StatusTooManyRequests || len(log.bodies) != 2 {
+		t.Fatalf("status %d after %d calls", rec.Code, len(log.bodies))
+	}
+}
