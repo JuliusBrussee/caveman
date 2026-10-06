@@ -20,7 +20,8 @@ function runShortcut(agentId, cliArgs) {
   writeFileSync(stub, `#!/bin/sh\nprintf '%s|%s' "$*" "$ANTHROPIC_BASE_URL"\n`, { mode: 0o755 });
   const home = mkdtempSync(join(tmpdir(), "cave-shortcut-home-"));
   mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
-  writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify({ wrap: { proxy: false, shrink: false, mcp: false, browse: false } }, null, 2));
+  // `modules` present = setup ran, so the door takes its post-setup path.
+  writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify({ modules: { output: true }, wrap: { proxy: false, shrink: false, mcp: false, browse: false } }, null, 2));
   const env = {
     ...process.env,
     NO_COLOR: "1",
@@ -186,7 +187,8 @@ function nativeShortcutEnv() {
   writeFileSync(proxy, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
   const home = mkdtempSync(join(tmpdir(), "cave-shortcut-native-home-"));
   mkdirSync(join(home, ".caveman-cloud"), { recursive: true });
-  writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify({ wrap: { proxy: false, shrink: false, mcp: false, browse: false } }, null, 2));
+  // `modules` present = setup ran, so the door takes its post-setup path.
+  writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify({ modules: { output: true }, wrap: { proxy: false, shrink: false, mcp: false, browse: false } }, null, 2));
   const env = {
     ...process.env,
     NO_COLOR: "1",

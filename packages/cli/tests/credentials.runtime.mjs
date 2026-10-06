@@ -177,7 +177,7 @@ test("stored gateway key reaches every managed-agent injection without entering 
   }
 });
 
-test("device login stores the complete grant only in a mode-0600 credential envelope", { skip: "Cloud login disabled during beta" }, async () => {
+test("device login stores the complete grant only in a mode-0600 credential envelope", async () => {
   const paths = isolatedEnv();
   const accessToken = makeToken({ org: "org-device" });
   mkdirSync(dirname(paths.credentialsPath), { recursive: true });
@@ -247,7 +247,7 @@ test("device login stores the complete grant only in a mode-0600 credential enve
   }
 });
 
-test("device login does not acknowledge until config persistence succeeds", { skip: "Cloud login disabled during beta" }, async () => {
+test("device login does not acknowledge until config persistence succeeds", async () => {
   const paths = isolatedEnv();
   const accessToken = makeToken({ org: "org-device-config-failure" });
   mkdirSync(dirname(paths.credentialsPath), { recursive: true });
@@ -285,7 +285,7 @@ test("device login does not acknowledge until config persistence succeeds", { sk
   }
 });
 
-test("device login keeps credentials but prints no success when ACK is rejected", { skip: "Cloud login disabled during beta" }, async () => {
+test("device login keeps credentials but prints no success when ACK is rejected", async () => {
   const paths = isolatedEnv();
   const accessToken = makeToken({ org: "org-device-ack-failure" });
   mkdirSync(dirname(paths.credentialsPath), { recursive: true });

@@ -11,7 +11,7 @@ const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.j
 function runSetup(env) {
   return new Promise((resolve, reject) => {
     // node is invoked by absolute path so an empty PATH can't break the spawn.
-    const child = spawn(process.execPath, [cli, "setup"], { env });
+    const child = spawn(process.execPath, [cli, "setup", "--json"], { env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -29,23 +29,23 @@ function baseEnv(home) {
   return env;
 }
 
-// A fresh npm install has none of the Go binaries. `caveman setup` must make
-// that impossible to miss: name every missing binary, say what degrades (loud
-// byte-safe pass-through, savings honestly 0), show the one install command,
-// and exit non-zero so scripts can gate on it. (no-fake-savings)
-test("setup reports every missing binary, the install command, and exits non-zero", async () => {
+// `caveman setup` is the first run now; `setup --json` keeps the binary report
+// for scripts. A fresh npm install has none of the Go binaries: name every one,
+// say what each powers and what degrades without it, and exit non-zero so
+// scripts can gate on it. (no-fake-savings)
+test("setup --json reports every missing binary and exits non-zero", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-setup-empty-"));
   const out = await runSetup(baseEnv(home));
   assert.notEqual(out.code, 0, "missing required binaries must exit non-zero");
+  const report = JSON.parse(out.stdout);
+  assert.equal(report.ready, false);
   for (const name of ["caveman-proxy", "caveman-engine", "caveman-mcp", "cavemem", "caveman-browse", "caveman-shrink"]) {
-    assert.match(out.stdout, new RegExp(name), `must name ${name}`);
+    const row = report.binaries.find((b) => b.name === name);
+    assert.ok(row, `must name ${name}`);
+    assert.equal(row.path, null);
+    assert.ok(row.without, `${name} must say what degrades without it`);
   }
-  assert.match(out.stdout, /missing/i);
-  assert.match(out.stdout, /pass-through/i, "must say affected commands degrade to pass-through");
-  assert.match(out.stdout, /agent-side compressed browsing MCP tools/, "browse line must say what installing it unlocks");
-  assert.match(out.stdout, /wrap auto-registers once installed/, "browse line must say wrap auto-registers it once present");
-  assert.match(out.stdout, /caveman setup --install/, "must show the signed install command");
-  assert.match(out.stdout, /login/, "must say connected verbs still work");
+  assert.match(report.binaries.find((b) => b.name === "caveman-browse").powers, /agent-side compressed browsing MCP tools/);
 });
 
 // With binaries present in ~/.caveman/bin (where the install script builds
@@ -59,8 +59,9 @@ test("setup finds binaries in ~/.caveman/bin and exits 0", async () => {
   }
   const out = await runSetup(baseEnv(home));
   assert.equal(out.code, 0, `all binaries present must exit 0: ${out.stdout}${out.stderr}`);
-  assert.match(out.stdout, /All required binaries found/);
-  assert.match(out.stdout, new RegExp(binDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")), "must print the resolved path");
+  const report = JSON.parse(out.stdout);
+  assert.equal(report.ready, true);
+  assert.equal(report.binaries.find((b) => b.name === "caveman-proxy").path, join(binDir, "caveman-proxy"), "must report the resolved path");
 });
 
 // Optional browse and tool-catalog binaries must not fail gate: required-only present → 0.
@@ -73,6 +74,9 @@ test("setup treats caveman-browse and caveman-shrink as optional", async () => {
   }
   const out = await runSetup(baseEnv(home));
   assert.equal(out.code, 0, `browse alone missing must still exit 0: ${out.stdout}`);
-  assert.match(out.stdout, /caveman-browse\s+missing\s+\(optional\)/, "browse must be marked optional");
-  assert.match(out.stdout, /caveman-shrink\s+missing\s+\(optional\)/, "shrink must be marked optional");
+  const report = JSON.parse(out.stdout);
+  for (const name of ["caveman-browse", "caveman-shrink"]) {
+    const row = report.binaries.find((b) => b.name === name);
+    assert.deepEqual([row.required, row.path], [false, null], `${name} must be optional and missing`);
+  }
 });

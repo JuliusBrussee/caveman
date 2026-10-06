@@ -50,6 +50,10 @@ import { PRACTICE_REGISTRY } from "./practices.generated.js";
 import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
 import { cloudConfigPath, legacyCloudDir } from "./modules/config-home.js";
+import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
+import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupRan, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
+// RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
+export { nextDevicePollIntervalMs } from "./device-auth.generated.js";
 import {
   AGENT_SKILLS,
   AGENT_SKILL_METADATA,
@@ -406,6 +410,8 @@ function printDiscovery(group: CommandGroup, all = false): void {
 }
 
 function resolveInvocation(raw: string[]): ResolvedInvocation {
+  // Bare `caveman` (and `npx caveman`) in a terminal before any setup is the first run.
+  if (raw.length === 0 && onboardInteractive() && !setupRan()) return { verb: "setup", argv: [], handler: setup };
   const top = raw[0] ?? "help";
   if (top === "--help") return { verb: "help", argv: [], handler: help };
   if (top === "--version") return { verb: "version", argv: [], handler: LEGACY_HANDLERS.version! };
@@ -642,6 +648,7 @@ async function ensureTelemetryDefault() {
   // `caveman telemetry …` manages the decision explicitly — don't pre-mint an
   // "on" for someone whose first-ever command is `telemetry off`.
   if (currentInvocation.verb === "telemetry") return;
+  if (deferDisclosureToOnboarding()) return;
   if (state.source === "config") return ensureTelemetryDisclosureVersion(state);
   if (state.source !== "default") return;
   const telemetry: TelemetryConfig = {
@@ -699,6 +706,18 @@ async function ensureTelemetryDisclosureVersion(state: TelemetryRuntimeState) {
     return;
   }
   process.stderr.write(`${dim(TELEMETRY_DISCLOSURE_LINE)}\n`);
+}
+
+// The first run prints the disclosure as its last line (onboard.ts calls back
+// through discloseTelemetry). Until then nothing is persisted, so nothing sends.
+let onboardingDisclosed = false;
+function deferDisclosureToOnboarding(): boolean {
+  if (onboardingDisclosed) return false;
+  if (currentInvocation.verb === "setup") {
+    const options = parseOnboardArgs(currentInvocation.argv);
+    return Boolean(options && !("error" in options) && !options.dryRun);
+  }
+  return currentInvocation.handler === agentShortcut && !setupRan();
 }
 
 function isHelpLikeInvocation(): boolean {
@@ -3274,6 +3293,17 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
 }
 
 async function setup(argv: string[] = []) {
+  const onboarding = parseOnboardArgs(argv);
+  if (onboarding && "error" in onboarding) {
+    console.error(`caveman setup: ${onboarding.error}`);
+    commandUsage(ONBOARD_USAGE);
+  }
+  if (onboarding) {
+    const result = await runOnboarding(onboarding);
+    if (result.cancelled) process.exitCode = 130;
+    else if (!result.ok) process.exitCode = 1;
+    return;
+  }
   const json = argv.includes("--json");
   const install = argv.includes("--install");
   const removeBundle = argv.includes("--remove");
@@ -3287,7 +3317,7 @@ async function setup(argv: string[] = []) {
     && !arg.startsWith("--agent-native=")
     && argv[index - 1] !== "--agent-native");
   if (unknown.length > 0 || (hasAgentNativeFlag && !agentNative) || (agentNative && (json || install)) || (removeBundle && !agentNative)) {
-    commandUsage("setup [--install] [--json] | setup --agent-native <claude|codex> [--remove]");
+    commandUsage(`${ONBOARD_USAGE} | setup --install [--json] | setup --json | setup --agent-native <claude|codex> [--remove]`);
   }
   if (agentNative) {
     if (agentNative !== "claude" && agentNative !== "codex") {
@@ -3357,50 +3387,53 @@ async function setup(argv: string[] = []) {
   }
   if (install) return setupInstall(json);
 
+  // Only `setup --json` reaches here: the binary status for scripts.
   const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }));
   const missingRequired = rows.filter((r) => r.required && !r.resolved);
+  print({
+    binaries: rows.map((row) => ({
+      name: row.name,
+      required: row.required,
+      path: row.resolved,
+      powers: row.powers,
+      without: row.resolved ? null : row.without,
+    })),
+    ready: missingRequired.length === 0,
+  });
+  if (missingRequired.length > 0) process.exit(1);
+}
 
-  if (json) {
-    print({
-      binaries: rows.map((row) => ({
-        name: row.name,
-        required: row.required,
-        path: row.resolved,
-        powers: row.powers,
-        without: row.resolved ? null : row.without,
-      })),
-      ready: missingRequired.length === 0,
-    });
-    if (missingRequired.length > 0) process.exit(1);
-    return;
-  }
+// runOnboarding hands the first run what it needs from the rest of the CLI.
+// Sign-in is the same `login` the verb runs, in its compact form.
+function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promise<OnboardResult> {
+  return onboard(options, {
+    cmd: invokedAs(),
+    agents: onboardAgents(),
+    interactive: onboardInteractive(),
+    signedIn: async () => Boolean((await config()).token),
+    signIn: (ui) => login([], ui),
+    discloseTelemetry: async () => {
+      onboardingDisclosed = true;
+      await ensureTelemetryDefault();
+    },
+    markFirstRun: markFirstRunDone,
+    ...(launching ? { launching: agentShortName(launching) } : {}),
+  });
+}
 
-  console.log(bold("caveman setup — Go binary status"));
-  console.log(dim("The CLI itself is plain JS; compression/metering run in these binaries."));
-  console.log("");
-  for (const r of rows) {
-    if (r.resolved) {
-      console.log(`${mark("ok")} ${r.name.padEnd(15)} ${dim(r.resolved)}`);
-      console.log(`    powers: ${r.powers}`);
-    } else {
-      console.log(`${mark(r.required ? "bad" : "warn")} ${r.name.padEnd(15)} missing${r.required ? "" : dim(" (optional)")}`);
-      console.log(`    without it: ${r.without}`);
-    }
-  }
-  console.log("");
-  if (missingRequired.length === 0) {
-    console.log(`${mark("ok")} All required binaries found. Try: ${cyan("caveman claude")}`);
-    return;
-  }
-  console.log(`${mark("warn")} ${missingRequired.length} of ${rows.filter((r) => r.required).length} required binaries missing — affected commands run as loud, byte-safe`);
-  console.log(`   pass-throughs: nothing is compressed, savings honestly report 0.`);
-  console.log(`   Connected verbs (login, plan, score, costs, …) work regardless — they only need HTTP.`);
-  console.log("");
-  console.log(`Get the signed binaries:`);
-  console.log(`  ${cyan("caveman setup --install")}`);
-  console.log(`Already installed elsewhere? Point at them: ${dim("export CAVEMAN_PROXY_BIN=/path/to/caveman-proxy")} (same for _ENGINE_/_MCP_/_BROWSE_)`);
-  console.log(`Lookup order: env override → PATH → ${dim(join(cavemanHome(), "bin"))}`);
-  process.exit(1);
+// The agents onboarding offers: every agent with native wiring (shown even when
+// missing, disabled), plus any other installed agent the skill installer covers.
+function onboardAgents() {
+  return AGENTS.flatMap((agent) => {
+    const installed = Boolean(which(binOf(agent)));
+    if (!installed && !nativeAgentId(agent.id)) return [];
+    const version = installed ? detectedAgentVersion(agent) : null;
+    return [{ id: agent.id, name: agentShortName(agent), installed, ...(version ? { version } : {}) }];
+  });
+}
+
+function agentShortName(agent: AgentProfile): string {
+  return agent.display_name.replace(/^OpenAI /, "").replace(/ CLI$/, "");
 }
 
 type WrapRuntimeMode = "compress" | "record" | "pixel";
@@ -4312,12 +4345,12 @@ async function requestWrapEntitlement(baseURL: string, accessToken: string, wrap
 // fetchAndStoreWrapEntitlement runs the login-time handshake. Login itself NEVER
 // fails for seats or a down entitlement service — and never for compression, which
 // does not depend on it. The worst case is no cloud sync.
-async function fetchAndStoreWrapEntitlement(baseURL: string, accessToken: string) {
+async function fetchAndStoreWrapEntitlement(baseURL: string, accessToken: string, quiet = false) {
   const result = await requestWrapEntitlement(baseURL, accessToken);
   switch (result.kind) {
     case "ok":
       saveWrapEntitlement(result.entitlement);
-      printLoginEntitlement(result.parsed);
+      if (!quiet) printLoginEntitlement(result.parsed);
       return;
     case "seatwall":
       {
@@ -5386,6 +5419,18 @@ async function agentShortcut(rest: string[]) {
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
   if (existsSync(join(process.cwd(), ".caveman", "agent.lock.json"))) return wrap(rest);
+  // Before any setup nothing machine-wide is written without Continue: the
+  // first run asks, and declining (or no terminal to ask in) runs this session
+  // only. An agent left unticked keeps the session-only door too.
+  if (!setupRan()) {
+    if (!onboardInteractive() || !which(binOf(agent))) return wrap(rest);
+    const result = await runOnboarding({ yes: false, dryRun: false }, agent);
+    if (result.cancelled) {
+      process.exitCode = 130;
+      return;
+    }
+    if (!result.confirmed || !result.plan?.agents.includes(agent.id)) return wrap(rest);
+  }
   // First-run disclosure comes before the first persistent write, mirroring wrap.
   await firstRunExperience();
   try {
@@ -10326,14 +10371,6 @@ export function resolveLoginBaseUrl(argv: string[]): string {
   return flagFrom(argv, "--base-url", process.env.CAVE_API_URL ?? PROD_API_URL);
 }
 
-// RFC 8628 §3.5's slow_down response increases the polling interval by five
-// seconds for every subsequent request. Keep this pure so timing behavior is
-// testable without waiting in a runtime HTTP test.
-export function nextDevicePollIntervalMs(currentMs: number, errorCode?: string): number {
-  const current = Math.max(0, Number.isFinite(currentMs) ? currentMs : 0);
-  return errorCode === "slow_down" ? current + 5000 : current;
-}
-
 export function loginBrowserOpener(
   url: string,
   platform: NodeJS.Platform = process.platform,
@@ -10412,173 +10449,98 @@ function openLoginBrowser(url: string): void {
   child.unref();
 }
 
-// acknowledgeDeviceGrant is the client receipt fence for durable device
-// credentials. The token endpoint can only prove that the HTTP server accepted
-// bytes; this second request is sent after the credential envelope is persisted
-// locally. Retries are safe when the ACK response itself is lost because the
-// control API treats an acknowledged activation idempotently.
-async function acknowledgeDeviceGrant(baseURL: string, accessToken: string, deviceCode: string, ackToken: string): Promise<void> {
-  let lastError = "unknown error";
-  for (let attempt = 0; attempt < 5; attempt++) {
-    try {
-      const response = await fetch(`${baseURL}/api/v1/auth/device/ack`, {
-        method: "POST",
-        redirect: "manual",
-        headers: {
-          authorization: `Bearer ${accessToken}`,
-          "content-type": "application/json",
-          "x-cave-client": "cli",
-        },
-        body: JSON.stringify({ device_code: deviceCode, ack_token: ackToken }),
-        signal: AbortSignal.timeout(5000),
-      });
-      if (response.ok) return;
-      const body = await response.json().catch(() => null) as { error?: { code?: unknown } } | null;
-      const code = typeof body?.error?.code === "string" ? body.error.code : `HTTP ${response.status}`;
-      lastError = code;
-      // Invalid/expired grants are terminal. Infrastructure responses remain
-      // retryable so a committed ACK whose response was dropped can converge.
-      if (response.status < 500 && response.status !== 429) break;
-    } catch (error) {
-      lastError = error instanceof Error ? error.message : String(error);
-    }
-    if (attempt < 4) await sleep(Math.min(2000, 200 * 2 ** attempt));
+// signInError turns "this Cloud does not take sign-ins" into one plain line:
+// 403 cave_device_login_disabled, or 404 where the device endpoint is absent.
+function signInError(error: unknown, baseURL: string): unknown {
+  if (!(error instanceof DeviceAuthError)) return error;
+  if ((error.status === 403 && error.code === "cave_device_login_disabled") || error.status === 404) {
+    return Object.assign(new Error(`Sign-in is not open on ${new URL(baseURL).host} yet.`), { code: "sign_in_closed" });
   }
-  throw new Error(`device credential delivery acknowledgement failed (${lastError}); credentials were persisted locally but the server may revoke them after the delivery window`);
+  return error;
 }
 
-// 0600 credentials file) — never in plaintext config. organization_id is bound
-// from the returned token, never from any local input.
-// Hosted login remains gated; explicit private instances use project access.
-function blockCloudLoginWhileBeta(): void {
-  throw new Error("Caveman Cloud platform is still in beta.");
-}
-
-async function login(argv: string[] = []) {
-  if (!argv.some((arg) => arg === "--instance" || arg.startsWith("--instance="))) blockCloudLoginWhileBeta();
+// Credentials go to the OS keychain (or a 0600 credentials file) — never in
+// plaintext config. organization_id is bound from the returned token, never
+// from any local input. `ui` is the onboarding's compact presentation of the
+// same flow: it shows the code its own way, can skip, and leaves the post-login
+// sync to `caveman sync`.
+async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: string }> {
   const { noBrowser, instance } = validateLoginArgs(argv);
   const baseURL = instance ?? resolveLoginBaseUrl(argv);
 
-  const codeResp = await fetch(`${baseURL}/api/v1/auth/device/code`, {
-    method: "POST",
-    redirect: "error",
-    headers: { "content-type": "application/json" },
-    body: "{}",
-    signal: AbortSignal.timeout(5000),
-  });
-  if (!codeResp.ok) throw new Error(`device authorization failed: HTTP ${codeResp.status}`);
-  const code = await codeResp.json();
-  if (!code.device_code) throw new Error("device authorization failed: missing device code");
-
-  const verificationURL = instance ? privateVerificationURL(code, instance) : code.verification_uri_complete ?? code.verification_uri;
-  console.error(`\n  Authorize this device in your browser:`);
-  console.error(`    ${verificationURL}`);
-  console.error(`    code: ${code.user_code}\n`);
-  if (typeof verificationURL === "string" && shouldOpenLoginBrowser(noBrowser)) openLoginBrowser(verificationURL);
-
-  let intervalMs = Math.max(0, Number(code.interval ?? 5)) * 1000;
-  const deadline = Date.now() + Number(code.expires_in ?? 600) * 1000;
-  while (Date.now() < deadline) {
-    let tok: Record<string, unknown>;
-    let tokenStatus = 0;
-    let retryAfterMs = 0;
-    try {
-      const tokResp = await fetch(`${baseURL}/api/v1/auth/device/token`, {
-        method: "POST",
-        redirect: "manual",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ device_code: code.device_code }),
-        signal: AbortSignal.timeout(5000),
-      });
-      tokenStatus = tokResp.status;
-      const retryAfter = tokResp.headers.get("retry-after");
-      if (retryAfter) {
-        const seconds = Number(retryAfter);
-        if (Number.isFinite(seconds) && seconds >= 0) retryAfterMs = seconds * 1000;
-      }
-      tok = tokenStatus >= 300 && tokenStatus < 400 ? {} : await tokResp.json() as Record<string, unknown>;
-    } catch (error) {
-      // RFC 8628 polling is retryable: a dropped connection or malformed
-      // transient response must not consume the approved code or abort login
-      // before the bounded device deadline. The next poll can reclaim the
-      // server-side lease and replay the same durable bundle.
-      if (Date.now() >= deadline) {
-        throw new Error(`device login polling failed: ${error instanceof Error ? error.message : String(error)}`);
-      }
-      await sleep(Math.max(intervalMs, retryAfterMs, 200));
-      continue;
-    }
-    if (tokenStatus >= 300 && tokenStatus < 400) throw new Error("device login refused a redirected token endpoint");
-    if (tokenStatus === 429) {
-      // rateLimitAuth returns a nested cave error envelope rather than the RFC
-      // `error` string. Status is the authoritative retry signal here.
-      await sleep(Math.max(intervalMs, retryAfterMs, 200));
-      continue;
-    }
-    const accessToken = typeof tok.access_token === "string" ? tok.access_token : "";
-    if (accessToken) {
-	  if (instance && (tokenStatus < 200 || tokenStatus >= 300 || tok.credential_kind !== "none" ||
-	      ["gateway_api_key", "gateway_key_id", "gateway_url"].some((key) => tok[key] != null) ||
-	      typeof tok.refresh_token !== "string" || !tok.refresh_token || typeof tok.project_id !== "string" || !tok.project_id ||
-	      typeof tok.delivery_ack_token !== "string" || !tok.delivery_ack_token || typeof tok.scope !== "string" || !tok.scope ||
-	      tok.scope.split(/\s+/).some((scope) => scope === "proxy:write" || scope === "sdk:write"))) {
-	    throw new Error("private device login requires a keyless project grant with a refresh token and delivery acknowledgement");
-	  }
-	  const credentials: StoredCredentials = {
-	    access_token: accessToken,
-	    ...(typeof tok.refresh_token === "string" && tok.refresh_token ? { refresh_token: tok.refresh_token } : {}),
-	    ...(typeof tok.gateway_api_key === "string" && tok.gateway_api_key ? { gateway_api_key: tok.gateway_api_key } : {}),
-	    ...(typeof tok.gateway_key_id === "string" && tok.gateway_key_id ? { gateway_key_id: tok.gateway_key_id } : {}),
-	    ...(typeof tok.project_id === "string" && tok.project_id ? { project_id: tok.project_id } : {}),
-	  };
-	  const tokenStore = storeCredentials(credentials);
-	  const organizationId = orgFromToken(accessToken);
-	  const gateway = instance ? "" : resolveLoginGatewayUrl(baseURL, tok, code, argv);
-	  const saved: Config = { baseURL, token: "", tokenStore };
-	  if (organizationId) saved.organizationId = organizationId;
-	  if (credentials.project_id) saved.projectId = credentials.project_id;
-	  if (gateway) saved.gatewayUrl = gateway;
-	  // Persist the complete local login state before the server-side receipt fence:
-	  // an ACK may permanently purge the replay bundle, so a config write that fails
-	  // must leave the grant retryable rather than acknowledging an undiscoverable
-	  // credential.
-	  await saveConfig(saved);
-	  const durableGrant = Boolean(credentials.refresh_token || credentials.gateway_api_key || credentials.gateway_key_id || credentials.project_id);
-	  const ackToken = typeof tok.delivery_ack_token === "string" ? tok.delivery_ack_token : "";
-	  if (durableGrant) {
-	    if (!ackToken) throw new Error("device login failed: server did not provide a delivery acknowledgement token");
-	    // Do not print authenticated success or continue the post-login bridge
-	    // until the control plane has recorded that this CLI stored the bundle.
-	    await acknowledgeDeviceGrant(baseURL, credentials.access_token, code.device_code, ackToken);
-	  }
-      if (instance) {
-        print({ authenticated: true, baseURL, organization_id: organizationId ?? null, project_id: credentials.project_id, scope: tok.scope, credential_kind: "none", token_store: tokenStore });
-        return;
-      }
-      // Mint/refresh the local-wrap entitlement for this device. Best
-      // effort: login never fails for seats or a down entitlement service.
-      await fetchAndStoreWrapEntitlement(baseURL, credentials.access_token);
-      if (gateway && wrapMode(gateway) === "managed") {
-        console.error(`  ${mark("ok")} wrap now routes through the managed gateway (${gateway}) — governed reporting; verified stays zero without qualifying provider evidence`);
-      } else if (gateway) {
-        console.error(`  ${mark("ok")} connected; wrap routes through ${gateway}`);
-      }
-      console.error(SYNC_DISCLOSURE);
-      print({ authenticated: true, baseURL, gateway_url: gateway || null, organization_id: organizationId ?? null, token_store: tokenStore });
-      // The funnel bridge: pull the spans the local proxy already measured into
-      // the dashboard, once, right now (always labeled inferred; best-effort).
-      await syncAfterLogin();
-      return;
-    }
-    const errorCode = typeof tok.error === "string" ? tok.error : "";
-    if (errorCode === "slow_down") {
-      intervalMs = nextDevicePollIntervalMs(intervalMs, errorCode);
-    } else if (errorCode && errorCode !== "authorization_pending") {
-      throw new Error(`device login failed: ${errorCode}`);
-    }
-    await sleep(Math.max(intervalMs, 200));
+  let grant: DeviceGrant;
+  try {
+    grant = await runCavemanDeviceFlow({
+      baseURL,
+      client: "cli",
+      ...(ui ? { signal: ui.signal } : {}),
+      onCode: (code) => {
+        const browserURL = instance ? privateVerificationURL(code as unknown as Record<string, unknown>, instance) : code.verification_uri_complete ?? code.verification_uri;
+        const open = shouldOpenLoginBrowser(noBrowser);
+        if (ui) {
+          ui.code(instance ? browserURL : code.verification_uri, code.user_code, open);
+        } else {
+          console.error(`\n  Authorize this device in your browser:`);
+          console.error(`    ${browserURL}`);
+          console.error(`    code: ${code.user_code}\n`);
+        }
+        if (open) openLoginBrowser(browserURL);
+      },
+    });
+  } catch (error) {
+    throw signInError(error, baseURL);
   }
-  throw new Error("device login timed out before approval");
+  const { code } = grant;
+  const tok = grant.credentials as Record<string, unknown>;
+  const accessToken = grant.credentials.access_token;
+  if (instance && (tok.credential_kind !== "none" ||
+      ["gateway_api_key", "gateway_key_id", "gateway_url"].some((key) => tok[key] != null) ||
+      typeof tok.refresh_token !== "string" || !tok.refresh_token || typeof tok.project_id !== "string" || !tok.project_id ||
+      typeof tok.delivery_ack_token !== "string" || !tok.delivery_ack_token || typeof tok.scope !== "string" || !tok.scope ||
+      tok.scope.split(/\s+/).some((scope) => scope === "proxy:write" || scope === "sdk:write"))) {
+    throw new Error("private device login requires a keyless project grant with a refresh token and delivery acknowledgement");
+  }
+  const credentials: StoredCredentials = {
+    access_token: accessToken,
+    ...(typeof tok.refresh_token === "string" && tok.refresh_token ? { refresh_token: tok.refresh_token } : {}),
+    ...(typeof tok.gateway_api_key === "string" && tok.gateway_api_key ? { gateway_api_key: tok.gateway_api_key } : {}),
+    ...(typeof tok.gateway_key_id === "string" && tok.gateway_key_id ? { gateway_key_id: tok.gateway_key_id } : {}),
+    ...(typeof tok.project_id === "string" && tok.project_id ? { project_id: tok.project_id } : {}),
+  };
+  const tokenStore = storeCredentials(credentials);
+  const organizationId = orgFromToken(accessToken);
+  const gateway = instance ? "" : resolveLoginGatewayUrl(baseURL, tok, code as unknown as Record<string, unknown>, argv);
+  const saved: Config = { baseURL, token: "", tokenStore };
+  if (organizationId) saved.organizationId = organizationId;
+  if (credentials.project_id) saved.projectId = credentials.project_id;
+  if (gateway) saved.gatewayUrl = gateway;
+  // Persist the complete local login state before the server-side receipt fence:
+  // an ACK may permanently purge the replay bundle, so a config write that fails
+  // must leave the grant retryable rather than acknowledging an undiscoverable
+  // credential. Do not print authenticated success or continue the post-login
+  // bridge until the control plane has recorded that this CLI stored the bundle.
+  await saveConfig(saved);
+  await grant.acknowledge();
+  const email = tokenClaim(accessToken, "email");
+  if (instance) {
+    print({ authenticated: true, baseURL, organization_id: organizationId ?? null, project_id: credentials.project_id, scope: tok.scope, credential_kind: "none", token_store: tokenStore });
+    return email ? { email } : {};
+  }
+  // Mint/refresh the local-wrap entitlement for this device. Best
+  // effort: login never fails for seats or a down entitlement service.
+  await fetchAndStoreWrapEntitlement(baseURL, credentials.access_token, Boolean(ui));
+  if (ui) return email ? { email } : {};
+  if (gateway && wrapMode(gateway) === "managed") {
+    console.error(`  ${mark("ok")} wrap now routes through the managed gateway (${gateway}) — governed reporting; verified stays zero without qualifying provider evidence`);
+  } else if (gateway) {
+    console.error(`  ${mark("ok")} connected; wrap routes through ${gateway}`);
+  }
+  console.error(SYNC_DISCLOSURE);
+  print({ authenticated: true, baseURL, gateway_url: gateway || null, organization_id: organizationId ?? null, token_store: tokenStore });
+  // The funnel bridge: pull the spans the local proxy already measured into
+  // the dashboard, once, right now (always labeled inferred; best-effort).
+  await syncAfterLogin();
+  return email ? { email } : {};
 }
 
 async function logout() {
@@ -19861,11 +19823,15 @@ function fileTokenDelete() {
 // base64url JSON payload of the HMAC token). It binds organization_id from the
 // server-issued token, never from any local input.
 function orgFromToken(token: string): string | undefined {
+  return tokenClaim(token, "oid");
+}
+
+function tokenClaim(token: string, key: string): string | undefined {
   const payload = token.split(".")[0];
   if (!payload) return undefined;
   try {
     const claims = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
-    return typeof claims.oid === "string" ? claims.oid : undefined;
+    return typeof claims[key] === "string" ? claims[key] : undefined;
   } catch {
     return undefined;
   }

@@ -78,24 +78,35 @@ function listen(server) {
   return new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
 }
 
-test("login is unavailable while Caveman Cloud is in beta", async () => {
+// The beta gate is gone: a Cloud that does not take sign-ins yet answers 403
+// cave_device_login_disabled, and the CLI says so in one line.
+test("login against a Cloud with sign-in closed says so plainly", async () => {
+  const server = createServer((req, res) => {
+    req.resume();
+    res.writeHead(403, { "content-type": "application/json" });
+    res.end(JSON.stringify({ error: { code: "cave_device_login_disabled", message: "device login is disabled" } }));
+  });
+  const port = await listen(server);
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
   const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
   const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1" };
   delete env.CAVE_TOKEN;
-
-  const result = await runCli(["login", "--base-url", "http://127.0.0.1:1"], env);
-  assert.equal(result.code, 1);
-  assert.equal(result.stdout, "");
-  assert.equal(result.stderr, "Caveman Cloud platform is still in beta.\n");
-  assert.equal(existsSync(join(home, ".caveman-cloud", "config.json")), false);
-  assert.equal(existsSync(join(caveDir, "credentials")), false);
+  try {
+    const result = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], env);
+    assert.equal(result.code, 1);
+    assert.equal(result.stdout, "");
+    assert.equal(result.stderr, `Sign-in is not open on 127.0.0.1:${port} yet.\n`);
+    assert.equal(existsSync(join(caveDir, "cloud.json")), false);
+    assert.equal(existsSync(join(caveDir, "credentials")), false);
+  } finally {
+    server.close();
+  }
 });
 
 // Device-flow login must store the token in the 0600 credentials file (keychain
 // forced off), bind organization_id from the token, keep the secret OUT of
 // config.json, and let a follow-up connected verb authenticate with it.
-test("login device flow stores token in credentials file and binds org", { skip: "Cloud login disabled during beta" }, async () => {
+test("login device flow stores token in credentials file and binds org", async () => {
   const { server, getCapturedAuth } = startStub();
   const port = await listen(server);
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
@@ -108,7 +119,7 @@ test("login device flow stores token in credentials file and binds org", { skip:
 
   assert.equal(readFileSync(join(caveDir, "credentials"), "utf8"), TOKEN, "token must be written to the credentials file");
 
-  const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   assert.equal(cfg.tokenStore, "file");
   assert.equal(cfg.organizationId, "org-test", "organization_id must be bound from the token");
   assert.ok(!cfg.token, "the secret token must never be persisted in config.json");
@@ -120,15 +131,15 @@ test("login device flow stores token in credentials file and binds org", { skip:
   server.close();
 });
 
-test("login beta gate takes precedence over argument validation", async () => {
+test("login rejects unknown arguments before any request", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
-  const out = await runCli(["login", "--browser-ish"], { ...process.env, HOME: home });
-  assert.equal(out.code, 1);
+  const out = await runCli(["login", "--browser-ish"], { ...process.env, HOME: home, CAVE_API_URL: "http://127.0.0.1:1" });
+  assert.equal(out.code, 2);
   assert.equal(out.stdout, "");
-  assert.equal(out.stderr, "Caveman Cloud platform is still in beta.\n");
+  assert.match(out.stderr, /^usage: caveman login /);
 });
 
-test("login rejects a non-2xx device-code response before polling", { skip: "Cloud login disabled during beta" }, async () => {
+test("login rejects a non-2xx device-code response before polling", async () => {
   let polls = 0;
   const server = createServer((req, res) => {
     if (req.url === "/api/v1/auth/device/code") {
@@ -151,7 +162,7 @@ test("login rejects a non-2xx device-code response before polling", { skip: "Clo
   }
 });
 
-test("login retries a transient token-poll connection failure", { skip: "Cloud login disabled during beta" }, async () => {
+test("login retries a transient token-poll connection failure", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
   const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
   const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1" };
@@ -221,7 +232,7 @@ test("connected verb without credentials exits non-zero with a login hint", asyn
 // after login persists a managed gateway URL, `caveman wrap` must route there with
 // NO env var. Gateway resolution is now dynamic (read from config.json per run), so
 // the login that writes gatewayUrl flips wrap on the next invocation.
-test("login persists the gateway URL and wrap flips to it with no env var", { skip: "Cloud login disabled during beta" }, async () => {
+test("login persists the gateway URL and wrap flips to it with no env var", async () => {
   const { server } = startStub();
   const port = await listen(server);
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
@@ -233,10 +244,10 @@ test("login persists the gateway URL and wrap flips to it with no env var", { sk
   const login = await runCli(["login", "--base-url", `http://127.0.0.1:${port}`, "--gateway-url", "http://127.0.0.1:9876"], env);
   assert.equal(login.code, 0, `login failed: ${login.stderr}`);
 
-  const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   assert.equal(cfg.gatewayUrl, "http://127.0.0.1:9876", "login must persist the managed gateway URL to config.json");
   cfg.wrap = { proxy: false };
-  writeFileSync(join(home, ".caveman-cloud", "config.json"), JSON.stringify(cfg, null, 2));
+  writeFileSync(join(caveDir, "cloud.json"), JSON.stringify(cfg, null, 2));
 
   // proxy:false so the test never spawns a real proxy; we only inspect the injection.
   const printEnv = "process.stdout.write(JSON.stringify({a:process.env.ANTHROPIC_BASE_URL,o:process.env.OPENAI_BASE_URL}))";
@@ -252,7 +263,7 @@ test("login persists the gateway URL and wrap flips to it with no env var", { sk
 // With no explicit --gateway-url, login derives the sibling gateway for the shapes
 // Caveman ships (local control-api :8080 → gateway :8787 here), so the flip works
 // with zero extra flags.
-test("login derives the local sibling gateway when none is given", { skip: "Cloud login disabled during beta" }, async () => {
+test("login derives the local sibling gateway when none is given", async () => {
   const { server } = startStub();
   const port = await listen(server);
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
@@ -264,7 +275,7 @@ test("login derives the local sibling gateway when none is given", { skip: "Clou
   const login = await runCli(["login", "--base-url", `http://127.0.0.1:${port}`], env);
   assert.equal(login.code, 0, `login failed: ${login.stderr}`);
 
-  const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   assert.equal(cfg.gatewayUrl, "http://127.0.0.1:8787", "login must derive the local sibling gateway (8080→8787)");
 
   server.close();
