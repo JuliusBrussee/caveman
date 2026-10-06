@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 2.1.0 — 2026-10-06
 
 - `route-ask-v1` (additive): optional, strict `request` (`endpoint`, `labels`
   of eleven allowlisted headers, each value at most 256 bytes or 16 KiB for
@@ -18,8 +18,8 @@
   object next to `signals` — `text` (required, non-blank, at most 131072 bytes),
   `prev_text` and `reply_tail` (at most 16384 bytes each) and `turn`
   (0..1000000). Every field keeps its end. The description now says the ask
-  carries raw conversation text. The `$id` still names `contracts-v2.0.0`;
-  moving it with the package version is due at the next release.
+  carries raw conversation text.
+- Schema `$id`s name `contracts-v2.1.0`.
 
 ## 2.0.0 — 2026-09-24
 
