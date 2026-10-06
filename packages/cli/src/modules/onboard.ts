@@ -214,8 +214,11 @@ function colors(out: NodeJS.WriteStream) {
   return { bold: paint("1"), dim: paint("2"), cyan: paint("36"), green: paint("32"), yellow: paint("33"), red: paint("31") };
 }
 
+// Keys typed before a prompt is on screen (an Enter hit twice while the plan
+// was computed) are dropped, so nothing is ever answered unseen.
 function keys(input: NodeJS.ReadStream, onKey: (key: Key) => void): () => void {
   emitKeypressEvents(input);
+  while (input.read() !== null);
   input.setRawMode?.(true);
   input.resume();
   const handler = (_: string | undefined, key: Key | undefined) => onKey(key ?? {});
@@ -236,10 +239,23 @@ function live(out: NodeJS.WriteStream, render: (active: boolean) => string[], on
       rows = lines.length;
     };
     let finished = false;
+    // The cursor comes back however the process ends, a kill included.
+    const restore = () => out.write("\x1b[?25h");
+    const onSignal = (signal: NodeJS.Signals) => {
+      restore();
+      input.setRawMode?.(false);
+      process.kill(process.pid, signal);
+    };
+    process.once("exit", restore);
+    process.once("SIGTERM", onSignal);
+    process.once("SIGHUP", onSignal);
     out.write("\x1b[?25l");
     draw(true);
     const finish = (ok: boolean) => {
       finished = true;
+      process.off("exit", restore);
+      process.off("SIGTERM", onSignal);
+      process.off("SIGHUP", onSignal);
       stop();
       draw(false);
       out.write("\n\x1b[?25h");
@@ -306,12 +322,19 @@ function toggle(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ti
   }, input).then((ok) => ok ? items.map((item) => item.on) : null);
 }
 
+// A Yes within the first moments after the question draws is the tail of a
+// double-tapped Enter, not an answer to a plan nobody has read yet.
+const CONFIRM_GRACE_MS = 400;
+
 function confirm(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, question: string): Promise<boolean | null> {
   let yes = true;
+  const shownAt = Date.now();
   const render = (active: boolean) => [active
     ? `${question} ${c.dim("›")} ${yes ? c.cyan("Yes") : c.dim("Yes")} ${c.dim("/")} ${yes ? c.dim("No") : c.cyan("No")}`
     : `${question} ${c.dim("›")} ${yes ? "Yes" : "No"}`];
   return live(out, render, (key, done) => {
+    const early = Date.now() - shownAt < CONFIRM_GRACE_MS;
+    if (early && (key.name === "y" || key.name === "return" || key.name === "enter")) return;
     if (key.name === "y") { yes = true; return done(); }
     if (key.name === "n") { yes = false; return done(); }
     if (key.name === "return" || key.name === "enter") return done();

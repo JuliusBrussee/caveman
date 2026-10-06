@@ -38,9 +38,14 @@ function terminal() {
     input,
     output,
     text: () => text,
+    async waitFor(pattern) {
+      for (let i = 0; i < 300 && !pattern.test(text); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+      assert.match(text, pattern);
+    },
     async press(waitFor, keys) {
-      for (let i = 0; i < 300 && !waitFor.test(text); i++) await new Promise((resolve) => setTimeout(resolve, 10));
-      assert.match(text, waitFor);
+      await this.waitFor(waitFor);
+      // Continue ignores a Yes in its first 400ms (a double-tapped Enter).
+      if (/Continue/.test(waitFor.source) && /^[\ry]$/.test(keys)) await new Promise((resolve) => setTimeout(resolve, 450));
       input.write(keys);
     },
   };
@@ -85,6 +90,27 @@ test("answering No writes nothing", async () => {
   const result = await run;
   assert.deepEqual([result.confirmed, result.cancelled], [false, false]);
   assert.match(tty.text(), /Continue\? › No\nNothing changed\.\n$/);
+  assert.equal(existsSync(configPath), false);
+});
+
+test("Enter typed ahead before Continue is shown never accepts the plan unseen", async () => {
+  rmSync(configPath, { force: true });
+  const tty = terminal();
+  const run = onboard({ yes: false, dryRun: false }, deps(tty, {
+    agents: [{ id: "claude", name: "Claude Code", installed: true, wired: false }],
+  }));
+  await tty.press(/space toggles/, "\r");
+  await tty.press(/Agents\n/, "\r");
+  // Two more Enters land while the plan is computed, before Continue draws,
+  // and one just after it draws.
+  tty.input.write("\r\r");
+  await tty.waitFor(/Continue\? › Yes \/ No/);
+  tty.input.write("\r");
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.doesNotMatch(tty.text(), /Continue\? › Yes\n/, "still waiting for a real answer");
+  tty.input.write("n");
+  const result = await run;
+  assert.equal(result.confirmed, false, "buffered Enters must not answer Continue");
   assert.equal(existsSync(configPath), false);
 });
 
@@ -160,7 +186,7 @@ test("end to end: caveman setup in a terminal against a Cloud that refuses sign-
     `spawn -noecho ${process.execPath} ${cli} setup`,
     'expect "space toggles"', "sleep 0.2", 'send "\\r"',
     'expect "Agents"', "sleep 0.2", 'send "\\r"',
-    'expect "Continue?"', "sleep 0.2", 'send "\\r"',
+    'expect "Continue?"', "sleep 0.6", 'send "\\r"',
     "expect eof",
     "catch wait result",
     "exit [lindex $result 3]",
