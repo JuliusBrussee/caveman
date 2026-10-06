@@ -14,13 +14,14 @@ test("fresh home: on --all --dry-run prints the whole plan and writes nothing", 
     assert.equal(out.code, 0, out.stderr);
     assert.match(out.stdout, /^This will\n/);
     assert.deepEqual(planLines(out.stdout).map((line) => line.join(" | ").replace(/bin-v[\d.]+/, "bin-vX")), [
-      "DOWNLOAD | caveman-proxy, caveman-engine, caveman-mcp, cavemem, caveman-shrink, caveman-browse | signed, bin-vX",
+      "DOWNLOAD | caveman-proxy, caveman-mcp, caveman-engine, cavemem, caveman-shrink, caveman-browse | signed, bin-vX",
       "CREATE | ~/.caveman-cloud/config.json | modules on: output, input, waste-fixes, routing, scripts, browse",
       "CREATE | ~/.claude/settings.json | claude settings",
       "CREATE | ~/.claude.json | claude mcp",
       "CREATE | ~/.codex/hooks.json | codex hooks",
       "CREATE | ~/.codex/config.toml | codex config",
-      "RUN | caveman-blocks hooks install",
+      "RUN | caveman-proxy | start local runtime",
+      "RUN | caveman-blocks hooks install | skipped: caveman-blocks not installed",
     ]);
     assert.deepEqual(snapshot(fx.home), before, "--dry-run wrote to HOME");
   } finally {
@@ -81,7 +82,7 @@ test("on → off → on round-trips harness files byte for byte", async () => {
 });
 
 test("off keeps agent wiring while another module needs it", async () => {
-  const fx = modulesFixture({ agents: ["claude"] });
+  const fx = modulesFixture({ agents: ["claude"], blocks: true });
   const journal = () => existsSync(join(fx.home, ".caveman", "integrations", "claude.json"));
   try {
     assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
@@ -91,8 +92,16 @@ test("off keeps agent wiring while another module needs it", async () => {
     assert.equal(input.code, 0, input.stderr);
     assert.deepEqual(planLines(input.stdout), [
       ["UPDATE", "~/.caveman-cloud/config.json", "modules off: input · think.mode = record · think.toon = false · think.shrink = false"],
+      ["UPDATE", "~/.claude/settings.json", "refresh claude hooks"],
+      ["UPDATE", "~/.claude.json", "refresh claude hooks"],
     ]);
+    assert.match(input.stdout, /^note: output also pauses: it runs through input$/m);
     assert.ok(journal(), "off input removed wiring output still needs");
+    assert.doesNotMatch(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8"), /shrink-hook/);
+    // The refreshed hooks match think.shrink, and output pausing is a choice.
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.equal(doctor.code, 0, doctor.stdout);
+    assert.match(doctor.stdout, /^· output: paused while input is off · caveman on input$/m);
 
     assert.equal((await runCli(["off", "output", "waste-fixes", "--yes"], fx.env)).code, 0);
     assert.ok(journal(), "wiring must stay while routing is on");
@@ -125,6 +134,98 @@ test("on/off reject unknown modules and bad flags", async () => {
     assert.equal((await runCli(["off"], fx.env)).code, 2);
     assert.equal((await runCli(["on", "--all", "output"], fx.env)).code, 2);
     assert.equal((await runCli(["on", "output", "--force"], fx.env)).code, 2);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("on <module> touches only that module: its key, its binary, no harness files", async () => {
+  const missing = modulesFixture({ binaries: false });
+  try {
+    const dry = await runCli(["on", "browse", "--dry-run"], missing.env);
+    assert.equal(dry.code, 0, dry.stderr);
+    assert.deepEqual(planLines(dry.stdout).map((line) => line.join(" | ").replace(/bin-v[\d.]+/, "bin-vX")), [
+      "DOWNLOAD | caveman-browse | signed, bin-vX",
+      "CREATE | ~/.caveman-cloud/config.json | modules on: browse",
+    ]);
+  } finally {
+    missing.cleanup();
+  }
+
+  const fx = modulesFixture();
+  try {
+    const before = snapshot(fx.home);
+    const out = await runCli(["on", "browse", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /^✓ browse on$/m);
+    const after = snapshot(fx.home);
+    const changed = Object.keys(after).filter((file) => after[file] !== before[file]);
+    assert.deepEqual(changed, [".caveman-cloud/config.json"]);
+    assert.deepEqual(JSON.parse(readFileSync(join(fx.home, ".caveman-cloud", "config.json"), "utf8")), { modules: { browse: true } });
+
+    // A missing external binary is said in the plan and after apply, not skipped silently.
+    const scripts = await runCli(["on", "scripts", "--yes"], fx.env);
+    assert.equal(scripts.code, 0, scripts.stderr);
+    assert.match(scripts.stdout, /RUN +caveman-blocks hooks install +skipped: caveman-blocks not installed/);
+    assert.match(scripts.stdout, /^✓ scripts on · caveman-blocks not installed$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("off <module> leaves the user's other config keys alone and reads old configs as off", async () => {
+  const fx = modulesFixture();
+  try {
+    mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
+    const configPath = join(fx.home, ".caveman-cloud", "config.json");
+    writeFileSync(configPath, JSON.stringify({ think: { mode: "record" }, execute: { browse_tool: false } }));
+    const out = await runCli(["off", "scripts", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.deepEqual(planLines(out.stdout), [["UPDATE", "~/.caveman-cloud/config.json", "modules off: scripts"]]);
+    assert.deepEqual(JSON.parse(readFileSync(configPath, "utf8")), {
+      think: { mode: "record" }, execute: { browse_tool: false }, modules: { scripts: false },
+    });
+    const modules = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout).modules;
+    assert.deepEqual(modules.filter((state) => !state.on).map((state) => state.id), ["input", "scripts", "browse"]);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("an invalid value leaves its module inactive, fails doctor, and on rewrites it", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    mkdirSync(join(fx.home, ".caveman-cloud"), { recursive: true });
+    writeFileSync(join(fx.home, ".caveman-cloud", "config.json"), JSON.stringify({ think: { mode: "comprss" } }));
+    const input = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout).modules.find((state) => state.id === "input");
+    assert.equal(input.on, true);
+    assert.equal(input.active, false);
+    assert.equal(input.reason, "think.mode has an invalid value: comprss");
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.equal(doctor.code, 1);
+    assert.match(doctor.stdout, /^✗ think.mode has an invalid value: comprss · fix: caveman on input$/m);
+    const plan = await runCli(["on", "input", "--dry-run"], fx.env);
+    assert.match(plan.stdout, /think\.mode = compress/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a project or env override shows the module on but inactive, with the reason", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    const project = join(fx.home, "project");
+    mkdirSync(join(project, ".caveman"), { recursive: true });
+    writeFileSync(join(project, ".caveman", "config.json"), JSON.stringify({ execute: { browse_tool: false } }));
+    const out = await runCli(["status", "--json"], { ...fx.env, CAVEMAN_CORE: "0" }, { cwd: project });
+    const modules = JSON.parse(out.stdout).modules;
+    assert.deepEqual(modules.find((state) => state.id === "browse"), {
+      id: "browse", on: true, active: false, reason: "overridden by project config", perAgent: { claude: "n/a", codex: "n/a" },
+    });
+    assert.equal(modules.find((state) => state.id === "output").reason, "overridden by CAVEMAN_CORE");
+    const doctor = await runCli(["doctor"], { ...fx.env, CAVEMAN_CORE: "0" }, { cwd: project });
+    assert.equal(doctor.code, 0, doctor.stdout);
+    assert.match(doctor.stdout, /^· browse: overridden by project config$/m);
   } finally {
     fx.cleanup();
   }

@@ -22,7 +22,8 @@ export type ModuleDef = {
   // Signing in to Caveman Cloud is required before the module does anything.
   needsSignIn: boolean;
   // Works through the native agent wiring (`caveman enable <agent>`: route,
-  // hooks, recovery MCP). The wiring stays while any such module is on.
+  // hooks, recovery MCP). The wiring stays while any such module is on, and
+  // needs caveman-proxy and caveman-mcp, so such modules list both.
   wiresAgents: boolean;
   capabilities: CapabilityEffect[];
   // Names from GO_BINARIES the module needs on disk.
@@ -42,7 +43,7 @@ export const MODULES: readonly ModuleDef[] = [
     needsSignIn: false,
     wiresAgents: true,
     capabilities: [{ key: "think.core", on: true, off: false }],
-    binaries: [],
+    binaries: ["caveman-proxy", "caveman-mcp"],
   },
   {
     id: "input",
@@ -67,7 +68,7 @@ export const MODULES: readonly ModuleDef[] = [
     wiresAgents: true,
     // The learn autopilot the native SessionEnd hook starts.
     capabilities: [{ key: "learnAutopilot", on: true, off: false }],
-    binaries: ["caveman-proxy"],
+    binaries: ["caveman-proxy", "caveman-mcp"],
   },
   {
     id: "routing",
@@ -77,7 +78,7 @@ export const MODULES: readonly ModuleDef[] = [
     needsSignIn: true,
     wiresAgents: true,
     capabilities: [],
-    binaries: ["caveman-proxy"],
+    binaries: ["caveman-proxy", "caveman-mcp"],
   },
   {
     id: "scripts",

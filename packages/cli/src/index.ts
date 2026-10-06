@@ -399,13 +399,36 @@ setModuleHost({
   configPath,
   readConfig: globalCapabilityDocument,
   mutateConfig: mutateRawConfig,
-  setConfigValue: (key, value) => CAPABILITY_KEYS.includes(key as CapabilityKey)
-    ? setGlobalCapability(key as CapabilityKey, value)
-    : mutateRawConfig((out) => { out[key] = value; }),
-  configDefault: (key) => CAPABILITY_DEFAULTS[key as CapabilityKey],
+  setConfigValue: (key, value) => {
+    if (CAPABILITY_KEYS.includes(key as CapabilityKey)) return setGlobalCapability(key as CapabilityKey, value);
+    if (key !== "learnAutopilot") throw new Error(`refusing to write unknown config key ${key}`);
+    mutateRawConfig((out) => { out[key] = value; });
+  },
+  capability: (key) => {
+    const doc = globalCapabilityDocument();
+    if (!CAPABILITY_KEYS.includes(key as CapabilityKey)) return { value: doc[key], source: doc[key] === undefined ? "default" : "global", global: doc[key] };
+    const resolved = resolveCapabilities().values[key as CapabilityKey];
+    const raw = nestedCapabilityValue(doc, key as CapabilityKey);
+    const parsed = raw === undefined ? undefined : capabilityInputValue(key as CapabilityKey, raw);
+    const overridden = resolved.source === "project" || resolved.source === "env";
+    const invalid = resolved.invalid ?? (raw !== undefined && parsed === undefined ? String(raw) : undefined);
+    return {
+      value: resolved.value,
+      source: resolved.source,
+      global: overridden ? parsed ?? CAPABILITY_DEFAULTS[key as CapabilityKey] : resolved.value,
+      ...(invalid !== undefined ? { invalid } : {}),
+    };
+  },
+  // nativeHooksDocument writes the shrink hook only while think.shrink is on.
+  wiringKeys: ["think.shrink"],
   binaryRelease: BINARY_RELEASE,
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
+  // One place to swap for per-module downloads (ensureModuleBinaries).
   installBinaries: () => setupInstall(false, { continuing: true }),
+  staleBinaries: () => [
+    ...(probeProxyVersion()?.capabilities.includes("run_state") === false ? ["caveman-proxy"] : []),
+    ...(probeMcpBinary()?.probe.current === false ? ["caveman-mcp"] : []),
+  ],
   which,
   nativeAgents: () => (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).map((id) => ({
     id,
@@ -417,6 +440,13 @@ setModuleHost({
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   wireAgent: (agent) => enableNative([agent]),
   unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent); },
+  refreshAgent: (agent) => repairNativeAgent(agent as NativeAgent),
+  runtimeAutostarts: async () => {
+    const gw = gatewayURL();
+    if (wrapMode(gw) !== "local" || !wrapRuntimeConfig().proxy) return false;
+    const { host, port } = gatewayHostPort(gw);
+    return !(await portListening(host, port));
+  },
   agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
   coreActive: () => nativeCoreRuntimeState().active,
   signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
@@ -432,7 +462,9 @@ setModuleHost({
       .filter((endpoint, index, all) => all.findIndex((other) => other.port === endpoint.port) === index);
     return Promise.all(endpoints.map(async ({ host, port }) => {
       const pid = readProxyRuntimeState(port, version).pid;
-      return { host, port, listening: await portListening(host, port), ...(pid ? { pid } : {}) };
+      const listening = await portListening(host, port);
+      const foreign = listening && !pid && Boolean(version?.capabilities.includes("run_state"));
+      return { host, port, listening, foreign, ...(pid ? { pid } : {}) };
     }));
   },
   interactive,
@@ -18681,7 +18713,8 @@ async function status(argv: string[]) {
   const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
   const notes = saved > 0 ? { input: `today: ~${humanTokens(saved)} tokens kept out of context (inferred)` } : {};
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
-  process.stdout.write(renderModuleGrid(modules, notes, nextStep(modules, { degraded: degraded[0], fallback: next }), degraded));
+  const lines = view.off_states.map((state) => state.line);
+  process.stdout.write(renderModuleGrid(modules, { notes, next: nextStep(modules, { degraded: degraded[0], fallback: next }), degraded, lines }));
 }
 
 // cliVersion reads the published version from package.json (next to the built

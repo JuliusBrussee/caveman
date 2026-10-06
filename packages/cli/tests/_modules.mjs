@@ -56,7 +56,9 @@ esac`);
       CAVEMAN_TELEMETRY: "0",
       NO_COLOR: "1",
       CI: "1",
+      // Port 9 (discard): nothing a developer machine runs, unlike 8787.
       CAVE_GATEWAY_URL: "http://127.0.0.1:9",
+      CAVEMAN_LISTEN: "127.0.0.1:9",
       CAVE_API_URL: "http://127.0.0.1:9",
       CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",
       ...bins,
@@ -67,9 +69,9 @@ esac`);
   };
 }
 
-export function runCli(argv, env, timeoutMs = 30_000) {
+export function runCli(argv, env, { cwd, timeoutMs = 30_000 } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...argv], { env, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [cli, ...argv], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {

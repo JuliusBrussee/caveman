@@ -13,6 +13,7 @@ test("status shows the modules × agents grid and one next line; --json adds mod
     assert.equal((await runCli(["off", "browse", "--yes"], fx.env)).code, 0);
     const out = await runCli(["status"], fx.env);
     assert.equal(out.code, 0, out.stderr);
+    const json = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout);
     assert.equal(out.stdout, [
       "caveman status",
       "                   claude     codex",
@@ -22,11 +23,12 @@ test("status shows the modules × agents grid and one next line; --json adds mod
       "  on  routing      —          —          sign in to turn on routing · caveman login",
       "  on  scripts      wired      wired",
       "  off browse                             caveman on browse",
+      // The existing off-state lines keep their place under the grid.
+      ...json.off_states.map((state) => state.line),
       "next: caveman login",
       "",
     ].join("\n"));
 
-    const json = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout);
     assert.deepEqual(Object.keys(json).slice(-2), ["native_integrations", "modules"]);
     assert.deepEqual(json.modules.find((state) => state.id === "routing"), {
       id: "routing", on: true, active: false, reason: "sign in to turn on routing", perAgent: { claude: "wired", codex: "wired" },
@@ -110,8 +112,7 @@ async function freePort() {
 test("stop ends the runtime it started and is idempotent", async () => {
   const fx = modulesFixture();
   try {
-    // Port 9 (discard): nothing a developer machine runs, unlike 8787.
-    const idle = await runCli(["stop"], { ...fx.env, CAVEMAN_LISTEN: "127.0.0.1:9" });
+    const idle = await runCli(["stop"], fx.env);
     assert.equal(idle.code, 0, idle.stderr);
     assert.equal(idle.stdout, "not running\n");
 

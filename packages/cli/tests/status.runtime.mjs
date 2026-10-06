@@ -224,7 +224,8 @@ test("status points at the runtime install first when the proxy is missing", asy
   try {
     const out = await runCli(["status"], { env: isolated.env, cwd: isolated.home });
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /on  output +not wired/);
+    assert.match(out.stdout, /on  output .* caveman-proxy not installed · caveman setup --install/);
+    assert.match(out.stdout, /^ +claude$/m);
     assert.match(out.stdout, /next: caveman setup --install/);
   } finally {
     isolated.cleanup();
