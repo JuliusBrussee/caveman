@@ -1,7 +1,7 @@
 // First run: pick modules and agents, see the plan, confirm once, apply, then
 // sign in only when routing is on. `caveman setup`, bare `caveman` before any
-// setup, `npx caveman`, the end of install.sh and `caveman <agent>` before any
-// setup all land here. Nothing is written before Continue.
+// setup, `npx @caveman-ai/cli`, the end of install.sh and `caveman <agent>`
+// before any setup all land here. Nothing is written before Continue.
 import { readFileSync } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 

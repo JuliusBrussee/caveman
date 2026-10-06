@@ -513,7 +513,7 @@ function printDiscovery(group: CommandGroup, all = false): void {
 }
 
 function resolveInvocation(raw: string[]): ResolvedInvocation {
-  // Bare `caveman` (and `npx caveman`) in a terminal before any setup is the first run.
+  // Bare `caveman` (and `npx @caveman-ai/cli`) in a terminal before any setup is the first run.
   if (raw.length === 0 && onboardInteractive() && !setupRan() && !setupDeclined()) return { verb: "setup", argv: [], handler: setup };
   const top = raw[0] ?? "help";
   if (top === "--help") return { verb: "help", argv: [], handler: help };
