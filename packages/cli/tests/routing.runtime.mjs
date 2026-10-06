@@ -16,11 +16,13 @@ async function cloud(me) {
   return { url: `http://127.0.0.1:${server.address().port}`, close: () => server.close() };
 }
 
-async function routingRow(me) {
+// `state` is a route-state.json caveman-proxy left behind.
+async function routingRow(me, state) {
   const fx = modulesFixture();
   const stub = await cloud(me);
   try {
     assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    if (state) writeFileSync(join(fx.env.CAVEMAN_HOME, "route-state.json"), JSON.stringify(state));
     const env = { ...fx.env, CAVE_TOKEN: "test-token", CAVE_API_URL: stub.url };
     const first = await runCli(["status"], env);
     assert.equal(first.code, 0, first.stderr);
@@ -53,6 +55,36 @@ test("routing over its free allowance pauses, says so once, and points at billin
   assert.ok(!second.includes(notice), "the allowance line prints once per period");
   // Local modules are untouched by the limit.
   assert.match(first, /^  on  input +wired +wired/m);
+});
+
+const soon = () => new Date(Date.now() + 10 * 60_000).toISOString();
+
+// A CLI key minted before Cloud let it route answers 403 to the proxy, which
+// keeps every request on its model; status names it and the login that fixes it.
+test("a key Cloud refuses shows routing degraded and next: caveman login", async () => {
+  const { row, first } = await routingRow({ user: { email: "a@b.c" } }, { outcome: "degraded", reason: "cloud_403", until: soon() });
+  assert.match(row, /—.*routing degraded · Cloud refused this login's key · caveman login$/);
+  assert.match(first, /^next: caveman login$/m);
+});
+
+test("a stale route-state record is ignored", async () => {
+  const { row } = await routingRow({ user: { email: "a@b.c" } }, { outcome: "degraded", reason: "cloud_403", until: new Date(Date.now() - 1000).toISOString() });
+  assert.match(row, /^  on  routing +wired +wired$/);
+});
+
+test("a billing limit pauses routing and shows Cloud's notice once", async () => {
+  const notice = "Routing hit your $20 limit for October · raise it: caveman billing";
+  const { row, first, second } = await routingRow(routing({ used: 9000, state: "limited", reason: "billing_limit", notice, period_end: "2026-11-01T00:00:00Z" }));
+  assert.match(row, /routing paused · billing limit · caveman billing$/);
+  assert.ok(first.includes(notice), first);
+  assert.ok(!second.includes(notice));
+});
+
+test("the proxy's record of a billing limit counts when /me says nothing yet", async () => {
+  const notice = "Routing hit your $20 limit · raise it: caveman billing";
+  const { row, first } = await routingRow({ user: { email: "a@b.c" } }, { outcome: "paused", reason: "billing_limit", notice, until: soon() });
+  assert.match(row, /routing paused · billing limit · caveman billing$/);
+  assert.ok(first.includes(notice), first);
 });
 
 test("a Cloud that does not answer never fails status", async () => {

@@ -1,9 +1,12 @@
 // What the CLI reads from Caveman Cloud's plan answer (GET /api/v1/auth/me,
-// tiers spec §4): the routing row's state and numbers, the once-per-period
-// "back to local" line, and `caveman billing`. Limits come from /me only and
-// never touch a local module. A /me that cannot be read, or lacks a field, is
-// "no answer": nothing fails because of it.
+// tiers spec §4) and from caveman-proxy's route-state.json: the routing row's
+// state and numbers, the once-per-period pause line, and `caveman billing`.
+// Limits never touch a local module. A /me that cannot be read, or lacks a
+// field, is "no answer": nothing fails because of it.
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { moduleHost } from "./apply.js";
+import { cavemanHome } from "./config-home.js";
 
 export type CloudProduct = {
   id?: string;
@@ -13,6 +16,7 @@ export type CloudProduct = {
   period_end?: string;
   state?: string;
   reason?: string;
+  notice?: string;
 };
 export type CloudMe = { plan?: string; deployment?: string; data?: { level?: string }; products?: CloudProduct[] };
 
@@ -37,34 +41,65 @@ export function decisionsNote(product: CloudProduct | undefined): string | undef
   return used ? `${used} decisions this month` : undefined;
 }
 
-// The period's end, or the next 1st (UTC) when /me does not say.
+// caveman-proxy's record of a routing pause the person can act on: a refused
+// key (outcome degraded, reason cloud_401|cloud_403), a used-up allowance or a
+// billing limit (outcome paused), with Cloud's notice. Gone once `until` passed.
+export type RouteState = { outcome?: string; reason?: string; notice?: string; until?: string };
+
+export function routeState(now = new Date()): RouteState | undefined {
+  try {
+    const state = JSON.parse(readFileSync(join(cavemanHome(), "route-state.json"), "utf8")) as RouteState;
+    return Date.parse(state?.until ?? "") > now.getTime() ? state : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+// The routing pause from /me, else from the proxy's record.
+export function routingPause(product: CloudProduct | undefined): CloudProduct | undefined {
+  if (product?.state === "limited") return product;
+  const proxy = routeState();
+  if (proxy?.outcome !== "paused") return undefined;
+  return { state: "limited", ...(proxy.reason ? { reason: proxy.reason } : {}), ...(proxy.notice ? { notice: proxy.notice } : {}),
+    ...(proxy.reason === "allowance" && proxy.until ? { period_end: proxy.until } : {}) };
+}
+
+// The period's end, or the next 1st (UTC) when nobody says.
 function periodEnd(product: CloudProduct, now: Date): Date {
   const end = product.period_end ? new Date(product.period_end) : new Date(NaN);
   return Number.isNaN(end.getTime()) ? new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() + 1, 1)) : end;
 }
 
-// "Free routing used for October. Back to local until Nov 1 · add a card:
-// caveman billing", once per period: the period it was shown for is kept in
-// the config.
-export function allowanceNotice(product: CloudProduct | undefined, now = new Date()): string | undefined {
-  if (product?.state !== "limited" || product.reason !== "allowance") return undefined;
-  const end = periodEnd(product, now);
-  const key = end.toISOString();
-  const h = moduleHost();
-  if (h.readConfig().routingAllowanceNotice === key) return undefined;
-  h.mutateConfig((out) => { out.routingAllowanceNotice = key; });
-  const month = new Date(end.getTime() - 1).toLocaleString("en-US", { month: "long", timeZone: "UTC" });
-  const until = end.toLocaleString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
-  return `Free routing used for ${month}. Back to local until ${until} · add a card: caveman billing`;
+// Cloud's text reaches a terminal: no control or bidi characters, bounded.
+function printable(text: string): string {
+  return text.replace(/[\u0000-\u001f\u007f-\u009f\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, "").slice(0, 240);
 }
 
-// The routing row's note and the allowance line, for `caveman status`. Asks
-// Cloud only while signed in with routing on.
+// The pause line, once per period (the period it was shown for is kept in the
+// config): Cloud's notice when it sends one, else "Free routing used for
+// October. Back to local until Nov 1 · add a card: caveman billing".
+export function pauseNotice(pause: CloudProduct | undefined, now = new Date()): string | undefined {
+  if (pause?.reason !== "allowance" && pause?.reason !== "billing_limit") return undefined;
+  const end = periodEnd(pause, now);
+  const key = `${pause.reason}@${end.toISOString()}`;
+  const h = moduleHost();
+  if (h.readConfig().routingPauseNotice === key) return undefined;
+  h.mutateConfig((out) => { out.routingPauseNotice = key; });
+  if (pause.notice && printable(pause.notice)) return printable(pause.notice);
+  const month = new Date(end.getTime() - 1).toLocaleString("en-US", { month: "long", timeZone: "UTC" });
+  const until = end.toLocaleString("en-US", { month: "short", day: "numeric", timeZone: "UTC" });
+  return pause.reason === "allowance"
+    ? `Free routing used for ${month}. Back to local until ${until} · add a card: caveman billing`
+    : `Routing reached your billing limit for ${month} · raise it: caveman billing`;
+}
+
+// The routing row's note and the pause line, for `caveman status`. Asks Cloud
+// only while signed in with routing on.
 export async function routingStatus(on: boolean): Promise<{ note?: string; notice?: string }> {
   if (!on || !moduleHost().signedIn()) return {};
   const product = cloudProduct(await cloudMe(), "routing");
   const note = decisionsNote(product);
-  const notice = allowanceNotice(product);
+  const notice = pauseNotice(routingPause(product));
   return { ...(note ? { note } : {}), ...(notice ? { notice } : {}) };
 }
 

@@ -8,6 +8,7 @@ export function moduleFix(state: ModuleState): string | undefined {
   const reason = state.reason ?? "";
   if (reason.startsWith("sign in")) return "caveman login";
   if (reason.startsWith(`${state.id} paused · `)) return "caveman billing";
+  if (reason.startsWith(`${state.id} degraded · `)) return "caveman login";
   if (reason === "paused while input is off") return "caveman on input";
   if (reason.endsWith(" in config") || reason.includes(" has an invalid value: ")) return `caveman on ${state.id}`;
   if (reason.endsWith(" not installed") && !findModule(state.id)?.external) return "caveman setup --install";

@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { portableInvocation } from "../portable-command.js";
-import { cloudMe, cloudProduct, type CloudMe } from "./cloud.js";
+import { cloudMe, cloudProduct, routeState, routingPause, type CloudMe } from "./cloud.js";
 import { findModule, MODULES, type ModuleDef, type ModuleId } from "./registry.js";
 import { moduleFix } from "./status.js";
 
@@ -479,7 +479,11 @@ function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: bool
     if (!signedIn) return `sign in to turn on ${m.id}`;
     const product = cloudProduct(me ?? null, m.id);
     if (!me || product?.state === "off") return `waiting for Cloud ${m.id}`;
-    if (product?.state === "limited") return `${m.id} paused · ${(product.reason ?? "limit").replace(/_/g, " ")}`;
+    const pause = m.id === "routing" ? routingPause(product) : product?.state === "limited" ? product : undefined;
+    if (pause) return `${m.id} paused · ${(pause.reason ?? "limit").replace(/_/g, " ")}`;
+    // caveman-proxy was refused the key (one minted before it could route,
+    // or revoked); a new login mints one.
+    if (m.id === "routing" && routeState()?.outcome === "degraded") return `${m.id} degraded · Cloud refused this login's key`;
   }
   const blocked = m.external && external ? externalProblem(m, external.bin, external.status) : undefined;
   if (blocked) return blocked;
