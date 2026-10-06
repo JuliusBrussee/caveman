@@ -319,7 +319,13 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   const { wire, unwire } = wiringChanges(selection, agents, only);
 
   const { missing } = binaryNeeds(selection, only);
-  if (missing.length) lines.push({ action: "DOWNLOAD", target: missing.join(", "), detail: `signed, ${h.binaryRelease}` });
+  // Hub binaries ship in every release; an external one (Blocks) only in a
+  // release whose signed modules.json carries it, so the plan says so.
+  const externals = new Set(MODULES.flatMap((m) => (m.external ? [m.external.binary] : [])));
+  const hubMissing = missing.filter((name) => !externals.has(name));
+  const externalMissing = missing.filter((name) => externals.has(name));
+  if (hubMissing.length) lines.push({ action: "DOWNLOAD", target: hubMissing.join(", "), detail: `signed, ${h.binaryRelease}` });
+  if (externalMissing.length) lines.push({ action: "DOWNLOAD", target: externalMissing.join(", "), detail: `signed, if ${h.binaryRelease} carries it` });
 
   if (state.length || effects.length) {
     lines.push({
@@ -362,6 +368,11 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
     lines.push({ action: "RUN", target: `${name} ${run.args.join(" ")}`, detail: skipped ? `skipped: ${externalProblem(run.def, null, undefined)}` : run.install ? names.join(", ") : "" });
   }
 
+  for (const def of MODULES) {
+    if (def.external && selection[def.id] && inScope(def.id, only) && agents.length && harnessFlags(agents).length === 0) {
+      notes.push(`${def.id} stays idle: none of the selected agents takes its hook (${Object.keys(EXTERNAL_HARNESSES).map((agent) => h.agentName(agent)).join(", ")})`);
+    }
+  }
   // Core is withheld in record mode, which is what input switched off means.
   if (selection.output && !selection.input && currentSelection().input && inScope("input", only)) {
     notes.push("output also pauses: it runs through input");
