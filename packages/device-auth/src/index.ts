@@ -29,8 +29,36 @@ export function nextDevicePollIntervalMs(currentMs: number, errorCode?: string):
   return errorCode === "slow_down" ? current + 5000 : current;
 }
 
-function defaultSleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+// DeviceAuthError carries the HTTP status and the server's error code so a
+// caller can tell "sign-in is closed here" (403 cave_device_login_disabled, or
+// 404 where the endpoint does not exist) from a broken network.
+export class DeviceAuthError extends Error {
+  readonly status: number;
+  readonly code: string | undefined;
+  constructor(message: string, status: number, code: string | undefined) {
+    super(message);
+    this.name = "DeviceAuthError";
+    this.status = status;
+    this.code = code;
+  }
+}
+
+// An abort ends the wait early; the next request then throws the abort reason.
+function defaultSleep(ms: number, signal?: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      resolve();
+    }, { once: true });
+  });
+}
+
+function errorCode(body: unknown): string | undefined {
+  const error = (body as { error?: unknown } | null)?.error;
+  if (typeof error === "string") return error;
+  const code = (error as { code?: unknown } | null | undefined)?.code;
+  return typeof code === "string" ? code : undefined;
 }
 
 function requestSignal(signal: AbortSignal | undefined, timeoutMs: number): AbortSignal {
@@ -61,6 +89,7 @@ async function acknowledge(
     try {
       const response = await options.fetcher(`${options.baseURL}/api/v1/auth/device/ack`, {
         method: "POST",
+        redirect: "manual",
         headers: {
           authorization: `Bearer ${options.credentials.access_token}`,
           "content-type": "application/json",
@@ -91,15 +120,21 @@ export async function runCavemanDeviceFlow(options: {
   onCode?: (code: DeviceCode) => void | Promise<void>;
 }): Promise<DeviceGrant> {
   const fetcher = options.fetch ?? globalThis.fetch;
-  const wait = options.sleep ?? defaultSleep;
+  const wait = options.sleep ?? ((ms: number) => defaultSleep(ms, options.signal));
   const baseURL = options.baseURL.replace(/\/$/, "");
+  // Device codes never follow redirects: a redirected endpoint is not the
+  // control plane the user asked to sign in to.
   const codeResponse = await fetcher(`${baseURL}/api/v1/auth/device/code`, {
     method: "POST",
+    redirect: "error",
     headers: { "content-type": "application/json", "x-cave-client": options.client },
     body: "{}",
     signal: requestSignal(options.signal, 5000),
   });
-  if (!codeResponse.ok) throw new Error(`device authorization failed: HTTP ${codeResponse.status}`);
+  if (!codeResponse.ok) {
+    const body = await codeResponse.json().catch(() => null);
+    throw new DeviceAuthError(`device authorization failed: HTTP ${codeResponse.status}`, codeResponse.status, errorCode(body));
+  }
   const rawCode = await codeResponse.json().catch(() => null) as Partial<DeviceCode> | null;
   if (rawCode === null || typeof rawCode.device_code !== "string" || rawCode.device_code === "" ||
     typeof rawCode.user_code !== "string" || typeof rawCode.verification_uri !== "string" ||
@@ -117,6 +152,7 @@ export async function runCavemanDeviceFlow(options: {
     try {
       const response = await fetcher(`${baseURL}/api/v1/auth/device/token`, {
         method: "POST",
+        redirect: "manual",
         headers: { "content-type": "application/json", "x-cave-client": options.client },
         body: JSON.stringify({ device_code: code.device_code }),
         signal: requestSignal(options.signal, 5000),
@@ -127,7 +163,7 @@ export async function runCavemanDeviceFlow(options: {
         const seconds = Number(retryAfter);
         if (Number.isFinite(seconds) && seconds >= 0) retryAfterMs = seconds * 1000;
       }
-      payload = await response.json() as Record<string, unknown>;
+      payload = status >= 300 && status < 400 ? {} : await response.json() as Record<string, unknown>;
     } catch (error) {
       if (options.signal?.aborted) throw options.signal.reason;
       if (Date.now() >= deadline) {
@@ -136,12 +172,15 @@ export async function runCavemanDeviceFlow(options: {
       await wait(Math.max(intervalMs, retryAfterMs, 200));
       continue;
     }
+    if (status >= 300 && status < 400) throw new Error("device login refused a redirected token endpoint");
     if (status === 429) {
       await wait(Math.max(intervalMs, retryAfterMs, 200));
       continue;
     }
     const accessToken = typeof payload.access_token === "string" ? payload.access_token : "";
     if (accessToken !== "") {
+      // A token on an error response is not a grant.
+      if (status < 200 || status >= 300) throw new Error(`device login failed: token response HTTP ${status}`);
       const credentials = { ...payload, access_token: accessToken } as DeviceCredentials;
       let acknowledged = false;
       return {
