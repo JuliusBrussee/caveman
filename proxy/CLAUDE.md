@@ -119,11 +119,28 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `$CAVEMAN_HOME/cloud.json`, for API-key Anthropic Messages / OpenAI chat or responses requests
   whose model is in the same-provider pool (subscription traffic never routes, ADR 0083 §7). The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
-  caller's models, counts and the raw text of the latest human turn, the one before it and the
-  end of the agent's last reply (contracts `route-ask-v1` `ask`, sent raw; Cloud picks the model
-  and no routing logic lives here), and its answer is cached per ask (session, provider,
-  model, turn number, latest human text; an input group carrying a tool result is no human turn,
-  text riding along included) so a tool loop never switches model mid-turn. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
+  caller's models, counts, what the request declares (the raw values of nine allowlisted agent
+  headers, its tool names, effort and thinking type), what the session's previous request ran
+  (the served model, the effort in force, the provider's input and cache token counts, its age)
+  and Cloud's opaque per-session state, plus, on a turn's first ask, the raw text of the latest
+  human turn, the one before it and the end of the agent's last reply (contracts `route-ask-v1`;
+  Cloud picks the model and the effort and no routing logic lives here). Its answer is cached
+  per ask (session, provider, model, turn number, latest human text; an input group carrying a
+  tool result is no human turn, text riding along included) so a tool loop never switches model
+  or effort mid-turn; a request the agent labels compaction or auxiliary is asked on its own,
+  without the text. The session is `x-cave-session`, else the agent's session header; a Claude
+  Code child (`x-claude-code-agent-id`) is a session of its own and sends its parent's state.
+  State, previous-request facts and marks live in bounded in-memory LRUs (1024), never on disk.
+  The answer sets Responses `reasoning.effort`, chat `reasoning_effort` or Anthropic
+  `output_config.effort`; Anthropic `effort_mode: message` instead inserts the byte-identical mark
+  `{"role":"system","content":[],"output_config":{"effort":…}}` (beta
+  `mid-conversation-output-config-2026-07-01` appended to `anthropic-beta`) before the last user
+  turn, or at the end after a tool result. Marks are remembered per session with a salted hash
+  of the message before each and replayed at the same places on every later request (the
+  agent resends history without them); an anchor that no longer matches drops that mark and
+  every later one. A 400 naming the thinking binding retries once without thinking blocks and
+  marks; a refused mark retries once with top-level effort only and, once served, latches
+  per-message effort off for the session. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
   answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
   (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the
