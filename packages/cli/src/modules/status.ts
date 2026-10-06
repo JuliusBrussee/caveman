@@ -7,6 +7,7 @@ import { findModule, type ModuleId } from "./registry.js";
 export function moduleFix(state: ModuleState): string | undefined {
   const reason = state.reason ?? "";
   if (reason.startsWith("sign in")) return "caveman login";
+  if (reason.startsWith(`${state.id} paused · `)) return "caveman billing";
   if (reason === "paused while input is off") return "caveman on input";
   if (reason.endsWith(" in config") || reason.includes(" has an invalid value: ")) return `caveman on ${state.id}`;
   if (reason.endsWith(" not installed") && !findModule(state.id)?.external) return "caveman setup --install";
@@ -17,7 +18,7 @@ export function moduleFix(state: ModuleState): string | undefined {
 // override, input off) rather than something broken.
 export function moduleChoice(state: ModuleState): boolean {
   const reason = state.reason ?? "";
-  return ["sign in", "waiting for Cloud", "overridden by", "paused while", "record mode"].some((start) => reason.startsWith(start))
+  return ["sign in", "waiting for Cloud", "overridden by", "paused while", "record mode", `${state.id} paused · `].some((start) => reason.startsWith(start))
     || reason.endsWith(" in config");
 }
 

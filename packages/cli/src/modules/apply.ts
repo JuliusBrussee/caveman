@@ -12,6 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { portableInvocation } from "../portable-command.js";
+import { cloudMe, cloudProduct, type CloudMe } from "./cloud.js";
 import { findModule, MODULES, type ModuleDef, type ModuleId } from "./registry.js";
 import { moduleFix } from "./status.js";
 
@@ -70,6 +71,9 @@ export type ModuleHost = {
   agentTraffic(): { target: "local" | "managed"; line: string; fix?: string };
   // A wired agent's written base URL is not the current traffic target.
   agentRouteStale(agent: string): boolean;
+  // Cloud's GET /api/v1/auth/me answer, or null when it cannot be read.
+  cloudMe(): Promise<CloudMe | null>;
+  openBrowser(url: string): void;
 };
 
 let host: ModuleHost | undefined;
@@ -467,9 +471,16 @@ const ENV_NAMES: Record<string, string> = {
   "think.shrink": "CAVEMAN_SHRINK",
 };
 
-function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: boolean, external?: { bin: string | null; status: Record<string, boolean> | undefined }): string | undefined {
+// A sign-in module is active once Cloud answers for the signed-in account;
+// a /me without the product's fields still counts as an answer.
+function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: boolean, external?: { bin: string | null; status: Record<string, boolean> | undefined }, me?: CloudMe | null): string | undefined {
   const h = moduleHost();
-  if (m.needsSignIn) return signedIn ? `waiting for Cloud ${m.id}` : `sign in to turn on ${m.id}`;
+  if (m.needsSignIn) {
+    if (!signedIn) return `sign in to turn on ${m.id}`;
+    const product = cloudProduct(me ?? null, m.id);
+    if (!me || product?.state === "off") return `waiting for Cloud ${m.id}`;
+    if (product?.state === "limited") return `${m.id} paused · ${(product.reason ?? "limit").replace(/_/g, " ")}`;
+  }
   const blocked = m.external && external ? externalProblem(m, external.bin, external.status) : undefined;
   if (blocked) return blocked;
   const missing = m.binaries.filter((name) => !h.resolveBinary(name));
@@ -490,11 +501,12 @@ export async function moduleStates(): Promise<ModuleState[]> {
   const selection = currentSelection();
   const agents = h.nativeAgents().filter((agent) => agent.detected || agent.wired);
   const signedIn = h.signedIn();
+  const me = signedIn && MODULES.some((m) => m.needsSignIn && selection[m.id]) ? await cloudMe() : null;
   return MODULES.map((m) => {
     const on = selection[m.id];
     const bin = on && m.external ? externalBin(m) : null;
     const status = m.external && bin ? externalStatus(m, bin) : undefined;
-    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }) : undefined;
+    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }, me) : undefined;
     const perAgent = Object.fromEntries(agents.map((agent) => [
       agent.id,
       m.wiresAgents ? agent.wired ? "wired" : "not wired" : externalAgentState(status, agent.id),

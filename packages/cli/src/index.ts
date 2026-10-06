@@ -74,6 +74,7 @@ import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, u
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
+import { billingCommand, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
@@ -346,9 +347,10 @@ const CLOUD_HANDLERS: Record<string, CommandHandler> = {
     return commandUsage("providers list|verify <id>");
   },
   billing: (argv) => {
+    if (argv.length === 0) return billingCommand();
     if (argv[0] === "status") return billingStatus(argv);
     if (argv[0] === "charges") return billingCharges(argv);
-    return commandUsage("billing status|charges");
+    return commandUsage("billing [status|charges]");
   },
   score: () => get("/api/v1/reports/cave-score").then(print),
   costs: () => get("/api/v1/reports/costs").then(print),
@@ -517,6 +519,13 @@ setModuleHost({
     const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) });
     if (!response.ok) throw new Error(`${cfg.baseURL} answered ${response.status}`);
   },
+  cloudMe: async () => {
+    if (process.env.CAVEMAN_OFFLINE === "1") return null;
+    const cfg = await config();
+    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(3000) });
+    return response.ok ? await response.json() as CloudMe : null;
+  },
+  openBrowser: openLoginBrowser,
   localRuntimes: async () => {
     const version = probeProxyVersion();
     const gw = gatewayURL();
@@ -18796,9 +18805,13 @@ async function status(argv: string[]) {
     return;
   }
   const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
-  const notes = saved > 0 ? { input: `today: ~${humanTokens(saved)} tokens kept out of context (inferred)` } : {};
+  const routing = await routingStatus(modules.some((state) => state.id === "routing" && state.on));
+  const notes = {
+    ...(saved > 0 ? { input: `today: ~${humanTokens(saved)} tokens kept out of context (inferred)` } : {}),
+    ...(routing.note ? { routing: routing.note } : {}),
+  };
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
-  const lines = view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line);
+  const lines = [...(routing.notice ? [routing.notice] : []), ...view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line)];
   const traffic = agentTraffic();
   lines.push(traffic.fix ? `${traffic.line} · ${traffic.fix}` : traffic.line);
   process.stdout.write(renderModuleGrid(modules, { notes, next: nextStep(modules, { degraded: degraded[0], fallback: next }), degraded, lines }));

@@ -75,6 +75,9 @@ export const MODULES: readonly ModuleDef[] = [
     title: "routing",
     summary: "the right model each turn",
     defaultOn: true,
+    // Decisions come from Cloud (POST /v1/route), so it acts only once signed
+    // in; caveman-proxy's route stage reads `modules.routing` itself, so no
+    // capability key carries it.
     needsSignIn: true,
     wiresAgents: true,
     capabilities: [],
