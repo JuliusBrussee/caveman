@@ -1,7 +1,8 @@
 // This repo is public, and routing decisions are made by Caveman Cloud. The
-// local runtime only asks: it sends a counts-only features line plus the
-// caller's models, then applies the answer or fails open. No tracked file may
-// carry names from the private router's policy, scoring or classification.
+// local runtime only asks: it sends the caller's models plus counts
+// (contracts route-ask-v1), then applies the answer or fails open. No tracked
+// file may carry names from the private router or its policy, scoring or
+// classification.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
@@ -12,9 +13,13 @@ const root = path.resolve(__dirname, '..');
 const self = path.relative(root, __filename);
 const terms = [
   'localpolicy', 'ClassifyTask', 'ScoutSignals', 'scoutAsk', 'taskclass', 'jevprior',
-  'decideAsk', 'continueAsk', 'sliderStop', 'effort_binding', 'askwords', 'evidence matrix',
+  'decideAsk', 'continueAsk', 'sliderStop', 'effort_binding', 'askwords', 'evidence matrix', 'routerd',
 ];
-const pattern = new RegExp(terms.map((term) => term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('|'), 'i');
+// routerd alone needs letter boundaries: openRouterDeveloper is not it.
+const pattern = new RegExp(terms.map((term) => {
+  const escaped = term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return term === 'routerd' ? `(?<![a-z])${escaped}(?![a-z])` : escaped;
+}).join('|'), 'i');
 // Unrelated uses, by path and term.
 const allowed = {
   // Eval snapshots: an "evidence matrix" of benchmark arms, nothing to do with routing.

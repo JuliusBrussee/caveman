@@ -6,8 +6,9 @@
 //
 // It never touches compression or any other local stage, and every failure
 // fails open: a Cloud error, timeout, 401 or allowance answer keeps the model
-// the agent asked for. No prompt text leaves the machine: the ask's text is one
-// line of counted features, and events carry counts and labels only.
+// the agent asked for. No prompt text leaves the machine: the ask carries the
+// caller's models and counts (contracts route-ask-v1), and events carry counts
+// and labels only.
 package cloudlink
 
 import (
@@ -441,25 +442,40 @@ var (
 	imageRE     = regexp.MustCompile(`"type"\s*:\s*"(?:image|image_url|input_image)"`)
 )
 
-// features is the only text an ask carries: one line of counts computed on this
-// machine, never prompt text. Tool errors are counted over the whole request.
-func features(ask gateway.RouteAsk) string {
-	harness := ask.Agent
-	if !slugRE.MatchString(harness) {
-		harness = "unlabeled-agent"
-	}
-	return fmt.Sprintf("routerd features: harness=%s context_tokens=%d tools_declared=%d recent_tool_errors=%d images=%t",
-		harness, ask.InputBytes/4, ask.ToolsCount, len(toolErrorRE.FindAllIndex(ask.Body, -1)), imageRE.Match(ask.Body))
+// routeAsk is POST /v1/route's body (contracts route-ask-v1): the caller's
+// models and counts computed on this machine. It has no text field: no prompt
+// text leaves the machine.
+type routeAsk struct {
+	Models  []string `json:"models"`
+	Signals signals  `json:"signals"`
 }
 
-// routeBody is POST /v1/route's body: the pool and the features line.
-type routeBody struct {
-	Models []string `json:"models"`
-	Text   string   `json:"text"`
+type signals struct {
+	Agent         string `json:"agent"`
+	ContextTokens int    `json:"context_tokens"`
+	ToolsDeclared int    `json:"tools_declared"`
+	ToolErrors    int    `json:"tool_errors"`
+	Images        bool   `json:"images"`
+}
+
+// signalsFor counts what the ask carries. Tool errors are counted over the
+// whole request; context tokens are estimated from its size.
+func signalsFor(ask gateway.RouteAsk) signals {
+	agent := ask.Agent
+	if !slugRE.MatchString(agent) {
+		agent = "unlabeled-agent"
+	}
+	return signals{
+		Agent:         agent,
+		ContextTokens: min(ask.InputBytes/4, 1_000_000_000),
+		ToolsDeclared: min(ask.ToolsCount, 1_000_000_000),
+		ToolErrors:    len(toolErrorRE.FindAllIndex(ask.Body, -1)),
+		Images:        imageRE.Match(ask.Body),
+	}
 }
 
 func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []string, deadline time.Time) gateway.RouteAnswer {
-	raw, _ := json.Marshal(routeBody{Models: models, Text: features(ask)})
+	raw, _ := json.Marshal(routeAsk{Models: models, Signals: signalsFor(ask)})
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.gateway+"/v1/route", bytes.NewReader(raw))

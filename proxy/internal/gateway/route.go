@@ -16,8 +16,8 @@ import (
 // for, and the request is never held past the link's budget.
 
 // RouteAsk is what the route stage knows about one request. Body is read-only
-// and never leaves the machine: the link derives a features line and a local
-// cache key from it.
+// and never leaves the machine: the link derives counts and a local cache key
+// from it.
 type RouteAsk struct {
 	Provider   string
 	Endpoint   string

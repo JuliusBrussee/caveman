@@ -106,7 +106,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 	if upstreamModel != "claude-sonnet-5-5" {
 		t.Errorf("provider got model %q, want the routed claude-sonnet-5-5", upstreamModel)
 	}
-	if strings.Contains(asked, secretPrompt) || !strings.Contains(asked, `"text":"routerd features: harness=claude `) {
+	if strings.Contains(asked, secretPrompt) || strings.Contains(asked, `"text"`) || !strings.Contains(asked, `"signals":{"agent":"claude",`) {
 		t.Errorf("ask = %s", asked)
 	}
 	if len(events) != 1 {

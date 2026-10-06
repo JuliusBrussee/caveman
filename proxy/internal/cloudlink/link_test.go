@@ -53,7 +53,7 @@ func messagesAsk(model string) gateway.RouteAsk {
 	return gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: model, Agent: "claude", SessionID: "s1", ToolsCount: 1, InputBytes: len(body), Body: []byte(body)}
 }
 
-func TestAskSendsTheFeaturesLineAndNoPromptText(t *testing.T) {
+func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
 	var got []byte
 	var auth string
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -75,9 +75,12 @@ func TestAskSendsTheFeaturesLineAndNoPromptText(t *testing.T) {
 	if err := json.Unmarshal(got, &body); err != nil {
 		t.Fatal(err)
 	}
+	if _, hasText := body["text"]; hasText {
+		t.Fatalf("the ask has a text field: %s", got)
+	}
 	want := map[string]any{
-		"models": []any{"claude-opus-5-5", "claude-sonnet-5-5"},
-		"text":   fmt.Sprintf("routerd features: harness=claude context_tokens=%d tools_declared=1 recent_tool_errors=1 images=true", ask.InputBytes/4),
+		"models":  []any{"claude-opus-5-5", "claude-sonnet-5-5"},
+		"signals": map[string]any{"agent": "claude", "context_tokens": float64(ask.InputBytes / 4), "tools_declared": float64(1), "tool_errors": float64(1), "images": true},
 	}
 	if fmt.Sprint(body) != fmt.Sprint(want) {
 		t.Fatalf("ask body = %v\nwant %v", body, want)
