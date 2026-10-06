@@ -126,8 +126,14 @@ func (l *Link) settings() settings {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	if stamp != l.stamp || l.stamp == "" {
+		previous := l.cfg
 		l.cfg = l.load(current, legacy, credentials)
 		l.stamp = stamp
+		if l.cfg.access != previous.access || l.cfg.key != previous.key {
+			// A new login starts fresh: no pause and no decision from the old one.
+			l.pauseUntil, l.decisions = time.Time{}, nil
+			l.forgetLocked()
+		}
 	}
 	return l.cfg
 }
@@ -382,28 +388,71 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []s
 		Model      string `json:"model"`
 		Reason     string `json:"reason"`
 		DecisionID string `json:"decision_id"`
+		Notice     string `json:"notice"`
 		Error      struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
 	_ = json.Unmarshal(body, &answer)
-	if answer.Reason == "allowance" || strings.Contains(answer.Error.Code, "allowance") {
-		// Free routing is used up for the period: back to local until the 1st.
-		now := l.now().UTC()
-		first := time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC)
-		return l.pause(first.Sub(now), gateway.RouteAnswer{Outcome: "paused", Reason: "allowance"})
+	limit := answer.Reason
+	for _, known := range []string{"allowance", "billing_limit"} {
+		if strings.Contains(answer.Error.Code, known) {
+			limit = known
+		}
+	}
+	if limit == "allowance" || limit == "billing_limit" {
+		// Free routing used up: back to local until the 1st. A billing limit
+		// can be raised at any time, so it is asked again sooner.
+		wait := refusedPause
+		if limit == "allowance" {
+			now := l.now().UTC()
+			wait = time.Date(now.Year(), now.Month()+1, 1, 0, 0, 0, 0, time.UTC).Sub(now)
+		}
+		return l.remember(l.pause(wait, gateway.RouteAnswer{Outcome: "paused", Reason: limit}), answer.Notice)
 	}
 	switch {
 	case response.StatusCode == http.StatusUnauthorized || response.StatusCode == http.StatusForbidden:
-		return l.pause(refusedPause, gateway.RouteAnswer{Outcome: "degraded", Reason: fmt.Sprintf("cloud_%d", response.StatusCode)})
+		// A key minted before it could route (no router:write) or a revoked
+		// login: `caveman login` mints a new one, which also lifts this pause.
+		return l.remember(l.pause(refusedPause, gateway.RouteAnswer{Outcome: "degraded", Reason: fmt.Sprintf("cloud_%d", response.StatusCode)}), "")
 	case response.StatusCode != http.StatusOK:
 		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: fmt.Sprintf("cloud_%d", response.StatusCode)})
 	case !slices.Contains(models, answer.Model):
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_outside_pool"}
-	case answer.Model == ask.Model:
+	}
+	l.forget()
+	if answer.Model == ask.Model {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: bounded(answer.Reason), DecisionID: answer.DecisionID}
 	}
 	return gateway.RouteAnswer{Model: answer.Model, Outcome: "routed", Reason: bounded(answer.Reason), DecisionID: answer.DecisionID}
+}
+
+// remember writes a pause the person can act on (a refused key, a used-up
+// allowance, a billing limit) to $CAVEMAN_HOME/route-state.json, where
+// `caveman status` reads it; Cloud's notice rides along.
+func (l *Link) remember(what gateway.RouteAnswer, notice string) gateway.RouteAnswer {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(notice) > 240 {
+		notice = notice[:240]
+	}
+	raw, _ := json.Marshal(map[string]string{"outcome": what.Outcome, "reason": what.Reason, "notice": notice, "until": l.pauseUntil.UTC().Format(time.RFC3339)})
+	path := filepath.Join(l.home, "route-state.json")
+	if os.WriteFile(path+".tmp", raw, 0o600) == nil {
+		_ = os.Rename(path+".tmp", path)
+	}
+	return what
+}
+
+func (l *Link) forget() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.forgetLocked()
+}
+
+// forgetLocked removes the pause record, also one an earlier proxy left.
+func (l *Link) forgetLocked() {
+	_ = os.Remove(filepath.Join(l.home, "route-state.json"))
 }
 
 // pause stops asking for d; asks meanwhile answer with what.

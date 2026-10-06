@@ -336,3 +336,66 @@ func TestEventsMatchTheRuntimeV1Schema(t *testing.T) {
 		}
 	}
 }
+
+// A key minted before it could route answers 403: the request keeps its model,
+// status learns why from route-state.json, and a new login lifts the pause.
+func TestRefusedKeyFailsOpenUntilANewLogin(t *testing.T) {
+	var hits atomic.Int32
+	refuse := atomic.Bool{}
+	refuse.Store(true)
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		if refuse.Load() {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"error":{"code":"cave_scope_missing"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	home := cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(-time.Hour))+`","gateway_api_key":"cave_old_key"}`)
+	link := newLink(home)
+	if answer := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Model != "" || answer.Outcome != "degraded" || answer.Reason != "cloud_403" {
+		t.Fatalf("answer = %+v, want the asked model kept and degraded", answer)
+	}
+	var state map[string]string
+	raw, err := os.ReadFile(filepath.Join(home, "route-state.json"))
+	if err != nil || json.Unmarshal(raw, &state) != nil || state["outcome"] != "degraded" || state["reason"] != "cloud_403" || state["until"] == "" {
+		t.Fatalf("route-state.json = %s (%v)", raw, err)
+	}
+	next := messagesAsk("claude-opus-5-5")
+	next.SessionID = "s2"
+	link.Ask(t.Context(), next)()
+	if hits.Load() != 1 {
+		t.Fatalf("cloud asked %d times during the pause, want once", hits.Load())
+	}
+	// `caveman login` writes a new credential: the pause lifts and the record goes.
+	refuse.Store(false)
+	time.Sleep(10 * time.Millisecond) // a distinct mtime for the rewritten file
+	if err := os.WriteFile(filepath.Join(home, "credentials"), []byte(`{"access_token":"`+token(time.Now().Add(time.Hour))+`","gateway_api_key":"cave_new_key"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	next.SessionID = "s3"
+	if answer := link.Ask(t.Context(), next)(); answer.Model != "claude-sonnet-5-5" {
+		t.Fatalf("after a new login: answer = %+v", answer)
+	}
+	if _, err := os.Stat(filepath.Join(home, "route-state.json")); !os.IsNotExist(err) {
+		t.Errorf("route-state.json kept after routing works again: %v", err)
+	}
+}
+
+// A billing limit pauses like the allowance and keeps Cloud's notice for status.
+func TestBillingLimitPausesWithCloudsNotice(t *testing.T) {
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"model":"claude-opus-5-5","reason":"billing_limit","notice":"Routing hit your $20 limit · raise it: caveman billing"}`)
+	}))
+	defer cloud.Close()
+	home := cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`)
+	if answer := newLink(home).Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Model != "" || answer.Outcome != "paused" || answer.Reason != "billing_limit" {
+		t.Fatalf("answer = %+v", answer)
+	}
+	raw, _ := os.ReadFile(filepath.Join(home, "route-state.json"))
+	if !strings.Contains(string(raw), `"reason":"billing_limit"`) || !strings.Contains(string(raw), "raise it: caveman billing") {
+		t.Errorf("route-state.json = %s", raw)
+	}
+}

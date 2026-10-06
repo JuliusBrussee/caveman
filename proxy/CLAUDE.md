@@ -120,9 +120,11 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   whose model is in the same-provider pool (subscription traffic never routes, ADR 0083 §7). The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries only
   the `routerd features:` line (never prompt text), and its answer is cached per ask so a tool loop
-  never switches model mid-turn. A Cloud error, timeout, 401/403 or `allowance` answer keeps the
-  asked model and pauses new asks (1 min, 10 min, until the 1st). A provider 4xx on the routed
-  model replays the original bytes on the asked model. The pass-through header and encoded bodies
+  never switches model mid-turn. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
+  answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
+  until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
+  (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the
+  routed model replays the original bytes on the asked model. The pass-through header and encoded bodies
   never route; record mode does (routing is its own module). runtime/v1 events share the gate:
   in-memory batches of at most 500, dropped on failure, trimmed to `/me`'s `data.level`; level
   `off` or an unreadable level sends nothing. Signing in or out never changes another stage.
