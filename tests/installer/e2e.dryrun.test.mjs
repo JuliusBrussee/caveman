@@ -26,7 +26,7 @@ test('dry-run --only claude prints plan and writes nothing', () => {
   ], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg } });
   assert.equal(r.status, 0);
   // Only fires if `claude` is on PATH on the test runner. If not, this assertion
-  // is a no-op (the installer just prints "nothing detected" and exits 0).
+  // is a no-op (the installer just prints "no agents detected" and exits 0).
   if (/Claude Code detected/.test(r.stdout)) {
     assert.match(r.stdout, /would run: claude plugin marketplace add/);
     assert.match(r.stdout, /would run: claude plugin install caveman@caveman/);

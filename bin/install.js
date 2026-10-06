@@ -2108,7 +2108,7 @@ async function main() {
     for (const [id, why] of ctx.results.failed) process.stderr.write(`    • ${id} — ${why}\n`);
   }
   if (!ctx.results.installed.length && !ctx.results.skipped.length && !ctx.results.failed.length) {
-    process.stdout.write('  nothing detected. run with --list to see all 30+ supported agents,\n');
+    process.stdout.write('  no agents detected. run with --list to see all 30+ supported agents,\n');
     process.stdout.write('  or pass --only <agent> to force a specific target.\n');
   }
   process.stdout.write('\n');

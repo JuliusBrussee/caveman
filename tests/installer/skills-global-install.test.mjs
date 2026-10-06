@@ -66,7 +66,7 @@ test('no detected agents must not install skills for every upstream profile', (t
   const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--non-interactive'], { encoding: 'utf8', cwd: dir, env });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(log), false, 'upstream --all installs agents that were never detected');
-  assert.match(result.stdout, /nothing detected/);
+  assert.match(result.stdout, /no agents detected/);
 });
 
 test('current Kiro and Mistral executables trigger their own install profiles', (t) => {
@@ -87,5 +87,5 @@ test('current Kiro and Mistral executables trigger their own install profiles', 
   assert.match(result.stdout, /-a kiro-cli --yes -g/);
   assert.match(result.stdout, /Mistral Vibe detected/);
   assert.match(result.stdout, /-a mistral-vibe --yes -g/);
-  assert.doesNotMatch(result.stdout, /nothing detected/);
+  assert.doesNotMatch(result.stdout, /no agents detected/);
 });
