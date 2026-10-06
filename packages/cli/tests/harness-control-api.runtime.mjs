@@ -43,7 +43,7 @@ test("shared CLI runner terminates a hung child at its deadline", async () => {
   }
 });
 
-test("stub control-api drives first-poll login, entitlement cache, and whoami", { skip: "Cloud login disabled during beta" }, async () => {
+test("stub control-api drives first-poll login, entitlement cache, and whoami", async () => {
   const api = await stubControlApi();
   const { env, home, caveHome } = isolatedEnv();
   try {
@@ -54,7 +54,7 @@ test("stub control-api drives first-poll login, entitlement cache, and whoami", 
     assert.equal(login.code, 0, login.stderr);
     assert.ok(elapsedMs < 2_000, `login took ${elapsedMs}ms`);
 
-    const configPath = join(home, ".caveman-cloud", "config.json");
+    const configPath = join(caveHome, "cloud.json");
     const config = JSON.parse(readFileSync(configPath, "utf8"));
     assert.equal(statSync(configPath).mode & 0o777, 0o600);
     assert.equal(config.wrapEntitlement?.entitled, true);
@@ -91,7 +91,7 @@ test("stub control-api drives first-poll login, entitlement cache, and whoami", 
   }
 });
 
-test("stub control-api exposes seat-wall login variant without minting entitlement", { skip: "Cloud login disabled during beta" }, async () => {
+test("stub control-api exposes seat-wall login variant without minting entitlement", async () => {
   const api = await stubControlApi({ seatWalled: true });
   const { env, home, caveHome } = isolatedEnv();
   try {
@@ -99,7 +99,7 @@ test("stub control-api exposes seat-wall login variant without minting entitleme
     assert.equal(login.code, 0, login.stderr);
     assert.match(login.stderr, /seat|device limit|compression is off/i);
 
-    const config = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+    const config = JSON.parse(readFileSync(join(caveHome, "cloud.json"), "utf8"));
     assert.equal(config.wrapEntitlement, undefined);
     assert.ok(api.requests.some((request) => request.path === "/api/v1/me/wrap-entitlement"));
   } finally {

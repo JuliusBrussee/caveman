@@ -411,7 +411,7 @@ test("sync does not advance the watermark when the server rejects the import", a
 
 // After a successful login, the CLI runs the same sync once automatically and
 // tells the user what happened (the funnel bridge).
-test("login auto-syncs local inferred savings once", { skip: "Cloud login disabled during beta" }, async () => {
+test("login auto-syncs local inferred savings once", async () => {
   const TOKEN = `${Buffer.from(JSON.stringify({ uid: "u1", oid: "org-test" })).toString("base64url")}.sig`;
   const imports = [];
   const localScans = [];
@@ -492,7 +492,7 @@ test("login auto-syncs local inferred savings once", { skip: "Cloud login disabl
   server.close();
 });
 
-test("login still uploads pending local scan when local spend DB is corrupt", { skip: "Cloud login disabled during beta" }, async () => {
+test("login still uploads pending local scan when local spend DB is corrupt", async () => {
   const TOKEN = `${Buffer.from(JSON.stringify({ uid: "u1", oid: "org-test" })).toString("base64url")}.sig`;
   const localScans = [];
   const server = createServer((req, res) => {
