@@ -48,7 +48,7 @@ export function runtimeDataLevel(me: CloudMe | null, telemetryOff: boolean): str
 
 // What routing sends, with its off switch: said at sign-in, by `caveman on
 // routing` and by setup when already signed in. The long form is SECURITY.md.
-export const ROUTING_ON_LINE = "routing is on · sends your latest ask (with what your agent attaches to it), the one before it, the end of the agent's last reply and request facts (tools, effort, token counts) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing · caveman off routing to stop";
+export const ROUTING_ON_LINE = "routing is on · sends your latest ask (with what your agent attaches to it), the one before it, the end of the agent's last reply and request facts (tools, effort, agent headers, token counts) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing · caveman off routing to stop";
 
 // After every sign-in: what routing does now and what data leaves the machine,
 // each with the way to stop it.
