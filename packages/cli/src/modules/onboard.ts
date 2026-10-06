@@ -156,7 +156,8 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   } else if (deps.launching) {
     out.write(`${c.green("✓")} Ready. Starting ${deps.launching}.\n`);
   } else {
-    out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${deps.cmd} ${agents[0] ?? "claude"}`)}      See it:  ${c.cyan(`${deps.cmd} status`)}\n`);
+    const tryAgent = ["claude", "codex"].find((id) => agents.includes(id)) ?? agents[0] ?? "claude";
+    out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${deps.cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${deps.cmd} status`)}\n`);
   }
   if (ask) await deps.discloseTelemetry();
   return { confirmed: true, cancelled: false, ok: result.ok, plan };

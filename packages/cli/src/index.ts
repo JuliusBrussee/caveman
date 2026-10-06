@@ -3508,7 +3508,7 @@ async function setup(argv: string[] = []) {
 // Sign-in is the same `login` the verb runs, in its compact form.
 function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promise<OnboardResult> {
   return onboard(options, {
-    cmd: invokedAs(),
+    cmd: runnableCommand(),
     agents: onboardAgents(),
     interactive: onboardInteractive(),
     signedIn: async () => Boolean((await config()).token),
@@ -3531,6 +3531,12 @@ function onboardAgents(): OnboardAgent[] {
     const version = detected ? detectedAgentVersion(agent) : null;
     return { id, name: agentShortName(agent), installed: detected, wired, ...(version ? { version } : {}) };
   });
+}
+
+// The command a hint can tell someone to type: under `npx` nothing named
+// caveman is on PATH.
+function runnableCommand(): string {
+  return telemetryInstallChannel() === "npx" ? "npx @caveman-ai/cli" : invokedAs();
 }
 
 function agentShortName(agent: AgentProfile): string {
@@ -5527,7 +5533,7 @@ async function agentShortcut(rest: string[]) {
   // in, runs this session only.
   if (!readNativeJournal(native)) {
     if (setupRan()) {
-      process.stderr.write(`${agentShortName(agent)} isn't set up for Caveman · ${invokedAs()} setup to add it\n`);
+      process.stderr.write(`${agentShortName(agent)} isn't set up for Caveman · ${runnableCommand()} setup to add it\n`);
       return wrap(rest);
     }
     if (setupDeclined() || !onboardInteractive() || !which(binOf(agent))) return wrap(rest);

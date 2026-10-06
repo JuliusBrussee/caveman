@@ -1,7 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { cpSync, existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { isolatedCliEnv, runCli as runIsolated } from "./_cli.mjs";
 import { modulesFixture, runCli, snapshot } from "./_modules.mjs";
 
@@ -10,6 +12,7 @@ import { modulesFixture, runCli, snapshot } from "./_modules.mjs";
 // lands in $CAVEMAN_HOME/cloud.json. The fixture stubs every module binary, so
 // nothing downloads.
 const skip = process.platform === "win32" ? "shell agent stubs" : false;
+const here = dirname(fileURLToPath(import.meta.url));
 
 function modules(fx) {
   return JSON.parse(readFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), "utf8")).modules;
@@ -73,6 +76,28 @@ test("--only, --skip and --agents pick modules and agents; a re-run keeps the cu
     const again = await runCli(["setup", "--yes"], fx.env);
     assert.equal(again.code, 0, again.stderr);
     assert.match(again.stdout, /\nModules {2}output · input\n/, "re-running starts from what is on, not the defaults");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Under npx nothing named caveman is on PATH, so every hint names the npx form.
+test("under npx the hints print the npx command, and Try prefers Claude Code", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex", "claude"] });
+  const npxDist = join(fx.home, "_npx", "0a1b", "node_modules", "@caveman-ai", "cli");
+  cpSync(join(here, "..", "dist"), join(npxDist, "dist"), { recursive: true });
+  cpSync(join(here, "..", "package.json"), join(npxDist, "package.json"));
+  try {
+    const out = await new Promise((resolve, reject) => {
+      const child = spawn(process.execPath, [join(npxDist, "dist", "index.js"), "setup", "--yes", "--agents", "codex,claude"], { env: fx.env, stdio: ["ignore", "pipe", "pipe"] });
+      let stdout = "";
+      child.stdout.on("data", (d) => (stdout += d));
+      child.on("exit", (code) => resolve({ code, stdout }));
+      child.on("error", reject);
+    });
+    assert.equal(out.code, 0, out.stdout);
+    assert.match(out.stdout, /routing is on and starts after you sign in · npx @caveman-ai\/cli login/);
+    assert.match(out.stdout, /Try: {2}npx @caveman-ai\/cli claude {6}See it: {2}npx @caveman-ai\/cli status/);
   } finally {
     fx.cleanup();
   }
