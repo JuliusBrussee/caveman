@@ -285,3 +285,49 @@ test("on and off report one line per step; enable's own report stays out", async
   }
 });
 
+// A deliberate setting under a module that stays on is left alone: only a
+// state change (or a primary key that contradicts the state) rewrites keys.
+test("setup and on keep think.toon=false under input on; off then on restores it", async () => {
+  const fx = modulesFixture();
+  const config = () => JSON.parse(readFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), "utf8"));
+  try {
+    mkdirSync(fx.env.CAVEMAN_HOME, { recursive: true });
+    writeFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ think: { toon: false } }));
+    const setup = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(setup.code, 0, setup.stderr);
+    assert.doesNotMatch(setup.stdout, /think\.toon/, "no plan line for a key whose module stays on");
+    assert.equal(config().think.toon, false);
+    assert.equal(config().modules.input, true);
+
+    const on = await runCli(["on", "input", "--yes"], fx.env);
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, /^✓ input already on$/m);
+    assert.equal(config().think.toon, false);
+
+    assert.equal((await runCli(["off", "input", "--yes"], fx.env)).code, 0);
+    assert.equal(config().think.mode, "record");
+    const back = await runCli(["on", "input", "--yes"], fx.env);
+    assert.equal(back.code, 0, back.stderr);
+    assert.match(back.stdout, /think\.toon = true/, "a state change applies every on value");
+    assert.equal(config().think.toon, true);
+    assert.equal(config().think.mode, "compress");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a primary key that contradicts the module state is reconciled", async () => {
+  const fx = modulesFixture();
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    // Switched off by hand under the module's back: input says on, think.mode says record.
+    const path = join(fx.env.CAVEMAN_HOME, "cloud.json");
+    const doc = JSON.parse(readFileSync(path, "utf8"));
+    writeFileSync(path, JSON.stringify({ ...doc, think: { ...doc.think, mode: "record" } }));
+    const plan = await runCli(["on", "input", "--dry-run"], fx.env);
+    assert.match(plan.stdout, /think\.mode = compress/);
+  } finally {
+    fx.cleanup();
+  }
+});
+

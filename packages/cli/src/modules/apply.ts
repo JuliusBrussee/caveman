@@ -118,20 +118,29 @@ export function defaultAgents(): string[] {
   return (wired.length ? wired : native.filter((agent) => agent.detected)).map((agent) => agent.id);
 }
 
-// Module state is the authority for the keys a module owns: an on module whose
-// key sits at its off value (or holds an invalid one), or an off module whose
-// key does not, is rewritten. Only modules in scope are touched.
+// Module state is the authority for the keys a module owns, but only where
+// the state moves: a module switched on or off (or whose primary key — its
+// first capability, think.mode for input — contradicts its state) gets every
+// key that disagrees rewritten to that state's value. A module that stays as
+// it is keeps deliberate tuning (think.toon=false under input on). An invalid
+// value is always rewritten. Only modules in scope are touched.
 function configChanges(selection: ModuleSelection, only: ModuleId[] | undefined) {
   const h = moduleHost();
   const stored = storedModules();
+  const current = currentSelection();
   const scoped = MODULES.filter((m) => inScope(m.id, only));
   const state = scoped.filter((m) => stored[m.id] !== selection[m.id]).map((m) => [m.id, selection[m.id]] as const);
   const effects: (readonly [string, string | boolean])[] = [];
+  const disagrees = (on: boolean, global: unknown, off: string | boolean) => on ? global === off : global !== off;
   for (const m of scoped) {
+    const primary = m.capabilities[0];
+    const moving = current[m.id] !== selection[m.id]
+      || (primary !== undefined && disagrees(selection[m.id], h.capability(primary.key).global, primary.off));
     for (const effect of m.capabilities) {
       const capability = h.capability(effect.key);
-      const wrong = selection[m.id] ? capability.global === effect.off : capability.global !== effect.off;
-      if (wrong || capability.invalid !== undefined) effects.push([effect.key, selection[m.id] ? effect.on : effect.off]);
+      if ((moving && disagrees(selection[m.id], capability.global, effect.off)) || capability.invalid !== undefined) {
+        effects.push([effect.key, selection[m.id] ? effect.on : effect.off]);
+      }
     }
   }
   return { state, effects };
