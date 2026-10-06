@@ -222,6 +222,30 @@ test("open gate: first request routes through /w/pi with Core in the system prom
   }
 });
 
+// The CLI keeps its config in $CAVEMAN_HOME/cloud.json; the pre-v4
+// ~/.caveman-cloud/config.json no longer decides the gateway once that exists.
+test("open gate: the gateway comes from $CAVEMAN_HOME/cloud.json, not the old config", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    delete fx.env.CAVE_GATEWAY_URL;
+    writeFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ gatewayUrl: `http://127.0.0.1:${port}` }));
+    mkdirSync(join(fx.env.HOME, ".caveman-cloud"), { recursive: true });
+    writeFileSync(join(fx.env.HOME, ".caveman-cloud", "config.json"), JSON.stringify({ gatewayUrl: "http://127.0.0.1:1" }));
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "openai", "--model", "stub-model",
+      "-p", "say hi",
+    ]);
+    assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
+    assert.equal(requests.filter((r) => r.method === "POST")[0]?.path, "/w/pi/openai/v1/chat/completions");
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
 test("closed gate (no run-state): zero proxy requests and a visible direct-mode notice", { skip: !havePi && "pi devDependency missing" }, async () => {
   const { server, requests, port } = await startStub();
   const fx = fixture(port, { runState: false });
