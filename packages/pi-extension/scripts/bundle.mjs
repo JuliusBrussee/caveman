@@ -6,12 +6,18 @@ const common = {
   format: "esm",
   platform: "node",
   target: "node22",
-  external: ["@earendil-works/*", "typebox"],
+  external: ["@earendil-works/*", "@oh-my-pi/*", "typebox"],
 };
 
 await build({
   entryPoints: [fileURLToPath(new URL("../src/index.ts", import.meta.url))],
   outfile: fileURLToPath(new URL("../dist/index.mjs", import.meta.url)),
+  ...common,
+});
+
+await build({
+  entryPoints: [fileURLToPath(new URL("../src/omp.ts", import.meta.url))],
+  outfile: fileURLToPath(new URL("../dist/omp.mjs", import.meta.url)),
   ...common,
 });
 

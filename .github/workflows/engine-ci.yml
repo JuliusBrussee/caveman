@@ -71,6 +71,7 @@ jobs:
         with:
           go-version-file: go.mod
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -91,6 +92,10 @@ jobs:
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+      # test:omp exercises the built dist/omp.mjs artifact against a fake OMP
+      # host — bun-only, so it runs outside the shared pnpm/node test matrix.
+      - run: npm run test:omp
+        working-directory: packages/pi-extension
 
   # Its own job: `pnpm -r test` stops at the first failing package, so a red
   # suite elsewhere in the workspace must not keep these from running.
