@@ -111,10 +111,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2.1.289",
+    "tested_agent_version": "2.1.291",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-10-04",
-    "verified_by": "local pinned-binary probe (claude 2.1.289 on Node 22.22.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-10-06",
+    "verified_by": "local pinned-binary probe (claude 2.1.291 on Node 22.22.0, agents/probe-installed.mjs); route probe: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -148,10 +148,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.160.0",
+    "tested_agent_version": "0.160.1",
     "injection_completeness": "code-only",
-    "last_verified_at": "2026-10-03",
-    "verified_by": "local pinned-binary probe (codex 0.160.0 on Node 24.16.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-10-06",
+    "verified_by": "local pinned-binary probe (codex 0.160.1 on Node 22.22.0, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -511,7 +511,7 @@ export const PROFILES: AgentProfile[] = [
     "args": [
       "--extensions=none"
     ],
-    "install": "npm i -g @qwen-code/qwen-code@0.24.7",
+    "install": "npm i -g @qwen-code/qwen-code@0.25.0",
     "wire_protocol": "openai-chat",
     "injection": {
       "method": "config-file",
@@ -757,10 +757,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "X-Cave-Agent"
     },
-    "tested_agent_version": "0.24.7",
+    "tested_agent_version": "0.25.0",
     "injection_completeness": "declarative",
-    "last_verified_at": "2026-10-03",
-    "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.24.7 on Node 24.16.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-10-06",
+    "verified_by": "local pinned-binary route probe (@qwen-code/qwen-code 0.25.0 on Node 22.22.0, agents/probe-installed.mjs); config_overlay accepted and POST /v1/chat/completions observed at the injected baseUrl carrying X-Cave-Agent: qwen",
     "fallback": "generic-env",
     "maintainer": null
   }
