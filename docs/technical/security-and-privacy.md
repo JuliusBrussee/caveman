@@ -52,7 +52,9 @@ controls. Those controls are not what gates a self-hosted shared proxy.
 
 Local mode keeps Caveman processing on device, but provider-bound content still
 goes to provider selected by agent. "Local" describes Caveman layer, not entire
-model request.
+model request. With routing on (signed in), your latest ask, the one before it
+and the end of the agent's last reply also go to Caveman Cloud to pick the model;
+`caveman off routing` stops it.
 
 Potential local data stores include:
 

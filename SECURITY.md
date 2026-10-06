@@ -44,6 +44,7 @@ reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
 | Framework middleware (client, adapters, and the runtime you host) | No | Your app keeps calling its provider directly. The adapters send eligible tool-result text to the runtime you point them at, and the runtime stores the originals so the model can fetch them back. Nothing goes to Caveman servers. See [Framework middleware data](#framework-middleware-data). |
 | CLI usage telemetry | No | Content-free usage events, including token counts processed and saved, go to Caveman by default (opt-out) and are stored with the sender's IP address (IPs cleared after 90 days, events deleted after 13 months). First interactive run prints the disclosure; `caveman telemetry off` or `DO_NOT_TRACK=1` turns it off for good. |
 | Authenticated dashboard sync | Yes | Local span metadata and aggregate findings go to Caveman Cloud when credentials are present. Raw prompt and response bodies are excluded. |
+| Routing (signed in, `routing` module on) | Yes | To pick the model for API-key requests to Anthropic or OpenAI, each new ask sends Caveman Cloud your latest ask, the one before it and the end of the agent's last reply, raw (at most 128 KiB, 16 KiB and 16 KiB), with the model names and request counts. Tool calls, tool results and the system prompt are not sent. The request itself still goes only to your provider. `caveman off routing` stops it. |
 
 Your model provider, MCP servers, browser targets, agent plugins, and any command
 the agent runs remain separate data processors. Caveman cannot make those tools
@@ -226,7 +227,8 @@ blocked during beta. Sync sends usage metadata and aggregate findings, never
 prompts, responses, credentials, tool evidence, or source paths. Subscription
 traffic omits dollar figures, and synced local data remains `inferred`. Managed
 gateway mode carries request and response content through Caveman Cloud; local
-mode sends it only to your provider. `CAVEMAN_OFFLINE=1` disables entitlement
+mode sends it only to your provider, apart from the turns routing sends to pick
+the model (see the table above). `CAVEMAN_OFFLINE=1` disables entitlement
 refresh and sync, but opted-in telemetry needs `CAVEMAN_TELEMETRY=0` or
 `DO_NOT_TRACK=1` too.
 
