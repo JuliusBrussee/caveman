@@ -241,19 +241,11 @@ func fresh(token string, now time.Time) bool {
 	return int64(*claims.Exp) > now.Add(30*time.Second).Unix()
 }
 
-// routeBearer prefers the durable project key; Cloud calls under /api prefer
-// the session token while it is fresh.
-func (s settings) routeBearer(now time.Time) string {
-	if s.key != "" {
-		return s.key
-	}
-	if fresh(s.access, now) {
-		return s.access
-	}
-	return ""
-}
-
-func (s settings) apiBearer(now time.Time) string {
+// bearer is the signed-in session's token while it is fresh (Cloud takes
+// device-login tokens on /v1/route and /api), else the durable project key the
+// device login issued. The CLI owns refreshing the session; the proxy never
+// spends the refresh token.
+func (s settings) bearer(now time.Time) string {
 	if fresh(s.access, now) {
 		return s.access
 	}
@@ -300,7 +292,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if models == nil {
 		return gateway.RouteAnswer{Outcome: "off", Reason: "model_outside_pool"}
 	}
-	bearer := cfg.routeBearer(l.now())
+	bearer := cfg.bearer(l.now())
 	if bearer == "" {
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "login_expired"}
 	}

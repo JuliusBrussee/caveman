@@ -246,7 +246,7 @@ func (l *Link) dataLevel(cfg settings) string {
 }
 
 func (l *Link) call(cfg settings, method, path string, body []byte, out any) (int, error) {
-	bearer := cfg.apiBearer(l.now())
+	bearer := cfg.bearer(l.now())
 	if bearer == "" {
 		return 0, fmt.Errorf("no usable credential")
 	}

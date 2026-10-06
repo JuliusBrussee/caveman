@@ -82,8 +82,14 @@ func TestAskSendsTheFeaturesLineAndNoPromptText(t *testing.T) {
 	if fmt.Sprint(body) != fmt.Sprint(want) {
 		t.Fatalf("ask body = %v\nwant %v", body, want)
 	}
+	if !strings.HasPrefix(auth, "Bearer ") || strings.TrimPrefix(auth, "Bearer ") == "cave_project_key" {
+		t.Errorf("authorization = %q, want the fresh session token", auth)
+	}
+	// A lapsed session token falls back to the durable project key.
+	stale := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(-time.Minute))+`","gateway_api_key":"cave_project_key"}`))
+	stale.Ask(t.Context(), ask)()
 	if auth != "Bearer cave_project_key" {
-		t.Errorf("authorization = %q, want the durable project key", auth)
+		t.Errorf("authorization = %q, want the project key once the session token lapsed", auth)
 	}
 }
 
