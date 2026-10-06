@@ -47,7 +47,7 @@ Caveman is six modules, each on unless you turn it off:
 | `output` | the agent says less |
 | `input` | logs, JSON, code and diffs shrink before the model reads them |
 | `waste-fixes` | finds your agent's worst waste and fixes it |
-| `routing` | the right model each turn; needs a free account and sends your latest ask, the one before it and the end of the agent's last reply to Caveman Cloud |
+| `routing` | the right model each turn; needs a free account. Sends your latest ask (with whatever your agent attaches to it, such as CLAUDE.md, memory or @-mentioned files), the one before it and the end of the agent's last reply to Caveman Cloud; on the Free plan Caveman may keep it to improve routing |
 | `scripts` | reusable scripts your agent keeps (installs `caveman-blocks`) |
 | `browse` | compressed pages for browser tools |
 
