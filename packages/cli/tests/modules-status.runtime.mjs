@@ -25,6 +25,7 @@ test("status shows the modules × agents grid and one next line; --json adds mod
       "  off browse                             caveman on browse",
       // The existing off-state lines keep their place under the grid.
       ...json.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line),
+      "agent traffic: local runtime",
       "next: caveman login",
       "",
     ].join("\n"));

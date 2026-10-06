@@ -63,6 +63,11 @@ export type ModuleHost = {
   localRuntimes(): Promise<LocalRuntime[]>;
   interactive(): boolean;
   confirm(question: string): Promise<boolean>;
+  // Where new wiring sends agent traffic, and the line status prints; `fix`
+  // when an earlier login left agents on the managed gateway unasked.
+  agentTraffic(): { target: "local" | "managed"; line: string; fix?: string };
+  // A wired agent's written base URL is not the current traffic target.
+  agentRouteStale(agent: string): boolean;
 };
 
 let host: ModuleHost | undefined;
@@ -164,11 +169,15 @@ function wiringChanges(selection: ModuleSelection, agents: string[], only: Modul
   };
 }
 
-// Wired agents that stay wired but carry hooks built from a key this run changes.
+// Wired agents that stay wired but carry hooks built from a key this run
+// changes, or a base URL that is no longer the traffic target (an earlier
+// login's managed gateway): any plan re-wires those, never anything else.
 function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire: string[]): string[] {
   const h = moduleHost();
-  if (!effects.some(([key]) => h.wiringKeys.includes(key))) return [];
-  return h.nativeAgents().filter((agent) => agent.wired && !unwire.includes(agent.id)).map((agent) => agent.id);
+  const keyChanged = effects.some(([key]) => h.wiringKeys.includes(key));
+  return h.nativeAgents()
+    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentRouteStale(agent.id)))
+    .map((agent) => agent.id);
 }
 
 // Modules in scope that are on and miss a binary they need.
@@ -267,8 +276,10 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
       lines.push({ action: "UPDATE", target: `${agent} config`, detail: "route + hooks" });
     }
   }
+  const target = h.agentTraffic().target === "local" ? "the local runtime" : "the managed gateway";
   for (const agent of refreshAgents(effects, unwire)) {
-    for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail: `refresh ${agent} hooks` });
+    const detail = h.agentRouteStale(agent) ? `point ${agent} at ${target}` : `refresh ${agent} hooks`;
+    for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail });
   }
   // aider is wired without the runtime; every other agent starts it.
   if (wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) {

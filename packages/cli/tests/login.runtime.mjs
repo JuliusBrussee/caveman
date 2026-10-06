@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -30,7 +30,7 @@ test("RFC 8628 slow_down adds five seconds to later polls", async () => {
 
 // startStub runs a minimal control-api: a device flow that grants TOKEN on the
 // first poll, plus /auth/me which records the Authorization header it received.
-function startStub() {
+function startStub({ gatewayUrl } = {}) {
   let capturedAuth = null;
   const server = createServer((req, res) => {
     let body = "";
@@ -50,7 +50,7 @@ function startStub() {
           interval: 0,
         });
       } else if (req.url === "/api/v1/auth/device/token") {
-        send(200, { access_token: TOKEN, token_type: "Bearer", expires_in: 900 });
+        send(200, { access_token: TOKEN, token_type: "Bearer", expires_in: 900, ...(gatewayUrl ? { gateway_url: gatewayUrl } : {}) });
       } else if (req.url === "/api/v1/auth/me") {
         capturedAuth = req.headers.authorization;
         send(200, { user: { email: "a@b.c" } });
@@ -228,11 +228,9 @@ test("connected verb without credentials exits non-zero with a login hint", asyn
   assert.match(whoami.stderr, /caveman login/, "must hint at `caveman login`");
 });
 
-// The keystone of the free→cloud funnel (SIMPLICITY_SPEC §6.5, audit finding #3):
-// after login persists a managed gateway URL, `caveman wrap` must route there with
-// NO env var. Gateway resolution is now dynamic (read from config.json per run), so
-// the login that writes gatewayUrl flips wrap on the next invocation.
-test("login persists the gateway URL and wrap flips to it with no env var", async () => {
+// An explicit gateway choice (`login --gateway-url`, or CAVE_GATEWAY_URL at
+// login) still moves wrap to the managed gateway with no env var afterwards.
+test("login with an explicit --gateway-url moves wrap to that gateway", async () => {
   const { server } = startStub();
   const port = await listen(server);
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
@@ -245,7 +243,8 @@ test("login persists the gateway URL and wrap flips to it with no env var", asyn
   assert.equal(login.code, 0, `login failed: ${login.stderr}`);
 
   const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
-  assert.equal(cfg.gatewayUrl, "http://127.0.0.1:9876", "login must persist the managed gateway URL to config.json");
+  assert.equal(cfg.gatewayUrl, "http://127.0.0.1:9876", "login must persist the chosen gateway URL");
+  assert.equal(cfg.managedGateway, true, "an explicit --gateway-url is a traffic choice");
   cfg.wrap = { proxy: false };
   writeFileSync(join(caveDir, "cloud.json"), JSON.stringify(cfg, null, 2));
 
@@ -254,15 +253,72 @@ test("login persists the gateway URL and wrap flips to it with no env var", asyn
   const wrapped = await runCli(["wrap", "node", "-e", printEnv], env);
   assert.equal(wrapped.code, 0, `wrap failed: ${wrapped.stderr}`);
   const injected = JSON.parse(wrapped.stdout);
-  assert.equal(injected.a, "http://127.0.0.1:9876", "wrap must route ANTHROPIC_BASE_URL to the persisted gateway with no env var");
-  assert.equal(injected.o, "http://127.0.0.1:9876", "wrap must route OPENAI_BASE_URL to the persisted gateway with no env var");
+  assert.equal(injected.a, "http://127.0.0.1:9876", "wrap must route ANTHROPIC_BASE_URL to the chosen gateway");
+  assert.equal(injected.o, "http://127.0.0.1:9876", "wrap must route OPENAI_BASE_URL to the chosen gateway");
 
   server.close();
 });
 
-// With no explicit --gateway-url, login derives the sibling gateway for the shapes
-// Caveman ships (local control-api :8080 → gateway :8787 here), so the flip works
-// with zero extra flags.
+// The golden rule: signing in never moves agent traffic through a Caveman hop.
+// Login keeps the Cloud's gateway (advertised here) for Cloud calls such as
+// /v1/route, but wrap, enable and module wiring stay on the local proxy, and no
+// harness file changes.
+test("login alone never changes where agent traffic goes", async () => {
+  const { server } = startStub({ gatewayUrl: "https://gateway.example.test" });
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1", CAVEMAN_OFFLINE: "1" };
+  delete env.CAVE_TOKEN;
+  delete env.CAVE_GATEWAY_URL;
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const settings = `${JSON.stringify({ env: { ANTHROPIC_BASE_URL: "http://127.0.0.1:8787" } }, null, 2)}\n`;
+  writeFileSync(join(home, ".claude", "settings.json"), settings);
+
+  const login = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], env);
+  assert.equal(login.code, 0, `login failed: ${login.stderr}`);
+  assert.doesNotMatch(login.stderr, /wrap (now )?routes through/);
+
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
+  assert.equal(cfg.gatewayUrl, "https://gateway.example.test", "the Cloud gateway stays known for Cloud calls");
+  assert.equal(cfg.managedGateway, undefined, "signing in is not a traffic choice");
+  assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), settings, "login never touches a harness file");
+  cfg.wrap = { proxy: false };
+  writeFileSync(join(caveDir, "cloud.json"), JSON.stringify(cfg, null, 2));
+
+  const printEnv = "process.stdout.write(JSON.stringify({a:process.env.ANTHROPIC_BASE_URL,o:process.env.OPENAI_BASE_URL}))";
+  const wrapped = await runCli(["wrap", "node", "-e", printEnv], env);
+  assert.equal(wrapped.code, 0, `wrap failed: ${wrapped.stderr}`);
+  assert.doesNotMatch(wrapped.stdout, /gateway\.example\.test/, "wrap must not route to the managed gateway after login alone");
+
+  const status = await runCli(["status"], env);
+  assert.match(status.stdout, /^agent traffic: local runtime$/m);
+
+  server.close();
+});
+
+// Wiring an earlier login pointed at the managed gateway is left alone on
+// upgrade; status names it and the one command that moves it.
+test("status names agent wiring an earlier login left on the managed gateway", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_NO_KEYCHAIN: "1", CAVEMAN_OFFLINE: "1" };
+  delete env.CAVE_TOKEN;
+  delete env.CAVE_GATEWAY_URL;
+  mkdirSync(join(caveDir, "integrations"), { recursive: true });
+  writeFileSync(join(caveDir, "integrations", "claude.json"), JSON.stringify({
+    schema_version: 1, agent: "claude", pack_version: "test", installed_at: "2026-09-01T00:00:00Z", detected_agent_version: null,
+    operations: [{ file: join(home, ".claude", "settings.json"), kind: "claude-settings", backup: "", before_exists: false, before_sha256: null, after_sha256: "", owned: { route: "https://gateway.example.test" } }],
+  }));
+  writeFileSync(join(caveDir, "cloud.json"), JSON.stringify({ gatewayUrl: "https://gateway.example.test" }));
+
+  const status = await runCli(["status"], env);
+  assert.match(status.stdout, /^agent traffic: managed gateway \(from an earlier login\) · caveman setup to use the local runtime$/m);
+});
+
+// With no explicit --gateway-url, login derives the sibling gateway for the
+// shapes Caveman ships (local control-api :8080 → gateway :8787 here) and keeps
+// it for Cloud calls.
 test("login derives the local sibling gateway when none is given", async () => {
   const { server } = startStub();
   const port = await listen(server);

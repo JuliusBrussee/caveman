@@ -36,6 +36,8 @@ export async function modulesDoctor(): Promise<void> {
     if (state === "degraded") failures.push(`${agent.id}: wiring degraded · fix: caveman doctor ${agent.id} --fix`);
     else if (state === "unavailable") failures.push(`${agent.id}: wired but not runnable · fix: reinstall ${agent.id}, or caveman disable ${agent.id}`);
   }
+  const traffic = h.agentTraffic();
+  if (traffic.fix) notes.push(`· ${traffic.line} · ${traffic.fix}`);
   for (const failure of failures) console.log(`✗ ${failure}`);
   for (const note of notes) console.log(note);
 
