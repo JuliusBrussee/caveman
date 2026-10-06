@@ -35,3 +35,21 @@ test("an earlier login's managed wiring moves to the local runtime only on the n
     fx.cleanup();
   }
 });
+
+// `caveman enable` re-points a stale route to the local runtime and says so,
+// instead of refusing it as degraded.
+test("enable moves an earlier login's managed wiring to the local runtime", async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const managed = { ...fx.env, CAVE_GATEWAY_URL: "https://gateway.example.test" };
+    assert.equal((await runCli(["on", "output", "--yes"], managed)).code, 0);
+    const local = { ...fx.env };
+    delete local.CAVE_GATEWAY_URL;
+    const out = await runCli(["enable", "claude"], local);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stderr, /routing: https:\/\/gateway\.example\.test → http:\/\/127\.0\.0\.1:8787/);
+    assert.match(harness(fx.home)[".claude/settings.json"], /"ANTHROPIC_BASE_URL": "http:\/\/127\.0\.0\.1:8787\/w\/claude"/);
+  } finally {
+    fx.cleanup();
+  }
+});

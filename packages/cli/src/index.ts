@@ -180,7 +180,7 @@ function agentTraffic(): { target: WrapMode; line: string; fix?: string; next?: 
   // logins record managedGateway true or false.
   const raw = globalCapabilityDocument();
   if (raw.managedGateway === undefined && typeof raw.gatewayUrl === "string" && raw.gatewayUrl && wrapMode(raw.gatewayUrl) === "managed") {
-    return { target: "local", line: `agent traffic: local runtime (was ${raw.gatewayUrl} before v4)`, fix: `caveman login --gateway-url ${raw.gatewayUrl} to keep it` };
+    return { target: "local", line: "agent traffic: local runtime", fix: `to keep using ${raw.gatewayUrl}: caveman login --gateway-url ${raw.gatewayUrl}` };
   }
   return { target: "local", line: "agent traffic: local runtime" };
 }
@@ -9034,8 +9034,10 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
       nativeProxyBinaryRequired(gw);
       const existing = nativeIntegrationStatus(agent);
       if (existing.installed) {
-        // Wiring an earlier login pointed elsewhere is re-wired below, outside the lock.
-        if (existing.state === "installed") return agentStaleRoute(agent) ? "stale" as const : "already" as const;
+        // Wiring an earlier login pointed elsewhere reads as degraded (its route
+        // is not the current target); it is re-wired below, outside the lock.
+        if (agentStaleRoute(agent)) return "stale" as const;
+        if (existing.state === "installed") return "already" as const;
         // `--fix` on purpose: bare `caveman doctor <agent>` prints JSON that says
         // `degraded` and nothing that says how to leave that state, so pointing
         // at it alone dead-ends the user who followed this line here (#1049).
@@ -9082,7 +9084,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     if (outcome === "stale") {
       const was = agentStaleRoute(agent);
       repairNativeAgent(agent, { quiet: true });
-      if (!quiet) process.stderr.write(`${mark("ok")} point ${agent} at ${wrapMode(gw) === "local" ? "the local runtime" : gw} (was ${was})\n`);
+      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: routing: ${was} → ${new URL(gw).origin}\n`);
     }
     ensureLocalProxyForNative(agent, gw);
     if (quiet || outcome === "stale") continue;

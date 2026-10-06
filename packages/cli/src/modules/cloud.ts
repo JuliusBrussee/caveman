@@ -5,7 +5,7 @@
 // field, is "no answer": nothing fails because of it.
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
-import { currentSelection, moduleHost } from "./apply.js";
+import { moduleHost } from "./apply.js";
 import { cavemanHome } from "./config-home.js";
 
 export type CloudProduct = {
@@ -51,7 +51,10 @@ export function runtimeDataLevel(me: CloudMe | null, telemetryOff: boolean): str
 export async function printSignInLines(): Promise<void> {
   const h = moduleHost();
   const lines: string[] = [];
-  if (currentSelection().routing) lines.push("routing is on · the right model each turn · caveman off routing to stop");
+  // The stored switch, as caveman-proxy reads it, not the registry default.
+  const modules = h.readConfig().modules;
+  const routing = !!modules && typeof modules === "object" && (modules as Record<string, unknown>).routing === true;
+  lines.push(routing ? "routing is on · the right model each turn · caveman off routing to stop" : "routing is off · caveman on routing to turn it on");
   const telemetryOff = h.telemetryOff();
   const level = runtimeDataLevel(await cloudMe(), telemetryOff);
   lines.push(telemetryOff

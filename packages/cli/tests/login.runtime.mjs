@@ -281,9 +281,13 @@ test("login alone never changes where agent traffic goes", async () => {
   assert.equal(login.code, 0, `login failed: ${login.stderr}`);
   assert.doesNotMatch(login.stderr, /wrap (now )?routes through/);
   // Every sign-in says what routing does now and what data leaves, each with its off switch.
-  assert.match(login.stderr, /^routing is on · the right model each turn · caveman off routing to stop$/m);
+  // No stored routing switch yet, so the proxy will not route: say so.
+  assert.match(login.stderr, /^routing is off · caveman on routing to turn it on$/m);
   assert.match(login.stderr, /^runtime data: counts per request to your Cloud, never prompt text · caveman telemetry off to stop$/m);
+  const stored = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
+  writeFileSync(join(caveDir, "cloud.json"), JSON.stringify({ ...stored, modules: { routing: true } }));
   const optedOut = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], { ...env, DO_NOT_TRACK: "1" });
+  assert.match(optedOut.stderr, /^routing is on · the right model each turn · caveman off routing to stop$/m);
   assert.match(optedOut.stderr, /^runtime data: nothing sent \(telemetry is off\)/m);
 
   const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
@@ -373,7 +377,7 @@ test("status names a pre-v4 login's gateway and how to keep it", async () => {
   delete env.CAVE_GATEWAY_URL;
   writeFileSync(join(caveDir, "cloud.json"), JSON.stringify({ gatewayUrl: "https://gateway.example.test" }));
   const status = await runCli(["status"], env);
-  assert.match(status.stdout, /^agent traffic: local runtime \(was https:\/\/gateway\.example\.test before v4\) · caveman login --gateway-url https:\/\/gateway\.example\.test to keep it$/m);
+  assert.match(status.stdout, /^agent traffic: local runtime · to keep using https:\/\/gateway\.example\.test: caveman login --gateway-url https:\/\/gateway\.example\.test$/m);
   const json = JSON.parse((await runCli(["status", "--json"], env)).stdout);
   assert.equal(json.agent_traffic.target, "local");
 });
