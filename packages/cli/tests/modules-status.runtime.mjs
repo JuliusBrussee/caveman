@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { modulesFixture, runCli } from "./_modules.mjs";
@@ -24,7 +24,7 @@ test("status shows the modules × agents grid and one next line; --json adds mod
       "  on  scripts      wired      wired",
       "  off browse                             caveman on browse",
       // The existing off-state lines keep their place under the grid.
-      ...json.off_states.map((state) => state.line),
+      ...json.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line),
       "next: caveman login",
       "",
     ].join("\n"));
@@ -141,6 +141,29 @@ test("stop ends the runtime it started and is idempotent", async () => {
     const again = await runCli(["stop"], env);
     assert.equal(again.code, 0, again.stderr);
     assert.equal(again.stdout, "not running\n");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("status counts the MCP entry native wiring writes for Claude and Codex", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    for (const agent of ["claude", "codex"]) assert.equal((await runCli(["enable", agent], fx.env)).code, 0);
+    const wired = await runCli(["status"], fx.env);
+    assert.equal(wired.code, 0, wired.stderr);
+    assert.doesNotMatch(wired.stdout, /MCP recovery missing/);
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.equal(doctor.code, 0, doctor.stdout);
+
+    const claudePath = join(fx.home, ".claude.json");
+    const claude = JSON.parse(readFileSync(claudePath, "utf8"));
+    delete claude.mcpServers.caveman;
+    writeFileSync(claudePath, JSON.stringify(claude, null, 2) + "\n");
+    const codexPath = join(fx.home, ".codex", "config.toml");
+    writeFileSync(codexPath, readFileSync(codexPath, "utf8").replace(/\[mcp_servers\.caveman\]\n[\s\S]*?(?=# <<< caveman:native-tables)/, ""));
+    const missing = await runCli(["status"], fx.env);
+    assert.match(missing.stdout, /^MCP recovery missing — .* · caveman tools mcp install <agent>$/m);
   } finally {
     fx.cleanup();
   }

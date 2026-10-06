@@ -11717,7 +11717,23 @@ function startMcpRecoveryAvailable(): boolean {
 }
 
 function anyMcpInstalled(): boolean {
-  return AGENTS.some((agent) => mcpInstalled(agent.id));
+  return AGENTS.some((agent) => mcpInstalled(agent.id)) || nativeMcpRegistered("claude") || nativeMcpRegistered("codex");
+}
+
+// Native Claude/Codex wiring registers the caveman MCP server in the host's own
+// config (journaled, no `mcp install` marker). It counts while that journaled
+// registration is still in the file.
+function nativeMcpRegistered(agent: "claude" | "codex"): boolean {
+  const operation = readNativeJournal(agent)?.operations.find((item) => item.kind === `${agent}-${agent === "claude" ? "mcp" : "config"}`);
+  const current = operation ? fileBytes(operation.file) : null;
+  if (!operation || !current) return false;
+  try {
+    if (agent === "codex") return typeof operation.owned?.tables_block === "string" && current.toString("utf8").includes(operation.owned.tables_block);
+    const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
+    return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
+  } catch {
+    return false;
+  }
 }
 
 // resolveMcpCommand decides how to launch the caveman MCP server, in order:
@@ -18713,7 +18729,7 @@ async function status(argv: string[]) {
   const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
   const notes = saved > 0 ? { input: `today: ~${humanTokens(saved)} tokens kept out of context (inferred)` } : {};
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
-  const lines = view.off_states.map((state) => state.line);
+  const lines = view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line);
   process.stdout.write(renderModuleGrid(modules, { notes, next: nextStep(modules, { degraded: degraded[0], fallback: next }), degraded, lines }));
 }
 
