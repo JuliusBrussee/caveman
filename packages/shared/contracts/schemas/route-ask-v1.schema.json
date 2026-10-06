@@ -48,13 +48,24 @@
         "endpoint": { "enum": ["messages", "chat", "responses"], "description": "Anthropic Messages, OpenAI chat completions or OpenAI Responses." },
         "labels": {
           "type": "object",
-          "maxProperties": 16,
-          "propertyNames": { "pattern": "^[a-z0-9-]{1,64}$" },
-          "additionalProperties": { "type": "string", "maxLength": 256 },
-          "description": "Raw values of these request headers when present, names lower-cased, each value at most 256 bytes (cut): x-claude-code-request-class, x-claude-code-compaction, x-claude-code-agent-id, x-claude-code-parent-agent-id, x-claude-code-context-compacted, x-openai-subagent, x-codex-turn-metadata, x-caveman-agent, x-parent-session-id. Left out when none."
+          "additionalProperties": false,
+          "description": "Raw values of these request headers when present, names lower-cased. A value over its bound is left out, never cut. Codex's turn metadata also comes from the body's client_metadata[\"x-codex-turn-metadata\"] when no header carries it; on a Claude Code child, x-caveman-agent (when the agent sent none) is the subagent_type of the tool call in the newest assistant message, which a forked child resends. Left out when none.",
+          "properties": {
+            "x-claude-code-request-class": { "$ref": "#/$defs/label" },
+            "x-claude-code-compaction": { "$ref": "#/$defs/label" },
+            "x-claude-code-agent-id": { "$ref": "#/$defs/label" },
+            "x-claude-code-parent-agent-id": { "$ref": "#/$defs/label" },
+            "x-claude-code-context-compacted": { "$ref": "#/$defs/label" },
+            "x-openai-subagent": { "$ref": "#/$defs/label" },
+            "x-codex-turn-metadata": { "type": "string", "minLength": 1, "maxLength": 16384, "description": "Codex's turn metadata JSON, whole; at most 16384 bytes." },
+            "x-codex-parent-thread-id": { "$ref": "#/$defs/label" },
+            "thread-id": { "$ref": "#/$defs/label" },
+            "x-caveman-agent": { "$ref": "#/$defs/label" },
+            "x-parent-session-id": { "$ref": "#/$defs/label" }
+          }
         },
-        "tool_names": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "description": "The request's declared tool names in order (Anthropic tools[].name; OpenAI tools[].name or tools[].function.name), at most 128, each at most 64 bytes (cut). Left out when none." },
-        "effort": { "type": "string", "maxLength": 32, "description": "The effort the request carries as sent: Anthropic output_config.effort, Responses reasoning.effort, chat reasoning_effort; empty when none." },
+        "tool_names": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "description": "The request's declared tool names in order (Anthropic tools[].name; OpenAI tools[].name or tools[].function.name), at most 128; a name over 64 bytes is left out. Left out when none." },
+        "effort": { "enum": ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "The effort the request carries as sent: Anthropic output_config.effort, Responses reasoning.effort, chat reasoning_effort; empty when none or another value." },
         "thinking": { "enum": ["adaptive", "enabled", "disabled", "between_tools", ""], "description": "Anthropic top-level thinking.type as sent; empty when none, another value or another provider." },
         "per_message_off": { "type": "boolean", "description": "This session's per-message effort is latched off: Anthropic refused a mark and the retry with top-level effort only was served, or it answered a request without marks with refusal wording." }
       }
@@ -78,6 +89,7 @@
     "parent_state": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "The parent session's state, on a subagent's asks." }
   },
   "$defs": {
-    "count": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+    "count": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+    "label": { "type": "string", "minLength": 1, "maxLength": 256 }
   }
 }

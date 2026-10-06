@@ -33,9 +33,9 @@ func TestRequestFromEachShape(t *testing.T) {
 			want:     routeRequest{Endpoint: "messages", ToolNames: []string{"Read", "web_search"}, Effort: "xhigh", Thinking: "adaptive"},
 		},
 		{
-			name:     "anthropic, thinking type unknown and no effort",
+			name:     "anthropic, thinking type and effort the contract does not know",
 			endpoint: "/v1/messages",
-			body:     `{"thinking":{"type":"sometimes"},"messages":[]}`,
+			body:     `{"thinking":{"type":"sometimes"},"output_config":{"effort":"adaptive"},"messages":[]}`,
 			want:     routeRequest{Endpoint: "messages"},
 		},
 		{
@@ -51,7 +51,7 @@ func TestRequestFromEachShape(t *testing.T) {
 			want:     routeRequest{Endpoint: "responses", ToolNames: []string{"apply_patch"}, Effort: "medium"},
 		},
 		{
-			name:     "names capped and cut",
+			name:     "names capped, long ones left out",
 			endpoint: "/v1/messages",
 			body:     `{"tools":[{"name":"` + strings.Repeat("n", 80) + `"},` + strings.Join(many, ",") + `],"messages":[]}`,
 		},
@@ -59,8 +59,8 @@ func TestRequestFromEachShape(t *testing.T) {
 	for _, c := range cases {
 		root, _ := jsonsplice.Root([]byte(c.body))
 		got := requestFor(gateway.RouteAsk{Endpoint: c.endpoint, Body: []byte(c.body)}, root)
-		if c.name == "names capped and cut" {
-			if len(got.ToolNames) != 128 || got.ToolNames[0] != strings.Repeat("n", 64) || got.ToolNames[127] != "tool_126" {
+		if c.name == "names capped, long ones left out" {
+			if len(got.ToolNames) != 128 || got.ToolNames[0] != "tool_0" || got.ToolNames[127] != "tool_127" {
 				t.Errorf("%s: %d names, first %q, last %q", c.name, len(got.ToolNames), got.ToolNames[0], got.ToolNames[len(got.ToolNames)-1])
 			}
 			continue
@@ -68,6 +68,33 @@ func TestRequestFromEachShape(t *testing.T) {
 		if fmt.Sprint(got) != fmt.Sprint(c.want) {
 			t.Errorf("%s:\n got %+v\nwant %+v", c.name, got, c.want)
 		}
+	}
+	// Codex's turn metadata rides in the body when no header carried it; a
+	// header wins, and a value over 16 KiB is left out, never cut.
+	turn := `{"turn_id":"t-1","workspaces":{"/repo":{"has_changes":true}}}`
+	responses := `{"model":"gpt-6-sol","client_metadata":{"x-codex-turn-metadata":` + fmt.Sprintf("%q", turn) + `},"input":"go"}`
+	root, _ := jsonsplice.Root([]byte(responses))
+	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/responses", Body: []byte(responses)}, root); got.Labels["x-codex-turn-metadata"] != turn {
+		t.Errorf("body turn metadata = %v", got.Labels)
+	}
+	header := map[string]string{"x-codex-turn-metadata": "from-header"}
+	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/responses", Body: []byte(responses), Labels: header}, root); got.Labels["x-codex-turn-metadata"] != "from-header" || len(header) != 1 {
+		t.Errorf("header turn metadata = %v (asked labels %v)", got.Labels, header)
+	}
+	huge := `{"client_metadata":{"x-codex-turn-metadata":"` + strings.Repeat("x", 16<<10+1) + `"},"input":"go"}`
+	root, _ = jsonsplice.Root([]byte(huge))
+	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/responses", Body: []byte(huge)}, root); got.Labels != nil {
+		t.Errorf("an oversized turn metadata went: %d labels", len(got.Labels))
+	}
+	// A forked Claude Code child names the agent type of the call that spawned it.
+	forked := `{"messages":[{"role":"user","content":"plan it"},{"role":"assistant","content":[{"type":"text","text":"Planning."},{"type":"tool_use","id":"t","name":"Task","input":{"description":"plan","prompt":"p","subagent_type":"Plan"}}]},{"role":"user","content":"child prompt"}]}`
+	root, _ = jsonsplice.Root([]byte(forked))
+	child := map[string]string{"x-claude-code-agent-id": "a1"}
+	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(forked), Labels: child}, root); got.Labels["x-caveman-agent"] != "Plan" || len(child) != 1 {
+		t.Errorf("forked child labels = %v", got.Labels)
+	}
+	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(forked)}, root); got.Labels["x-caveman-agent"] != "" {
+		t.Errorf("a main request got an agent type: %v", got.Labels)
 	}
 	labels := map[string]string{"x-claude-code-request-class": "main"}
 	if got := requestFor(gateway.RouteAsk{Endpoint: "/v1/messages", Body: []byte(`{}`), Labels: labels, PerMessageOff: true}, jsonsplice.Span{Start: 0, End: 2}); got.Labels["x-claude-code-request-class"] != "main" || !got.PerMessageOff {

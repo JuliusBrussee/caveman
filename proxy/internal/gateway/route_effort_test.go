@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -22,17 +24,30 @@ func TestRouteRunReadsLabelsAndSessionKeys(t *testing.T) {
 	h.Set("X-Claude-Code-Agent-Id", "agent-7")
 	h.Set("X-Claude-Code-Parent-Agent-Id", "agent-3")
 	h.Set("X-Claude-Code-Request-Class", "subagent")
-	h.Set("X-Codex-Turn-Metadata", strings.Repeat("é", 200)) // 400 bytes
+	h.Set("X-Codex-Turn-Metadata", strings.Repeat("é", 2000)) // 4000 bytes: within its 16 KiB
+	h.Set("X-Openai-Subagent", strings.Repeat("s", 257))      // over 256: left out, never cut
 	h.Set("X-Unlisted", "never sent")
 	run := newRouteRun(h, "")
 	if run.key != "sess-1#agent-7" || run.parent != "sess-1#agent-3" || run.perRequest || run.compacted {
 		t.Fatalf("run = %+v", run)
 	}
-	if len(run.labels) != 4 || run.labels["x-claude-code-request-class"] != "subagent" || run.labels["x-unlisted"] != "" {
+	if len(run.labels) != 4 || run.labels["x-claude-code-request-class"] != "subagent" || run.labels["x-unlisted"] != "" || run.labels["x-openai-subagent"] != "" {
 		t.Fatalf("labels = %v", run.labels)
 	}
-	if got := run.labels["x-codex-turn-metadata"]; len(got) != 256 || got != strings.Repeat("é", 128) {
-		t.Errorf("a long label is %d bytes, want 256 cut on a rune boundary", len(got))
+	if got := run.labels["x-codex-turn-metadata"]; got != strings.Repeat("é", 2000) {
+		t.Errorf("turn metadata is %d bytes, want it whole", len(got))
+	}
+	h.Set("X-Codex-Turn-Metadata", strings.Repeat("x", 16<<10+1))
+	if got := newRouteRun(h, "").labels["x-codex-turn-metadata"]; got != "" {
+		t.Errorf("turn metadata over 16 KiB went (%d bytes)", len(got))
+	}
+	// A Codex thread is its own session; a child thread hangs off its parent's.
+	codex := http.Header{}
+	codex.Set("Session-Id", "codex-session")
+	codex.Set("Thread-Id", "thread-2")
+	codex.Set("X-Codex-Parent-Thread-Id", "thread-1")
+	if run := newRouteRun(codex, ""); run.key != "thread-2" || run.parent != "thread-1" || run.labels["thread-id"] != "thread-2" || run.labels["x-codex-parent-thread-id"] != "thread-1" {
+		t.Errorf("codex child thread: %+v", run)
 	}
 	// The caller's x-cave-session wins; a child without a parent agent hangs off the session.
 	h.Del("X-Claude-Code-Parent-Agent-Id")
@@ -734,5 +749,44 @@ func TestRefusedEffortRejectsTheDecision(t *testing.T) {
 	srv.Handler().ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK || len(sent) != 2 || rejected != 1 {
 		t.Fatalf("status %d, attempts %d, rejected %d", rec.Code, len(sent), rejected)
+	}
+}
+
+// Every label the gateway reads is one route-ask-v1 allows, at the same bound.
+func TestRouteLabelsMatchTheContract(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "packages", "shared", "contracts", "schemas", "route-ask-v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Properties struct {
+			Request struct {
+				Properties struct {
+					Labels struct {
+						Properties map[string]struct {
+							Ref       string `json:"$ref"`
+							MaxLength int    `json:"maxLength"`
+						} `json:"properties"`
+					} `json:"labels"`
+				} `json:"properties"`
+			} `json:"request"`
+		} `json:"properties"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	allowed := schema.Properties.Request.Properties.Labels.Properties
+	if len(allowed) != len(routeLabelNames) {
+		t.Errorf("the contract allows %d labels, the gateway reads %d", len(allowed), len(routeLabelNames))
+	}
+	for _, name := range routeLabelNames {
+		spec, ok := allowed[name]
+		bound := spec.MaxLength
+		if spec.Ref == "#/$defs/label" {
+			bound = 256
+		}
+		if !ok || bound != RouteLabelMax(name) {
+			t.Errorf("%s: in the contract %v, bound %d, gateway %d", name, ok, bound, RouteLabelMax(name))
+		}
 	}
 }

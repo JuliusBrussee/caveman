@@ -136,6 +136,17 @@ var routeLabelNames = []string{
 	"x-claude-code-request-class", "x-claude-code-compaction", "x-claude-code-agent-id",
 	"x-claude-code-parent-agent-id", "x-claude-code-context-compacted", "x-openai-subagent",
 	"x-codex-turn-metadata", "x-caveman-agent", "x-parent-session-id",
+	"x-codex-parent-thread-id", "thread-id",
+}
+
+// RouteLabelMax is the most bytes a label value may have; a longer one is left
+// out, never cut (Cloud refuses a cut value). Codex's turn metadata is JSON and
+// may be longer.
+func RouteLabelMax(name string) int {
+	if name == "x-codex-turn-metadata" {
+		return 16 << 10
+	}
+	return 256
 }
 
 // routeRun carries one request's route-stage facts from the ask to the response.
@@ -156,28 +167,32 @@ type routeRun struct {
 }
 
 // newRouteRun reads the labels and the session keys. The session is the
-// caller's session id when it is exact, else the agent's own session header; a
-// Claude Code child (x-claude-code-agent-id) is that plus its agent id.
+// caller's session id when it is exact, else the agent's own session header
+// (a Codex thread is its own session); a Claude Code child
+// (x-claude-code-agent-id) is that plus its agent id.
 func newRouteRun(h http.Header, sessionID string) *routeRun {
 	run := &routeRun{labels: map[string]string{}}
 	for _, name := range routeLabelNames {
-		if value := h.Get(name); value != "" {
-			run.labels[name] = cutBytes(value, 256)
+		if value := h.Get(name); value != "" && len(value) <= RouteLabelMax(name) {
+			run.labels[name] = value
 		}
 	}
-	for _, name := range []string{"x-claude-code-session-id", "session-id", "session_id"} {
+	for _, name := range []string{"x-claude-code-session-id", "thread-id", "session-id", "session_id"} {
 		if sessionID == "" {
 			sessionID = cutBytes(h.Get(name), 256)
 		}
 	}
 	if run.key = sessionID; sessionID != "" {
-		if agent := run.labels["x-claude-code-agent-id"]; agent != "" {
+		switch agent := run.labels["x-claude-code-agent-id"]; {
+		case agent != "":
 			run.key, run.parent = sessionID+"#"+agent, sessionID
 			if parent := run.labels["x-claude-code-parent-agent-id"]; parent != "" {
 				run.parent += "#" + parent
 			}
-		} else if parent := run.labels["x-parent-session-id"]; parent != "" {
-			run.parent = parent
+		case run.labels["x-codex-parent-thread-id"] != "":
+			run.parent = run.labels["x-codex-parent-thread-id"]
+		case run.labels["x-parent-session-id"] != "":
+			run.parent = run.labels["x-parent-session-id"]
 		}
 	}
 	class := strings.ToLower(run.labels["x-claude-code-request-class"])

@@ -98,8 +98,10 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `$CAVEMAN_HOME/cloud.json`, for API-key Anthropic Messages / OpenAI chat or responses requests
   whose model is in the same-provider pool (subscription traffic never routes, ADR 0083 §7). The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
-  caller's models, counts, what the request declares (the raw values of nine allowlisted agent
-  headers, its tool names, effort and thinking type), what the session's previous request ran
+  caller's models, counts, what the request declares (the raw values of eleven allowlisted agent
+  headers, never cut: a value over 256 bytes, 16 KiB for Codex's turn metadata, which also comes
+  from the body's `client_metadata`, is left out; a forked Claude Code child's spawn-call
+  `subagent_type` as `x-caveman-agent`; its tool names, effort and thinking type), what the session's previous request ran
   (the served model, the effort in force, the provider's input and cache token counts, its age)
   and Cloud's opaque per-session state, plus, on a turn's first ask, the raw text of the latest
   human turn, the one before it and the end of the agent's last reply (contracts `route-ask-v1`;
@@ -107,7 +109,8 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   per ask (session, provider, model, turn number, latest human text; an input group carrying a
   tool result is no human turn, text riding along included) so a tool loop never switches model
   or effort mid-turn; a request the agent labels compaction or auxiliary is asked on its own,
-  without the text. The session is `x-cave-session`, else the agent's session header; a Claude
+  without the text. The session is `x-cave-session`, else the agent's session header (a Codex
+  thread, `thread-id`, is its own, its parent `x-codex-parent-thread-id`); a Claude
   Code child (`x-claude-code-agent-id`) is a session of its own and sends its parent's state;
   a session id guessed from timing is not used. State, previous-request facts and marks live in
   bounded in-memory LRUs (1024), never on disk. The answer sets Responses `reasoning.effort`,

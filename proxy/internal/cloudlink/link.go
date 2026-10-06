@@ -27,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -515,10 +516,23 @@ type routeRequest struct {
 }
 
 // requestFor reads routeRequest from the body: the declared tool names (at
-// most 128, each cut to 64 bytes), the top-level effort field, and Anthropic's
-// thinking.type. Labels come as the gateway read them.
+// most 128; a name over 64 bytes is left out), the top-level effort and
+// Anthropic's thinking.type when they are values the contract knows (else ""),
+// and two labels a body can carry: Codex's turn metadata from client_metadata
+// when no header carried it, and on a Claude Code child the agent type of the
+// spawn call it was forked from (x-caveman-agent). A label over its bound is
+// left out, never cut.
 func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
-	out := routeRequest{Endpoint: "messages", Labels: ask.Labels, PerMessageOff: ask.PerMessageOff}
+	out := routeRequest{Endpoint: "messages", PerMessageOff: ask.PerMessageOff}
+	labels := maps.Clone(ask.Labels)
+	label := func(name, value string) {
+		if _, set := labels[name]; !set && value != "" && len(value) <= gateway.RouteLabelMax(name) {
+			if labels == nil {
+				labels = map[string]string{}
+			}
+			labels[name] = value
+		}
+	}
 	body := ask.Body
 	var effort string
 	switch {
@@ -526,6 +540,9 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 		out.Endpoint = "responses"
 		reasoning, _ := jsonsplice.Field(body, root, "reasoning")
 		effort, _ = jsonsplice.StringField(body, reasoning, "effort")
+		metadata, _ := jsonsplice.Field(body, root, "client_metadata")
+		turn, _ := jsonsplice.StringField(body, metadata, "x-codex-turn-metadata")
+		label("x-codex-turn-metadata", turn)
 	case strings.HasSuffix(ask.Endpoint, "/chat/completions"):
 		out.Endpoint = "chat"
 		effort, _ = jsonsplice.StringField(body, root, "reasoning_effort")
@@ -536,8 +553,14 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 		if kind, _ := jsonsplice.StringField(body, thinking, "type"); slices.Contains([]string{"adaptive", "enabled", "disabled", "between_tools"}, kind) {
 			out.Thinking = kind
 		}
+		if labels["x-claude-code-agent-id"] != "" {
+			label("x-caveman-agent", spawnedAgentType(body, root))
+		}
 	}
-	out.Effort = truncate(effort, 32)
+	if slices.Contains([]string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}, effort) {
+		out.Effort = effort
+	}
+	out.Labels = labels
 	list, _ := jsonsplice.Field(body, root, "tools")
 	tools, _ := jsonsplice.Elements(body, list)
 	for _, tool := range tools {
@@ -549,11 +572,36 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 			function, _ := jsonsplice.Field(body, tool, "function")
 			name, _ = jsonsplice.StringField(body, function, "name")
 		}
-		if name = truncate(name, 64); name != "" {
+		if name != "" && len(name) <= 64 {
 			out.ToolNames = append(out.ToolNames, name)
 		}
 	}
 	return out
+}
+
+// spawnedAgentType is the subagent_type of a tool call in the newest
+// assistant message (a forked child resends its parent's history up to the
+// call that spawned it), or "". Only that message's tool_use inputs are read.
+func spawnedAgentType(body []byte, root jsonsplice.Span) string {
+	list, _ := jsonsplice.Field(body, root, "messages")
+	items, _ := jsonsplice.Elements(body, list)
+	for i := len(items) - 1; i >= 0; i-- {
+		if role, _ := jsonsplice.StringField(body, items[i], "role"); role != "assistant" {
+			continue
+		}
+		content, _ := jsonsplice.Field(body, items[i], "content")
+		blocks, _ := jsonsplice.Elements(body, content)
+		for j := len(blocks) - 1; j >= 0; j-- {
+			if kind, _ := jsonsplice.StringField(body, blocks[j], "type"); kind == "tool_use" {
+				input, _ := jsonsplice.Field(body, blocks[j], "input")
+				if agentType, _ := jsonsplice.StringField(body, input, "subagent_type"); agentType != "" {
+					return agentType
+				}
+			}
+		}
+		return ""
+	}
+	return ""
 }
 
 // The contract's bounds, in bytes.
