@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -80,11 +81,7 @@ func injectRetrieveTool(provider, routePath string, body []byte) ([]byte, bool) 
 		if len(elements) > 0 {
 			prefix = []byte(",")
 		}
-		out := make([]byte, 0, len(body)+len(prefix)+len(toolBytes))
-		out = append(out, body[:insertAt]...)
-		out = append(out, prefix...)
-		out = append(out, toolBytes...)
-		out = append(out, body[insertAt:]...)
+		out := slices.Concat(body[:insertAt], prefix, toolBytes, body[insertAt:])
 		return out, json.Valid(out)
 	}
 
@@ -93,12 +90,7 @@ func injectRetrieveTool(provider, routePath string, body []byte) ([]byte, bool) 
 	if gatewayObjectEmpty(body, root) {
 		prefix = []byte(`"tools":[`)
 	}
-	out := make([]byte, 0, len(body)+len(prefix)+len(toolBytes)+1)
-	out = append(out, body[:insertAt]...)
-	out = append(out, prefix...)
-	out = append(out, toolBytes...)
-	out = append(out, ']')
-	out = append(out, body[insertAt:]...)
+	out := slices.Concat(body[:insertAt], prefix, toolBytes, []byte{']'}, body[insertAt:])
 	if !json.Valid(out) {
 		return body, false
 	}

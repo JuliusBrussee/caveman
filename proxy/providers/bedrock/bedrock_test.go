@@ -122,6 +122,10 @@ func TestResolveUpstreamURL_MantleIsOptInAndUsesOfficialHost(t *testing.T) {
 	if got != want {
 		t.Fatalf("Mantle upstream = %q, want %q", got, want)
 	}
+	// The Mantle host comes from the configured endpoint, never the caller header.
+	if got, err := resolve(t, a, path, map[string]string{"x-cave-aws-region": "us-east-1"}); err == nil {
+		t.Fatalf("caller region steered Mantle host to %q", got)
+	}
 }
 
 func TestResolveUpstreamURL_RejectsConfiguredEndpointKindMismatch(t *testing.T) {

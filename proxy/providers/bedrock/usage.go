@@ -566,7 +566,7 @@ func bedrockNonNegativeInt(v any) (int, bool) {
 	default:
 		return 0, false
 	}
-	if n64 < 0 || uint64(n64) > uint64(^uint(0)>>1) {
+	if n64 < 0 || n64 > math.MaxInt {
 		return 0, false
 	}
 	return int(n64), true

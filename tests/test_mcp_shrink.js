@@ -563,5 +563,20 @@ test('the default grace period is a real duration', () => {
   assert.ok(DEFAULT_GRACE_MS >= 1000, `grace period too short: ${DEFAULT_GRACE_MS}ms`);
 });
 
+test('protected patterns stay linear on adversarial descriptions (CodeQL js/polynomial-redos)', () => {
+  // The path, dotted and function-call patterns used to retry from every
+  // position inside a run, so these took seconds at 40 KB. Linear on these
+  // inputs; an unclosed `a(a(a(` run is still quadratic (pre-existing).
+  for (const s of ['A'.repeat(40000), 'a.'.repeat(20000), 'a-'.repeat(20000), 'A1'.repeat(20000)]) {
+    const t0 = Date.now();
+    compress(s);
+    assert.ok(Date.now() - t0 < 200, `compress took ${Date.now() - t0}ms on ${JSON.stringify(s.slice(0, 4))}…`);
+  }
+  // Leftmost-match semantics unchanged: digits leading an identifier, and a
+  // path whose run opens with "." still protect the same text.
+  assert.strictEqual(compress('9run(the very thing)').compressed, '9run(the very thing)');
+  assert.strictEqual(compress('see .just/x now').compressed, 'See.just/x now');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

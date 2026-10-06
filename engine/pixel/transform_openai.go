@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"strings"
 )
 
@@ -732,7 +733,7 @@ func responsesStaticContentText(content any) string {
 
 func setOpenAIChatTextContent(msg map[string]any, text string) {
 	if arr, ok := msg["content"].([]any); ok {
-		kept := make([]any, 0, len(arr)+1)
+		kept := make([]any, 0, len(arr))
 		kept = append(kept, map[string]any{"type": "text", "text": text})
 		for _, p := range arr {
 			m, ok := p.(map[string]any)
@@ -749,7 +750,7 @@ func setOpenAIChatTextContent(msg map[string]any, text string) {
 
 func setResponsesTextContent(msg map[string]any, text string) {
 	if arr, ok := msg["content"].([]any); ok {
-		kept := make([]any, 0, len(arr)+1)
+		kept := make([]any, 0, len(arr))
 		kept = append(kept, map[string]any{"type": "input_text", "text": text})
 		for _, p := range arr {
 			m, ok := p.(map[string]any)
@@ -817,19 +818,11 @@ func nonEmptyStrings(values []string) []string {
 }
 
 func insertAny(items []any, idx int, value any) []any {
-	out := make([]any, 0, len(items)+1)
-	out = append(out, items[:idx]...)
-	out = append(out, value)
-	out = append(out, items[idx:]...)
-	return out
+	return slices.Concat(items[:idx], []any{value}, items[idx:])
 }
 
 func replaceRangeWith(items []any, start, end int, values ...any) []any {
-	out := make([]any, 0, len(items)-(end-start)+len(values))
-	out = append(out, items[:start]...)
-	out = append(out, values...)
-	out = append(out, items[end:]...)
-	return out
+	return slices.Concat(items[:start], values, items[end:])
 }
 
 func setRawJSON(root map[string]json.RawMessage, key string, value any) {
