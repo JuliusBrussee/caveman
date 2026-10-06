@@ -10,6 +10,29 @@ const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.j
 
 export const HARNESS_FILES = [".claude/settings.json", ".claude.json", ".codex/config.toml", ".codex/hooks.json"];
 
+// A caveman-blocks stand-in that behaves like rc.2: `version --json` names
+// hooks_status_json; hooks status/install/uninstall act on each --harness
+// (default: every harness whose home exists); install talks; and
+// $HOME/.blocks-fail fails it. Hook state lives outside the harness files so
+// their round-trip stays exact.
+export const FAKE_BLOCKS = `cmd="$1 $2"
+if [ $# -ge 2 ]; then shift 2; else shift $#; fi
+names=
+while [ $# -gt 0 ]; do if [ "$1" = --harness ]; then names="$names $2"; shift; fi; shift; done
+if [ -z "$names" ]; then for h in claude-code:.claude codex:.codex; do [ -d "$HOME/\${h#*:}" ] && names="$names \${h%%:*}"; done; fi
+case "$cmd" in
+  "version --json") printf '%s\\n' '{"version":"test","capabilities":["hooks_status_json"]}' ;;
+  "hooks status") sep=; printf '{"version":"test","harnesses":['
+    for n in $names; do if [ -f "$HOME/.blocks-$n" ]; then i=true; else i=false; fi; printf '%s{"name":"%s","installed":%s}' "$sep" "$n" "$i"; sep=,; done
+    printf ']}\\n' ;;
+  "hooks install") if [ -f "$HOME/.blocks-fail" ]; then echo "binary: copied"; echo "codex: cannot write ~/.codex/hooks.json: permission denied" >&2; exit 1; fi
+    echo "binary: $HOME/.local/bin/caveman-blocks (copied)"
+    for n in $names; do : > "$HOME/.blocks-$n"; echo "$n: installed"; done
+    echo "  Codex trusts each new or changed hook once: open /hooks in Codex and approve it."
+    echo install >> "$HOME/blocks.log" ;;
+  "hooks uninstall") for n in $names; do rm -f "$HOME/.blocks-$n"; done; echo uninstall >> "$HOME/blocks.log" ;;
+esac`;
+
 export function modulesFixture({ agents = ["claude", "codex"], binaries = true, blocks = false } = {}) {
   const home = mkdtempSync(join(tmpdir(), "caveman-modules-"));
   const bin = join(home, "bin");
@@ -35,15 +58,7 @@ esac`),
     CAVEMAN_BROWSE_BIN: script("caveman-browse", "exit 0"),
   };
   if (!binaries) for (const key of Object.keys(bins)) bins[key] = join(home, "missing", key);
-  if (blocks) {
-    // Hook state lives outside the harness files so their round-trip stays exact.
-    script("caveman-blocks", `case "$1 $2" in
-  "hooks status") if [ -f "$HOME/.blocks-hooks" ]; then i=true; else i=false; fi
-    printf '{"version":"test","harnesses":[{"name":"claude-code","installed":%s},{"name":"codex","installed":%s}]}\\n' $i $i ;;
-  "hooks install") : > "$HOME/.blocks-hooks"; echo install >> "$HOME/blocks.log" ;;
-  "hooks uninstall") rm -f "$HOME/.blocks-hooks"; echo uninstall >> "$HOME/blocks.log" ;;
-esac`);
-  }
+  if (blocks) script("caveman-blocks", FAKE_BLOCKS);
   return {
     home,
     bin,
@@ -61,6 +76,9 @@ esac`);
       CAVEMAN_LISTEN: "127.0.0.1:9",
       CAVE_API_URL: "http://127.0.0.1:9",
       CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",
+      // Nothing downloads from the real release.
+      CAVE_BINARY_RELEASE_BASE: "http://127.0.0.1:9",
+      CAVEMAN_BLOCKS_BIN: blocks ? join(bin, "caveman-blocks") : join(home, "missing", "caveman-blocks"),
       ...bins,
     },
     cleanup() {

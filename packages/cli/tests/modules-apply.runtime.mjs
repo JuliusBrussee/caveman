@@ -81,6 +81,89 @@ test("on → off → on round-trips harness files byte for byte", async () => {
   }
 });
 
+test("a failed Blocks install prints Blocks' full output", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    writeFileSync(join(fx.home, ".blocks-fail"), "");
+    const out = await runCli(["on", "scripts", "--yes"], fx.env);
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /^✗ caveman-blocks hooks install failed\nbinary: copied\ncodex: cannot write ~\/\.codex\/hooks\.json: permission denied$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// rc.1 and older answer --json with "unknown flag" and exit 2. Such a copy on
+// PATH is passed over for the signed one; when that cannot download, nothing
+// claims scripts is ready and every surface says what to do.
+test("a Blocks older than rc.2 on PATH is never called ready", async () => {
+  const fx = modulesFixture();
+  const env = { ...fx.env };
+  delete env.CAVEMAN_BLOCKS_BIN;
+  try {
+    writeFileSync(join(fx.bin, "caveman-blocks"), "#!/bin/sh\ncase \"$*\" in *--json*) echo 'caveman-blocks: unknown flag: --json' >&2; exit 2 ;; esac\necho ok\n", { mode: 0o755 });
+    const old = "~/bin/caveman-blocks is older than Blocks rc.2 · update or remove it";
+    const on = await runCli(["on", "scripts", "--yes"], env);
+    assert.match(on.stdout, /^ {2}DOWNLOAD +caveman-blocks +signed, if bin-\S+ carries it$/m, "the plan never promises a Blocks download the release may not carry");
+    assert.doesNotMatch(on.stdout, /scripts ready/);
+    assert.ok(on.stdout.includes(`○ scripts: ${old}\n`), on.stdout);
+    const scripts = JSON.parse((await runCli(["status", "--json"], env)).stdout).modules.find((state) => state.id === "scripts");
+    assert.deepEqual([scripts.active, scripts.reason], [false, old]);
+    const doctor = await runCli(["doctor"], env);
+    assert.ok(doctor.stdout.includes(`✗ scripts: ${old}, or caveman off scripts\n`), doctor.stdout);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("turning scripts off on a fresh hub config leaves hooks Blocks' own installer wrote", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    writeFileSync(join(fx.home, ".blocks-claude-code"), "");
+    const out = await runCli(["setup", "--yes", "--skip", "scripts"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /hooks uninstall/);
+    assert.ok(existsSync(join(fx.home, ".blocks-claude-code")), "the user's own hook was removed");
+    assert.equal(existsSync(join(fx.home, "blocks.log")), false);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("Blocks hooks only the selected agents, and an agent wired later gets its hook in that run", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    mkdirSync(join(fx.home, ".codex"), { recursive: true });
+    const first = await runCli(["setup", "--yes", "--only", "scripts", "--agents", "claude"], fx.env);
+    assert.equal(first.code, 0, first.stderr);
+    assert.match(first.stdout, /^ {2}RUN +caveman-blocks hooks install +Claude Code$/m);
+    assert.match(first.stdout, /^✓ scripts ready \(Claude Code\)$/m);
+    assert.doesNotMatch(first.stdout, /Codex asks once/);
+    assert.equal(existsSync(join(fx.home, ".blocks-codex")), false, "Codex was hooked without being selected");
+
+    // scripts is not named, but output wires Codex in this run.
+    const output = await runCli(["on", "output", "--yes"], fx.env);
+    assert.equal(output.code, 0, output.stderr);
+    assert.match(output.stdout, /^✓ Codex wired\n(?:.*\n)*✓ scripts ready \(Claude Code, Codex\)\n {2}Codex asks once/m);
+    assert.ok(existsSync(join(fx.home, ".blocks-codex")));
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("scripts with only agents Blocks cannot hook says it stays idle", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    writeFileSync(join(fx.bin, "gemini"), "#!/bin/sh\necho gemini\n", { mode: 0o755 });
+    const out = await runCli(["setup", "--yes", "--only", "scripts", "--agents", "gemini"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /^note: scripts stays idle: none of the selected agents takes its hook \(Claude Code, Codex, opencode\)$/m, out.stdout);
+    assert.doesNotMatch(out.stdout, /scripts ready/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("off keeps agent wiring while another module needs it", async () => {
   const fx = modulesFixture({ agents: ["claude"], blocks: true });
   const journal = () => existsSync(join(fx.home, ".caveman", "integrations", "claude.json"));

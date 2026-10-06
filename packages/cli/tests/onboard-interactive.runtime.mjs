@@ -7,7 +7,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { PassThrough } from "node:stream";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { modulesFixture } from "./_modules.mjs";
+import { modulesFixture, runCli } from "./_modules.mjs";
 
 // The interactive first run, two ways: in-process with a fake terminal (keys
 // in, text out) for the flow itself, and end to end through the real CLI under
@@ -236,6 +236,47 @@ test("end to end: a No at the agent door is remembered; caveman claude stops ask
   }
 });
 
+// Real gemini and opencode write their home (~/.gemini, ~/.local/share/opencode)
+// on any run, `--version` included, so nothing may run an agent before Continue,
+// and status before setup reads agents from PATH alone.
+test("end to end: before Continue nothing runs a detected agent, through a declined first run, setup, --dry-run, on and status", { skip: hasExpect() ? false : "expect(1) not installed", timeout: 60_000 }, async () => {
+  const box = modulesFixture({ agents: [] });
+  const ran = join(box.home, "agents-ran");
+  for (const agent of ["claude", "codex", "gemini", "opencode"]) {
+    writeFileSync(join(box.bin, agent), `#!/bin/sh\necho "${agent} $*" >> "${ran}"\necho '${agent} 1.0.0'\n`, { mode: 0o755 });
+  }
+  const script = join(box.home, "decline.exp");
+  writeFileSync(script, [
+    "set timeout 20",
+    `spawn -noecho ${process.execPath} ${cli} setup`,
+    'expect "space toggles"', "sleep 0.2", 'send "\\r"',
+    'expect "Agents"', "sleep 0.2", 'send "\\r"',
+    'expect "Continue?"', "sleep 0.6", 'send "n"',
+    "expect eof",
+    "",
+  ].join("\n"));
+  const env = { ...box.env, TERM: "xterm" };
+  delete env.CI;
+  const agentRuns = () => existsSync(ran) ? readFileSync(ran, "utf8") : "";
+  try {
+    const declined = await expectRun(script, env);
+    assert.match(declined.text, /Found Claude Code, Codex, Gemini and opencode\n/, "no version without running the agent");
+    assert.match(declined.text, /CREATE +~\/\.config\/opencode\/plugins\/caveman-native\.js/, "the plan still names every file");
+    assert.match(declined.text, /Nothing changed · caveman setup when you want it/);
+    assert.equal(agentRuns(), "", "a declined first run ran an agent");
+    for (const argv of [["setup"], ["setup", "--dry-run"], ["on", "output"], ["status"], ["status", "--json"]]) {
+      const out = await runCli(argv, box.env);
+      assert.equal(agentRuns(), "", `caveman ${argv.join(" ")} ran an agent`);
+      if (argv[1] === "--json" && argv[0] === "status") {
+        const gemini = JSON.parse(out.stdout).native_integrations.find((item) => item.agent === "gemini");
+        assert.deepEqual([gemini.binary_present, gemini.state], [true, "available"], "an agent on PATH still shows as present");
+      }
+    }
+  } finally {
+    box.cleanup();
+  }
+});
+
 test("end to end: at the agent door, unticking every wiring module never wires the agent", { skip: hasExpect() ? false : "expect(1) not installed", timeout: 60_000 }, async () => {
   const box = modulesFixture();
   const env = { ...box.env, TERM: "xterm" };
@@ -321,7 +362,7 @@ test("end to end: caveman setup in a terminal against a Cloud that refuses sign-
       child.on("error", reject);
     });
     assert.equal(out.code, 0, out.text);
-    assert.match(out.text, /Found Claude Code 1\.0 and Codex 1\.0/);
+    assert.match(out.text, /Found Claude Code and Codex\n/, "no version before the agent was ever wired");
     // One line per step between Continue and sign-in; enable's own report stays out.
     assert.match(out.text, /Continue\? › Yes\n✓ Claude Code wired\n✓ Codex wired\n○ local runtime starts with your next agent session\n○ scripts: caveman-blocks not installed yet\n\nRouting needs a free Caveman account\.\n/);
     assert.doesNotMatch(out.text, /planned user-scoped writes|native Caveman enabled|→ /);

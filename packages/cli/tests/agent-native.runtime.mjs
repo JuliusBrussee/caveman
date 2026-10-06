@@ -222,7 +222,10 @@ test("setup --agent-native preserves an unjournaled Claude cloud MCP registratio
     writeFileSync(claude, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'claude 1.0.0'; fi\n", { mode: 0o755 });
     writeFileSync(mcp, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
     writeFileSync(proxy, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
-    Object.assign(isolated.env, { PATH: `${bin}:${isolated.env.PATH}`, CAVEMAN_MCP_BIN: mcp, CAVEMAN_PROXY_BIN: proxy });
+    // Each run probes these stubs several times (preflight, enable, postflight)
+    // under a 2-3s cap; a loaded box can miss it, and a missed claude probe
+    // fails the postflight as "unavailable" and rolls the setup back.
+    Object.assign(isolated.env, { PATH: `${bin}:${isolated.env.PATH}`, CAVEMAN_MCP_BIN: mcp, CAVEMAN_PROXY_BIN: proxy, CAVE_BINARY_PROBE_TIMEOUT_MS: "10000" });
     const configPath = join(isolated.home, ".claude.json");
     const before = JSON.stringify({ mcpServers: { "caveman-cloud": { command: "user-command", args: ["keep"] } }, theme: "keep" }, null, 2) + "\n";
     writeFileSync(configPath, before);

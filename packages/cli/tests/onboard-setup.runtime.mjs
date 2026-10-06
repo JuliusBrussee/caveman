@@ -23,7 +23,7 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   try {
     const out = await runCli(["setup", "--yes"], fx.env);
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /^caveman · make your coding agent cheaper\n\nFound Claude Code 1\.0 and Codex 1\.0\n/);
+    assert.match(out.stdout, /^caveman · make your coding agent cheaper\n\nFound Claude Code and Codex\n/);
     assert.match(out.stdout, /\nModules {2}output · input · waste fixes · routing · scripts · browse\nAgents {3}Claude Code · Codex\n/);
     assert.match(out.stdout, /\nThis will\n(?: {2}[A-Z]+ .*\n)*  CREATE +~\/\.caveman\/cloud\.json +modules on: output, input, waste-fixes, routing, scripts, browse\n/, "the plan is printed");
     assert.match(out.stdout, /\n {2}CREATE +~\/\.claude\/settings\.json +claude settings\n/);
@@ -32,6 +32,24 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
     assert.match(out.stdout, /routing is on and starts after you sign in · caveman login/, "no sign-in prompt without a terminal");
     assert.match(out.stdout, /✓ Ready\. Try: {2}caveman claude {6}See it: {2}caveman status\n/);
     assert.deepEqual(modules(fx), { output: true, input: true, "waste-fixes": true, routing: true, scripts: true, browse: true });
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Blocks' installer talks (binary copied, one line per harness, trust notes);
+// setup says one line, plus the one thing the user still has to do.
+test("setup --yes says one line for scripts and keeps only the caveat that needs the user", { skip }, async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /\n✓ scripts ready \(Claude Code, Codex\)\n {2}Codex asks once: open \/hooks in Codex and approve the caveman-blocks hook\n/);
+    assert.doesNotMatch(out.stdout + out.stderr, /binary:|: installed|trusts each/, "Blocks' own output stays out");
+    const again = await runCli(["off", "scripts", "--yes"], fx.env);
+    assert.equal(again.code, 0, again.stderr);
+    const on = await runCli(["on", "scripts", "--yes"], fx.env);
+    assert.match(on.stdout, /^✓ scripts ready \(Claude Code, Codex\)$/m);
   } finally {
     fx.cleanup();
   }
@@ -78,6 +96,7 @@ test("--only, --skip and --agents pick modules and agents; a re-run keeps the cu
     const again = await runCli(["setup", "--yes"], fx.env);
     assert.equal(again.code, 0, again.stderr);
     assert.match(again.stdout, /\nModules {2}output · input\n/, "re-running starts from what is on, not the defaults");
+    assert.match(again.stdout, /\nFound Claude Code and Codex 1\.0\n/, "a wired agent's version comes from its journal, not from running it");
   } finally {
     fx.cleanup();
   }

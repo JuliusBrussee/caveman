@@ -40,6 +40,8 @@ export type ModuleHost = {
   binaryRelease: string;
   resolveBinary(name: string): string | null;
   installBinaries(modules: ModuleId[]): Promise<void>;
+  // Binaries the hub installed for a module, from modules.lock.json.
+  lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
   which(name: string): string | null;
   // Every agent the native wiring supports, detected on PATH or journaled.
@@ -180,36 +182,78 @@ function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire:
     .map((agent) => agent.id);
 }
 
-// Modules in scope that are on and miss a binary they need.
+// Modules in scope that are on and miss a binary they need. An external
+// binary is missing when no usable copy resolves, unless an override names
+// one: a download would not be the copy used then.
 function binaryNeeds(selection: ModuleSelection, only: ModuleId[] | undefined) {
   const h = moduleHost();
   const on = MODULES.filter((m) => selection[m.id] && inScope(m.id, only));
-  const names = [...new Set(on.flatMap((m) => m.binaries))];
-  const missing = names.filter((name) => !h.resolveBinary(name));
-  return { missing, modules: on.filter((m) => m.binaries.some((name) => missing.includes(name))).map((m) => m.id) };
+  const missingOf = (m: ModuleDef) => [
+    ...m.binaries.filter((name) => !h.resolveBinary(name)),
+    ...(m.external && !externalOverride(m) && !externalBin(m) ? [m.external.binary] : []),
+  ];
+  const missing = [...new Set(on.flatMap(missingOf))];
+  return { missing, modules: on.filter((m) => missingOf(m).length).map((m) => m.id) };
 }
 
-function externalBin(name: string): string | null {
-  const explicit = process.env[`${name.toUpperCase().replace(/-/g, "_")}_BIN`];
+function externalOverride(def: ModuleDef): string | undefined {
+  return process.env[`${def.external!.binary.toUpperCase().replace(/-/g, "_")}_BIN`] || undefined;
+}
+
+// Blocks reports this from `version --json` once it can answer
+// `hooks status --json` (rc.2).
+const STATUS_JSON = "hooks_status_json";
+const answersJson = new Map<string, boolean>();
+
+function reportsStatusJson(bin: string): boolean {
+  let known = answersJson.get(bin);
+  if (known === undefined) {
+    try {
+      const out = runExternal(bin, ["version", "--json"], 5000);
+      const capabilities = (JSON.parse(out.stdout) as { capabilities?: unknown }).capabilities;
+      known = out.status === 0 && Array.isArray(capabilities) && capabilities.includes(STATUS_JSON);
+    } catch {
+      known = false;
+    }
+    answersJson.set(bin, known);
+  }
+  return known;
+}
+
+// The external binary the hub runs: the override, the copy the hub installed
+// (recorded in modules.lock.json), or one on PATH new enough to report its
+// hooks as JSON. A user's own current Blocks stays usable; an older one is
+// passed over for the signed download.
+function externalBin(def: ModuleDef): string | null {
+  const name = def.external!.binary;
+  const explicit = externalOverride(def);
   if (explicit) return existsSync(explicit) ? explicit : null;
   const local = join(process.env.CAVEMAN_HOME ?? join(homedir(), ".caveman"), "bin", process.platform === "win32" ? `${name}.exe` : name);
-  return moduleHost().which(name) ?? (existsSync(local) ? local : null);
+  if (moduleHost().lockedBinaries(def.id).includes(name) && existsSync(local)) return local;
+  const onPath = moduleHost().which(name);
+  return onPath && reportsStatusJson(onPath) ? onPath : null;
 }
 
-function runExternal(bin: string, args: readonly string[], capture: boolean) {
+// Why an external module cannot run: no binary, or the copy that resolves (or
+// the only one on PATH) cannot report its hooks. Undefined when it can.
+function externalProblem(def: ModuleDef, bin: string | null, status: Record<string, boolean> | undefined): string | undefined {
+  if (bin && status) return undefined;
+  const old = bin ?? (externalOverride(def) ? null : moduleHost().which(def.external!.binary));
+  return old ? `${tilde(old)} is older than Blocks rc.2 · update or remove it` : `${def.external!.binary} not installed`;
+}
+
+// Output is captured: the hub says one line per step, and shows the binary's
+// own output only when the step fails.
+function runExternal(bin: string, args: readonly string[], timeout: number) {
   const invocation = portableInvocation(bin, args);
-  return spawnSync(invocation.command, invocation.args, {
-    encoding: "utf8",
-    timeout: capture ? 5000 : 120_000,
-    stdio: capture ? ["ignore", "pipe", "ignore"] : ["ignore", 2, 2],
-  });
+  return spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout, stdio: ["ignore", "pipe", "pipe"] });
 }
 
 // Harness name → hook installed, from `<binary> hooks status --json`
 // ({ harnesses: [{ name, installed }] }). Undefined when the binary cannot say.
-function externalStatus(def: ModuleDef, bin: string): Record<string, boolean> | undefined {
+function externalStatus(def: ModuleDef, bin: string, flags: string[] = []): Record<string, boolean> | undefined {
   try {
-    const out = runExternal(bin, def.external!.status, true);
+    const out = runExternal(bin, [...def.external!.status, ...flags], 5000);
     const parsed = JSON.parse(out.stdout) as { harnesses?: { name?: unknown; installed?: unknown }[] };
     if (out.status !== 0 || !Array.isArray(parsed.harnesses)) return undefined;
     return Object.fromEntries(parsed.harnesses.filter((h) => typeof h.name === "string").map((h) => [h.name as string, h.installed === true]));
@@ -218,25 +262,61 @@ function externalStatus(def: ModuleDef, bin: string): Record<string, boolean> | 
   }
 }
 
-// The install/uninstall an external module in scope needs. Without a status
-// answer, install runs when the module is switched on (or first recorded on).
-// `bin` is null when the binary is not installed: the run is then skipped.
-function externalRuns(selection: ModuleSelection, only: ModuleId[] | undefined) {
-  const current = currentSelection();
+// Blocks' harness names for the agents the hub wires; it hooks no others.
+const EXTERNAL_HARNESSES: Record<string, string> = { claude: "claude-code", codex: "codex", opencode: "opencode" };
+const harnessFlags = (agents: string[]) => agents.flatMap((agent) => EXTERNAL_HARNESSES[agent] ? ["--harness", EXTERNAL_HARNESSES[agent]] : []);
+
+// The install/uninstall an external module needs, for the selected agents
+// only. It is in scope when named, and also when it is on and this run wires
+// an agent, so a new agent gets its hook in the same run. Install runs when a
+// selected agent's hook is missing or, without a status answer, when the
+// module is first recorded on. Uninstall runs only when the hub had it
+// recorded on, so hooks installed with Blocks' own installer stay. `bin` is
+// null when no usable binary resolves; the run is then skipped. `before` is
+// the status ahead of the run.
+function externalRuns(selection: ModuleSelection, only: ModuleId[] | undefined, agents: string[], wiring: boolean) {
   const stored = storedModules();
-  const runs: { def: ModuleDef; args: string[]; bin: string | null }[] = [];
+  const runs: { def: ModuleDef; args: string[]; install: boolean; bin: string | null; flags: string[]; before?: Record<string, boolean> | undefined }[] = [];
   for (const def of MODULES) {
-    if (!def.external || !inScope(def.id, only)) continue;
-    const bin = externalBin(def.external.binary);
+    if (!def.external || !(inScope(def.id, only) || (selection[def.id] && wiring))) continue;
+    const bin = externalBin(def);
+    if (!inScope(def.id, only) && !bin) continue;
     if (selection[def.id]) {
-      const status = bin ? externalStatus(def, bin) : undefined;
-      const needed = status ? Object.values(status).some((installed) => !installed) : stored[def.id] !== true;
-      if (needed) runs.push({ def, args: def.external.install, bin });
-    } else if (current[def.id] && bin) {
-      runs.push({ def, args: def.external.uninstall, bin });
+      const flags = harnessFlags(agents);
+      if (flags.length === 0) continue;
+      const before = bin ? externalStatus(def, bin, flags) : undefined;
+      const needed = before ? Object.values(before).some((installed) => !installed) : stored[def.id] !== true;
+      if (needed) runs.push({ def, args: def.external.install, install: true, bin, flags, before });
+    } else if (stored[def.id] === true && bin) {
+      runs.push({ def, args: def.external.uninstall, install: false, bin, flags: harnessFlags(Object.keys(EXTERNAL_HARNESSES)) });
     }
   }
   return runs;
+}
+
+// The hub's name for a Blocks harness.
+function harnessName(name: string): string {
+  const agent = Object.keys(EXTERNAL_HARNESSES).find((id) => EXTERNAL_HARNESSES[id] === name);
+  return agent ? moduleHost().agentName(agent) : name;
+}
+
+// What a harness's new hook still asks of the user, from Blocks' trust notes;
+// notes that ask nothing are left out.
+const EXTERNAL_ASKS: Record<string, string> = {
+  codex: "Codex asks once: open /hooks in Codex and approve the caveman-blocks hook",
+};
+
+// One line for a finished install, built from the status it leaves, then one
+// line per new hook the user still has to approve.
+function externalReady(def: ModuleDef, bin: string, flags: string[], before: Record<string, boolean> | undefined): string[] {
+  const after = externalStatus(def, bin, flags);
+  if (!after) return [`○ ${def.id}: ${externalProblem(def, bin, after)}`];
+  const hooked = Object.keys(after).filter((name) => after[name]);
+  if (hooked.length === 0) return [`○ ${def.id}: no agent to hook yet`];
+  return [
+    `✓ ${def.id} ready (${hooked.map(harnessName).join(", ")})`,
+    ...hooked.filter((name) => !before?.[name] && EXTERNAL_ASKS[name]).map((name) => `  ${EXTERNAL_ASKS[name]}`),
+  ];
 }
 
 export async function planModules(selection: ModuleSelection, agents: string[], options: { only?: ModuleId[] } = {}): Promise<ModulePlan> {
@@ -248,7 +328,13 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   const { wire, unwire } = wiringChanges(selection, agents, only);
 
   const { missing } = binaryNeeds(selection, only);
-  if (missing.length) lines.push({ action: "DOWNLOAD", target: missing.join(", "), detail: `signed, ${h.binaryRelease}` });
+  // Hub binaries ship in every release; an external one (Blocks) only in a
+  // release whose signed modules.json carries it, so the plan says so.
+  const externals = new Set(MODULES.flatMap((m) => (m.external ? [m.external.binary] : [])));
+  const hubMissing = missing.filter((name) => !externals.has(name));
+  const externalMissing = missing.filter((name) => externals.has(name));
+  if (hubMissing.length) lines.push({ action: "DOWNLOAD", target: hubMissing.join(", "), detail: `signed, ${h.binaryRelease}` });
+  if (externalMissing.length) lines.push({ action: "DOWNLOAD", target: externalMissing.join(", "), detail: `signed, if ${h.binaryRelease} carries it` });
 
   if (state.length || effects.length) {
     lines.push({
@@ -285,11 +371,19 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   if (wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) {
     lines.push({ action: "RUN", target: "caveman-proxy", detail: "start local runtime" });
   }
-  for (const run of externalRuns(selection, only)) {
+  for (const run of externalRuns(selection, only, agents, wire.length > 0)) {
     const name = run.def.external!.binary;
-    lines.push({ action: "RUN", target: `${name} ${run.args.join(" ")}`, detail: run.bin ? "" : `skipped: ${name} not installed` });
+    // A binary the plan downloads first is not a skip.
+    const skipped = !run.bin && !missing.includes(name);
+    const names = [...new Set(run.flags.filter((flag) => flag !== "--harness").map(harnessName))];
+    lines.push({ action: "RUN", target: `${name} ${run.args.join(" ")}`, detail: skipped ? `skipped: ${externalProblem(run.def, null, undefined)}` : run.install ? names.join(", ") : "" });
   }
 
+  for (const def of MODULES) {
+    if (def.external && selection[def.id] && inScope(def.id, only) && agents.length && harnessFlags(agents).length === 0) {
+      notes.push(`${def.id} stays idle: none of the selected agents takes its hook (${Object.keys(EXTERNAL_HARNESSES).map((agent) => h.agentName(agent)).join(", ")})`);
+    }
+  }
   // Core is withheld in record mode, which is what input switched off means.
   if (selection.output && !selection.input && currentSelection().input && inScope("input", only)) {
     notes.push("output also pauses: it runs through input");
@@ -313,7 +407,10 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   if (needs.missing.length) {
     try {
       await h.installBinaries(needs.modules);
-      say(`✓ downloaded ${needs.missing.join(", ")}`);
+      // A release from before modules.json brings no external binary.
+      const still = binaryNeeds(plan.selection, plan.only).missing;
+      const got = needs.missing.filter((name) => !still.includes(name));
+      if (got.length) say(`✓ downloaded ${got.join(", ")}`);
     } catch (error) { fail("download", error); }
   }
   // Decide everything before the first config write: the external uninstall
@@ -321,7 +418,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const { state, effects } = configChanges(plan.selection, plan.only);
   const { wire, unwire } = wiringChanges(plan.selection, plan.agents, plan.only);
   const refresh = refreshAgents(effects, unwire);
-  const runs = externalRuns(plan.selection, plan.only);
+  const runs = externalRuns(plan.selection, plan.only, plan.agents, wire.length > 0);
   const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
 
   if (state.length) h.mutateConfig((out) => { out.modules = { ...objectOf(out.modules), ...Object.fromEntries(state) }; });
@@ -343,19 +440,22 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
     const name = run.def.external!.binary;
     // Absent binary: the module stays on but inactive, and the verb says why.
     if (!run.bin) {
-      say(`○ ${run.def.id}: ${name} not installed yet`);
+      const why = externalProblem(run.def, null, undefined)!;
+      say(`○ ${run.def.id}: ${why.endsWith(" not installed") ? `${why} yet` : why}`);
       continue;
     }
-    const out = runExternal(run.bin, run.args, false);
-    if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}`);
+    const out = runExternal(run.bin, [...run.args, ...run.flags], 120_000);
+    const output = `${out.stdout ?? ""}${out.stderr ?? ""}`.trim();
+    if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}${output ? `\n${output}` : ""}`);
+    else if (run.install) for (const line of externalReady(run.def, run.bin, run.flags, run.before)) say(line);
     else say(`✓ ${run.def.id}: ${name} ${run.args.join(" ")}`);
   }
   return { ok: problems.length === 0, problems };
 }
 
 function externalAgentState(status: Record<string, boolean> | undefined, agent: string): "wired" | "not wired" | "n/a" {
-  // Blocks names Claude Code "claude-code"; the hub calls it "claude".
-  const installed = status?.[agent] ?? status?.[`${agent}-code`];
+  const harness = EXTERNAL_HARNESSES[agent];
+  const installed = harness === undefined ? undefined : status?.[harness];
   return installed === undefined ? "n/a" : installed ? "wired" : "not wired";
 }
 
@@ -367,10 +467,11 @@ const ENV_NAMES: Record<string, string> = {
   "think.shrink": "CAVEMAN_SHRINK",
 };
 
-function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: boolean): string | undefined {
+function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: boolean, external?: { bin: string | null; status: Record<string, boolean> | undefined }): string | undefined {
   const h = moduleHost();
   if (m.needsSignIn) return signedIn ? `waiting for Cloud ${m.id}` : `sign in to turn on ${m.id}`;
-  if (m.external && !externalBin(m.external.binary)) return `${m.external.binary} not installed`;
+  const blocked = m.external && external ? externalProblem(m, external.bin, external.status) : undefined;
+  if (blocked) return blocked;
   const missing = m.binaries.filter((name) => !h.resolveBinary(name));
   if (missing.length) return `${missing.join(", ")} not installed`;
   for (const effect of m.capabilities) {
@@ -391,9 +492,9 @@ export async function moduleStates(): Promise<ModuleState[]> {
   const signedIn = h.signedIn();
   return MODULES.map((m) => {
     const on = selection[m.id];
-    const bin = on && m.external ? externalBin(m.external.binary) : null;
+    const bin = on && m.external ? externalBin(m) : null;
     const status = m.external && bin ? externalStatus(m, bin) : undefined;
-    const reason = on ? inactiveReason(m, selection, signedIn) : undefined;
+    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }) : undefined;
     const perAgent = Object.fromEntries(agents.map((agent) => [
       agent.id,
       m.wiresAgents ? agent.wired ? "wired" : "not wired" : externalAgentState(status, agent.id),

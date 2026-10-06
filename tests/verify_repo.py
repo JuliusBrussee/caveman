@@ -274,7 +274,7 @@ def verify_synced_files() -> None:
 
     ensure(
         (ROOT / "bin" / "install.js").exists(),
-        "bin/install.js missing — package.json bin entry would break npx caveman",
+        "bin/install.js missing — package.json bin entry would break npx github:JuliusBrussee/caveman",
     )
     ensure(
         (ROOT / "bin" / "lib" / "settings.js").exists(),

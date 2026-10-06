@@ -75,6 +75,7 @@ import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } fro
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
 import { modulesDoctor } from "./modules/doctor.js";
+import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
 
@@ -466,11 +467,17 @@ setModuleHost({
       const { problems } = await ensureModuleBinaries(modules);
       if (problems.length > 0) throw new Error(problems.join("; "));
     } catch (error) {
-      // A release cut before modules.json: install every signed hub binary instead.
-      if (error instanceof NoModuleIndexError) return setupInstall(false, { continuing: true });
+      // A release cut before modules.json: install every signed hub binary
+      // instead, unless only an external one (Blocks) was missing; that
+      // release does not carry it.
+      if (error instanceof NoModuleIndexError) {
+        if (modules.some((id) => findModule(id)?.binaries.length)) await setupInstall(false, { continuing: true });
+        return;
+      }
       throw error;
     }
   },
+  lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
   staleBinaries: () => [
     ...(probeProxyVersion()?.capabilities.includes("run_state") === false ? ["caveman-proxy"] : []),
     ...(probeMcpBinary()?.probe.current === false ? ["caveman-mcp"] : []),
@@ -481,7 +488,7 @@ setModuleHost({
     detected: Boolean(which(binOf(findAgent(id)!))),
     wired: Boolean(readNativeJournal(id) || readPendingNativeJournal(id)),
   })),
-  planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp")
+  planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp", { plan: true })
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   agentName: (agent) => agentShortName(findAgent(agent)!),
@@ -547,7 +554,7 @@ function printDiscovery(group: CommandGroup, all = false): void {
 }
 
 function resolveInvocation(raw: string[]): ResolvedInvocation {
-  // Bare `caveman` (and `npx caveman`) in a terminal before any setup is the first run.
+  // Bare `caveman` (and `npx @caveman-ai/cli`) in a terminal before any setup is the first run.
   if (raw.length === 0 && onboardInteractive() && !setupRan() && !setupDeclined()) return { verb: "setup", argv: [], handler: setup };
   const top = raw[0] ?? "help";
   if (top === "--help") return { verb: "help", argv: [], handler: help };
@@ -3570,10 +3577,12 @@ function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promi
 
 // The agents onboarding offers are the ones module wiring supports, in its
 // order (Claude Code first); missing ones show disabled unless already wired.
+// Nothing runs an agent before Continue (`gemini --version` writes ~/.gemini):
+// the version shown is the one the wiring journal recorded, if any.
 function onboardAgents(): OnboardAgent[] {
   return moduleHost().nativeAgents().map(({ id, detected, wired }) => {
     const agent = findAgent(id)!;
-    const version = detected ? detectedAgentVersion(agent) : null;
+    const version = detected ? readNativeJournal(id)?.detected_agent_version : null;
     return { id, name: agentShortName(agent), installed: detected, wired, ...(version ? { version } : {}) };
   });
 }
@@ -7648,7 +7657,8 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
   if (!binary) return { binary: null, launchable: false, version: null, error: "binary_not_found" };
   try {
     const invocation = portableInvocation(binary, ["--version"]);
-    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: 3000 });
+    // CAVE_BINARY_PROBE_TIMEOUT_MS may only lengthen the 3s default, to 10s at most (a loaded test box).
+    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.min(10_000, Math.max(3000, versionedBinaryProbeTimeoutMs())) });
     if (out.error) return { binary, launchable: false, version: null, error: boundedHookString(out.error.message, 240) ?? "version_probe_failed" };
     const value = `${out.stdout ?? ""} ${out.stderr ?? ""}`.trim();
     if (out.status !== 0) return { binary, launchable: false, version: value ? value.slice(0, 160) : null, error: `version_probe_exit_${out.status ?? "unknown"}` };
@@ -8196,7 +8206,7 @@ export default {
 `;
 }
 
-function opencodeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
+function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): NativeMutation[] {
   const configPath = join(homedir(), ".config", "opencode", "opencode.json");
   const before = fileBytes(configPath);
   const root = parseJsonFileObject(configPath, before);
@@ -8241,7 +8251,8 @@ function opencodeNativeMutations(gw: string, mcpBinary: string): NativeMutation[
     {
       file: pluginPath,
       before: pluginBefore,
-      after: Buffer.from(opencodeNativePluginSource()),
+      // The plugin source reads `opencode --version`; a plan only names the file.
+      after: Buffer.from(plan ? "" : opencodeNativePluginSource()),
       kind: "opencode-plugin",
     },
   ];
@@ -8975,7 +8986,8 @@ function recoverPendingNativeInstallUnlocked(agent: NativeAgent): boolean {
   return true;
 }
 
-function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | undefined): NativeMutation[] {
+// `plan`: only the files and their kinds are wanted, so nothing runs the agent.
+function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | undefined, { plan = false } = {}): NativeMutation[] {
   return agent === "claude"
     ? claudeNativeMutations(gw, mcpBinary!)
     : agent === "codex"
@@ -8985,7 +8997,7 @@ function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | 
         : agent === "gemini"
           ? geminiNativeMutations(gw, mcpBinary!)
           : agent === "opencode"
-            ? opencodeNativeMutations(gw, mcpBinary!)
+            ? opencodeNativeMutations(gw, mcpBinary!, plan)
             : agent === "pi"
               ? piNativeMutations()
               : aiderNativeMutations(gw);
@@ -9428,9 +9440,13 @@ function disableNative(argv: string[]) {
   disableNativeAgent(target);
 }
 
-function nativeIntegrationStatus(agent: NativeAgent) {
+// `probe: false` runs only a journaled agent: status before setup must not
+// start agents (gemini and opencode write their home on `--version`), so the
+// others read as present or not from PATH alone.
+function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?: boolean } = {}) {
   const profile = findAgent(agent)!;
-  const host = nativeHostProbe(profile);
+  const onPath = probe || readNativeJournal(agent) || readPendingNativeJournal(agent) ? null : which(binOf(profile));
+  const host = onPath === null ? nativeHostProbe(profile) : { binary: onPath, launchable: true, version: null, error: null };
   const available = host.launchable;
   const journal = readNativeJournal(agent);
   const transactionPending = Boolean(readPendingNativeJournal(agent));
@@ -11279,6 +11295,9 @@ async function syncLocalSavings(cfg: Config): Promise<SyncOutcome> {
   let rows: Record<string, unknown>[];
   let key: string;
   try {
+    // A read that meets another process mid-commit (the proxy, or a racing sync
+    // writing the marker below) waits for it instead of failing as locked.
+    db.exec("PRAGMA busy_timeout = 3000");
     key = syncWatermarkKey(cfg, dbFingerprint(db, dbPath, DatabaseSync));
   } catch (err) {
     db.close();
@@ -18764,7 +18783,7 @@ async function status(argv: string[]) {
     next,
   };
   const native = (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as const).map((agent) => {
-    const integration = nativeIntegrationStatus(agent);
+    const integration = nativeIntegrationStatus(agent, { probe: false });
     return {
       ...integration,
       runtime_reachable: listening,

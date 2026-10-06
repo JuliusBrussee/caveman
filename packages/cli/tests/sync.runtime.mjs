@@ -770,6 +770,41 @@ test("two sync processes racing the same watermark upload each local row once", 
   server.close();
 });
 
+// Under load the race above failed as "database is locked": the sync holding
+// the claim read the store while the other was still committing its
+// fingerprint marker, on a handle with no busy timeout. Pinned here: the claim
+// is held until this sync's marker lands, then a write lock is taken before
+// the claim is let go, so the sync's read meets it.
+test("a sync whose read meets another process's commit waits for it", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+  const { db, insert } = makeSpendDb(caveDir);
+  try {
+    insert("req-1", 1000, 400);
+    db.exec("PRAGMA busy_timeout = 3000");
+    const lockPath = join(home, ".caveman-cloud", "sync.json.lock");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, "held by the test");
+
+    const run = runCli(["sync"], env);
+    const marker = () => { try { return Boolean(db.prepare("SELECT value FROM cave_cli_meta").get()); } catch { return false; } };
+    for (let i = 0; i < 400 && !marker(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(marker(), "the sync never wrote its fingerprint marker");
+    db.exec("BEGIN EXCLUSIVE");
+    unlinkSync(lockPath);
+    setTimeout(() => db.exec("COMMIT"), 300);
+    const out = await run;
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(imports.length, 1);
+  } finally {
+    try { db.close(); } catch { /* already closed */ }
+    server.close();
+  }
+});
+
 // A lock left behind by a killed holder must not wedge sync off forever: the
 // next run reclaims it once it is past the stale window, and releases it.
 test("a stale sync lock from a crashed holder does not wedge sync off", async () => {
