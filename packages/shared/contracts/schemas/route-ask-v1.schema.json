@@ -31,7 +31,7 @@
       "type": "object",
       "additionalProperties": false,
       "required": ["text"],
-      "description": "The conversation, raw as the agent sent it. A human turn is a user message (Anthropic Messages, OpenAI chat) or user input item (OpenAI Responses) with at least one text block; a user message carrying only tool results is not one. A turn's text blocks are joined with \"\\n\". Byte bounds are UTF-8 and every cut lands on a rune boundary. Optional fields are left out when empty. Sent together with signals.",
+      "description": "The conversation, raw as the agent sent it. A human turn is a user message (Anthropic Messages, OpenAI chat) or user input item (OpenAI Responses) with at least one non-blank text block, in an input group (the items between two model outputs) that carries no tool result: no Anthropic tool_result block, OpenAI chat tool message or Responses *_call_output item. Text riding along with tool results belongs to the tool loop, not to a new turn. A turn's text blocks are joined with \"\\n\". Byte bounds are UTF-8 and every cut lands on a rune boundary. Optional fields are left out when empty. Sent together with signals.",
       "properties": {
         "text": { "type": "string", "minLength": 1, "maxLength": 131072, "pattern": "\\S", "description": "The latest human turn. At most 131072 bytes, keeping the head." },
         "prev_text": { "type": "string", "maxLength": 16384, "description": "The human turn before the latest one. At most 16384 bytes, keeping the head." },

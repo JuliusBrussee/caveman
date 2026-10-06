@@ -151,9 +151,9 @@ func TestAskTextFromEachShape(t *testing.T) {
 			want:     askText{Text: "just this"},
 		},
 		{
-			// The newest assistant text before the latest turn, even when the
-			// assistant's last message held only a tool call; tool-result and
-			// blank messages count as no human turn.
+			// An interrupt note rides with the interrupted call's tool result,
+			// so it belongs to the tool loop: the latest human turn stays B.
+			// Blank messages count as no human turn either.
 			name:     "interrupted tool call",
 			endpoint: "/v1/messages",
 			body: `{"messages":[
@@ -163,7 +163,27 @@ func TestAskTextFromEachShape(t *testing.T) {
 				{"role":"user","content":"B"},
 				{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},
 				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"},{"type":"text","text":"[Request interrupted by user for tool use]"}]}]}`,
-			want: askText{Text: "[Request interrupted by user for tool use]", PrevText: "B", ReplyTail: "R", Turn: 2},
+			want: askText{Text: "B", PrevText: "A", ReplyTail: "R", Turn: 1},
+		},
+		{
+			name:     "responses user message next to a tool output",
+			endpoint: "/v1/responses",
+			body: `{"input":[
+				{"role":"user","content":"ask"},
+				{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+				{"type":"function_call_output","call_id":"c1","output":"ok"},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "chat user message after tool results",
+			endpoint: "/v1/chat/completions",
+			body: `{"messages":[
+				{"role":"user","content":"ask"},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"c1","content":"result"},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
 		},
 		{
 			name:     "tool results only",
@@ -181,6 +201,37 @@ func TestAskTextFromEachShape(t *testing.T) {
 				t.Errorf("got  %+v\nwant %+v", got, tc.want)
 			}
 		})
+	}
+}
+
+// Claude Code puts its system-reminders next to tool results: that message is
+// part of the tool loop, so the loop keeps the ask's text and its decision.
+func TestToolLoopKeepsTheAsk(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	ask := func(messages string) gateway.RouteAsk {
+		body := `{"model":"claude-opus-5-5","messages":[{"role":"user","content":[{"type":"text","text":"<system-reminder>ctx</system-reminder>"},{"type":"text","text":"fix the login bug"}]}` + messages + `]}`
+		return gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: "claude-opus-5-5", Agent: "claude", SessionID: "s1", Body: []byte(body)}
+	}
+	first := ask("")
+	loop := ask(`,{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]},
+		{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"package a"},{"type":"text","text":"<system-reminder>The file changed.</system-reminder>"}]}`)
+	root, _ := jsonsplice.Root(loop.Body)
+	if got := askTextFor(loop.Endpoint, loop.Body, root); got.Text != "<system-reminder>ctx</system-reminder>\nfix the login bug" || got.Turn != 0 {
+		t.Fatalf("ask text in the loop = %+v", got)
+	}
+	for _, request := range []gateway.RouteAsk{first, loop} {
+		if answer := link.Ask(t.Context(), request)(); answer.Model != "claude-sonnet-5-5" {
+			t.Fatalf("answer = %+v", answer)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("cloud asked %d times for one ask and its tool loop, want once", hits.Load())
 	}
 }
 

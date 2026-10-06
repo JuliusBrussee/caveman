@@ -101,8 +101,8 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   caller's models, counts and the raw text of the latest human turn, the one before it and the
   end of the agent's last reply (contracts `route-ask-v1` `ask`, sent raw; Cloud picks the model
   and no routing logic lives here), and its answer is cached per ask (session, provider,
-  model, latest human text) so a tool loop
-  never switches model mid-turn. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
+  model, latest human text; text riding along with tool results is not a human turn) so a tool
+  loop never switches model mid-turn. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
   answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
   (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the

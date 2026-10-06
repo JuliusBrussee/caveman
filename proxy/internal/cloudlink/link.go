@@ -496,8 +496,11 @@ type askText struct {
 
 // askTextFor reads askText out of an Anthropic Messages, OpenAI chat or OpenAI
 // Responses body in one walk over its message spans; only text blocks are
-// decoded. A human turn is a user message with text: one carrying only tool
-// results is not. Each field is cut to its bound on a rune boundary.
+// decoded. A human turn is a user message with text whose input group (the
+// items between two model outputs) carries no tool result: the text that rides
+// along with tool results (an agent's injected reminders) belongs to the tool
+// loop, so a loop keeps its decision. Each field is cut to its bound on a rune
+// boundary.
 func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
 	field := "messages"
 	if strings.HasSuffix(endpoint, "/responses") {
@@ -513,50 +516,71 @@ func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
 	items, _ := jsonsplice.Elements(body, list)
 	var out askText
 	humans, replied := 0, false
+	var group []string // the current input group's user texts, newest first
+	tooled := false    // the current input group carries a tool result
+	flush := func() {
+		if !tooled {
+			for _, text := range group {
+				switch humans {
+				case 0:
+					out.Text = truncate(text, askTextMax)
+				case 1:
+					out.PrevText = truncate(text, askSideMax)
+				}
+				humans++
+			}
+		}
+		group, tooled = group[:0], false
+	}
 	for i := len(items) - 1; i >= 0; i-- {
-		switch role, _ := jsonsplice.StringField(body, items[i], "role"); {
+		role, _ := jsonsplice.StringField(body, items[i], "role")
+		kind, _ := jsonsplice.StringField(body, items[i], "type")
+		switch {
 		case role == "user":
-			text, ok := messageText(body, items[i], "text", "input_text")
-			if !ok {
-				continue
+			text, ok, tool := messageText(body, items[i], "text", "input_text")
+			tooled = tooled || tool
+			if ok {
+				group = append(group, text)
 			}
-			switch humans {
-			case 0:
-				out.Text = truncate(text, askTextMax)
-			case 1:
-				out.PrevText = truncate(text, askSideMax)
-			}
-			humans++
-		case role == "assistant" && humans > 0 && !replied:
-			if text, ok := messageText(body, items[i], "text", "output_text"); ok {
-				out.ReplyTail, replied = tail(text, askSideMax), true
+		case role == "tool" || strings.HasSuffix(kind, "_call_output"):
+			tooled = true
+		case role == "system" || role == "developer":
+		default: // a model output: an assistant message, a tool call, reasoning
+			flush()
+			if role == "assistant" && humans > 0 && !replied {
+				if text, ok, _ := messageText(body, items[i], "text", "output_text"); ok {
+					out.ReplyTail, replied = tail(text, askSideMax), true
+				}
 			}
 		}
 	}
+	flush()
 	out.Turn = min(max(humans-1, 0), askTurnMax)
 	return out
 }
 
 // messageText joins a message's text blocks with "\n"; a string content is one
-// block. ok is false when no block has any non-space text.
-func messageText(body []byte, message jsonsplice.Span, types ...string) (string, bool) {
+// block. ok is false when no block has any non-space text; tool reports a
+// tool-result block.
+func messageText(body []byte, message jsonsplice.Span, types ...string) (text string, ok, tool bool) {
 	content, _ := jsonsplice.Field(body, message, "content")
-	if text, ok := jsonsplice.String(body, content); ok {
-		return text, strings.TrimSpace(text) != ""
+	if text, isString := jsonsplice.String(body, content); isString {
+		return text, strings.TrimSpace(text) != "", false
 	}
 	blocks, _ := jsonsplice.Elements(body, content)
 	var texts []string
-	found := false
 	for _, block := range blocks {
-		if kind, _ := jsonsplice.StringField(body, block, "type"); !slices.Contains(types, kind) {
+		kind, _ := jsonsplice.StringField(body, block, "type")
+		tool = tool || strings.HasSuffix(kind, "tool_result")
+		if !slices.Contains(types, kind) {
 			continue
 		}
-		if text, ok := jsonsplice.StringField(body, block, "text"); ok {
+		if text, isString := jsonsplice.StringField(body, block, "text"); isString {
 			texts = append(texts, text)
-			found = found || strings.TrimSpace(text) != ""
+			ok = ok || strings.TrimSpace(text) != ""
 		}
 	}
-	return strings.Join(texts, "\n"), found
+	return strings.Join(texts, "\n"), ok, tool
 }
 
 // askBody is the ask's JSON within askBodyMax. Escaping can grow text past it
