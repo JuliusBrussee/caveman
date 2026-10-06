@@ -8,7 +8,7 @@
 //
 // ~/.caveman/modules.lock.json records, per module, the release asked for, the
 // release installed and the sha256 of each binary on disk.
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { BINARY_RELEASE, BINARY_RELEASE_BASE_DEFAULT } from "../binaries.generated.js";
@@ -20,7 +20,6 @@ import {
   ensureCavemanHome,
   fetchReleaseAsset,
   parseSignedChecksums,
-  setupInstallFailure,
   setupPlatform,
   setupTimeoutSeconds,
   sha256File,
@@ -46,11 +45,17 @@ function releaseBase(): string {
   return `${trimTrailingSlashes(process.env.CAVE_BINARY_RELEASE_BASE ?? BINARY_RELEASE_BASE_DEFAULT)}/${BINARY_RELEASE}`;
 }
 
-async function fetchText(url: string, timeoutSeconds: number): Promise<string> {
+// A name only this process owns, so concurrent installs (or setup --install,
+// which uses `<target>.part`) never write, hash or publish each other's file.
+function uniquePath(path: string, suffix: string): string {
+  return `${path}.${process.pid}.${randomBytes(6).toString("hex")}.${suffix}`;
+}
+
+async function fetchBytes(url: string, timeoutSeconds: number): Promise<Buffer> {
   try {
-    return await (await fetchReleaseAsset(url, timeoutSeconds)).text();
+    return Buffer.from(await (await fetchReleaseAsset(url, timeoutSeconds)).arrayBuffer());
   } catch (error) {
-    setupInstallFailure(error, timeoutSeconds);
+    throw new Error(`could not download the module index (${url}: ${(error as Error).message}) — check the network and try again`);
   }
 }
 
@@ -59,25 +64,25 @@ async function fetchText(url: string, timeoutSeconds: number): Promise<string> {
 export async function loadModuleIndex(): Promise<ModuleIndex> {
   const base = releaseBase();
   const timeout = setupTimeoutSeconds();
-  const [checksumsRaw, signature] = await Promise.all([
-    fetchText(`${base}/checksums.txt`, timeout),
-    fetchText(`${base}/checksums.txt.keysig`, timeout),
-  ]);
-  if (!verifyChecksumSignature(checksumsRaw, signature)) {
+  const [checksumsRaw, signature] = (await Promise.all([
+    fetchBytes(`${base}/checksums.txt`, timeout),
+    fetchBytes(`${base}/checksums.txt.keysig`, timeout),
+  ])).map((bytes) => bytes.toString("utf8"));
+  if (!verifyChecksumSignature(checksumsRaw!, signature!)) {
     throw new Error(`signature check failed for checksums.txt of ${BINARY_RELEASE} — refusing modules.json`);
   }
   let expected: string | undefined;
   try {
-    expected = parseSignedChecksums(checksumsRaw).get("modules.json");
+    expected = parseSignedChecksums(checksumsRaw!).get("modules.json");
   } catch (error) {
     throw new Error(`signature check failed for checksums.txt (${(error as Error).message}) — refusing modules.json`);
   }
   if (!expected) throw new Error(`${BINARY_RELEASE} has no signed modules.json — refusing to read modules`);
-  const raw = await fetchText(`${base}/modules.json`, timeout);
+  const raw = await fetchBytes(`${base}/modules.json`, timeout);
   if (createHash("sha256").update(raw).digest("hex") !== expected) {
     throw new Error(`signature check failed for modules.json of ${BINARY_RELEASE} — refusing it`);
   }
-  const index = JSON.parse(raw) as ModuleIndex;
+  const index = JSON.parse(raw.toString("utf8")) as ModuleIndex;
   if (index.schema !== "caveman.modules.v1" || index.release !== BINARY_RELEASE || !Array.isArray(index.modules)) {
     throw new Error(`modules.json of ${BINARY_RELEASE} is not a caveman.modules.v1 index for that release`);
   }
@@ -103,15 +108,17 @@ export function readLock(): ModuleLock {
 export function writeLock(lock: ModuleLock): void {
   ensureCavemanHome();
   const path = lockPath();
-  writeFileSync(`${path}.tmp`, `${JSON.stringify(lock, null, 2)}\n`, { mode: 0o600 });
-  chmodSync(`${path}.tmp`, 0o600);
-  renameSync(`${path}.tmp`, path);
+  const temp = uniquePath(path, "tmp");
+  writeFileSync(temp, `${JSON.stringify(lock, null, 2)}\n`, { mode: 0o600 });
+  chmodSync(temp, 0o600);
+  renameSync(temp, path);
 }
 
 // Downloads the binaries the named modules need into ~/.caveman/bin, each
-// checked against the signed index, and records them in the lockfile. A
-// signature or network failure throws; a module with no build for this
-// platform is skipped and named in `problems`, so the others still install.
+// checked against the signed index, and records each module in the lockfile
+// as soon as its binaries are in place. A signature or network failure throws;
+// a module with no build for this platform is skipped and named in
+// `problems`, so the others still install.
 export async function ensureModuleBinaries(ids: ModuleId[]): Promise<{ lock: ModuleLock; problems: string[] }> {
   const platform = setupPlatform();
   const index = await loadModuleIndex();
@@ -126,8 +133,10 @@ export async function ensureModuleBinaries(ids: ModuleId[]): Promise<{ lock: Mod
       problems.push(`${id}: not in modules.json of ${index.release}`);
       continue;
     }
-    const picked = Object.entries(entry.binaries).map(([binary, builds]) =>
-      [binary, builds.find((build) => build.os === platform.os && build.arch === platform.arch)] as const);
+    const picked = Object.entries(entry.binaries).map(([binary, builds]) => {
+      if (!/^[a-z0-9-]+$/.test(binary)) throw new Error(`modules.json of ${index.release} names an invalid binary ${JSON.stringify(binary)}`);
+      return [binary, builds.find((build) => build.os === platform.os && build.arch === platform.arch)] as const;
+    });
     const missing = picked.filter(([, build]) => !build).map(([binary]) => binary);
     if (missing.length > 0) {
       problems.push(`${id}: ${missing.join(", ")} has no ${platform.os}/${platform.arch} build in ${index.release}`);
@@ -135,27 +144,31 @@ export async function ensureModuleBinaries(ids: ModuleId[]): Promise<{ lock: Mod
     }
     const digests: Record<string, string> = {};
     for (const [binary, build] of picked) {
+      const { name, sha256 } = build!;
+      if (name !== `${binary}_${platform.os}_${platform.arch}` || !/^[a-f0-9]{64}$/.test(sha256)) {
+        throw new Error(`modules.json of ${index.release} has an invalid ${binary} build entry`);
+      }
       const target = join(binDir, binaryInstallFilename(binary, platform.os));
-      digests[binary] = build!.sha256;
-      if (sha256File(target) === build!.sha256) continue;
-      const partial = `${target}.part`;
-      cleanupPartial(partial);
-      let got: string;
+      digests[binary] = sha256;
+      if (sha256File(target) === sha256) continue;
+      const part = uniquePath(target, "part");
       try {
-        got = (await downloadReleaseBinary(`${releaseBase()}/${build!.name}`, partial, timeout)).sha256;
+        let got: string;
+        try {
+          got = (await downloadReleaseBinary(`${releaseBase()}/${name}`, part, timeout)).sha256;
+        } catch (error) {
+          throw new Error(`the ${id} module could not download ${name} (${(error as Error).message}) — check the network, then retry with \`caveman on ${id}\``);
+        }
+        if (got !== sha256) throw new Error(`signature check failed for ${name} — refusing to install the ${id} module; partial download deleted`);
+        chmodSync(part, 0o755);
+        renameSync(part, target);
       } catch (error) {
-        cleanupPartial(partial);
-        setupInstallFailure(error, timeout);
+        cleanupPartial(part);
+        throw error;
       }
-      if (got !== build!.sha256) {
-        cleanupPartial(partial);
-        throw new Error(`signature check failed for ${build!.name} — refusing to install; partial download deleted`);
-      }
-      chmodSync(partial, 0o755);
-      renameSync(partial, target);
     }
     lock.modules[id] = { asked: BINARY_RELEASE, installed: index.release, binaries: digests };
+    writeLock(lock);
   }
-  writeLock(lock);
   return { lock, problems };
 }

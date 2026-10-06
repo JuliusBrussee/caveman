@@ -62,6 +62,7 @@ import {
   type JSONValue,
 } from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
+import { readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
@@ -2409,8 +2410,9 @@ const GO_BINARIES = [
   { name: "caveman-browse", env: "CAVEMAN_BROWSE_BIN", required: false, powers: "browse + agent-side compressed browsing MCP tools — wrap auto-registers once present", without: "agent-side compressed browsing MCP tools unavailable; wrap auto-registers once installed" },
   { name: "caveman-shrink", env: "CAVEMAN_SHRINK_BIN", required: false, powers: "compress catalog — dedicated tool-schema compression, lint, and recovery", without: "tool-catalog compression is unavailable; command-output shrink is unaffected" },
   // From caveman-ai/blocks, mirrored into the signed release; installed by the
-  // scripts module (modules/index-file.ts), not by setup --install.
-  { name: "caveman-blocks", env: "CAVEMAN_BLOCKS_BIN", required: false, external: true, powers: "scripts module — reusable scripts your agent keeps", without: "the scripts module cannot run; `caveman on scripts` installs it" },
+  // scripts module (modules/index-file.ts), not by setup --install. setup
+  // lists it only once present or once a module installed it.
+  { name: "caveman-blocks", env: "CAVEMAN_BLOCKS_BIN", required: false, external: true, powers: "scripts module — reusable scripts your agent keeps", without: "the scripts module cannot run until it is installed again" },
 ] as const;
 
 // resolveGoBin is cavemanBin plus an honest "is it actually there" answer: the
@@ -2697,7 +2699,7 @@ function installProgressComplete(
   else console.error(line);
 }
 
-export function setupInstallFailure(error: unknown, timeoutSeconds: number): never {
+function setupInstallFailure(error: unknown, timeoutSeconds: number): never {
   if (interactive()) process.stderr.write("\n");
   if (error instanceof BinaryDownloadError && error.kind === "stalled") {
     throw new Error(`${OFF_STATES.downloadStalled(timeoutSeconds).line}\nfix: ${OFF_STATES.downloadStalled(timeoutSeconds).fix}`);
@@ -3359,7 +3361,9 @@ async function setup(argv: string[] = []) {
   }
   if (install) return setupInstall(json);
 
-  const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }));
+  const locked = Object.values(readLock().modules).flatMap((entry) => Object.keys(entry?.binaries ?? {}));
+  const rows = GO_BINARIES.map((b) => ({ ...b, resolved: resolveGoBin(b.name, b.env) }))
+    .filter((row) => !("external" in row) || row.resolved || locked.includes(row.name));
   const missingRequired = rows.filter((r) => r.required && !r.resolved);
 
   if (json) {

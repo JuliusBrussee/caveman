@@ -5,7 +5,7 @@ import assert from "node:assert";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, mkdtempSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -39,6 +39,7 @@ async function serve(files) {
   const server = createServer((request, response) => {
     const name = (request.url ?? "").slice(`/${release}/`.length);
     if (!(request.url ?? "").startsWith(`/${release}/`)) return response.writeHead(404).end();
+    if (files[name] === null) return response.writeHead(404).end();
     if (name in files) return response.end(files[name]);
     binaries++;
     response.end(binaryBody);
@@ -185,12 +186,59 @@ test("generator: modules.json shape from the registry and checksums.txt", () => 
   assert.deepEqual(JSON.parse(out.stdout), index);
 });
 
-test("setup lists caveman-blocks as an optional binary", () => {
+test("a tampered module binary is refused; modules installed before it stay locked", async () => {
+  const blocks = releaseArtifactName("caveman-blocks", here.os === "win32" ? "windows" : here.os, here.arch);
+  const server = await serve({ ...fixtureRelease(), [blocks]: "tampered\n" });
+  try {
+    const home = useHome(server.base);
+    await assert.rejects(
+      ensureModuleBinaries(["browse", "scripts"]),
+      new RegExp(`signature check failed for ${blocks} — refusing to install the scripts module`),
+    );
+    const lock = readFileSync(join(home, "modules.lock.json"), "utf8");
+    assert.deepEqual(Object.keys(JSON.parse(lock).modules), ["browse"]);
+    assert.deepEqual(readdirSync(join(home, "bin")), [exe("caveman-browse")]);
+
+    await assert.rejects(ensureModuleBinaries(["scripts"]), /signature check failed/);
+    assert.equal(readFileSync(join(home, "modules.lock.json"), "utf8"), lock);
+    assert.deepEqual(readdirSync(join(home, "bin")), [exe("caveman-browse")]);
+  } finally {
+    await server.close();
+  }
+});
+
+test("a failed module download names the module and its retry", async () => {
+  const blocks = releaseArtifactName("caveman-blocks", here.os === "win32" ? "windows" : here.os, here.arch);
+  const server = await serve({ ...fixtureRelease(), [blocks]: null });
+  try {
+    const home = useHome(server.base);
+    await assert.rejects(
+      ensureModuleBinaries(["scripts"]),
+      new RegExp(`the scripts module could not download ${blocks} \\(404.*retry with \`caveman on scripts\``),
+    );
+    assert.deepEqual(readdirSync(join(home, "bin")), []);
+  } finally {
+    await server.close();
+  }
+});
+
+test("setup lists caveman-blocks only once a module installed it", () => {
   const home = mkdtempSync(join(tmpdir(), "cave-modules-setup-"));
-  const out = spawnSync(process.execPath, [cli, "setup", "--json"], {
-    encoding: "utf8",
-    env: { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: join(home, ".caveman"), CAVEMAN_BLOCKS_BIN: "" },
-  });
-  const blocks = JSON.parse(out.stdout).binaries.find((b) => b.name === "caveman-blocks");
-  assert.equal(blocks.required, false);
+  const caveHome = join(home, ".caveman");
+  const blocksRow = () => {
+    const out = spawnSync(process.execPath, [cli, "setup", "--json"], {
+      encoding: "utf8",
+      env: { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: caveHome, CAVEMAN_BLOCKS_BIN: "", PATH: "/usr/bin:/bin" },
+    });
+    return JSON.parse(out.stdout).binaries.find((b) => b.name === "caveman-blocks");
+  };
+  assert.equal(blocksRow(), undefined);
+  mkdirSync(caveHome, { recursive: true });
+  writeFileSync(join(caveHome, "modules.lock.json"), JSON.stringify({
+    schema: "caveman.modules.lock.v1",
+    modules: { scripts: { asked: release, installed: release, binaries: { "caveman-blocks": sha256(binaryBody) } } },
+  }));
+  const row = blocksRow();
+  assert.equal(row.required, false);
+  assert.equal(row.path, null);
 });
