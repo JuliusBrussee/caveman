@@ -243,9 +243,11 @@ func TestEventsFollowTheDataLevel(t *testing.T) {
 
 func TestEventsDropOnFailureWithoutBlocking(t *testing.T) {
 	var posts atomic.Int32
+	release := make(chan struct{})
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/runtime/events" {
 			posts.Add(1)
+			<-release // the send hangs until the test lets it fail
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
@@ -254,13 +256,20 @@ func TestEventsDropOnFailureWithoutBlocking(t *testing.T) {
 	defer cloud.Close()
 	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
 	link.events.every = time.Hour
-	started := time.Now()
-	for i := range 3 * eventQueueMax {
-		link.Observe(record(i))
+	// The request path must finish while a send is stuck: a full buffer drops.
+	observed := make(chan struct{})
+	go func() {
+		for i := range 3 * eventQueueMax {
+			link.Observe(record(i))
+		}
+		close(observed)
+	}()
+	select {
+	case <-observed:
+	case <-time.After(30 * time.Second):
+		t.Fatal("Observe waited on a send")
 	}
-	if took := time.Since(started); took > time.Second {
-		t.Fatalf("Observe blocked: %v for %d events", took, 3*eventQueueMax)
-	}
+	close(release)
 	link.flush()
 	if n := len(link.events.ch); n != 0 {
 		t.Fatalf("%d events kept after a failed send, want all dropped", n)
@@ -624,35 +633,98 @@ func TestRejectedModelKeepsTheAskOnTheAskedModel(t *testing.T) {
 	}
 }
 
-// A login rewrites cloud.json; the secret cached from the keychain is dropped
-// at once, so no ask goes out with the old login's credential.
-func TestKeychainSecretIsDroppedWhenTheLoginChanges(t *testing.T) {
+// keychainHome is a signed-in CLI state whose secret lives in the keychain.
+func keychainHome(t *testing.T, cloud string, extra map[string]any) string {
+	t.Helper()
 	home := t.TempDir()
-	write := func(org string) {
-		raw, _ := json.Marshal(map[string]any{"baseURL": "https://api.example.test", "tokenStore": "keychain", "organizationId": org, "modules": map[string]any{"routing": true}})
-		if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {
-			t.Fatal(err)
+	writeKeychainConfig(t, home, cloud, extra)
+	return home
+}
+
+func writeKeychainConfig(t *testing.T, home, cloud string, extra map[string]any) {
+	t.Helper()
+	doc := map[string]any{"baseURL": cloud, "gatewayUrl": cloud, "tokenStore": "keychain", "modules": map[string]any{"routing": true}}
+	for key, value := range extra {
+		doc[key] = value
+	}
+	raw, _ := json.Marshal(doc)
+	if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func waitForAccess(t *testing.T, link *Link, want string) {
+	t.Helper()
+	for deadline := time.Now().Add(5 * time.Second); link.settings().access != want; time.Sleep(5 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatalf("credential = %q, want %q", link.settings().access, want)
 		}
 	}
+}
+
+// Ordinary CLI commands rewrite cloud.json (telemetry watermarks, token
+// refreshes). With the same secret that changes nothing: the credential never
+// blanks and the decision a turn is using stays.
+func TestCloudJSONRewriteWithTheSameSecretKeepsTheTurn(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/route" {
+			hits.Add(1)
+		}
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	secretA := token(time.Now().Add(time.Hour))
+	home := keychainHome(t, cloud.URL, nil)
+	link := New(home, nil)
+	link.keychain = func() string { return `{"access_token":"` + secretA + `"}` }
+	waitForAccess(t, link, secretA)
+	if answer := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Model != "claude-sonnet-5-5" {
+		t.Fatalf("first turn = %+v", answer)
+	}
+	for i := range 5 {
+		time.Sleep(5 * time.Millisecond)
+		writeKeychainConfig(t, home, cloud.URL, map[string]any{"telemetryTokens": i})
+		if got := link.settings().access; got != secretA {
+			t.Fatalf("credential blanked to %q after a cloud.json rewrite", got)
+		}
+		if answer := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Model != "claude-sonnet-5-5" {
+			t.Fatalf("turn %d = %+v, want the same routed model", i, answer)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("cloud asked %d times for one ask, want once (no cache reset)", hits.Load())
+	}
+}
+
+// A real re-login swaps the secret; the new login asks with its own token and
+// no 401 pause from the old one survives.
+func TestReLoginSwapsTheKeychainSecretWithoutAPause(t *testing.T) {
+	secretA, secretB := token(time.Now().Add(time.Hour)), token(time.Now().Add(2*time.Hour))
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("authorization") != "Bearer "+secretB {
+			w.WriteHeader(http.StatusUnauthorized) // the old session is revoked by the re-login
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
 	var secret atomic.Value
-	secret.Store(`{"access_token":"login-a"}`)
-	write("org-a")
+	secret.Store(`{"access_token":"` + secretA + `"}`)
+	home := keychainHome(t, cloud.URL, map[string]any{"organizationId": "org"})
 	link := New(home, nil)
 	link.keychain = func() string { return secret.Load().(string) }
-	waitFor := func(want string) {
-		t.Helper()
-		for deadline := time.Now().Add(2 * time.Second); link.settings().access != want; time.Sleep(5 * time.Millisecond) {
-			if time.Now().After(deadline) {
-				t.Fatalf("credential = %q, want %q", link.settings().access, want)
-			}
-		}
+	waitForAccess(t, link, secretA)
+	if answer := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Reason != "cloud_401" {
+		t.Fatalf("old login = %+v, want a 401", answer)
 	}
-	waitFor("login-a")
-	secret.Store(`{"access_token":"login-b"}`)
-	time.Sleep(10 * time.Millisecond)
-	write("org-b-longer")
-	if got := link.settings().access; got == "login-a" {
-		t.Fatal("the old login's secret is still in use after cloud.json changed")
+	secret.Store(`{"access_token":"` + secretB + `"}`)
+	time.Sleep(5 * time.Millisecond)
+	writeKeychainConfig(t, home, cloud.URL, map[string]any{"organizationId": "org", "relogin": true})
+	waitForAccess(t, link, secretB)
+	next := messagesAsk("claude-opus-5-5")
+	next.SessionID = "after-login"
+	if answer := link.Ask(t.Context(), next)(); answer.Model != "claude-sonnet-5-5" {
+		t.Fatalf("after re-login = %+v, want routed with the new token and no pause", answer)
 	}
-	waitFor("login-b")
 }

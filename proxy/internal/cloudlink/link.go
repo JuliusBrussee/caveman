@@ -85,6 +85,7 @@ type Link struct {
 	kmu    sync.Mutex
 	kcache string
 	kbusy  bool
+	kgen   int // bumped by every refresh request
 }
 
 type decision struct {
@@ -152,8 +153,9 @@ func (l *Link) settings() settings {
 	if filesChanged || cfg != l.cfg {
 		previous := l.cfg
 		l.cfg, l.stamp, l.loaded = cfg, stamp, true
-		if cfg.access != previous.access || cfg.key != previous.key {
+		if (cfg.access != "" || cfg.key != "") && (cfg.access != previous.access || cfg.key != previous.key) {
 			// A new login starts fresh: no pause and no decision from the old one.
+			// Signing out needs no reset: nothing is asked while signed out.
 			l.pauseUntil, l.decisions = time.Time{}, nil
 			l.forgetLocked()
 		}
@@ -162,30 +164,48 @@ func (l *Link) settings() settings {
 }
 
 // keychainSecret is the last keychain read; a read never runs on a request
-// goroutine. refresh starts one in the background (one at a time), and a new
-// secret marks the settings stale so the next use reloads them.
+// goroutine. refresh (cloud.json changed: a login, logout or token refresh)
+// starts a background read and keeps serving the cached secret until it lands.
+// A change during an in-flight read bumps the generation, which schedules
+// exactly one more read, so no pre-login secret lingers. Only a non-empty,
+// different secret replaces the cache and marks the settings stale; an empty
+// read (a locked keychain) changes nothing, and logout is cloud.json's job.
 func (l *Link) keychainSecret(refresh bool) string {
 	l.kmu.Lock()
 	defer l.kmu.Unlock()
-	if refresh && !l.kbusy {
-		// cloud.json changed (a login, logout or token refresh rewrites it): the
-		// old secret may be dead, so ask nothing with it while the read runs.
-		// ponytail: any cloud.json write blanks the credential for one read.
-		l.kcache, l.kbusy = "", true
-		go func() {
-			secret := l.keychain()
-			l.kmu.Lock()
-			changed := secret != l.kcache
-			l.kcache, l.kbusy = secret, false
-			l.kmu.Unlock()
-			if changed {
-				l.mu.Lock()
-				l.stale = true
-				l.mu.Unlock()
-			}
-		}()
+	if refresh {
+		l.kgen++
+		if !l.kbusy {
+			l.kbusy = true
+			go l.readKeychain()
+		}
 	}
 	return l.kcache
+}
+
+func (l *Link) readKeychain() {
+	for {
+		l.kmu.Lock()
+		gen := l.kgen
+		l.kmu.Unlock()
+		secret := l.keychain()
+		l.kmu.Lock()
+		changed := secret != "" && secret != l.kcache
+		if changed {
+			l.kcache = secret
+		}
+		again := l.kgen != gen
+		l.kbusy = again
+		l.kmu.Unlock()
+		if changed {
+			l.mu.Lock()
+			l.stale = true
+			l.mu.Unlock()
+		}
+		if !again {
+			return
+		}
+	}
 }
 
 func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) settings {
