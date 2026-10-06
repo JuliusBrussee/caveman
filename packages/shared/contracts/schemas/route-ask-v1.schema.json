@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/route-ask-v1.schema.json",
   "title": "Caveman route ask v1",
-  "description": "The body a signed-in local runtime posts to Cloud's POST /v1/route: the caller's models and counts computed on the machine. No prompt text, file contents or headers. The tenant comes from the bearer token, never from the body. Cloud answers with one of the models, or the runtime keeps the asked one.",
+  "description": "The body a signed-in local runtime posts to Cloud's POST /v1/route, at most 256 KiB: the caller's models, counts computed on the machine, and the ask Cloud picks the model from (the latest human turn, the one before it and the end of the agent's last reply). Those turns go raw, with any context the agent put into them; tool calls, tool results, the system prompt and headers are not sent. The tenant comes from the bearer token, never from the body. Cloud answers with one of the models, or the runtime keeps the asked one.",
   "type": "object",
   "additionalProperties": false,
   "required": ["models", "signals"],
@@ -25,6 +25,18 @@
         "tools_declared": { "$ref": "#/$defs/count", "description": "Tools the request declares." },
         "tool_errors": { "$ref": "#/$defs/count", "description": "Tool results in the request marked as errors." },
         "images": { "type": "boolean", "description": "The request carries image input." }
+      }
+    },
+    "ask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "description": "The conversation, raw as the agent sent it. A human turn is a user message (Anthropic Messages, OpenAI chat) or user input item (OpenAI Responses) with at least one text block; a user message carrying only tool results is not one. A turn's text blocks are joined with \"\\n\". Byte bounds are UTF-8 and every cut lands on a rune boundary. Optional fields are left out when empty. Sent together with signals.",
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 131072, "pattern": "\\S", "description": "The latest human turn. At most 131072 bytes, keeping the head." },
+        "prev_text": { "type": "string", "maxLength": 16384, "description": "The human turn before the latest one. At most 16384 bytes, keeping the head." },
+        "reply_tail": { "type": "string", "maxLength": 16384, "description": "The newest assistant text (not tool calls) before the latest human turn. At most 16384 bytes, keeping the end." },
+        "turn": { "type": "integer", "minimum": 0, "maximum": 1000000, "description": "Human turns before the latest one." }
       }
     }
   },

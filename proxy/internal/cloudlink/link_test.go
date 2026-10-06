@@ -16,11 +16,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
 
-const secretPrompt = "PROMPT-TEXT-THAT-MUST-STAY-LOCAL"
+// promptText goes out in the route ask and never in an event.
+const promptText = "PROMPT-TEXT-ONLY-THE-ROUTE-ASK-CARRIES"
 
 // cloudHome writes the CLI state a signed-in user with routing on leaves.
 func cloudHome(t *testing.T, cloud string, routing bool, credentials string) string {
@@ -49,11 +52,11 @@ func newLink(home string) *Link {
 }
 
 func messagesAsk(model string) gateway.RouteAsk {
-	body := fmt.Sprintf(`{"model":%q,"tools":[{"name":"bash"}],"messages":[{"role":"user","content":%q},{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"boom"},{"type":"image","source":{}}]}]}`, model, secretPrompt)
+	body := fmt.Sprintf(`{"model":%q,"tools":[{"name":"bash"}],"messages":[{"role":"user","content":%q},{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"boom"},{"type":"image","source":{}}]}]}`, model, promptText)
 	return gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: model, Agent: "claude", SessionID: "s1", ToolsCount: 1, InputBytes: len(body), Body: []byte(body)}
 }
 
-func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
+func TestAskSendsModelsSignalsAndText(t *testing.T) {
 	var got []byte
 	var auth string
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,19 +71,16 @@ func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
 	if answer.Model != "claude-sonnet-5-5" || answer.Outcome != "routed" || answer.DecisionID == "" {
 		t.Fatalf("answer = %+v", answer)
 	}
-	if strings.Contains(string(got), secretPrompt) || strings.Contains(string(got), "fix") {
-		t.Fatalf("the ask carried prompt text: %s", got)
-	}
 	var body map[string]any
 	if err := json.Unmarshal(got, &body); err != nil {
 		t.Fatal(err)
 	}
-	if _, hasText := body["text"]; hasText {
-		t.Fatalf("the ask has a text field: %s", got)
-	}
+	// A first turn: the tool-result message after it is no human turn, and the
+	// empty optional fields are left out.
 	want := map[string]any{
 		"models":  []any{"claude-opus-5-5", "claude-sonnet-5-5"},
 		"signals": map[string]any{"agent": "claude", "context_tokens": float64(ask.InputBytes / 4), "tools_declared": float64(1), "tool_errors": float64(1), "images": true},
+		"ask":     map[string]any{"text": promptText},
 	}
 	if fmt.Sprint(body) != fmt.Sprint(want) {
 		t.Fatalf("ask body = %v\nwant %v", body, want)
@@ -93,6 +93,143 @@ func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
 	stale.Ask(t.Context(), ask)()
 	if auth != "Bearer cave_project_key" {
 		t.Errorf("authorization = %q, want the project key once the session token lapsed", auth)
+	}
+}
+
+func TestAskTextFromEachShape(t *testing.T) {
+	cases := []struct {
+		name, endpoint, body string
+		want                 askText
+	}{
+		{
+			name:     "claude code messages",
+			endpoint: "/v1/messages",
+			body: `{"model":"claude-opus-5-5","system":[{"type":"text","text":"You are Claude Code"}],"messages":[
+				{"role":"user","content":[{"type":"text","text":"<system-reminder>ctx</system-reminder>"},{"type":"text","text":"fix the login bug"}]},
+				{"role":"assistant","content":[{"type":"thinking","thinking":"hmm","signature":"s"},{"type":"text","text":"Looking."},{"type":"tool_use","id":"t1","name":"Read","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"package a"}]},
+				{"role":"assistant","content":[{"type":"text","text":"Fixed: the check used < not <=."}]},
+				{"role":"user","content":[{"type":"text","text":"<system-reminder>note</system-reminder>"},{"type":"text","text":"now add a test"}]},
+				{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}]}`,
+			want: askText{
+				Text:      "<system-reminder>note</system-reminder>\nnow add a test",
+				PrevText:  "<system-reminder>ctx</system-reminder>\nfix the login bug",
+				ReplyTail: "Fixed: the check used < not <=.",
+				Turn:      1,
+			},
+		},
+		{
+			name:     "openai chat",
+			endpoint: "/v1/chat/completions",
+			body: `{"model":"gpt-6-sol","messages":[
+				{"role":"system","content":"be brief"},
+				{"role":"user","content":"first"},
+				{"role":"assistant","content":"answer one"},
+				{"role":"user","content":[{"type":"text","text":"second"},{"type":"image_url","image_url":{"url":"data:"}},{"type":"text","text":"more"}]},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"c1","content":"result"}]}`,
+			want: askText{Text: "second\nmore", PrevText: "first", ReplyTail: "answer one", Turn: 1},
+		},
+		{
+			name:     "openai responses",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"role":"developer","content":"rules"},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
+				{"type":"reasoning","summary":[]},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer one"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"second"},{"type":"input_text","text":"more"}]},
+				{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+				{"type":"function_call_output","call_id":"c1","output":"ok"}]}`,
+			want: askText{Text: "second\nmore", PrevText: "first", ReplyTail: "answer one", Turn: 1},
+		},
+		{
+			name:     "responses input string",
+			endpoint: "/v1/responses",
+			body:     `{"model":"gpt-6-sol","input":"just this"}`,
+			want:     askText{Text: "just this"},
+		},
+		{
+			// The newest assistant text before the latest turn, even when the
+			// assistant's last message held only a tool call; tool-result and
+			// blank messages count as no human turn.
+			name:     "interrupted tool call",
+			endpoint: "/v1/messages",
+			body: `{"messages":[
+				{"role":"user","content":"A"},
+				{"role":"assistant","content":[{"type":"text","text":"R"}]},
+				{"role":"user","content":[{"type":"text","text":"  "}]},
+				{"role":"user","content":"B"},
+				{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"},{"type":"text","text":"[Request interrupted by user for tool use]"}]}]}`,
+			want: askText{Text: "[Request interrupted by user for tool use]", PrevText: "B", ReplyTail: "R", Turn: 2},
+		},
+		{
+			name:     "tool results only",
+			endpoint: "/v1/messages",
+			body:     `{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"}]}]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, ok := jsonsplice.Root([]byte(tc.body))
+			if !ok {
+				t.Fatal("bad fixture")
+			}
+			if got := askTextFor(tc.endpoint, []byte(tc.body), root); got != tc.want {
+				t.Errorf("got  %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Each field keeps its bound on a rune boundary: text and prev_text their head,
+// reply_tail its end.
+func TestAskTextCutsOnRuneBoundaries(t *testing.T) {
+	long := "a" + strings.Repeat("é", 100_000) // a cut at an even offset lands mid-rune
+	body, _ := json.Marshal(map[string]any{"messages": []map[string]any{
+		{"role": "user", "content": long},
+		{"role": "assistant", "content": long + "END"},
+		{"role": "user", "content": long},
+	}})
+	root, _ := jsonsplice.Root(body)
+	got := askTextFor("/v1/messages", body, root)
+	for name, cut := range map[string]struct {
+		text string
+		max  int
+		head bool
+	}{"text": {got.Text, askTextMax, true}, "prev_text": {got.PrevText, askSideMax, true}, "reply_tail": {got.ReplyTail, askSideMax, false}} {
+		kept := strings.HasSuffix(long+"END", cut.text)
+		if cut.head {
+			kept = strings.HasPrefix(long, cut.text)
+		}
+		if !kept || !utf8.ValidString(cut.text) || len(cut.text) > cut.max || len(cut.text) < cut.max-3 {
+			t.Errorf("%s: %d bytes, valid %v, kept %v", name, len(cut.text), utf8.ValidString(cut.text), kept)
+		}
+	}
+}
+
+// Escaping can make the JSON six times the text; the body still fits 256 KiB
+// and text keeps the longest head that fits.
+func TestAskBodyFitsTheContract(t *testing.T) {
+	side := strings.Repeat("<", askSideMax) // "\u003c" in JSON
+	text := strings.Repeat("\x01", askTextMax)
+	raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: askText{Text: text, PrevText: side, ReplyTail: side, Turn: 3}})
+	var got routeAsk
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > askBodyMax || len(raw) <= askBodyMax-6 {
+		t.Errorf("body is %d bytes, want the most that fits %d", len(raw), askBodyMax)
+	}
+	if got.Ask.Text == "" || !strings.HasPrefix(text, got.Ask.Text) || got.Ask.PrevText != side || got.Ask.ReplyTail != side || got.Ask.Turn != 3 {
+		t.Errorf("ask = text %d bytes, prev %d, reply %d, turn %d", len(got.Ask.Text), len(got.Ask.PrevText), len(got.Ask.ReplyTail), got.Ask.Turn)
+	}
+	// An ordinary ask goes as marshalled.
+	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: askText{Text: "hi"}}
+	if want, _ := json.Marshal(small); string(askBody(small)) != string(want) {
+		t.Errorf("askBody = %s", askBody(small))
 	}
 }
 
@@ -204,7 +341,7 @@ func TestEventsFollowTheDataLevel(t *testing.T) {
 			}
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &body)
-			if body.SchemaVersion != 1 || strings.Contains(string(raw), secretPrompt) {
+			if body.SchemaVersion != 1 || strings.Contains(string(raw), promptText) {
 				t.Errorf("bad batch: %s", raw)
 			}
 			mu.Lock()

@@ -16,8 +16,9 @@ import (
 // for, and the request is never held past the link's budget.
 
 // RouteAsk is what the route stage knows about one request. Body is read-only
-// and never leaves the machine: the link derives counts and a local cache key
-// from it.
+// and never sent whole: the link derives counts, a local cache key and the
+// ask's text (the latest human turn, the one before it and the end of the
+// agent's last reply) from it.
 type RouteAsk struct {
 	Provider   string
 	Endpoint   string
@@ -63,13 +64,6 @@ func routable(provider, endpoint string) bool {
 		return strings.HasSuffix(endpoint, "/chat/completions") || strings.HasSuffix(endpoint, "/responses")
 	}
 	return false
-}
-
-// LatestHumanText is the newest human-written text in a provider request (tool
-// results skipped). The route stage hashes it into a local cache key so every
-// tool-loop turn of one ask reuses one decision; the text itself goes nowhere.
-func LatestHumanText(provider, endpoint string, body []byte) string {
-	return extractCompressionQuery(provider, endpoint, body)
 }
 
 // setModel replaces the value of the top-level "model" string and leaves every

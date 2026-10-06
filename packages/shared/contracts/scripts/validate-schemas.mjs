@@ -115,6 +115,25 @@ for (const [reason] of Object.entries(v11.reason_catalog)) {
   if (!/^[a-z][a-z0-9_]{0,63}$/.test(reason)) throw new Error(`reason_catalog: ${reason} violates the reason grammar`);
 }
 
+// Route ask: the ask is optional and strict, its text required and non-blank.
+const validateRouteAsk = ajv.getSchema(`${SCHEMA_BASE}route-ask-v1.schema.json`);
+const routeAsk = (ask) => ({
+  models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+  signals: { agent: "claude", context_tokens: 1200, tools_declared: 3, tool_errors: 0, images: false },
+  ...(ask && { ask }),
+});
+for (const [ask, valid] of [
+  [undefined, true],
+  [{ text: "fix the login bug" }, true],
+  [{ text: "now add a test", prev_text: "fix the login bug", reply_tail: "Fixed.", turn: 1 }, true],
+  [{ text: " \n " }, false],
+  [{ prev_text: "fix the login bug" }, false],
+  [{ text: "fix it", turn: 1000001 }, false],
+  [{ text: "fix it", model_hint: "x" }, false],
+]) {
+  if (validateRouteAsk(routeAsk(ask)) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(ask)} should be ${valid ? "valid" : "invalid"}`);
+}
+
 // OpenAPI: every relative $ref must land on a schema file (and JSON pointer) in this package.
 const openapiPath = path.join(packageRoot, "openapi", "middleware.openapi.json");
 const openapi = JSON.parse(await readFile(openapiPath, "utf8"));

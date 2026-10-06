@@ -6,9 +6,10 @@
 //
 // It never touches compression or any other local stage, and every failure
 // fails open: a Cloud error, timeout, 401 or allowance answer keeps the model
-// the agent asked for. No prompt text leaves the machine: the ask carries the
-// caller's models and counts (contracts route-ask-v1), and events carry counts
-// and labels only.
+// the agent asked for. The ask carries the caller's models, counts and the
+// conversation's text Cloud picks the model from: the latest human turn, the
+// one before it and the end of the agent's last reply (contracts route-ask-v1).
+// Events carry counts and labels only, never prompt text.
 package cloudlink
 
 import (
@@ -31,6 +32,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -393,16 +395,17 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if bearer == "" {
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "login_expired"}
 	}
-	if statefulChain(ask.Body) {
+	root, ok := jsonsplice.Root(ask.Body)
+	if ok && statefulChain(ask.Body, root) {
 		// A Responses chain's follow-ups carry no human text to key a decision
 		// on, so routing it would switch model halfway through a turn.
 		return gateway.RouteAnswer{Outcome: "off", Reason: "stateful_chain"}
 	}
-	query := gateway.LatestHumanText(ask.Provider, ask.Endpoint, ask.Body)
-	if query == "" {
+	text := askTextFor(ask.Endpoint, ask.Body, root)
+	if text.Text == "" {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
 	}
-	key := sha256.Sum256([]byte(ask.SessionID + "\x00" + ask.Provider + "\x00" + ask.Model + "\x00" + query))
+	key := sha256.Sum256([]byte(ask.SessionID + "\x00" + ask.Provider + "\x00" + ask.Model + "\x00" + text.Text))
 	// Every tool-loop turn of one ask reuses its answer, failures included, so
 	// a turn never switches model halfway; a pause only stops new asks.
 	l.mu.Lock()
@@ -424,7 +427,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if !seen {
 		func() {
 			defer close(d.done) // waiters on this ask never hang, even on a panic
-			d.answer = l.ask(cfg, bearer, ask, models, deadline)
+			d.answer = l.ask(cfg, bearer, ask, text, models, deadline)
 		}()
 	}
 	<-d.done
@@ -446,11 +449,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	return answer
 }
 
-func statefulChain(body []byte) bool {
-	root, ok := jsonsplice.Root(body)
-	if !ok {
-		return false
-	}
+func statefulChain(body []byte, root jsonsplice.Span) bool {
 	span, ok := jsonsplice.Field(body, root, "previous_response_id")
 	return ok && string(body[span.Start:span.End]) != "null"
 }
@@ -469,11 +468,114 @@ var (
 )
 
 // routeAsk is POST /v1/route's body (contracts route-ask-v1): the caller's
-// models and counts computed on this machine. It has no text field: no prompt
-// text leaves the machine.
+// models, counts computed on this machine, and the conversation's text.
 type routeAsk struct {
 	Models  []string `json:"models"`
 	Signals signals  `json:"signals"`
+	Ask     askText  `json:"ask"`
+}
+
+// The contract's bounds, in bytes.
+const (
+	askBodyMax = 256 << 10
+	askTextMax = 128 << 10
+	askSideMax = 16 << 10
+	askTurnMax = 1_000_000
+)
+
+// askText is the conversation the ask carries, raw: Cloud reads it as is.
+// Text is the latest human turn, PrevText the human turn before it, ReplyTail
+// the end of the newest assistant text before the latest turn, and Turn the
+// number of human turns before the latest one.
+type askText struct {
+	Text      string `json:"text"`
+	PrevText  string `json:"prev_text,omitempty"`
+	ReplyTail string `json:"reply_tail,omitempty"`
+	Turn      int    `json:"turn,omitempty"`
+}
+
+// askTextFor reads askText out of an Anthropic Messages, OpenAI chat or OpenAI
+// Responses body in one walk over its message spans; only text blocks are
+// decoded. A human turn is a user message with text: one carrying only tool
+// results is not. Each field is cut to its bound on a rune boundary.
+func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
+	field := "messages"
+	if strings.HasSuffix(endpoint, "/responses") {
+		field = "input"
+	}
+	list, _ := jsonsplice.Field(body, root, field)
+	if text, ok := jsonsplice.String(body, list); ok { // a Responses input string is one human turn
+		if strings.TrimSpace(text) == "" {
+			return askText{}
+		}
+		return askText{Text: truncate(text, askTextMax)}
+	}
+	items, _ := jsonsplice.Elements(body, list)
+	var out askText
+	humans, replied := 0, false
+	for i := len(items) - 1; i >= 0; i-- {
+		switch role, _ := jsonsplice.StringField(body, items[i], "role"); {
+		case role == "user":
+			text, ok := messageText(body, items[i], "text", "input_text")
+			if !ok {
+				continue
+			}
+			switch humans {
+			case 0:
+				out.Text = truncate(text, askTextMax)
+			case 1:
+				out.PrevText = truncate(text, askSideMax)
+			}
+			humans++
+		case role == "assistant" && humans > 0 && !replied:
+			if text, ok := messageText(body, items[i], "text", "output_text"); ok {
+				out.ReplyTail, replied = tail(text, askSideMax), true
+			}
+		}
+	}
+	out.Turn = min(max(humans-1, 0), askTurnMax)
+	return out
+}
+
+// messageText joins a message's text blocks with "\n"; a string content is one
+// block. ok is false when no block has any non-space text.
+func messageText(body []byte, message jsonsplice.Span, types ...string) (string, bool) {
+	content, _ := jsonsplice.Field(body, message, "content")
+	if text, ok := jsonsplice.String(body, content); ok {
+		return text, strings.TrimSpace(text) != ""
+	}
+	blocks, _ := jsonsplice.Elements(body, content)
+	var texts []string
+	found := false
+	for _, block := range blocks {
+		if kind, _ := jsonsplice.StringField(body, block, "type"); !slices.Contains(types, kind) {
+			continue
+		}
+		if text, ok := jsonsplice.StringField(body, block, "text"); ok {
+			texts = append(texts, text)
+			found = found || strings.TrimSpace(text) != ""
+		}
+	}
+	return strings.Join(texts, "\n"), found
+}
+
+// askBody is the ask's JSON within askBodyMax. Escaping can grow text past it
+// (a control byte encodes as six), so then text keeps its longest head that
+// fits. The other fields always fit: even escaped they stay under 200 KiB.
+func askBody(ask routeAsk) []byte {
+	raw, _ := json.Marshal(ask)
+	if len(raw) <= askBodyMax {
+		return raw
+	}
+	text := ask.Ask.Text
+	n := sort.Search(len(text)+1, func(n int) bool {
+		ask.Ask.Text = truncate(text, n)
+		raw, _ = json.Marshal(ask)
+		return len(raw) > askBodyMax
+	}) - 1
+	ask.Ask.Text = truncate(text, n)
+	raw, _ = json.Marshal(ask)
+	return raw
 }
 
 type signals struct {
@@ -500,8 +602,8 @@ func signalsFor(ask gateway.RouteAsk) signals {
 	}
 }
 
-func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []string, deadline time.Time) gateway.RouteAnswer {
-	raw, _ := json.Marshal(routeAsk{Models: models, Signals: signalsFor(ask)})
+func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, text askText, models []string, deadline time.Time) gateway.RouteAnswer {
+	raw := askBody(routeAsk{Models: models, Signals: signalsFor(ask), Ask: text})
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.gateway+"/v1/route", bytes.NewReader(raw))
@@ -657,4 +759,16 @@ func truncate(text string, n int) string {
 		n--
 	}
 	return text[:n]
+}
+
+// tail keeps the last n bytes of text, cut on a rune boundary.
+func tail(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	start := len(text) - n
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return text[start:]
 }

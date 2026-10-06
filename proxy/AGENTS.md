@@ -97,9 +97,11 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   it asks Cloud `POST /v1/route` only while the CLI is signed in with `modules.routing: true` in
   `$CAVEMAN_HOME/cloud.json`, for API-key Anthropic Messages / OpenAI chat or responses requests
   whose model is in the same-provider pool (subscription traffic never routes, ADR 0083 §7). The
-  ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries only
-  the caller's models and counts (contracts `route-ask-v1`: no `text`, never prompt text), and
-  its answer is cached per ask so a tool loop
+  ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
+  caller's models, counts and the raw text of the latest human turn, the one before it and the
+  end of the agent's last reply (contracts `route-ask-v1` `ask`, sent raw; Cloud picks the model
+  and no routing logic lives here), and its answer is cached per ask (session, provider,
+  model, latest human text) so a tool loop
   never switches model mid-turn. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
   answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`

@@ -91,7 +91,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 		})},
 		Cloud: link,
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"`+secretPrompt+`"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"`+promptText+`"}]}`))
 	req.Header.Set("x-api-key", "sk-ant-api03-test")
 	req.Header.Set("x-cave-agent", "claude")
 	rec := httptest.NewRecorder()
@@ -106,7 +106,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 	if upstreamModel != "claude-sonnet-5-5" {
 		t.Errorf("provider got model %q, want the routed claude-sonnet-5-5", upstreamModel)
 	}
-	if strings.Contains(asked, secretPrompt) || strings.Contains(asked, `"text"`) || !strings.Contains(asked, `"signals":{"agent":"claude",`) {
+	if !strings.Contains(asked, `"ask":{"text":"`+promptText+`"}`) || !strings.Contains(asked, `"signals":{"agent":"claude",`) {
 		t.Errorf("ask = %s", asked)
 	}
 	if len(events) != 1 {
@@ -116,7 +116,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 	if events[0]["model_requested"] != "claude-opus-5-5" || events[0]["model_used"] != "claude-sonnet-5-5" || route["outcome"] != "routed" {
 		t.Errorf("event = %v", events[0])
 	}
-	if raw, _ := json.Marshal(events); strings.Contains(string(raw), secretPrompt) {
+	if raw, _ := json.Marshal(events); strings.Contains(string(raw), promptText) {
 		t.Error("an event carried prompt text")
 	}
 }
