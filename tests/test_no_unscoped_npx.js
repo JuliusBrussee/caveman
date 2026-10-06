@@ -1,5 +1,5 @@
-// The unscoped npm package `caveman` belongs to someone else, so any
-// `npx caveman` we print would run a stranger's code. The CLI is
+// The unscoped npm package `caveman` belongs to someone else, so telling
+// anyone to npx it would run a stranger's code. The CLI is
 // `npx @caveman-ai/cli`; the skill installer is
 // `npx -y github:JuliusBrussee/caveman`. No tracked text file may say otherwise.
 const test = require('node:test');
