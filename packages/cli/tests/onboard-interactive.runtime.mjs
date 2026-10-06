@@ -363,7 +363,7 @@ test("end to end: caveman setup in a terminal against a Cloud that refuses sign-
     });
     assert.equal(out.code, 0, out.text);
     assert.match(out.text, /Found Claude Code and Codex\n/, "no version before the agent was ever wired");
-    assert.match(out.text, /routing +your asks go to Caveman Cloud to pick the model · free account\n[\s\S]*Continue\?/, "the picker says what routing sends before Continue");
+    assert.match(out.text, /routing +asks go to Caveman Cloud to pick model \+ effort · free account\n[\s\S]*Continue\?/, "the picker says what routing sends before Continue");
     // One line per step between Continue and sign-in; enable's own report stays out.
     assert.match(out.text, /Continue\? › Yes\n✓ Claude Code wired\n✓ Codex wired\n○ local runtime starts with your next agent session\n○ scripts: caveman-blocks not installed yet\n\nRouting needs a free Caveman account\.\n/);
     assert.doesNotMatch(out.text, /planned user-scoped writes|native Caveman enabled|→ /);

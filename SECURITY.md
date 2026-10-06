@@ -227,8 +227,8 @@ blocked during beta. Sync sends usage metadata and aggregate findings, never
 prompts, responses, credentials, tool evidence, or source paths. Subscription
 traffic omits dollar figures, and synced local data remains `inferred`. Managed
 gateway mode carries request and response content through Caveman Cloud; local
-mode sends it only to your provider, apart from the turns routing sends to pick
-the model (see the table above). `CAVEMAN_OFFLINE=1` disables entitlement
+mode sends it only to your provider, apart from what routing sends to pick the
+model and effort (see the table above). `CAVEMAN_OFFLINE=1` disables entitlement
 refresh and sync, and a local runtime started with it sends no routing asks or
 runtime events, but opted-in telemetry needs `CAVEMAN_TELEMETRY=0` or
 `DO_NOT_TRACK=1` too.
