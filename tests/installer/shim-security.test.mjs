@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { mkdtempSync, readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -69,6 +69,15 @@ test("every bootstrap pin names the same release", () => {
   }
 });
 
+// With no caveman on PATH the first run comes from npx; it must be the CLI
+// this repo releases, never whatever @latest is that day.
+test("both shims pin the first-run CLI to packages/cli/package.json", () => {
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  assert.equal(shellShim.match(/^CLI_VERSION="([^"]+)"$/m)?.[1], cli, "install.sh CLI_VERSION drifted from packages/cli/package.json");
+  assert.equal(powershellShim.match(/\$CliVersion = "([^"]+)"/)?.[1], cli, "install.ps1 $CliVersion drifted from packages/cli/package.json");
+  assert.doesNotMatch(shellShim + powershellShim, /@caveman-ai\/cli@latest/);
+});
+
 // The install ends in the CLI's first run. Without a terminal (CI, a pipe) the
 // shim prints the one command instead of running it; flags like --help never
 // lead into it.
@@ -90,4 +99,15 @@ test("shell install ends by naming the first-run command when no terminal is att
   assert.equal(plain.stdout, "installer-ran\nNext: caveman setup\n");
   const help = run(["--help"]);
   assert.equal(help.stdout, "installer-ran\n");
+  // No caveman on PATH (and nothing from the host's PATH): the pinned CLI through npx.
+  rmSync(join(fakeBin, "caveman"));
+  writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
+  const viaNpx = spawnSync("bash", ["-s", "--"], {
+    cwd,
+    input: shellShim,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` },
+  });
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  assert.equal(viaNpx.stdout, `installer-ran\nNext: npx -y @caveman-ai/cli@${cli} setup\n`);
 });

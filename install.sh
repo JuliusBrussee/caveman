@@ -23,6 +23,9 @@ set -euo pipefail
 
 REPO="JuliusBrussee/caveman"
 PINNED_REF="${CAVEMAN_REF:-v3.1.0}"
+# The CLI release the first run comes from when caveman is not installed;
+# kept equal to packages/cli/package.json (tests/installer/shim-security).
+CLI_VERSION="2.0.1"
 
 # Require Node ≥18. nvm is a common path; print a hint if missing.
 if ! command -v node >/dev/null 2>&1; then
@@ -48,7 +51,7 @@ first_run() {
   if command -v caveman >/dev/null 2>&1; then
     set -- caveman setup
   else
-    set -- npx -y @caveman-ai/cli@latest setup
+    set -- npx -y "@caveman-ai/cli@$CLI_VERSION" setup
   fi
   if [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then
     echo

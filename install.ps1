@@ -33,6 +33,9 @@ function Install-Caveman {
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
   $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v3.1.0" }
+  # The CLI release the first run comes from when caveman is not installed;
+  # kept equal to packages/cli/package.json (tests/installer/shim-security).
+  $CliVersion = "2.0.1"
 
   # Require Node ≥18.
   $node = Get-Command node -ErrorAction SilentlyContinue
@@ -82,7 +85,7 @@ caveman: Node.js (>=18) required. Install:
   # End in the CLI's first run: modules, agents, one Continue.
   $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
   if ($skip.Count -gt 0) { exit 0 }
-  $setup = if (Get-Command caveman -ErrorAction SilentlyContinue) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@latest", "setup") }
+  $setup = if (Get-Command caveman -ErrorAction SilentlyContinue) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup") }
   if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
     & $setup[0] $setup[1..($setup.Length - 1)]
     exit $LASTEXITCODE
