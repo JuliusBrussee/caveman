@@ -859,3 +859,123 @@ func (m *servedModel) name(contentEncoding string) string {
 	}
 	return ""
 }
+
+// shownModel puts the model the agent asked for back into what it reads when
+// the route stage moved the request: Claude Code drops its thinking when the
+// answer names another model. Only the client's copy changes; usage, stats and
+// last read the provider's bytes. A JSON answer changes its top-level "model"
+// (setModel); a stream changes every "model":"<sent>" pair, which is where
+// Anthropic's message_start, Responses' response.* events and every chat chunk
+// name it (tool arguments stream as escaped strings and never match). A
+// dated id of the model sent ("<sent>-2026-09-01") counts as it.
+type shownModel struct {
+	src      io.Reader
+	sent     string
+	asked    []byte
+	ready    []byte // rewritten, not yet handed out
+	tail     []byte // may still become a pair: held for the next read
+	scratch  []byte
+	err      error
+	finished bool
+}
+
+// shownModelRE matches one "model":"…" pair; whitespace is bounded so a pair
+// split across reads is never held for long.
+var shownModelRE = regexp.MustCompile(`"model"[ \t\r\n]{0,8}:[ \t\r\n]{0,8}"([^"\\]{1,128})"`)
+
+const shownModelPairMax = 7 + 8 + 1 + 8 + 1 + 128 + 1
+
+func newShownModel(src io.Reader, sent, asked string) *shownModel {
+	return &shownModel{src: src, sent: sent, asked: []byte(asked), scratch: make([]byte, 32<<10)}
+}
+
+func (m *shownModel) Read(p []byte) (int, error) {
+	for len(m.ready) == 0 && !m.finished {
+		n, err := m.src.Read(m.scratch)
+		if n > 0 {
+			chunk := m.rewrite(append(m.tail, m.scratch[:n]...))
+			held := partialPair(chunk)
+			m.ready = append(m.ready, chunk[:len(chunk)-held]...)
+			m.tail = append([]byte(nil), chunk[len(chunk)-held:]...)
+		}
+		if err != nil {
+			m.ready, m.tail, m.err, m.finished = append(m.ready, m.tail...), nil, err, true
+		}
+	}
+	n := copy(p, m.ready)
+	m.ready = m.ready[n:]
+	if len(m.ready) == 0 && m.finished {
+		return n, m.err
+	}
+	return n, nil
+}
+
+// rewrite swaps the value of every complete pair naming the model sent.
+func (m *shownModel) rewrite(data []byte) []byte {
+	matches := shownModelRE.FindAllSubmatchIndex(data, -1)
+	if matches == nil {
+		return data
+	}
+	var out []byte
+	prev := 0
+	for _, match := range matches {
+		value := string(data[match[2]:match[3]])
+		if value != m.sent && !strings.HasPrefix(value, m.sent+"-") {
+			continue
+		}
+		out = append(append(out, data[prev:match[2]]...), m.asked...)
+		prev = match[3]
+	}
+	if out == nil {
+		return data
+	}
+	return append(out, data[prev:]...)
+}
+
+// partialPair is how many bytes at the end of data could still become a pair:
+// from the earliest quote in the last shownModelPairMax bytes that starts an
+// unfinished one. A finished event never ends in one, so streams stay live.
+func partialPair(data []byte) int {
+	for i := max(len(data)-shownModelPairMax, 0); i < len(data); i++ {
+		if data[i] == '"' && pairPrefix(data[i:]) {
+			return len(data) - i
+		}
+	}
+	return 0
+}
+
+// pairPrefix reports whether tail is the unfinished start of a "model":"…" pair.
+func pairPrefix(tail []byte) bool {
+	const key = `"model"`
+	i := 0
+	for ; i < len(tail) && i < len(key); i++ {
+		if tail[i] != key[i] {
+			return false
+		}
+	}
+	if i == len(tail) {
+		return true
+	}
+	space := func() bool {
+		start := i
+		for i < len(tail) && strings.IndexByte(" \t\r\n", tail[i]) >= 0 {
+			i++
+		}
+		return i-start <= 8
+	}
+	if !space() || i < len(tail) && tail[i] != ':' {
+		return false
+	}
+	if i == len(tail) {
+		return true
+	}
+	i++
+	if !space() || i < len(tail) && tail[i] != '"' {
+		return false
+	}
+	if i == len(tail) {
+		return true
+	}
+	value := tail[i+1:]
+	return len(value) <= 128 && bytes.IndexAny(value, `"\`) < 0
+}

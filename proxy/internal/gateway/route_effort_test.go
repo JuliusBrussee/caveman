@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -787,6 +788,172 @@ func TestRouteLabelsMatchTheContract(t *testing.T) {
 		}
 		if !ok || bound != RouteLabelMax(name) {
 			t.Errorf("%s: in the contract %v, bound %d, gateway %d", name, ok, bound, RouteLabelMax(name))
+		}
+	}
+}
+
+// chunked hands out its chunks one Read at a time.
+type chunked struct{ chunks [][]byte }
+
+func (c *chunked) Read(p []byte) (int, error) {
+	if len(c.chunks) == 0 {
+		return 0, io.EOF
+	}
+	n := copy(p, c.chunks[0])
+	if c.chunks[0] = c.chunks[0][n:]; len(c.chunks[0]) == 0 {
+		c.chunks = c.chunks[1:]
+	}
+	return n, nil
+}
+
+// The agent's copy names the asked model at every split of the stream,
+// in each provider's stream shape; nothing else changes.
+func TestShownModelInStreamsAtEverySplit(t *testing.T) {
+	cases := []struct{ name, sent, in, want string }{
+		{
+			"anthropic message_start", "claude-sonnet-5-5",
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5-5\",\"content\":[]}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"model\\\":\\\"claude-sonnet-5-5\\\"}\"}}\n\n",
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-opus-5-5\",\"content\":[]}}\n\nevent: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"delta\":{\"type\":\"input_json_delta\",\"partial_json\":\"{\\\"model\\\":\\\"claude-sonnet-5-5\\\"}\"}}\n\n",
+		},
+		{
+			"chat chunks, dated id", "gpt-6-sol",
+			"data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-6-sol-2026-09-01\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\": \"gpt-6-sol-2026-09-01\",\"choices\":[]}\n\ndata: [DONE]\n\n",
+			"data: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\":\"gpt-6-luna\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"id\":\"c\",\"object\":\"chat.completion.chunk\",\"model\": \"gpt-6-luna\",\"choices\":[]}\n\ndata: [DONE]\n\n",
+		},
+		{
+			"responses events", "gpt-6-sol",
+			"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"instructions\":\"say \\\"model\\\": \\\"gpt-6-sol\\\"\",\"model\":\"gpt-6-sol\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"model\":\"gpt-6-sol\",\"usage\":{}}}\n\n",
+			"event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\",\"instructions\":\"say \\\"model\\\": \\\"gpt-6-sol\\\"\",\"model\":\"gpt-6-luna\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\",\"model\":\"gpt-6-luna\",\"usage\":{}}}\n\n",
+		},
+	}
+	asked := map[string]string{"claude-sonnet-5-5": "claude-opus-5-5", "gpt-6-sol": "gpt-6-luna"}
+	for _, c := range cases {
+		in := []byte(c.in)
+		for i := 0; i <= len(in); i++ {
+			for _, j := range []int{i, min(i+3, len(in)), min(i+40, len(in))} {
+				got, err := io.ReadAll(newShownModel(&chunked{chunks: [][]byte{in[:i:i], in[i:j:j], in[j:]}}, c.sent, asked[c.sent]))
+				if err != nil || string(got) != c.want {
+					t.Fatalf("%s split at %d/%d:\n got %q\nwant %q", c.name, i, j, got, c.want)
+				}
+			}
+		}
+	}
+}
+
+// A stream stays live: a complete event is handed out without waiting for
+// more input, and a pair split across reads is held only until it completes.
+func TestShownModelStaysIncremental(t *testing.T) {
+	reader, writer := io.Pipe()
+	shown := newShownModel(reader, "claude-sonnet-5-5", "claude-opus-5-5")
+	go func() {
+		_, _ = writer.Write([]byte("data: {\"model\":\"claude-sonnet-5-5\"}\n\ndata: {\"mod"))
+		_, _ = writer.Write([]byte("el\":\"claude-sonnet-5-5\"}\n\n"))
+		_ = writer.Close()
+	}()
+	buf := make([]byte, 1024)
+	n, err := shown.Read(buf)
+	if err != nil || string(buf[:n]) != "data: {\"model\":\"claude-opus-5-5\"}\n\ndata: {" {
+		t.Fatalf("first read = %q, %v", buf[:n], err)
+	}
+	rest, _ := io.ReadAll(shown)
+	if string(rest) != "\"model\":\"claude-opus-5-5\"}\n\n" {
+		t.Fatalf("rest = %q", rest)
+	}
+}
+
+// When the request moved, the agent reads the model it asked for, in a JSON
+// answer (top-level "model" only, Content-Length right) and in a stream;
+// usage, the recorded row and last keep the served model.
+func TestRoutedAnswerShowsTheAskedModel(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+		srv, log := effortServer(t, cloud, func(body []byte) (int, string) {
+			if stream {
+				return 0, ""
+			}
+			return http.StatusOK, `{"id":"m","type":"message","role":"assistant","model":"claude-sonnet-5-5","content":[{"type":"tool_use","id":"t","name":"Write","input":{"model":"claude-sonnet-5-5"}}],"usage":{"input_tokens":10,"output_tokens":2}}`
+		})
+		if stream {
+			srv, log = streamServer(t, cloud)
+		}
+		rec := post(t, srv, convo("high", uA), nil)
+		sent, upstreamHeader := log.last()
+		if !bytes.Contains(sent, []byte(`"model":"claude-sonnet-5-5"`)) || upstreamHeader.Get("accept-encoding") == "br" {
+			t.Fatalf("upstream got %s", sent)
+		}
+		body := rec.Body.String()
+		if !strings.Contains(body, `"model":"claude-opus-5-5"`) || strings.Count(body, "claude-sonnet-5-5") != map[bool]int{false: 1, true: 0}[stream] {
+			t.Errorf("stream=%v: the agent read %s", stream, body)
+		}
+		if !stream && rec.Header().Get("content-length") != strconv.Itoa(len(body)) {
+			t.Errorf("content-length %s for %d bytes", rec.Header().Get("content-length"), len(body))
+		}
+		if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" || cloud.observed[0].Model != "claude-sonnet-5-5" {
+			t.Errorf("routed-from %q, recorded model %q", rec.Header().Get("x-caveman-routed-from"), cloud.observed[0].Model)
+		}
+		post(t, srv, convo("high", uA, aB, uC), nil)
+		if last := cloud.asks[1].Last; last == nil || last.Model != "claude-sonnet-5-5" {
+			t.Errorf("stream=%v: last = %+v, want the served model", stream, last)
+		}
+	}
+}
+
+// streamServer answers every request with an Anthropic stream naming the model sent.
+func streamServer(t *testing.T, cloud CloudLink) (*Server, *upstreamLog) {
+	t.Helper()
+	log := &upstreamLog{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		log.mu.Lock()
+		log.bodies, log.headers = append(log.bodies, raw), append(log.headers, r.Header.Clone())
+		log.mu.Unlock()
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.Unmarshal(raw, &req)
+		w.Header().Set("content-type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		for _, event := range []string{
+			`event: message_start` + "\n" + `data: {"type":"message_start","message":{"id":"m","type":"message","role":"assistant","model":"` + req.Model + `","content":[],"usage":{"input_tokens":10,"output_tokens":1}}}` + "\n\n",
+			`event: message_delta` + "\n" + `data: {"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}` + "\n\n",
+			`event: message_stop` + "\n" + `data: {"type":"message_stop"}` + "\n\n",
+		} {
+			_, _ = io.WriteString(w, event)
+			flusher.Flush()
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	return New(Config{
+		Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	}), log
+}
+
+// OpenAI chat and Responses JSON answers show the asked model too.
+func TestRoutedOpenAIAnswerShowsTheAskedModel(t *testing.T) {
+	for path, answer := range map[string]string{
+		"/v1/chat/completions": `{"id":"c","object":"chat.completion","model":"gpt-6-luna-2026-09-01","choices":[],"usage":{"prompt_tokens":1,"completion_tokens":1}}`,
+		"/v1/responses":        `{"id":"r","object":"response","instructions":"x","model":"gpt-6-luna-2026-09-01","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`,
+	} {
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("content-type", "application/json")
+			_, _ = io.WriteString(w, answer)
+		}))
+		cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-luna", Outcome: "routed"}}
+		srv := New(Config{
+			Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+		})
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-6-sol","input":"go","messages":[]}`))
+		req.Header.Set("authorization", "Bearer sk-proj-api-key")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		upstream.Close()
+		if want := strings.Replace(answer, "gpt-6-luna-2026-09-01", "gpt-6-sol", 1); rec.Body.String() != want {
+			t.Errorf("%s: the agent read %s", path, rec.Body.String())
+		}
+		if cloud.observed[0].Model != "gpt-6-luna" {
+			t.Errorf("%s: recorded model %q", path, cloud.observed[0].Model)
 		}
 	}
 }

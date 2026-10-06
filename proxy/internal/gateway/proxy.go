@@ -447,7 +447,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
 	if run != nil && !run.off {
-		withoutBrotli(upstreamHeaders)
+		if meta.Model != modelRequested {
+			// An identity answer, so the agent's copy can name the model it asked for.
+			upstreamHeaders.Del("accept-encoding")
+		} else {
+			withoutBrotli(upstreamHeaders)
+		}
 	}
 	healHeaders := upstreamHeaders // the heal retry carries no marks, so no per-message beta
 	if run != nil && run.marked {
@@ -623,6 +628,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
+	// The agent reads the model it asked for when the route stage moved the
+	// request (route.go shownModel); a compressed answer is left as it is.
+	encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
+	moved := run != nil && meta.Model != modelRequested && (encoding == "" || strings.EqualFold(encoding, "identity"))
+	var shown []byte
 	if !meta.Stream {
 		data, rerr := readUpstreamBody(resp)
 		if rerr != nil {
@@ -633,6 +643,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
+		if moved {
+			if out, ok := setModel(data, modelRequested); ok {
+				shown = out
+				resp.Header.Set("Content-Length", strconv.Itoa(len(shown)))
+			}
+		}
 	}
 	defer resp.Body.Close()
 
@@ -675,7 +691,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if run != nil {
 		scanned = io.MultiWriter(usageScanner, &served)
 	}
-	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, scanned), meta.Stream, requestID)
+	src := io.Reader(io.TeeReader(resp.Body, scanned))
+	switch {
+	case shown != nil:
+		_, _ = io.Copy(scanned, resp.Body) // the provider's bytes still feed usage and last
+		src = bytes.NewReader(shown)
+	case moved && meta.Stream:
+		src = newShownModel(src, meta.Model, modelRequested)
+	}
+	counter, copyErrCode := s.streamResponse(w, r, src, meta.Stream, requestID)
 	ttfb := time.Since(start).Milliseconds()
 	if !counter.firstByteAt.IsZero() {
 		ttfb = counter.firstByteAt.Sub(start).Milliseconds()
