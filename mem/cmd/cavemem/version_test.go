@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -14,12 +15,13 @@ func TestVersionJSON(t *testing.T) {
 	}
 	var v struct {
 		Version      string   `json:"version"`
+		Schema       string   `json:"schema"`
 		Capabilities []string `json:"capabilities"`
 	}
 	if err := json.Unmarshal(out.Bytes(), &v); err != nil {
 		t.Fatalf("version --json is not JSON: %v: %q", err, out.String())
 	}
-	if v.Version != version || !slices.Contains(v.Capabilities, "recall") {
+	if v.Version != version || !strings.HasPrefix(v.Schema, "caveman.") || !slices.Contains(v.Capabilities, "recall") {
 		t.Fatalf("version --json = %+v", v)
 	}
 	out.Reset()

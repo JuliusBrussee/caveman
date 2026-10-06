@@ -67,13 +67,14 @@ func main() {
 // version is the build version (go build -ldflags "-X main.version=...").
 var version = "dev"
 
-// runVersion prints the version, or with --json {version, capabilities}: the
+// runVersion prints the version, or with --json {version, schema, capabilities}: the
 // shape every caveman binary answers so the CLI can probe what a build supports.
 // The capabilities are the MCP server (no arguments) and its direct commands.
 func runVersion(args []string, stdout io.Writer) {
 	if len(args) > 0 && args[0] == "--json" {
 		_ = json.NewEncoder(stdout).Encode(map[string]any{
 			"version":      version,
+			"schema":       "caveman.browse.version.v1",
 			"capabilities": []string{"mcp", "snapshot", "act", "eval", "recover", "close"},
 		})
 		return
