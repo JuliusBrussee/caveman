@@ -10582,6 +10582,10 @@ function signInError(error: unknown, baseURL: string): unknown {
 async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: string }> {
   const { noBrowser, instance } = validateLoginArgs(argv);
   const baseURL = instance ?? resolveLoginBaseUrl(argv);
+  // Credentials never cross plain http, except to this machine.
+  if (!instance && !secureLoginURL(new URL(baseURL))) {
+    throw new Error(`Sign-in needs https: ${baseURL} (plain http only for localhost).`);
+  }
 
   let grant: DeviceGrant;
   try {

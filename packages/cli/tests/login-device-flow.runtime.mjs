@@ -93,3 +93,19 @@ test("login happy path: grant persisted to the one config home before the ACK", 
     rmSync(box.home, { recursive: true, force: true });
   }
 });
+
+test("login refuses a plain-http Cloud that is not this machine, from the flag or CAVE_API_URL", async () => {
+  const box = env();
+  try {
+    const flag = await login(["--base-url", "http://cloud.example.test"], box.env);
+    assert.equal(flag.code, 1);
+    assert.equal(flag.stderr, "Sign-in needs https: http://cloud.example.test (plain http only for localhost).\n");
+    const fromEnv = await login([], { ...box.env, CAVE_API_URL: "http://cloud.example.test" });
+    assert.equal(fromEnv.code, 1);
+    assert.match(fromEnv.stderr, /^Sign-in needs https: http:\/\/cloud\.example\.test /);
+    assert.equal(existsSync(join(box.caveHome, "credentials")), false);
+  } finally {
+    rmSync(box.home, { recursive: true, force: true });
+  }
+});
+
