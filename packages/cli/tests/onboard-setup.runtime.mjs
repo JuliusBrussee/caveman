@@ -5,8 +5,8 @@ import { join } from "node:path";
 import { isolatedCliEnv, runCli as runIsolated } from "./_cli.mjs";
 import { modulesFixture, runCli, snapshot } from "./_modules.mjs";
 
-// Non-interactive first run (`caveman setup --yes`, CI, no TTY): every module
-// on, every detected agent, the plan printed, no sign-in prompt. Module state
+// Non-interactive first run (no TTY, or CI): the plan is printed, and only
+// --yes applies it — every module on, every detected agent, no sign-in prompt. Module state
 // lands in $CAVEMAN_HOME/cloud.json. The fixture stubs every module binary, so
 // nothing downloads.
 const skip = process.platform === "win32" ? "shell agent stubs" : false;
@@ -27,6 +27,20 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
     assert.match(out.stdout, /routing is on and starts after you sign in · caveman login/, "no sign-in prompt without a terminal");
     assert.match(out.stdout, /✓ Ready\. Try: {2}caveman claude {6}See it: {2}caveman status\n/);
     assert.deepEqual(modules(fx), { output: true, input: true, "waste-fixes": true, routing: true, scripts: true, browse: true });
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("setup without --yes and no terminal prints the plan, applies nothing, exits 0", { skip }, async () => {
+  const fx = modulesFixture();
+  try {
+    const before = snapshot(fx.home);
+    const out = await runCli(["setup"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /\nThis will\n/);
+    assert.match(out.stdout, /Nothing changed: pass --yes to apply · caveman setup --yes\n$/);
+    assert.deepEqual(snapshot(fx.home), before);
   } finally {
     fx.cleanup();
   }

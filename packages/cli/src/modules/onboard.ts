@@ -130,6 +130,11 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     out.write(`${c.dim("Dry run: nothing was written.")}\n`);
     return { confirmed: false, cancelled: false, ok: true, plan };
   }
+  // Without a terminal to ask in (CI counts), only --yes applies.
+  if (!deps.interactive && !opts.yes) {
+    out.write(`Nothing changed: pass --yes to apply · ${deps.cmd} setup --yes\n`);
+    return { confirmed: false, cancelled: false, ok: true, plan };
+  }
   if (ask) {
     const yes = await confirm(input, out, c, "Continue?");
     if (yes === null) return cancelled(out, c);

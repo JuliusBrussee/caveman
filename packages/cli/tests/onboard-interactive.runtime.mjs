@@ -216,6 +216,28 @@ test("end to end: a No at the agent door is remembered; caveman claude stops ask
   }
 });
 
+test("end to end: CI=1 in a terminal (install.sh in CI) never applies without --yes", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
+  const box = modulesFixture();
+  const script = join(box.home, "ci.exp");
+  writeFileSync(script, [
+    "set timeout 20",
+    `spawn -noecho ${process.execPath} ${cli} setup`,
+    "expect eof",
+    "catch wait result",
+    "exit [lindex $result 3]",
+    "",
+  ].join("\n"));
+  try {
+    const out = await expectRun(script, { ...box.env, TERM: "xterm", CI: "1" });
+    assert.equal(out.code, 0, out.text);
+    assert.doesNotMatch(out.text, /space toggles/);
+    assert.match(out.text, /Nothing changed: pass --yes to apply/);
+    assert.equal(existsSync(join(box.env.CAVEMAN_HOME, "cloud.json")), false);
+  } finally {
+    box.cleanup();
+  }
+});
+
 test("end to end: caveman setup in a terminal against a Cloud that refuses sign-in (403)", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
   const server = createServer((req, res) => {
     req.resume();
