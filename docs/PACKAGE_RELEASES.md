@@ -184,6 +184,17 @@ unconditionally), so a release page serving an older signed manifest and
 binaries fails the install. CLIs pinned to earlier runtimes accept a manifest
 without the entry.
 
+The release also carries the `caveman-blocks` binaries of the `scripts` module
+and `modules.json`, the module index. The workflow downloads the
+[caveman-ai/blocks](https://github.com/caveman-ai/blocks) release pinned in
+`packages/cli/BLOCKS_RELEASE`, checks it against Blocks' own `checksums.txt`,
+and attaches each binary as `caveman-blocks_<os>_<arch>` (targets Blocks does
+not build are left out). `packages/cli/scripts/gen-modules-index.mjs` then
+writes `modules.json` from the module registry and the manifest: per module
+its kind, defaults and every platform build's SHA-256. Both are listed in
+`checksums.txt` before it is signed. The CLI (`src/modules/index-file.ts`)
+refuses a `modules.json` the signed manifest does not list byte for byte.
+
 The container image carries OCI labels (`org.opencontainers.image.source`,
 `version`, `revision`, `licenses` = `Apache-2.0`, `title`, `description`), ships the
 license texts under `/licenses/` (third-party Go modules under
@@ -227,6 +238,7 @@ release layout unchanged:
 $CAVE_BINARY_RELEASE_BASE/<bin-vX.Y.Z>/checksums.txt
 $CAVE_BINARY_RELEASE_BASE/<bin-vX.Y.Z>/checksums.txt.keysig
 $CAVE_BINARY_RELEASE_BASE/<bin-vX.Y.Z>/<binary>_<darwin|linux|win32>_<amd64|arm64>
+$CAVE_BINARY_RELEASE_BASE/<bin-vX.Y.Z>/modules.json
 ```
 
 The release tag is the one pinned in the installed CLI or launcher, not one the
