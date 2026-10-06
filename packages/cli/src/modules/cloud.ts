@@ -54,7 +54,7 @@ export async function printSignInLines(): Promise<void> {
   // The stored switch, as caveman-proxy reads it, not the registry default.
   const modules = h.readConfig().modules;
   const routing = !!modules && typeof modules === "object" && (modules as Record<string, unknown>).routing === true;
-  lines.push(routing ? "routing is on · the right model each turn · caveman off routing to stop" : "routing is off · caveman on routing to turn it on");
+  lines.push(routing ? "routing is on · sends your latest ask, the one before it and the end of the agent's last reply to Caveman Cloud to pick the model · caveman off routing to stop" : "routing is off · caveman on routing to turn it on");
   const telemetryOff = h.telemetryOff();
   const level = runtimeDataLevel(await cloudMe(), telemetryOff);
   lines.push(telemetryOff
