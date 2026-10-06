@@ -13,6 +13,6 @@
     "package": "npm run test:all && node scripts/build-extension-zip.mjs && node scripts/build-extension-zip.mjs firefox"
   },
   "devDependencies": {
-    "@playwright/test": "1.55.0"
+    "@playwright/test": "1.63.0"
   }
 }

@@ -74,6 +74,6 @@
     "test:node": "node --test --test-force-exit tests/*.runtime.mjs"
   },
   "devDependencies": {
-    "typescript": "5.9.3"
+    "typescript": "7.0.2"
   }
 }
