@@ -563,19 +563,27 @@ func messageText(body []byte, message jsonsplice.Span, types ...string) (string,
 // (a control byte encodes as six), so then text keeps its longest head that
 // fits. The other fields always fit: even escaped they stay under 200 KiB.
 func askBody(ask routeAsk) []byte {
-	raw, _ := json.Marshal(ask)
+	raw := encodeAsk(ask)
 	if len(raw) <= askBodyMax {
 		return raw
 	}
 	text := ask.Ask.Text
 	n := sort.Search(len(text)+1, func(n int) bool {
 		ask.Ask.Text = truncate(text, n)
-		raw, _ = json.Marshal(ask)
-		return len(raw) > askBodyMax
+		return len(encodeAsk(ask)) > askBodyMax
 	}) - 1
 	ask.Ask.Text = truncate(text, n)
-	raw, _ = json.Marshal(ask)
-	return raw
+	return encodeAsk(ask)
+}
+
+// encodeAsk is JSON without HTML escaping: an agent's <tags> and && stay one
+// byte each instead of six.
+func encodeAsk(ask routeAsk) []byte {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(ask)
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 type signals struct {

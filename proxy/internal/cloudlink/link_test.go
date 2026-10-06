@@ -213,7 +213,7 @@ func TestAskTextCutsOnRuneBoundaries(t *testing.T) {
 // Escaping can make the JSON six times the text; the body still fits 256 KiB
 // and text keeps the longest head that fits.
 func TestAskBodyFitsTheContract(t *testing.T) {
-	side := strings.Repeat("<", askSideMax) // "\u003c" in JSON
+	side := strings.Repeat("\x02", askSideMax) // "\u0002" in JSON
 	text := strings.Repeat("\x01", askTextMax)
 	raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: askText{Text: text, PrevText: side, ReplyTail: side, Turn: 3}})
 	var got routeAsk
@@ -226,10 +226,10 @@ func TestAskBodyFitsTheContract(t *testing.T) {
 	if got.Ask.Text == "" || !strings.HasPrefix(text, got.Ask.Text) || got.Ask.PrevText != side || got.Ask.ReplyTail != side || got.Ask.Turn != 3 {
 		t.Errorf("ask = text %d bytes, prev %d, reply %d, turn %d", len(got.Ask.Text), len(got.Ask.PrevText), len(got.Ask.ReplyTail), got.Ask.Turn)
 	}
-	// An ordinary ask goes as marshalled.
-	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: askText{Text: "hi"}}
-	if want, _ := json.Marshal(small); string(askBody(small)) != string(want) {
-		t.Errorf("askBody = %s", askBody(small))
+	// An ordinary ask goes whole, its <tags> and && unescaped.
+	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: askText{Text: "<system-reminder>a && b</system-reminder>"}}
+	if raw := string(askBody(small)); !strings.HasSuffix(raw, `"ask":{"text":"<system-reminder>a && b</system-reminder>"}}`) {
+		t.Errorf("askBody = %s", raw)
 	}
 }
 
