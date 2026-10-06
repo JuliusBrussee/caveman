@@ -9,6 +9,10 @@
 # Local clone:
 #   pwsh install.ps1 [flags]
 #
+# After the installer it hands over to the CLI's first run (`caveman setup`:
+# modules, agents, one Continue) in an interactive console, and prints that
+# one command otherwise.
+#
 # Why a Node installer? install.sh + install.ps1 used to be parallel sources of
 # truth and constantly drifted (issue #249 was a `node -e "..."` quoting bug
 # that silently dropped the JSON merge step on every Windows install). One
@@ -51,27 +55,40 @@ caveman: Node.js (>=18) required. Install:
   # $PSCommandPath is $null when piped to iex (#565) — the old unguarded
   # Split-Path on it was the "Cannot bind argument to parameter 'Path'
   # because it is null" crash.
+  $local = $null
   if ($PSCommandPath) {
     $here = Split-Path -Parent $PSCommandPath
     $local = Join-Path $here "bin/install.js"
-    if (Test-Path $local) {
-      & node $local @InstallerArgs
-      exit $LASTEXITCODE
+    if (-not (Test-Path $local)) { $local = $null }
+  }
+
+  if ($local) {
+    & node $local @InstallerArgs
+  } else {
+    # Curl-pipe path: delegate to npx.
+    $npx = Get-Command npx -ErrorAction SilentlyContinue
+    if (-not $npx) {
+      Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
+      exit 1
     }
-  }
 
-  # Curl-pipe path: delegate to npx.
-  $npx = Get-Command npx -ErrorAction SilentlyContinue
-  if (-not $npx) {
-    Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
-    exit 1
+    # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
+    # package, and a literal `--` was tripping bin/install.js's parseArgs as an
+    # unknown flag.
+    & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
   }
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
-  # package, and a literal `--` was tripping bin/install.js's parseArgs as an
-  # unknown flag.
-  & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
-  exit $LASTEXITCODE
+  # End in the CLI's first run: modules, agents, one Continue.
+  $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
+  if ($skip.Count -gt 0) { exit 0 }
+  $setup = if (Get-Command caveman -ErrorAction SilentlyContinue) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@latest", "setup") }
+  if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+    & $setup[0] $setup[1..($setup.Length - 1)]
+    exit $LASTEXITCODE
+  }
+  Write-Host "Next: $($setup -join ' ')"
+  exit 0
 }
 
 # $args is the automatic variable: populated when run as a file

@@ -11,6 +11,10 @@
 # Local clone:
 #   bash install.sh [flags]
 #
+# After the installer it hands over to the CLI's first run (`caveman setup`:
+# modules, agents, one Continue) when a terminal is attached, and prints that
+# one command otherwise.
+#
 # Why a Node installer? install.sh + install.ps1 used to be parallel sources
 # of truth and constantly drifted (issue #249, etc.). One Node script works
 # everywhere without bash/PowerShell quoting bugs.
@@ -35,6 +39,25 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
   exit 1
 fi
 
+# first_run ends the install in the CLI's first run. The terminal comes from
+# /dev/tty because under curl | bash stdin is the script itself.
+first_run() {
+  for arg in "$@"; do
+    case "$arg" in -h|--help|--list|-u|--uninstall|--dry-run) return 0 ;; esac
+  done
+  if command -v caveman >/dev/null 2>&1; then
+    set -- caveman setup
+  else
+    set -- npx -y @caveman-ai/cli@latest setup
+  fi
+  if [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then
+    echo
+    "$@" </dev/tty
+  else
+    echo "Next: $*"
+  fi
+}
+
 # If we're inside the repo clone, run the local installer directly — saves
 # the npx round-trip and keeps offline installs working. BASH_SOURCE is unset
 # when bash is invoked from stdin (curl | bash). Do not feed an empty value to
@@ -46,7 +69,9 @@ if [ -n "$source_path" ]; then
   here="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd)" || here=""
 fi
 if [ -n "$here" ] && [ -f "$here/bin/install.js" ]; then
-  exec node "$here/bin/install.js" "$@"
+  node "$here/bin/install.js" "$@"
+  first_run "$@"
+  exit 0
 fi
 
 # Curl-pipe path: delegate to npx. We do NOT pass `--` here — npm 7+ npx
@@ -57,4 +82,5 @@ if ! command -v npx >/dev/null 2>&1; then
   exit 1
 fi
 
-exec npx -y "github:$REPO#$PINNED_REF" "$@"
+npx -y "github:$REPO#$PINNED_REF" "$@"
+first_run "$@"

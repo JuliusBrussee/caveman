@@ -68,3 +68,26 @@ test("every bootstrap pin names the same release", () => {
     for (const ref of refs) assert.equal(ref, pins["install.sh"], `${doc} one-liner pins ${ref}`);
   }
 });
+
+// The install ends in the CLI's first run. Without a terminal (CI, a pipe) the
+// shim prints the one command instead of running it; flags like --help never
+// lead into it.
+test("shell install ends by naming the first-run command when no terminal is attached", { skip: process.platform === "win32" }, () => {
+  const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-first-run-"));
+  const fakeBin = join(cwd, "fake-bin");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "node"), "#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then echo 24; else exec /usr/bin/env node \"$@\"; fi\n", { mode: 0o755 });
+  writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
+  writeFileSync(join(fakeBin, "caveman"), "#!/bin/sh\necho caveman-ran \"$@\"\n", { mode: 0o755 });
+  const run = (args) => spawnSync("bash", ["-s", "--", ...args], {
+    cwd,
+    input: shellShim,
+    encoding: "utf8",
+    env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH ?? ""}` },
+  });
+  const plain = run([]);
+  assert.equal(plain.status, 0, plain.stderr);
+  assert.equal(plain.stdout, "installer-ran\nNext: caveman setup\n");
+  const help = run(["--help"]);
+  assert.equal(help.stdout, "installer-ran\n");
+});
