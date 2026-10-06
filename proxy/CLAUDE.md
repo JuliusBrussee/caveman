@@ -141,23 +141,31 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   (beta `mid-conversation-output-config-2026-07-01` appended to `anthropic-beta`) before the last
   user turn, or at the end after a tool result. Marks are remembered per session with a salted
   hash of the message before each (`cache_control` left out) and replayed at the same places on
-  every later request to a model that already took them, whatever the answer, routing off and
-  Cloud failures included (the agent resends history without them); with no effort from Cloud
-  the request's own top-level effort is marked instead, so a routed mark never outlives the
-  agent's choice; an anchor that no longer matches drops that mark and every later one;
-  compaction and side requests never change them. A 400 naming the thinking binding on a routed
-  request retries once on the same model with `thinking.block_binding.prefix_mismatch_behavior:
-  "drop_block"` (beta `thinking-binding-controls-2026-08-01`), sent on every later request of the
-  session and its forked children; where Anthropic refuses that (Sonnet 5.5 `between_tools`) the
-  retry drops thinking blocks from the failing message on and later requests strip the same
-  range up front. A refused mark retries once with top-level effort only and, once served,
-  latches per-message effort off for the session (a model that refused takes Cloud's effort
-  top-level); compressed 400s are decoded first. A Cloud error, timeout, 401/403, `allowance` or `billing_limit`
-  answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
+  every later request to a model that already took them (the agent resends history without them),
+  count_tokens included. Without an effort from Cloud (a failure, routing off, effort "") the
+  request runs at its own top-level effort: marked back when it differs from the one in force, or,
+  when it sets none, sent as the agent sent it, without the marks, which the session then forgets
+  (a routed effort never becomes the top-level field of an agent that sets none; on a fresh
+  conversation its mark goes first). An anchor that no longer matches drops that mark and every
+  later one; compaction and side requests never change them, and a body matching none of them (an
+  unlabeled side request, compacted history) gets marks of its own, which replace the session's
+  only once a later request continuing that conversation matches them. A thinking-binding 400 on
+  the asked model retries once only on a session the route stage changed (it was on for the
+  request, or the session carries its marks or heal) whose body sets no `thinking.block_binding`:
+  with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"` (beta
+  `thinking-binding-controls-2026-08-01`) when the block is bound to a different conversation and
+  the request's thinking is adaptive or enabled, then sent on every later request (count_tokens
+  and forked children included); else (Sonnet 5.5 `between_tools`, no thinking field, a tampered
+  signature) without thinking blocks from the failing message on, and later requests strip the
+  same range up front (a second strip widens it). Routing switched off after a restart surfaces
+  that 400. A refused mark retries once with top-level effort only and, once served, latches
+  per-message effort off for the session (a model that refused takes Cloud's effort top-level);
+  compressed 400s are decoded first. A Cloud error, timeout, 401/403, `allowance` or
+  `billing_limit` answer keeps the asked model and pauses new asks (1 min; 10 min for 401/403 and billing_limit;
   until the 1st for allowance). Refusals and limits land in `$CAVEMAN_HOME/route-state.json`
   (with Cloud's notice) for `caveman status`; a new login lifts the pause. A provider 4xx on the
-  routed model replays the original bytes on the asked model; a 429 on a routed request is
-  returned as is. When the model moved, the agent's
+  routed model replays the original bytes on the asked model; a 429 on the asked model of a
+  routed request is returned as is. When the model moved, the agent's
   copy of the answer names the model it asked for (Claude Code drops its thinking on another
   name): a JSON answer's top-level `model`, and in a stream every `"model":"<sent>"` pair, rewritten
   incrementally across reads; the upstream is asked for an identity answer, a compressed one is

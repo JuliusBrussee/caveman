@@ -216,9 +216,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	var run *routeRun
 	modelRequested := meta.Model
 	evidence.modelRequested = modelRequested
+	// count_tokens runs the same thinking-binding check as Messages
+	// (preserved-thinking, read 2026-10-06): it gets the session's marks and
+	// heal, and is never asked about.
+	countTokens := meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages/count_tokens")
 	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
 		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
-		routable(meta.Provider, meta.Endpoint) {
+		(routable(meta.Provider, meta.Endpoint) || countTokens) {
 		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
 		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
 		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
@@ -236,6 +240,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				exact = evidence.SessionID
 			}
 			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
+			if countTokens {
+				run.perRequest, run.replay = true, true
+				break
+			}
 			last, perMessageOff := s.routes.facts(run.key, time.Now())
 			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
@@ -404,6 +412,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
+	} else if run != nil {
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
 	}
 	transformedHash := sha256.Sum256(transform.Body)
 	evidence.acceptedBody = transform.Body
@@ -447,11 +457,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
 	if run != nil {
-		if meta.Model != modelRequested {
+		switch {
+		case meta.Model != modelRequested:
 			// An identity answer, so the agent's copy can name the model it asked for.
 			upstreamHeaders.Del("accept-encoding")
-		} else {
-			withoutBrotli(upstreamHeaders)
+		case !run.off || run.heal:
+			withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
 		}
 		if run.dropBlocks {
 			upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
@@ -497,7 +508,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// A 400 naming the thinking binding or the per-message marks earns one heal
 	// retry (route.go routeHeal); if that is refused too, the original-bytes
 	// retry below still runs.
-	if run != nil && resp.StatusCode == http.StatusBadRequest {
+	if run != nil && resp.StatusCode == http.StatusBadRequest && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
 		if retry, kind, from := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
 			headers := healHeaders
 			switch kind {
@@ -525,6 +536,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				}
 				resp, upstreamHeaders = healed, headers
 				transform.Body, transformedHash, evidence.acceptedBody = retry, sha256.Sum256(retry), retry
+				transform.OptimizerIDs = append(slices.Clone(transform.OptimizerIDs), "route-heal")
 				providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, retry, meta)
 				// Later requests keep the history that was served; a compaction or
 				// side request does not change the session.
@@ -546,10 +558,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// (Measured 2026-07-07: Anthropic answers subscription-OAuth requests whose
 	// first system block changed with an opaque 429; any future fingerprint check
 	// lands here too.) The retry claims no optimization and books no savings.
-	// A routed request's 429 is the provider's rate limit, not its bytes:
-	// retrying the original (without the session's marks) cannot help.
+	// A routed request's 429 on the asked model is the provider's rate limit,
+	// not its bytes: retrying the original (without the session's marks) cannot
+	// help. On a moved model it falls back to the asked one as before.
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) &&
-		!(run != nil && !run.off && resp.StatusCode == http.StatusTooManyRequests) {
+		!(run != nil && !run.off && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
@@ -708,7 +721,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	usageScanner := adapter.NewUsageScanner(resp.Header)
 	var served servedModel
 	scanned := io.Writer(usageScanner)
-	if run != nil {
+	if run != nil && !run.off {
 		scanned = io.MultiWriter(usageScanner, &served)
 	}
 	src := io.Reader(io.TeeReader(resp.Body, scanned))

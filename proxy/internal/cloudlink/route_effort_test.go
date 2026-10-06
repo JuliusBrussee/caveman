@@ -226,6 +226,7 @@ func TestAnswerEffortIsCheckedNotGuessed(t *testing.T) {
 		`{"model":"claude-opus-5-5","effort":"High\"}","effort_mode":"message"}`: {"", ""},
 		`{"model":"claude-opus-5-5","effort":"low","effort_mode":"sometimes"}`:   {"", ""},
 		`{"model":"claude-opus-5-5","effort":"","effort_mode":"top"}`:            {"", ""},
+		`{"model":"claude-opus-5-5","effort":"adaptive","effort_mode":"top"}`:    {"", ""},
 	} {
 		cloud := &cloudRecorder{answer: func(int) string { return answer }}
 		link := newLink(cloudHome(t, cloud.server(t).URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))

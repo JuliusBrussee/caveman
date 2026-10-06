@@ -581,7 +581,8 @@ var contractEfforts = []string{"none", "minimal", "low", "medium", "high", "xhig
 // from: a forked child resends its parent's history up to the newest assistant
 // message, then its own prompt. The one tool_use there whose input.prompt the
 // child's prompt carries names it; none or several leave it "". Only that
-// message's tool_use inputs and the text after it are read.
+// message's first 32 tool_use inputs and the text after it (at most
+// askTextMax bytes) are read.
 func spawnedAgentType(body []byte, root jsonsplice.Span) string {
 	list, _ := jsonsplice.Field(body, root, "messages")
 	items, _ := jsonsplice.Elements(body, list)
@@ -594,12 +595,18 @@ func spawnedAgentType(body []byte, root jsonsplice.Span) string {
 			continue
 		}
 		child := strings.Join(prompt, "\n")
+		if len(child) > askTextMax {
+			return ""
+		}
 		content, _ := jsonsplice.Field(body, items[i], "content")
 		blocks, _ := jsonsplice.Elements(body, content)
-		found := ""
+		found, uses := "", 0
 		for _, block := range blocks {
 			if kind, _ := jsonsplice.StringField(body, block, "type"); kind != "tool_use" {
 				continue
+			}
+			if uses++; uses > 32 {
+				return ""
 			}
 			input, _ := jsonsplice.Field(body, block, "input")
 			agentType, _ := jsonsplice.StringField(body, input, "subagent_type")
@@ -869,7 +876,7 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	l.keepState(ask.SessionID, answer.State)
 	out := gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
 	// An effort the runtime cannot splice in safely is left out, never guessed at.
-	if answer.Effort != "" && effortRE.MatchString(answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
+	if slices.Contains(contractEfforts, answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
 		out.Effort, out.EffortMode = answer.Effort, answer.EffortMode
 	}
 	if answer.Model != ask.Model {
@@ -877,8 +884,6 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	}
 	return out
 }
-
-var effortRE = regexp.MustCompile(`^[a-z]{0,16}$`)
 
 // state is Cloud's opaque state for a session key, "" when none.
 func (l *Link) state(key string) string {
