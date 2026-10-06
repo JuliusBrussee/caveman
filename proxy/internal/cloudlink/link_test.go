@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -171,7 +173,7 @@ func TestOneDecisionPerAsk(t *testing.T) {
 
 func record(i int) gateway.RequestRecord {
 	return gateway.RequestRecord{
-		Timestamp: time.Now().UTC().Format(time.RFC3339Nano), AgentSlug: "claude", Provider: "anthropic",
+		Timestamp: time.Now().UTC().Format("2006-01-02 15:04:05.000"), AgentSlug: "claude", Provider: "anthropic",
 		Model: "claude-sonnet-5-5", RouteFrom: "claude-opus-5-5", RouteTo: "claude-sonnet-5-5", AuthMode: "payg", RuntimeMode: "compress",
 		InputTokens: 100 + i, OutputTokens: 10, TokenUsageBasis: "provider_complete", CompressionTokensBefore: 50, CompressionTokensAfter: 20,
 		RouteOutcome: "routed", RouteReason: "ranked", RouteDecisionID: "0b9f6e4e-3b1a-4c7e-9a4e-1d2c3b4a5f60",
@@ -277,5 +279,54 @@ func TestEventsNeverSentAtLevelOffOrSignedOut(t *testing.T) {
 	signedOut.Observe(record(2))
 	if posts.Load() != 0 {
 		t.Fatalf("%d batches sent at level off or signed out", posts.Load())
+	}
+}
+
+// Every event, at every level, uses only the fields runtime/v1 defines, with
+// its required ones and its patterns and enums (the schema in the contracts
+// package is the source).
+func TestEventsMatchTheRuntimeV1Schema(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "..", "packages", "shared", "contracts", "schemas", "runtime-event-v1.schema.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var schema struct {
+		Defs struct {
+			Event struct {
+				Required   []string                   `json:"required"`
+				Properties map[string]json.RawMessage `json:"properties"`
+			} `json:"event"`
+		} `json:"$defs"`
+	}
+	if err := json.Unmarshal(raw, &schema); err != nil {
+		t.Fatal(err)
+	}
+	for _, level := range []string{"counts", "usage", "decisions"} {
+		encoded, _ := json.Marshal(eventFor(record(1), strings.Repeat("ab", 32), time.Now()).atLevel(level))
+		var event map[string]any
+		_ = json.Unmarshal(encoded, &event)
+		for _, field := range schema.Defs.Event.Required {
+			if _, ok := event[field]; !ok {
+				t.Errorf("%s: required %q missing", level, field)
+			}
+		}
+		for field, value := range event {
+			spec, ok := schema.Defs.Event.Properties[field]
+			if !ok {
+				t.Errorf("%s: %q is not a runtime/v1 field", level, field)
+				continue
+			}
+			var rule struct {
+				Pattern string `json:"pattern"`
+				Enum    []any  `json:"enum"`
+			}
+			_ = json.Unmarshal(spec, &rule)
+			if text, isText := value.(string); isText && rule.Pattern != "" && !regexp.MustCompile(rule.Pattern).MatchString(text) {
+				t.Errorf("%s: %s=%q does not match %s", level, field, text, rule.Pattern)
+			}
+			if len(rule.Enum) > 0 && !slices.Contains(rule.Enum, value) {
+				t.Errorf("%s: %s=%v is not one of %v", level, field, value, rule.Enum)
+			}
+		}
 	}
 }

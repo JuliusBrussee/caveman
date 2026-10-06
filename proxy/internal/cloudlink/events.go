@@ -135,13 +135,13 @@ func eventFor(rec gateway.RequestRecord, install string, now time.Time) runtimeE
 	case "degraded", "paused":
 		route = "degraded"
 	}
-	occurred := rec.Timestamp
-	if _, err := time.Parse(time.RFC3339Nano, occurred); err != nil {
-		occurred = now.UTC().Format(time.RFC3339)
+	occurred := now.UTC()
+	if at, err := time.Parse("2006-01-02 15:04:05.000", rec.Timestamp); err == nil { // the gateway's row stamp, UTC
+		occurred = at
 	}
 	event := runtimeEvent{
 		EventID:      newUUID(),
-		OccurredAt:   occurred,
+		OccurredAt:   occurred.Format(time.RFC3339Nano),
 		InstallID:    install,
 		Agent:        agent,
 		Provider:     provider,

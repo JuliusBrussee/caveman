@@ -284,7 +284,9 @@ func (l *Link) Ask(_ context.Context, ask gateway.RouteAsk) func() gateway.Route
 		case answer := <-result:
 			return answer
 		case <-timer.C:
-			return gateway.RouteAnswer{Outcome: "degraded", Reason: "timeout"}
+			// Pause now: the ask's own deadline lands at the same moment, and
+			// the next request must not wait on a slow Cloud again.
+			return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: "timeout"})
 		}
 	}
 }
