@@ -26,6 +26,8 @@ type poolStub struct {
 	bodies   map[string][]string
 	poolCode int    // status the pool host answers
 	poolSSE  string // a streamed chat answer, when set
+	respSSE  string // the Responses host's stream
+	respCode int
 	gwCode   int
 	cloud    *fakeCloud
 }
@@ -53,6 +55,13 @@ func (p *poolStub) server(t *testing.T) *Server {
 			}
 			w.Header().Set("content-type", "application/json")
 			_, _ = io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"gpt-6.1-sol","choices":[{"index":0,"message":{"role":"assistant","content":"pool says hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3}}`)
+		case "/responses":
+			if p.respCode != 0 {
+				w.WriteHeader(p.respCode)
+				return
+			}
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, p.respSSE)
 		case "/gw/v1/messages":
 			if p.gwCode != 0 {
 				w.WriteHeader(p.gwCode)
@@ -179,7 +188,7 @@ func TestPoolFailureBeforeTheFirstByteFallsBackToTheAskedModel(t *testing.T) {
 		"pool 401":       func(c *poolCase) { c.stub.poolCode = 401 },
 		"pool down":      func(c *poolCase) { c.stub.cloud.answer.Target = localTarget("down.example") },
 		"gateway error":  func(c *poolCase) { c.stub.gwCode = 502; c.stub.cloud.answer.Target = cloudTarget() },
-		"untranslatable": func(c *poolCase) { c.stub.cloud.answer.Target.Wire = translate.Responses },
+		"untranslatable": func(c *poolCase) { c.stub.cloud.answer.Target.Wire = "unknown-grammar" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := newPoolCase(t, localTarget("api.openai.com"), "high")
@@ -265,4 +274,49 @@ func TestPoolCutStreamNeverEndsAsACleanEOF(t *testing.T) {
 	}()
 	poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
 	t.Fatal("a cut stream returned normally")
+}
+
+func chatgptTarget() *RouteTarget {
+	header := http.Header{}
+	header.Set("authorization", "Bearer chatgpt-access")
+	return &RouteTarget{PoolID: "chatgpt/gpt-6.1-sol", Via: "local", Host: "chatgpt", Model: "gpt-6.1-sol", Wire: translate.Responses,
+		URL: "https://api.openai.com/responses", Header: header,
+		Translate: translate.Options{Model: "gpt-6.1-sol", Route: "chatgpt", ChatGPTLogin: true}}
+}
+
+// A Claude Code request runs on the ChatGPT login (Responses only) and reads
+// an Anthropic stream back; a refusal before the first byte falls back.
+func TestPoolClaudeCodeOnTheChatGPTLogin(t *testing.T) {
+	c := newPoolCase(t, chatgptTarget(), "high")
+	c.stub.respSSE = "data: {\"type\":\"response.created\",\"response\":{\"id\":\"r1\"}}\n\n" +
+		"data: {\"type\":\"response.output_text.delta\",\"item_id\":\"m1\",\"delta\":\"plan says hi\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"
+	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"tools":[{"name":"Read","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"fix the bug"}]}`)
+	out := rec.Body.String()
+	for _, want := range []string{"event: message_start", `"claude-opus-5-5"`, "plan says hi", "message_stop"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("stream lacks %q:\n%s", want, out)
+		}
+	}
+	req, body := c.stub.last("/responses")
+	if req == nil || req.Header.Get("authorization") != "Bearer chatgpt-access" || req.Header.Get("x-api-key") != "" || req.Header.Get("anthropic-version") != "" {
+		t.Fatalf("responses request = %v", req)
+	}
+	var sent map[string]any
+	_ = json.Unmarshal([]byte(body), &sent)
+	if sent["model"] != "gpt-6.1-sol" || sent["store"] != false || sent["stream"] != true || sent["additional_tools"] == nil ||
+		encode(sent["reasoning"]) != `{"effort":"high","summary":"auto"}` {
+		t.Fatalf("responses body = %s", body)
+	}
+
+	c = newPoolCase(t, chatgptTarget(), "high")
+	c.stub.respCode = 401
+	if rec := poolSend(t, c.srv, poolBody); !strings.Contains(rec.Body.String(), "harness says hi") || c.rejected.Load() != 1 {
+		t.Fatalf("fallback: %s", rec.Body.String())
+	}
+}
+
+func encode(value any) string {
+	raw, _ := json.Marshal(value)
+	return string(raw)
 }

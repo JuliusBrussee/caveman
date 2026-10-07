@@ -220,8 +220,9 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   (Cloud's state carries the move) and books no dollars off Anthropic/OpenAI list prices. Later
   requests of a session a pool host served drop, on the harness's own Anthropic/OpenAI path, the
   reasoning that host wrote (`translate.AnthropicNative`/`OpenAINative`; translated Responses
-  reasoning always carries the envelope, never a bare id); other sessions go byte for byte. Not translated yet: Messages to Responses,
-  chat to Messages or Responses (those hosts stay out of that caller's pool). Terms: no Claude
+  reasoning always carries the envelope, never a bare id); other sessions go byte for byte. Messages reaches Responses hosts (a Claude Code
+  session on the ChatGPT login); chat to Messages or Responses is not translated (those hosts stay
+  out of a chat caller's pool). Terms: no Claude
   Pro/Max, Google or Copilot login is ever added; every OAuth row in `providers.json` carries a
   terms note.
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.

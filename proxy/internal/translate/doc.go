@@ -8,10 +8,11 @@
 // with the rest of this repository.
 //
 // Three grammars: Anthropic Messages, OpenAI chat completions and OpenAI
-// Responses. Six directions are supported (Supported): each grammar to
+// Responses. Seven directions are supported (Supported): each grammar to
 // itself (fitted: model id, effort, parameters, thinking hygiene), Messages
-// to chat (Claude Code on a model Anthropic never served), Responses to
-// Messages and Responses to chat (Codex on a model OpenAI never served).
+// to chat and Messages to Responses (Claude Code on a model Anthropic never
+// served, the ChatGPT plan included), Responses to Messages and Responses to
+// chat (Codex on a model OpenAI never served). Chat callers reach chat only.
 //
 // Thinking signatures. Anthropic rejects any thinking block it did not sign,
 // and Claude Code answers that rejection by dropping thinking for the rest of
@@ -21,6 +22,9 @@
 //   - a chat upstream's reasoning becomes a thinking block signed
 //     "caveman:v1:<route>:<model>", replayed as reasoning_content only to that
 //     route and model (Options.Replay);
+//   - a Responses upstream's reasoning becomes a thinking block signed
+//     "caveman:r1:<route>:<encrypted_content>", replayed as a reasoning item
+//     only to that route;
 //   - a non-Anthropic Messages host's own signatures come back as
 //     "caveman:<route>:<signature>" and are restored for that route only;
 //   - Anthropic thinking a Responses caller carries is stashed, signed, in a

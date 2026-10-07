@@ -21,12 +21,12 @@ const (
 )
 
 // Supported: a caller body in grammar from can run on an upstream wire to.
-// True for (m,m) (c,c) (r,r) (m,c) (r,m) (r,c); false otherwise (m->r, c->m,
-// c->r are not ported).
+// True for (m,m) (c,c) (r,r) (m,c) (m,r) (r,m) (r,c); false otherwise (c->m
+// and c->r are not built).
 func Supported(from, to string) bool {
 	switch from + ">" + to {
 	case Messages + ">" + Messages, Chat + ">" + Chat, Responses + ">" + Responses,
-		Messages + ">" + Chat, Responses + ">" + Messages, Responses + ">" + Chat:
+		Messages + ">" + Chat, Messages + ">" + Responses, Responses + ">" + Messages, Responses + ">" + Chat:
 		return true
 	}
 	return false
@@ -128,6 +128,9 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 		fields, err = messagesBody(body, opts)
 	case from == Messages && to == Chat:
 		fields, err = messagesChatBody(body, opts)
+	case from == Messages && to == Responses:
+		fields, err = messagesResponsesBody(body, opts)
+		reply.upstreamStream = true
 	case from == Chat:
 		if err = json.Unmarshal(body, &fields); err == nil {
 			fitChat(fields, opts, probe.Stream, chatCallerEffort(fields, opts))
@@ -398,6 +401,8 @@ func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 	}
 	shown := r.opts.shown()
 	switch {
+	case r.from == Messages && r.to == Responses:
+		return streamResponsesToAnthropic(w, body, r.stream, r.opts)
 	case r.from == Messages && r.to == Chat:
 		if r.upstreamStream {
 			startSSE(w)

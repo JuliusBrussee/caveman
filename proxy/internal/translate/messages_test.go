@@ -19,8 +19,8 @@ func TestSupported(t *testing.T) {
 		want     bool
 	}{
 		{Messages, Messages, true}, {Chat, Chat, true}, {Responses, Responses, true},
-		{Messages, Chat, true}, {Responses, Messages, true}, {Responses, Chat, true},
-		{Messages, Responses, false}, {Chat, Messages, false}, {Chat, Responses, false}, {"x", Chat, false},
+		{Messages, Chat, true}, {Responses, Messages, true}, {Responses, Chat, true}, {Messages, Responses, true},
+		{Chat, Messages, false}, {Chat, Responses, false}, {"x", Chat, false},
 	} {
 		if got := Supported(tc.from, tc.to); got != tc.want {
 			t.Errorf("Supported(%s, %s) = %v", tc.from, tc.to, got)

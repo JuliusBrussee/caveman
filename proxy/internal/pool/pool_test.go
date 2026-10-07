@@ -59,10 +59,12 @@ func TestEntriesFollowWhatThePersonSetUpAndWhatTheRuntimeCanTranslate(t *testing
 		"openai": "sk-openai", "chatgpt": chatgptRecord(time.Now().Add(time.Hour), false), "deepseek": "sk-ds",
 		"zai-coding-plan": "zai", "unknown-host": "x",
 	}))
-	// A Claude Code request (Messages): OpenAI on its chat wire, DeepSeek on its
-	// Messages wire, no ChatGPT login (Responses only, which Messages cannot reach yet).
+	// A Claude Code request (Messages): OpenAI on its chat wire, the ChatGPT
+	// login on Responses (its only wire), DeepSeek on its Messages wire.
 	got := strings.Join(ids(store.Entries("messages", "claude", 64, nil)), " ")
-	want := "openai/gpt-6.1-sol@chat openai/gpt-6-sol@chat openai/gpt-6-astra@chat openai/gpt-6-luna@chat deepseek/deepseek-v4-pro@messages deepseek/deepseek-v4-flash@messages zai-coding-plan/glm-5.3@messages"
+	want := "openai/gpt-6.1-sol@chat openai/gpt-6-sol@chat openai/gpt-6-astra@chat openai/gpt-6-luna@chat " +
+		"chatgpt/gpt-6.1-sol@responses chatgpt/gpt-6-sol@responses chatgpt/gpt-6-astra@responses chatgpt/gpt-6-luna@responses " +
+		"deepseek/deepseek-v4-pro@messages deepseek/deepseek-v4-flash@messages zai-coding-plan/glm-5.3@messages"
 	if got != want {
 		t.Fatalf("messages pool =\n%s\nwant\n%s", got, want)
 	}

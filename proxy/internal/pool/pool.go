@@ -273,7 +273,7 @@ type Entry struct {
 // wirePreference is the order a caller's grammar tries a host's wires in:
 // its own first, then the ones a translator serves it from.
 var wirePreference = map[string][]string{
-	translate.Messages:  {translate.Messages, translate.Chat},
+	translate.Messages:  {translate.Messages, translate.Chat, translate.Responses},
 	translate.Responses: {translate.Responses, translate.Messages, translate.Chat},
 	translate.Chat:      {translate.Chat},
 }
