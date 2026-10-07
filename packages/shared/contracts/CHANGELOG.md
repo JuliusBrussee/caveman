@@ -26,8 +26,9 @@
   host serves. Left out when no login adds an entry. The answer may carry
   `pool_id` and `via` (`local` | `cloud`; Cloud may add `via: "cloud"`
   entries on its side, which the runtime sends to the Cloud gateway with
-  `x-caveman-route: <pool_id>`). A Cloud that refuses `pool` with a 400 is
-  asked again without it.
+  `x-caveman-route: <pool_id>`, pool_id `cloud:<provider>:<model>`, on the
+  project gateway key only). A Cloud whose 400 names `pool` is asked once
+  more without it.
 - Schema `$id`s name `contracts-v2.1.0`.
 
 ## 2.0.0 — 2026-09-24
