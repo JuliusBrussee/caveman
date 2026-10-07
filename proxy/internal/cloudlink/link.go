@@ -354,15 +354,25 @@ func fresh(token string, now time.Time) bool {
 	return int64(*claims.Exp) > now.Add(30*time.Second).Unix()
 }
 
-// bearer is the signed-in session's token while it is fresh (Cloud takes
-// device-login tokens on /v1/route and /api), else the durable project key the
-// device login issued. The CLI owns refreshing the session; the proxy never
+// bearer is the signed-in session's token while it is fresh (the control API
+// takes device-login tokens on /api), else the durable project key the device
+// login issued. The CLI owns refreshing the session; the proxy never
 // spends the refresh token.
 func (s settings) bearer(now time.Time) string {
 	if fresh(s.access, now) {
 		return s.access
 	}
 	return s.key
+}
+
+// gatewayBearer is the credential for the gateway (POST /v1/route): the
+// project key, which is all the gateway authenticates (a login token is
+// refused there); the session token only when no key was issued.
+func (s settings) gatewayBearer(now time.Time) string {
+	if s.key != "" {
+		return s.key
+	}
+	return s.bearer(now)
 }
 
 // Ask starts the decision for one request and returns the wait for it. The
@@ -410,7 +420,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if models == nil {
 		return gateway.RouteAnswer{Outcome: "off", Reason: "model_outside_pool"}
 	}
-	bearer := cfg.bearer(l.now())
+	bearer := cfg.gatewayBearer(l.now())
 	if bearer == "" {
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "login_expired"}
 	}
@@ -877,26 +887,25 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	if !ok {
 		return failed
 	}
-	if response.StatusCode == http.StatusBadRequest && len(entries) > 0 {
-		// An older Cloud refuses the unknown pool field: ask again without it,
-		// and, when its error named pool, keep leaving it out for this login.
-		refusal, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
-		response.Body.Close()
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
+	response.Body.Close()
+	if response.StatusCode == http.StatusBadRequest && len(entries) > 0 && strings.Contains(strings.ToLower(string(raw)), "pool") {
+		// An older Cloud refuses the unknown pool field by name: ask once more
+		// without it, and leave it out for the rest of this login. Any other
+		// 400 is answered as before, never retried.
+		l.mu.Lock()
+		l.noPool = true
+		l.mu.Unlock()
+		if l.logger != nil {
+			l.logger.Warn("Cloud refused the routing pool; asking with the harness's models only until the next login")
+		}
 		body.Pool, entries = nil, nil
 		if response, failed, ok = post(body); !ok {
 			return failed
 		}
-		if response.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(refusal)), "pool") {
-			l.mu.Lock()
-			l.noPool = true
-			l.mu.Unlock()
-			if l.logger != nil {
-				l.logger.Warn("Cloud refused the routing pool; asking with the harness's models only until the next login")
-			}
-		}
+		raw, _ = io.ReadAll(io.LimitReader(response.Body, answerMax))
+		response.Body.Close()
 	}
-	defer response.Body.Close()
-	raw, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
 	var answer struct {
 		PoolID     string `json:"pool_id"`
 		Via        string `json:"via"`
@@ -940,8 +949,13 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	case unreadable:
 		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_unreadable"})
 	}
-	target, model, reason := l.poolAnswer(cfg, bearer, declared.Endpoint, models, entries, answer.PoolID, answer.Via, answer.Model)
-	if reason != "" {
+	target, model, reason := l.poolAnswer(cfg, declared.Endpoint, models, entries, answer.PoolID, answer.Via, answer.Model)
+	switch reason {
+	case "":
+	case "cloud_off":
+		// `caveman providers cloud off`: the asked model, on the harness's credential.
+		return gateway.RouteAnswer{Outcome: "kept", Reason: reason}
+	default:
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: reason}
 	}
 	l.forget()
@@ -963,9 +977,9 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	return out
 }
 
-// poolIDRE bounds a pool id Cloud names for a via "cloud" entry, which the
-// runtime only sends back in x-caveman-route.
-var poolIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+// cloudRouteRE is a via "cloud" pool id, sent back as x-caveman-route:
+// cloud:<provider>:<model>, the provider lower case, at most 256 bytes.
+var cloudRouteRE = regexp.MustCompile(`^cloud:[a-z0-9_]+:[!-~]+$`)
 
 // poolAnswer reads where an answer sends the request. Without pool_id it is
 // one of models (route-ask-v1 as before). A pool_id names one of the entries
@@ -974,7 +988,7 @@ var poolIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
 // Cloud added, sent to the Cloud gateway in the caller's grammar. Anything
 // else, or a login whose secret cannot be read, is outside the pool: the
 // request keeps the asked model (no pause, the next ask may differ).
-func (l *Link) poolAnswer(cfg settings, bearer, grammar string, models []string, entries []pool.Entry, id, via, model string) (*gateway.RouteTarget, string, string) {
+func (l *Link) poolAnswer(cfg settings, grammar string, models []string, entries []pool.Entry, id, via, model string) (*gateway.RouteTarget, string, string) {
 	if id == "" {
 		if !slices.Contains(models, model) {
 			return nil, "", "answer_outside_pool"
@@ -983,15 +997,17 @@ func (l *Link) poolAnswer(cfg settings, bearer, grammar string, models []string,
 	}
 	switch via {
 	case "cloud":
-		if !poolIDRE.MatchString(id) || model == "" || len(model) > 128 || cfg.gateway == "" {
+		switch {
+		case len(id) > 256 || !cloudRouteRE.MatchString(id) || model == "" || len(model) > 128 || cfg.gateway == "":
 			return nil, "", "answer_outside_pool"
-		}
-		key := cfg.key // the project gateway key, else the session token
-		if key == "" {
-			key = bearer
+		case l.logins != nil && l.logins.CloudOff():
+			return nil, "", "cloud_off"
+		case cfg.key == "":
+			// The gateway takes only the project key, never the login token.
+			return nil, "", "cloud_unavailable"
 		}
 		header := http.Header{}
-		header.Set("authorization", "Bearer "+key)
+		header.Set("authorization", "Bearer "+cfg.key)
 		header.Set("x-caveman-route", id)
 		return &gateway.RouteTarget{PoolID: id, Via: "cloud", Host: "cloud", Model: model, Wire: grammar,
 			URL: cfg.gateway + cloudPaths[grammar], Header: header}, "", ""

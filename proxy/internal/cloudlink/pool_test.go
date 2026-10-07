@@ -122,20 +122,23 @@ func TestPoolAnswerHarnessEntryAppliesLikeModels(t *testing.T) {
 
 func TestPoolAnswerViaCloudGoesToTheGateway(t *testing.T) {
 	fake := &poolCloud{answer: func(map[string]any) (int, string) {
-		return 200, `{"pool_id":"cloud/gpt-6.1-sol","via":"cloud","model":"gpt-6.1-sol"}`
+		return 200, `{"pool_id":"cloud:openai:gpt-6.1-sol","via":"cloud","model":"gpt-6.1-sol"}`
 	}}
 	cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
 	defer cloud.Close()
 	answer := newLink(signedIn(t, cloud.URL)).Ask(t.Context(), messagesAsk("claude-opus-5-5"))()
 	target := answer.Target
 	if target == nil || target.Via != "cloud" || target.URL != cloud.URL+"/v1/messages" || target.Wire != "messages" ||
-		target.Header.Get("x-caveman-route") != "cloud/gpt-6.1-sol" || target.Header.Get("authorization") != "Bearer cave_project_key" || target.Model != "gpt-6.1-sol" {
+		target.Header.Get("x-caveman-route") != "cloud:openai:gpt-6.1-sol" || target.Header.Get("authorization") != "Bearer cave_project_key" || target.Model != "gpt-6.1-sol" {
 		t.Fatalf("answer = %+v target = %+v", answer, target)
 	}
 	for _, bad := range []string{
 		`{"pool_id":"openai/gpt-6.1-sol","via":"local","model":"gpt-6.1-sol"}`, // never sent
-		`{"pool_id":"bad id with spaces","via":"cloud"}`,
-		`{"pool_id":"cloud/x","via":"carrier-pigeon"}`,
+		`{"pool_id":"bad id with spaces","via":"cloud","model":"m"}`,
+		`{"pool_id":"cloud:OpenAI:gpt-6.1-sol","via":"cloud","model":"m"}`,      // provider not lower case
+		`{"pool_id":"cloud:openai:gpt\r\nx-evil: 1","via":"cloud","model":"m"}`, // no header injection
+		`{"pool_id":"cloud:openai:gpt-6.1-sol","via":"cloud"}`,                  // no model
+		`{"pool_id":"cloud:openai:x","via":"carrier-pigeon"}`,
 		`{"model":"gpt-6.1-sol"}`, // outside models, no pool_id
 	} {
 		fake.answer = func(map[string]any) (int, string) { return 200, bad }
@@ -169,5 +172,41 @@ func TestOlderCloudRefusingPoolIsAskedAgainWithoutIt(t *testing.T) {
 	link.Ask(t.Context(), ask)()
 	if len(fake.bodies) != 3 || fake.bodies[2]["pool"] != nil {
 		t.Fatalf("third ask: %d bodies, pool %v", len(fake.bodies), fake.bodies[len(fake.bodies)-1]["pool"])
+	}
+}
+
+func TestViaCloudNeedsTheProjectKeyAndHonoursCloudOff(t *testing.T) {
+	fake := &poolCloud{answer: func(map[string]any) (int, string) {
+		return 200, `{"pool_id":"cloud:openai:gpt-6.1-sol","via":"cloud","model":"gpt-6.1-sol","effort":"high"}`
+	}}
+	cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer cloud.Close()
+	// No project key: the gateway would refuse the login token, so the asked model runs.
+	keyless := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	if answer := keyless.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Target != nil || answer.Reason != "cloud_unavailable" {
+		t.Fatalf("keyless answer = %+v", answer)
+	}
+	// `caveman providers cloud off`: kept on the asked model, no effort from the cloud answer.
+	home := signedIn(t, cloud.URL)
+	if err := os.WriteFile(filepath.Join(home, "provider-logins.json"), []byte(`{"version":1,"cloud":false,"logins":[]}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if answer := newLink(home).Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); answer.Target != nil || answer.Outcome != "kept" || answer.Reason != "cloud_off" || answer.Effort != "" {
+		t.Fatalf("cloud off answer = %+v", answer)
+	}
+}
+
+// Only a 400 that names pool is retried, once, without it; the ask text goes once otherwise.
+func TestOtherBadRequestsAreNeverRetried(t *testing.T) {
+	fake := &poolCloud{answer: func(map[string]any) (int, string) {
+		return 400, `{"error":{"code":"invalid_request","message":"text too long"}}`
+	}}
+	cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer cloud.Close()
+	home := signedIn(t, cloud.URL)
+	addLogin(t, home, "openai", "sk-openai")
+	newLink(home).Ask(t.Context(), messagesAsk("claude-opus-5-5"))()
+	if len(fake.bodies) != 1 {
+		t.Fatalf("asked %d times, want once", len(fake.bodies))
 	}
 }
