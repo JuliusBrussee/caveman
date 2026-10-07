@@ -200,10 +200,16 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   Any failure before content reaches the agent (refused translation, translator panic, connect
   error, non-2xx, or a 2xx that fails or ends first: `translate.ErrNotServed`, the translator holds
   its output until the first content, for at most `gateHold` (10 s) even while the host sends only
-  comments or pings; after it the headers go and pings start) falls back to the asked model on the
-  harness credential, at the answered effort fitted to that model's levels (`translate.FitEffort`),
-  and marks the ask rejected; a stream cut after content aborts HTTP framing and never closes a
-  half-finished tool call. A pool turn is not `last` and books no dollars off Anthropic/OpenAI list
+  comments or pings; after it the headers go and pings start, only between the upstream's events)
+  falls back to the asked model on the harness credential, at the answered effort fitted to that
+  model's levels (`translate.FitEffort`: the Claude table, the catalog's `effort_levels`, high at
+  most with thinking off), and marks the ask rejected; a stream cut after content aborts HTTP
+  framing and never closes a half-finished tool call, while the host's own failure event after
+  content ends the stream as sent, without an abort (`pool_upstream_failed`). The row keeps
+  `route_pool_id`, `route_reason` and the host's answer id (`upstream_response_id`, e.g.
+  OpenRouter's `gen-…`); each failure is logged. A translated Messages stream's `message_start`
+  carries an input estimate (`x-caveman-input-tokens: estimated`) that `message_delta`'s exact
+  count replaces. A pool turn is not `last` and books no dollars off Anthropic/OpenAI list
   prices. Every request to Anthropic's/OpenAI's own API (not pass-through) drops reasoning another host
   wrote (`translate.AnthropicNative`/`OpenAINative`, byte for byte when there is none; a Responses
   host's encrypted reasoning is route-tagged so only that host gets it back; per-message effort
