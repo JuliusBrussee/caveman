@@ -68,11 +68,10 @@ func newMsgBuilder(size int) *msgBuilder {
 	b := &msgBuilder{dropped: map[int]bool{}}
 	if pooled, ok := arenas.Get().(*[]byte); ok && cap(*pooled) >= size {
 		b.arena = (*pooled)[:0]
-	} else {
-		if size > maxHint { // the bound capHint applies, inline: a guard CodeQL sees
-			size = maxHint
-		}
+	} else if size <= maxHint { // the bound capHint applies, as a guard CodeQL sees
 		b.arena = make([]byte, 0, size+size/8+1024)
+	} else {
+		b.arena = make([]byte, 0, maxHint)
 	}
 	return b
 }
