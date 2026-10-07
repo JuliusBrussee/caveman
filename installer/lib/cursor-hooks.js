@@ -4,7 +4,9 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-const { HOOK_SCRIPT_NAME } = require('../../src/hooks/cursor-dedupe-tools');
+// Filename only. The script itself lives in src/hooks and is copied at install
+// time. This module must not require it: detached installs ship bin/ alone.
+const HOOK_SCRIPT_NAME = 'cursor-dedupe-tools.js';
 
 function cursorDir(home = os.homedir()) {
   return path.join(home, '.cursor');
