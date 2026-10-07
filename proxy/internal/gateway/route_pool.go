@@ -143,7 +143,10 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 		CachedInputTokens: usage.CacheReadTokens, CacheCreationInputTokens: usage.CacheWriteTokens, CacheStatus: "unknown",
 	}}
-	if err != nil {
+	switch {
+	case errors.Is(err, translate.ErrUpstreamFailed):
+		out.errMsg = "pool_upstream_failed" // the host's own failure, relayed as its stream's end
+	case err != nil:
 		out.errMsg = "cave_upstream_body_read_failed"
 	}
 	return out

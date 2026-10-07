@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/bedrock"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
@@ -429,7 +430,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				}
 				estimateWG.Wait()
 				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, false, compressionEligible)
-				if result.errMsg != "" && result.stream {
+				if result.errMsg != "" && result.errMsg != "pool_upstream_failed" && result.stream {
 					panic(http.ErrAbortHandler) // a cut stream never ends as a clean EOF
 				}
 				return
@@ -438,9 +439,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if answer.Reject != nil {
 				answer.Reject() // the rest of this ask stays on the asked model
 			}
-			// The asked model runs at the answered effort, as a non-pool answer would.
+			// The asked model runs at the answered effort, as a non-pool answer
+			// would, fitted to that model's levels (the word was chosen for the target).
 			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID,
-				Effort: answer.Effort, EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
+				Effort: translate.FitEffort(grammarOf(meta.Endpoint), meta.Model, answer.Effort), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
 		}
 		// The harness's own path: reasoning another host wrote earlier in the
 		// conversation goes no further than that host; a body without any goes
@@ -460,11 +462,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
-	} else {
-		// Every other request to Anthropic or OpenAI too (pass-through, encoded,
-		// subscription, a custom origin): byte for byte when it carries nothing
-		// another host wrote.
-		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
+		// Every other request to Anthropic's or OpenAI's own API too (encoded,
+		// subscription, routing off): byte for byte when it carries nothing
+		// another host wrote. Pass-through and other origins are left alone:
+		// only the provider's own API refuses another host's reasoning.
+		if upstream, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{}); err == nil && statsPricingOriginKnown(meta.Provider, upstream) {
+			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		}
 	}
 	transformedHash := sha256.Sum256(transform.Body)
 	evidence.acceptedBody = transform.Body

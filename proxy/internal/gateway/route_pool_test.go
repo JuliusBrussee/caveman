@@ -15,6 +15,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 )
 
 // poolStub is every upstream at once, told apart by path: the harness's own
@@ -94,7 +95,7 @@ func (p *poolStub) server(t *testing.T) *Server {
 		return http.DefaultTransport.RoundTrip(r)
 	})
 	return New(Config{
-		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com")},
+		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com"), openai.New("https://api.openai.com")},
 		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
 		Creds:      stubCreds{key: "sk-byok"},
 		Sink:       &captureSink{},
@@ -427,5 +428,84 @@ func TestPoolOpenAILoginReasoningIsTaggedUnlessItIsTheHarnessKey(t *testing.T) {
 		if !strings.Contains(rec.Body.String(), `"signature":"caveman:r1:`+route+`:BLOB"`) {
 			t.Fatalf("%s: want route %s:\n%s", key, route, rec.Body.String())
 		}
+	}
+}
+
+// A failed target falls back at the answered effort fitted to the asked
+// model: the word was chosen for the target, and minimal to Claude or max to
+// OpenAI is a 400.
+func TestPoolFallbackFitsTheEffortToTheAskedModel(t *testing.T) {
+	c := newPoolCase(t, localTarget("down.example"), "minimal")
+	poolSend(t, c.srv, poolBody)
+	if _, body := c.stub.last("/v1/messages"); !strings.Contains(body, `"output_config":{"effort":"low"}`) {
+		t.Fatalf("minimal on Claude: %s", body)
+	}
+	c = newPoolCase(t, localTarget("down.example"), "none")
+	poolSend(t, c.srv, poolBody)
+	if _, body := c.stub.last("/v1/messages"); strings.Contains(body, `"effort"`) {
+		t.Fatalf("none on Claude: %s", body)
+	}
+	c = newPoolCase(t, localTarget("down.example"), "max")
+	c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"harness says hi\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-sol","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`))
+	req.Header.Set("authorization", "Bearer sk-proj-harness")
+	req.Header.Set("x-cave-agent", "codex")
+	req.Header.Set("session_id", "thread-1")
+	rec := httptest.NewRecorder()
+	c.srv.Handler().ServeHTTP(rec, req)
+	if _, body := c.stub.last("/v1/responses"); !strings.Contains(rec.Body.String(), "harness says hi") || !strings.Contains(body, `"reasoning":{"effort":"xhigh"}`) {
+		t.Fatalf("max on OpenAI: %s\nanswer %s", body, rec.Body.String())
+	}
+}
+
+// Pass-through traffic and other origins are never cleaned: only the
+// provider's own API refuses another host's reasoning.
+func TestHarnessCleaningOnlyOnTheProvidersOwnAPI(t *testing.T) {
+	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"caveman:v1:fireworks:kimi"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
+	stub := &poolStub{cloud: &fakeCloud{}}
+	pooled := stub.server(t)
+	server := func(origin string) *Server { // no Cloud: the harness path outside the route stage
+		return New(Config{
+			Adapters: []providers.Adapter{anthropic.New(origin)},
+			Auth:     stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+			Creds:    stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: pooled.httpClient,
+		})
+	}
+	send := func(srv *Server, header string) string {
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+		req.Header.Set("x-api-key", "sk-ant-api-key")
+		if header != "" {
+			req.Header.Set("x-cave-transforms", header)
+		}
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		_, sent := stub.last("/v1/messages")
+		return sent
+	}
+	own := server("https://api.anthropic.com")
+	if sent := send(own, ""); strings.Contains(sent, "caveman:v1") {
+		t.Fatalf("own API kept another host's reasoning: %s", sent)
+	}
+	if sent := send(own, "caveman.pass-through.v1"); sent != body {
+		t.Fatalf("pass-through was changed: %s", sent)
+	}
+	other := server("https://llm.example.com")
+	if sent := send(other, ""); sent != body || len(stub.got["/v1/messages"]) != 3 {
+		t.Fatalf("another origin was changed (%d sent): %s", len(stub.got["/v1/messages"]), sent)
+	}
+}
+
+// The host's own failure after content is relayed as the stream's end: the
+// agent gets it once and the connection ends cleanly, no abort.
+func TestPoolUpstreamFailureAfterContentEndsCleanly(t *testing.T) {
+	c := newPoolCase(t, cloudTarget(), "")
+	c.stub.gwSSE = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"model\":\"x\",\"usage\":{\"input_tokens\":1}}}\n\n" +
+		"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n" +
+		"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n" +
+		"event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"
+	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+	out := rec.Body.String()
+	if !strings.Contains(out, "partial") || strings.Count(out, "event: error") != 1 || strings.Contains(out, "harness says hi") {
+		t.Fatalf("answer: %s", out)
 	}
 }
