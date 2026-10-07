@@ -293,8 +293,13 @@ func (t *responsesToMessages) consume(line []byte) {
 			t.stop = "tool_use"
 		}
 		if event.Response != nil {
-			if details := event.Response.IncompleteDetails; details != nil && details.Reason == "max_output_tokens" {
-				t.stop = "max_tokens"
+			if details := event.Response.IncompleteDetails; details != nil {
+				switch details.Reason {
+				case "max_output_tokens":
+					t.stop = "max_tokens"
+				case "content_filter":
+					t.stop = "refusal"
+				}
 			}
 			if usage := event.Response.Usage; usage != nil {
 				t.usage = chatUsage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, PromptTokensDetails: &promptTokensDetails{

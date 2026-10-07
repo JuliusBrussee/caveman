@@ -3,6 +3,7 @@ package translate
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -210,7 +211,7 @@ func TestChatAnswerToMessages(t *testing.T) {
 		answer["stop_reason"] != "tool_use" || answer["stop_sequence"] != nil {
 		t.Fatalf("envelope = %v", answer)
 	}
-	if encode(answer["usage"]) != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":40,"input_tokens":60,"output_tokens":20}` {
+	if encode(answer["usage"]) != `{"cache_creation_input_tokens":10,"cache_read_input_tokens":40,"input_tokens":50,"output_tokens":20}` {
 		t.Fatalf("usage = %v", answer["usage"])
 	}
 	content := answer["content"].([]any)
@@ -228,7 +229,7 @@ func TestChatAnswerToMessages(t *testing.T) {
 			t.Fatalf("tool id %q is not one Anthropic accepts", id)
 		}
 	}
-	for finish, want := range map[string]string{"stop": "end_turn", "length": "max_tokens", "content_filter": "end_turn", "tool_calls": "tool_use", "": "end_turn"} {
+	for finish, want := range map[string]string{"stop": "end_turn", "length": "max_tokens", "content_filter": "refusal", "tool_calls": "tool_use", "": "end_turn"} {
 		if got := anthropicStopReason(finish); got != want {
 			t.Fatalf("%s -> %s, want %s", finish, got, want)
 		}
@@ -400,10 +401,21 @@ func TestMessagesHostStreamIsNamespaced(t *testing.T) {
 	if recorder.Body.String() != strings.Replace(anthropicText("hi"), `"model":"claude-upstream"`, `"model":"claude-opus-5-5"`, 1) {
 		t.Fatalf("native relay changed bytes:\n%s", recorder.Body.String())
 	}
-	// A cut relay ends in an error event and an error.
+	// A relay cut before any content reaches nobody: the caller may run it elsewhere.
 	recorder, _, err = serve(t, native, sse(`{"type":"message_start","message":{"usage":{"input_tokens":1}}}`), true)
-	if events := anthropicEvents(t, recorder.Body.String()); err == nil || events[len(events)-1].name != "error" {
+	if !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+		t.Fatalf("cut before content: %v\n%s", err, recorder.Body.String())
+	}
+	// One cut after content ends in an error event and an error.
+	started := sse(`{"type":"message_start","message":{"usage":{"input_tokens":1}}}`, `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+	recorder, _, err = serve(t, native, started, true)
+	if events := anthropicEvents(t, recorder.Body.String()); err == nil || errors.Is(err, ErrNotServed) || events[len(events)-1].name != "error" {
 		t.Fatalf("cut relay: %v\n%s", err, recorder.Body.String())
+	}
+	// A clean end without message_stop is no success either.
+	recorder, _, err = serve(t, native, started, false)
+	if events := anthropicEvents(t, recorder.Body.String()); err == nil || events[len(events)-1].name != "error" {
+		t.Fatalf("no terminal event: %v\n%s", err, recorder.Body.String())
 	}
 }
 
@@ -509,7 +521,9 @@ func TestMessagesEffortFitsTheModel(t *testing.T) {
 		{"claude-opus-5-5", `{"type":"adaptive"}`, "minimal", `{"type":"adaptive"}`, `{"effort":"low"}`},
 		{"claude-sonnet-4-5", `{"type":"adaptive"}`, "high", `{"budget_tokens":5000,"type":"enabled"}`, ``},
 		{"anthropic/claude-sonnet-4.6", `{"type":"enabled","budget_tokens":4000}`, "high", `{"type":"enabled","budget_tokens":4000}`, `{"effort":"high"}`},
-		{"claude-opus-5-5", `{"type":"disabled"}`, "high", ``, `{"effort":"high"}`},
+		{"claude-opus-5-5", `{"type":"disabled"}`, "high", `{"type":"disabled"}`, `{"effort":"high"}`}, // the claude-opus-5 family below xhigh
+		{"claude-opus-5-5", `{"type":"disabled"}`, "max", ``, `{"effort":"max"}`},
+		{"claude-sonnet-5-5", `{"type":"disabled"}`, "max", `{"type":"disabled"}`, `{"effort":"max"}`},
 		{"claude-sonnet-5", `{"type":"disabled"}`, "max", `{"type":"disabled"}`, `{"effort":"max"}`},
 		{"deepseek-v4-flash", `{"type":"adaptive"}`, "high", `{"type":"adaptive"}`, `{"effort":"high"}`},
 	} {

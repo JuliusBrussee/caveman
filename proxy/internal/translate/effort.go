@@ -193,7 +193,13 @@ func nativeThinking(raw, maxTokens json.RawMessage, model, effort string) (json.
 		reshaped["type"] = mustJSON("adaptive")
 		return mustJSON(reshaped), true
 	case kind == "disabled" && !manual:
-		atAnyEffort, accepted := thinkingDisableAccepted[claudeID(model)]
+		// A family name covers its versions: claude-sonnet-5 is claude-sonnet-5-5 too.
+		atAnyEffort, accepted := false, false
+		for family, any := range thinkingDisableAccepted {
+			if hasPrefix(claudeID(model), family) {
+				atAnyEffort, accepted = any, true
+			}
+		}
 		if accepted && (atAnyEffort || (effort != "xhigh" && effort != "max")) {
 			return raw, true
 		}

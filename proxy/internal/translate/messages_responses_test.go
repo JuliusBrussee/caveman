@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -210,9 +211,10 @@ func TestResponsesAnswerAssembledForANonStreamingCaller(t *testing.T) {
 	if encode(answer) != want {
 		t.Fatalf("answer =\n%s\nwant\n%s", encode(answer), want)
 	}
-	recorder, _, _ = serve(t, reply, upstreamResponses(`{"type":"response.output_text.delta","delta":"a"}`), false)
-	if recorder.Code != 502 || !strings.Contains(recorder.Body.String(), `"type":"error"`) {
-		t.Fatalf("a cut stream for a non-streaming caller = %d %s", recorder.Code, recorder.Body.String())
+	// A cut stream for a non-streaming caller writes nothing: the request falls back.
+	recorder, _, err = serve(t, reply, upstreamResponses(`{"type":"response.output_text.delta","delta":"a"}`), false)
+	if !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+		t.Fatalf("a cut stream for a non-streaming caller = %v %q", err, recorder.Body.String())
 	}
 }
 

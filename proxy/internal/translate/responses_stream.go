@@ -733,15 +733,17 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 	if out.finished {
 		return
 	}
+	if cut() != nil || !finished {
+		// Only the failure: no output_item.done for a half-finished call, so
+		// Codex never runs a tool on cut-off arguments.
+		out.fail(streamCut)
+		return
+	}
 	closeReasoning()
 	closeText()
 	for _, index := range order {
 		calls[index].open(out, bridge)
 		out.endTool(calls[index].item, calls[index].arguments.String())
-	}
-	if cut() != nil || !finished {
-		out.fail(streamCut)
-		return
 	}
 	out.complete()
 }
@@ -763,6 +765,7 @@ func finishTranslated(w http.ResponseWriter, stream bool, model string, translat
 		} else {
 			startResponses(w, false)
 			_, _ = w.Write(out.answer())
+			commitOn(w)
 		}
 	}
 	return out

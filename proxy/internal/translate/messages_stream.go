@@ -41,6 +41,9 @@ func (s sseWriter) event(name string, data any) {
 		return
 	}
 	_, _ = s.w.Write([]byte("event: " + name + "\ndata: " + string(payload) + "\n\n"))
+	if !heldEvents[name] {
+		commitOn(s.w)
+	}
 	s.flush()
 }
 
@@ -185,7 +188,8 @@ func (m *messageStream) fail(kind, message string) {
 		return
 	}
 	m.start()
-	m.closeBlock()
+	// No content_block_stop for a half-finished block: a tool call cut off
+	// mid-arguments must never read as a finished one.
 	m.out.event("error", map[string]any{"type": "error", "error": map[string]any{"type": kind, "message": message}})
 	m.errored = true
 }

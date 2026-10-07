@@ -142,7 +142,7 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 		fields, reply.tools, err = responsesChatBody(body, opts)
 		reply.upstreamStream = true
 	default:
-		if fields, err = responsesNativeBody(body, opts.Model, opts.Effort); err == nil && opts.ChatGPTLogin {
+		if fields, err = responsesNativeBody(body, opts.Model, opts.Effort, opts.Route); err == nil && opts.ChatGPTLogin {
 			chatgptLoginBody(fields)
 			reply.upstreamStream = true
 		}
@@ -392,7 +392,90 @@ func chatgptLoginBody(body map[string]json.RawMessage) {
 // bytes reached w (the caller already got an error event in its grammar).
 // Same-grammar answers are relayed (Messages from a non-Anthropic host:
 // signatures namespaced), with every "model" value rewritten to Shown.
+//
+// Nothing reaches w until the answer carries content (a block, a delta, an
+// output item, a finished answer): an upstream that answers 2xx and then
+// fails, or ends, before that returns ErrNotServed with w untouched, so the
+// caller can still run the request elsewhere.
 func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, error) {
+	g := &gate{w: w, header: http.Header{}}
+	usage, err := r.serve(g, upstream)
+	if !g.open {
+		return usage, ErrNotServed
+	}
+	return usage, err
+}
+
+// ErrNotServed: the upstream failed or ended before any content; nothing was
+// written to the caller.
+var ErrNotServed = errors.New("translate: upstream failed before any content")
+
+// gate holds an answer back until it carries content (commit).
+type gate struct {
+	w      http.ResponseWriter
+	header http.Header
+	status int
+	buf    bytes.Buffer
+	open   bool
+}
+
+func (g *gate) Header() http.Header {
+	if g.open {
+		return g.w.Header()
+	}
+	return g.header
+}
+
+func (g *gate) WriteHeader(status int) {
+	if g.open {
+		g.w.WriteHeader(status)
+		return
+	}
+	g.status = status
+}
+
+func (g *gate) Write(p []byte) (int, error) {
+	if g.open {
+		return g.w.Write(p)
+	}
+	return g.buf.Write(p)
+}
+
+func (g *gate) Flush() {
+	if g.open {
+		_ = http.NewResponseController(g.w).Flush()
+	}
+}
+
+// commit sends what was held and passes everything after it straight on.
+func (g *gate) commit() {
+	if g.open {
+		return
+	}
+	g.open = true
+	for name, values := range g.header {
+		g.w.Header()[name] = values
+	}
+	if g.status == 0 {
+		g.status = http.StatusOK
+	}
+	g.w.WriteHeader(g.status)
+	_, _ = g.w.Write(g.buf.Bytes())
+	g.Flush()
+}
+
+// commitOn commits w when it is a gate.
+func commitOn(w io.Writer) {
+	if g, ok := w.(*gate); ok {
+		g.commit()
+	}
+}
+
+// heldEvents are the events that carry no content: they wait behind the gate.
+var heldEvents = map[string]bool{"message_start": true, "ping": true, "error": true,
+	"response.created": true, "response.in_progress": true, "response.failed": true}
+
+func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, error) {
 	body := io.Reader(upstream.Body)
 	if r.namespaces() && r.upstreamStream {
 		pipe := namespaceStream(body, r.opts.route())
@@ -412,6 +495,11 @@ func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 		raw, err := io.ReadAll(body)
 		if err != nil {
 			return Usage{}, r.readFailed(w, err)
+		}
+		if chatAnswerFailed(raw) {
+			// A 200 carrying an error, no choice or no JSON is no answer.
+			writeAnthropicError(w, http.StatusBadGateway, "api_error", "upstream answered without a completion")
+			return Usage{}, nil
 		}
 		answer, usage := chatToAnthropic(raw, shown, r.opts.chatSignature())
 		writeJSON(w, answer)
@@ -436,7 +524,7 @@ func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 		if r.namespaces() {
 			raw = namespaceAnswer(raw, r.opts.route())
 		}
-		raw = withModel(raw, shown)
+		raw = r.tagReasoning(withModel(raw, shown))
 		writeJSON(w, raw)
 		return answerUsage(r.from, raw), nil
 	case r.from == Responses && !r.stream:
@@ -452,6 +540,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	out := newSSEWriter(w)
 	var messages anthropicUsage
 	var usage Usage
+	terminal := false // the upstream ended the answer itself
 	lines, cut := sseLines(body)
 	for line := range lines {
 		if line == nil {
@@ -461,8 +550,16 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			}
 			continue
 		}
+		commit := false
 		if data, ok := sseData(line); ok {
-			if edited := withModel(data, shown); !bytes.Equal(edited, data) {
+			failed := bytes.Contains(data, []byte(`"type":"error"`)) || bytes.Contains(data, []byte(`"error":{`)) || bytes.Contains(data, []byte(`"response.failed"`))
+			if failed && !gated(w) {
+				return usage, ErrNotServed // an error before any content: nothing reached the caller
+			}
+			terminal = terminal || relayTerminal(r.from, data)
+			commit = !failed && !bytes.Contains(data, []byte(`"message_start"`)) && !bytes.Contains(data, []byte(`"response.created"`)) &&
+				!bytes.Contains(data, []byte(`"response.in_progress"`)) && !bytes.Contains(data, []byte(`"type":"ping"`))
+			if edited := r.tagReasoning(withModel(data, shown)); !bytes.Equal(edited, data) {
 				line = append(append([]byte("data: "), edited...), '\n')
 			}
 			switch r.from {
@@ -483,9 +580,18 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			}
 		}
 		_, _ = w.Write(line)
+		if commit {
+			commitOn(w)
+		}
 		out.flush()
 	}
 	err := cut()
+	if err == nil && !terminal {
+		if !gated(w) {
+			return usage, ErrNotServed
+		}
+		err = errors.New("no terminal event")
+	}
 	if err == nil {
 		return usage, nil
 	}
@@ -500,6 +606,23 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		newResponsesStream(w, shown, true).fail(streamCut)
 	}
 	return usage, fmt.Errorf("%w: %w", errStreamTruncated, err)
+}
+
+// gated reports content already sent through w's gate (true for a plain writer).
+func gated(w http.ResponseWriter) bool {
+	g, ok := w.(*gate)
+	return !ok || g.open
+}
+
+// relayTerminal reports the event that ends an answer in grammar.
+func relayTerminal(grammar string, data []byte) bool {
+	switch grammar {
+	case Messages:
+		return bytes.Contains(data, []byte(`"message_stop"`))
+	case Chat:
+		return bytes.Equal(data, []byte("[DONE]")) || bytes.Contains(data, []byte(`"finish_reason":"`))
+	}
+	return bytes.Contains(data, []byte(`"response.completed"`)) || bytes.Contains(data, []byte(`"response.incomplete"`))
 }
 
 // assembleResponses answers a non-streaming Responses caller from a streamed
@@ -520,9 +643,9 @@ func (r *Reply) assembleResponses(w http.ResponseWriter, body io.Reader, shown s
 			_ = json.Unmarshal(data, &event)
 			switch event.Type {
 			case "response.output_item.done":
-				items = append(items, event.Item)
+				items = append(items, r.tagReasoning(event.Item))
 			case "response.completed":
-				return writeAssembled(w, event.Response, items, shown), nil
+				return writeAssembled(w, r.tagReasoning(event.Response), items, shown), nil
 			case "response.failed":
 				var failed struct {
 					Error *responsesFailure `json:"error"`
@@ -627,6 +750,7 @@ func writeJSON(w http.ResponseWriter, body []byte) {
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+	commitOn(w)
 }
 
 // withModel renames the model a payload reports to shown: the top-level

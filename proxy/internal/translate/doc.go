@@ -2,11 +2,6 @@
 // upstream that speaks another, and turns the upstream's answer back into the
 // caller's grammar, streamed or not.
 //
-// These translators were moved from the private caveman-ai/router repository
-// (its engine/ package and the daemon's wire fitting) when that daemon was
-// retired per Caveman Cloud ADR 0085. Same author; they are now Apache-2.0
-// with the rest of this repository.
-//
 // Three grammars: Anthropic Messages, OpenAI chat completions and OpenAI
 // Responses. Seven directions are supported (Supported): each grammar to
 // itself (fitted: model id, effort, parameters, thinking hygiene), Messages

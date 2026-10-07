@@ -435,13 +435,25 @@ func toolInput(arguments string) any {
 	return map[string]any{"_raw": arguments}
 }
 
+// chatAnswerFailed reports a 200 chat body that is no completion: an error
+// envelope, no choice, or no JSON at all.
+func chatAnswerFailed(body []byte) bool {
+	var parsed struct {
+		Error   json.RawMessage   `json:"error"`
+		Choices []json.RawMessage `json:"choices"`
+	}
+	return json.Unmarshal(body, &parsed) != nil || len(parsed.Error) > 0 && string(parsed.Error) != "null" || len(parsed.Choices) == 0
+}
+
 func anthropicStopReason(finish string) string {
 	switch finish {
 	case "length":
 		return "max_tokens"
 	case "tool_calls", "function_call":
 		return "tool_use"
-	default: // stop, content_filter, "": the turn ended.
+	case "content_filter":
+		return "refusal"
+	default: // stop, "": the turn ended.
 		return "end_turn"
 	}
 }
@@ -450,7 +462,8 @@ func anthropicUsageFromChat(usage chatUsage) anthropicUsage {
 	cached := usage.cachedTokens()
 	// OpenAI counts cached tokens inside prompt_tokens; some upstreams report
 	// them alongside it instead. Clamp rather than publish a negative count.
-	return anthropicUsage{InputTokens: max(usage.PromptTokens-cached, 0), OutputTokens: usage.CompletionTokens, CacheReadInputTokens: cached}
+	written := usage.cacheWriteTokens()
+	return anthropicUsage{InputTokens: max(usage.PromptTokens-cached-written, 0), OutputTokens: usage.CompletionTokens, CacheReadInputTokens: cached, CacheCreationInputTokens: written}
 }
 
 // --- thinking hygiene -------------------------------------------------------

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -260,6 +261,13 @@ func TestResponsesStreamFailures(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			_, reply := mustRequest(t, Responses, tc.to, codexBody("m", "low", "", userHello), Options{Model: "claude-opus-5-5"})
 			recorder, _, err := serve(t, reply, tc.stream, tc.cut)
+			if !tc.failed {
+				// An error before any content reaches nobody: the request falls back.
+				if !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+					t.Fatalf("err %v body %q", err, recorder.Body.String())
+				}
+				return
+			}
 			turn := codexAccept(t, recorder.Body.String())
 			// server_error is retryable for Codex: the half answer never completes.
 			if (err != nil) != tc.failed || turn.failure != tc.code || tc.message != "" && turn.message != tc.message || strings.Contains(recorder.Body.String(), "response.completed") {
@@ -503,10 +511,14 @@ func TestResponsesNativeRelay(t *testing.T) {
 	if usage != (Usage{InputTokens: 100, OutputTokens: 5, CacheReadTokens: 40}) {
 		t.Fatalf("usage = %+v", usage)
 	}
-	// A cut relay ends in response.failed.
+	// A relay cut before content reaches nobody; one cut after it ends in response.failed.
 	recorder, _, err = serve(t, reply, sse(`{"type":"response.created","response":{"id":"resp_up"}}`), true)
-	if turn := codexAccept(t, recorder.Body.String()); err == nil || turn.failure != "server_error" {
-		t.Fatalf("cut = %v %+v", err, turn)
+	if !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+		t.Fatalf("cut before content = %v %q", err, recorder.Body.String())
+	}
+	recorder, _, err = serve(t, reply, sse(`{"type":"response.created","response":{"id":"resp_up"}}`, `{"type":"response.output_text.delta","item_id":"m","delta":"half"}`), true)
+	if strings.Count(recorder.Body.String(), "half") != 1 || err == nil || errors.Is(err, ErrNotServed) || !strings.Contains(recorder.Body.String(), "response.failed") {
+		t.Fatalf("cut = %v %s", err, recorder.Body.String())
 	}
 	// A non-streamed answer is renamed and its usage read.
 	_, quiet := mustRequest(t, Responses, Responses, `{"model":"m","input":"hi"}`, Options{Model: "gpt-5.6", Shown: "openai/gpt-5.6"})
@@ -537,8 +549,8 @@ func TestChatGPTLoginFitting(t *testing.T) {
 		t.Fatalf("assembled = %s %+v %v", recorder.Body.String(), usage, err)
 	}
 	recorder, _, err = serve(t, reply, sse(`{"type":"response.created","response":{"id":"resp_1"}}`), false)
-	if err == nil || recorder.Code != 502 {
-		t.Fatalf("an unfinished preview stream: %d %v", recorder.Code, err)
+	if !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+		t.Fatalf("an unfinished preview stream: %v %q", err, recorder.Body.String())
 	}
 }
 

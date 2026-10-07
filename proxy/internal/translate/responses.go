@@ -386,6 +386,58 @@ func wireCallID(id, messageID string, index int) string {
 type reasoningEnvelope struct {
 	Caveman string            `json:"caveman"`
 	Blocks  []json.RawMessage `json:"blocks"`
+	// Route and Blob carry another Responses host's own encrypted_content
+	// (the ChatGPT plan, OpenCode Go): restored only for that route.
+	Route string `json:"route,omitempty"`
+	Blob  string `json:"blob,omitempty"`
+}
+
+// encryptedContentRE finds one encrypted_content value (base64, no escapes).
+var encryptedContentRE = regexp.MustCompile(`("encrypted_content"\s*:\s*)"([A-Za-z0-9+/=_-]+)"`)
+
+// tagReasoning wraps the encrypted_content a Responses host other than
+// OpenAI's own API wrote into an envelope naming that host, so its reasoning
+// goes back to it and to nothing else (OpenAI's API included). A no-op for
+// every other answer.
+func (r *Reply) tagReasoning(data []byte) []byte {
+	route := r.opts.Route
+	if r.from != Responses || r.to != Responses || route == "" || route == "openai" || !bytes.Contains(data, []byte("encrypted_content")) {
+		return data
+	}
+	return encryptedContentRE.ReplaceAllFunc(data, func(match []byte) []byte {
+		parts := encryptedContentRE.FindSubmatch(match)
+		if bytes.HasPrefix(parts[2], envelopeMarker) {
+			return match
+		}
+		wrapped := base64.StdEncoding.EncodeToString(mustJSON(reasoningEnvelope{Caveman: reasoningEnvelopeVersion, Blocks: []json.RawMessage{}, Route: route, Blob: string(parts[2])}))
+		return append(append([]byte{}, parts[1]...), mustJSON(wrapped)...)
+	})
+}
+
+// restoreReasoning puts back the encrypted_content a route's own envelopes
+// carry, for a request to that route.
+func restoreReasoning(body map[string]json.RawMessage, route string) {
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(body["input"], &items) != nil {
+		return
+	}
+	changed := false
+	for _, item := range items {
+		var kind, encrypted string
+		_ = json.Unmarshal(item["type"], &kind)
+		_ = json.Unmarshal(item["encrypted_content"], &encrypted)
+		if kind != "reasoning" || !strings.HasPrefix(encrypted, string(envelopeMarker)) {
+			continue
+		}
+		raw, err := base64.StdEncoding.DecodeString(encrypted)
+		var envelope reasoningEnvelope
+		if err == nil && json.Unmarshal(raw, &envelope) == nil && envelope.Route == route && envelope.Blob != "" {
+			item["encrypted_content"], changed = mustJSON(envelope.Blob), true
+		}
+	}
+	if changed {
+		body["input"] = mustJSON(items)
+	}
 }
 
 const reasoningEnvelopeVersion = "v1"
@@ -918,12 +970,15 @@ func chatResponseFormat(request responsesRequest) map[string]any {
 // removed: the runtime's Anthropic envelopes, and items with no
 // encrypted_content at all (another model's, which store:false could not look
 // up). OpenAI's own encrypted_content passes untouched.
-func responsesNativeBody(raw []byte, model, effort string) (map[string]json.RawMessage, error) {
+func responsesNativeBody(raw []byte, model, effort, route string) (map[string]json.RawMessage, error) {
 	var body map[string]json.RawMessage
 	if err := json.Unmarshal(raw, &body); err != nil {
 		return nil, err
 	}
 	body["model"] = mustJSON(model)
+	if route != "" && route != "openai" {
+		restoreReasoning(body, route)
+	}
 	dropReasoning(body, func(encrypted *string) bool { return encrypted == nil || *encrypted == "" })
 	if effort != "" {
 		var reasoning map[string]json.RawMessage
