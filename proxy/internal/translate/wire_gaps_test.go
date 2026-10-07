@@ -963,7 +963,7 @@ func TestTerminalEventEndsTheStream(t *testing.T) {
 		for to := range targets {
 			run(from, to, answers[to], 50*time.Millisecond)
 			if to == Chat {
-				run(from, to, sse(chatFrames...), usageGrace+50*time.Millisecond) // no [DONE]
+				run(from, to, sse(chatFrames...), usageGrace+150*time.Millisecond) // no [DONE]: the grace, then the end
 			}
 		}
 	}
