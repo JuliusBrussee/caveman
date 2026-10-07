@@ -25,9 +25,25 @@ test('merge keeps unrelated hooks and adds caveman entries', () => {
   };
   const merged = CURSOR.mergeHooksDocument(doc);
   assert.equal(merged.hooks.beforeShellExecution.length, 2);
-  assert.equal(merged.hooks.preToolUse.length, 2);
-  assert.ok(merged.hooks.preToolUse.some((e) => CURSOR.isCavemanHookEntry(e)));
+  assert.equal(merged.hooks.preToolUse.length, 4);
+  const cavemanPre = merged.hooks.preToolUse.filter((e) => CURSOR.isCavemanHookEntry(e));
+  assert.equal(cavemanPre.length, 3);
+  assert.ok(cavemanPre.some((e) => e.matcher === 'Read'));
+  assert.ok(cavemanPre.some((e) => e.matcher === 'Grep'));
+  assert.ok(cavemanPre.some((e) => e.matcher === 'Glob'));
   assert.ok(merged.hooks.beforeShellExecution.some((e) => e.command === './hooks/user.sh'));
+});
+
+test('merge replaces older caveman Read entry without duplicating', () => {
+  const doc = {
+    version: 1,
+    hooks: {
+      preToolUse: [{ command: 'node "./hooks/cursor-dedupe-tools.js" read', matcher: 'Read' }],
+    },
+  };
+  const merged = CURSOR.mergeHooksDocument(doc);
+  const cavemanPre = merged.hooks.preToolUse.filter((e) => CURSOR.isCavemanHookEntry(e));
+  assert.equal(cavemanPre.length, 3);
 });
 
 test('strip removes only caveman hook entries', () => {

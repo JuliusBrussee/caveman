@@ -26,11 +26,14 @@ function isCavemanHookEntry(entry) {
 }
 
 function cavemanHookEntries() {
-  const readCommand = `node "./hooks/${HOOK_SCRIPT_NAME}" read`;
-  const shellCommand = `node "./hooks/${HOOK_SCRIPT_NAME}" shell`;
+  const hook = (mode) => `node "./hooks/${HOOK_SCRIPT_NAME}" ${mode}`;
   return {
-    preToolUse: [{ command: readCommand, matcher: 'Read' }],
-    beforeShellExecution: [{ command: shellCommand }],
+    preToolUse: [
+      { command: hook('read'), matcher: 'Read' },
+      { command: hook('grep'), matcher: 'Grep' },
+      { command: hook('glob'), matcher: 'Glob' },
+    ],
+    beforeShellExecution: [{ command: hook('shell') }],
   };
 }
 

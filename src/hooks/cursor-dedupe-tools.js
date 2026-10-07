@@ -5,9 +5,12 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
+const { execSync } = require('child_process');
 
 const STATE_VERSION = 1;
 const HOOK_SCRIPT_NAME = 'cursor-dedupe-tools.js';
+const MAX_CONVERSATIONS = 50;
+const TREE_MTIME_MAX_FILES = 500;
 
 function defaultStateDir(env = process.env) {
   const home = env.HOME || env.USERPROFILE || os.homedir();
@@ -35,9 +38,19 @@ function loadState(stateDir) {
   }
 }
 
+function trimConversations(state, max = MAX_CONVERSATIONS) {
+  const ids = Object.keys(state.conversations);
+  if (ids.length <= max) return state;
+  const next = { ...state, conversations: { ...state.conversations } };
+  for (let i = 0; i < ids.length - max; i++) delete next.conversations[ids[i]];
+  return next;
+}
+
 function saveState(stateDir, state) {
   fs.mkdirSync(stateDir, { recursive: true });
-  fs.writeFileSync(stateFilePath(stateDir), `${JSON.stringify(state, null, 2)}\n`, { mode: 0o600 });
+  const trimmed = trimConversations(state);
+  fs.writeFileSync(stateFilePath(stateDir), `${JSON.stringify(trimmed, null, 2)}\n`, { mode: 0o600 });
+  return trimmed;
 }
 
 function normalizePath(filePath, cwd = process.cwd()) {
@@ -68,6 +81,27 @@ function isRangedRead(toolInputValue) {
   return hasOffset || hasLimit;
 }
 
+function parseReadRange(toolInputValue) {
+  const start = toolInputValue.offset !== undefined && toolInputValue.offset !== null && toolInputValue.offset !== ''
+    ? Math.max(1, Number(toolInputValue.offset) || 1)
+    : 1;
+  const limit = toolInputValue.limit;
+  const hasLimit = limit !== undefined && limit !== null && limit !== '';
+  const end = hasLimit ? start + (Number(limit) || 0) - 1 : Number.MAX_SAFE_INTEGER;
+  return { start, end, full: !isRangedRead(toolInputValue) };
+}
+
+function rangeContained(requested, stored) {
+  if (!stored || !Array.isArray(stored.ranges)) return false;
+  return stored.ranges.some((r) => requested.start >= r.start && requested.end <= r.end);
+}
+
+function mergeReadRange(stored, range) {
+  const ranges = stored && Array.isArray(stored.ranges) ? [...stored.ranges] : [];
+  ranges.push(range);
+  return ranges;
+}
+
 function fileFingerprint(filePath) {
   const stat = fs.statSync(filePath);
   const hash = crypto.createHash('sha256').update(fs.readFileSync(filePath)).digest('hex');
@@ -76,13 +110,33 @@ function fileFingerprint(filePath) {
 
 function convState(state, convId) {
   if (!state.conversations[convId]) {
-    state.conversations[convId] = { reads: {}, shell: {}, crossWarned: {} };
+    state.conversations[convId] = { reads: {}, shell: {}, crossWarned: {}, searches: {} };
   }
-  return state.conversations[convId];
+  const c = state.conversations[convId];
+  if (!c.searches) c.searches = {};
+  return c;
 }
 
 function fingerprintsMatch(a, b) {
   return a && b && a.hash === b.hash && a.mtimeMs === b.mtimeMs && a.size === b.size;
+}
+
+function recordRead(c, norm, fp, range) {
+  const prev = c.reads[norm];
+  if (prev && prev.hash === fp.hash && prev.mtimeMs === fp.mtimeMs) {
+    c.reads[norm] = {
+      ...prev,
+      ranges: mergeReadRange(prev, range),
+      full: prev.full === true || range.full === true,
+    };
+    return;
+  }
+  c.reads[norm] = {
+    mtimeMs: fp.mtimeMs,
+    hash: fp.hash,
+    ranges: [range],
+    full: range.full === true,
+  };
 }
 
 function decideRead(input, options = {}) {
@@ -94,7 +148,6 @@ function decideRead(input, options = {}) {
   const filePath = readPath(input);
 
   if (!filePath) return { permission: 'allow', state };
-  if (isRangedRead(ti)) return { permission: 'allow', state };
 
   const norm = normalizePath(filePath, cwd);
   if (!fs.existsSync(norm)) return { permission: 'allow', state };
@@ -107,8 +160,25 @@ function decideRead(input, options = {}) {
   }
 
   const c = convState(state, convId);
+  const ranged = isRangedRead(ti);
+
+  if (ranged) {
+    const requested = parseReadRange(ti);
+    const seen = c.reads[norm];
+    if (seen && seen.hash === fp.hash && seen.mtimeMs === fp.mtimeMs && rangeContained(requested, seen)) {
+      return {
+        permission: 'deny',
+        agent_message: 'Already read this line range from this unchanged file in this chat. Use the earlier tool result or request lines outside that range.',
+        state,
+      };
+    }
+    recordRead(c, norm, fp, { start: requested.start, end: requested.end, full: false });
+    state.fingerprints[norm] = fp;
+    return { permission: 'allow', state };
+  }
+
   const seen = c.reads[norm];
-  if (seen && seen.mtimeMs === fp.mtimeMs && seen.hash === fp.hash) {
+  if (seen && seen.mtimeMs === fp.mtimeMs && seen.hash === fp.hash && seen.full) {
     return {
       permission: 'deny',
       agent_message: 'Already read this unchanged file in this chat. Use the earlier tool result or request a line range (offset/limit).',
@@ -126,14 +196,118 @@ function decideRead(input, options = {}) {
     };
   }
 
-  c.reads[norm] = { mtimeMs: fp.mtimeMs, hash: fp.hash };
+  recordRead(c, norm, fp, { start: 1, end: Number.MAX_SAFE_INTEGER, full: true });
   state.fingerprints[norm] = fp;
   return { permission: 'allow', state };
+}
+
+function normalizeSearchText(value) {
+  return String(value || '').trim().replace(/\s+/g, ' ');
+}
+
+function searchRoot(ti, cwd) {
+  const raw = ti.path || ti.target_directory || ti.glob_pattern || '.';
+  return normalizePath(raw, cwd);
+}
+
+function searchQueryKey(toolKind, ti, cwd) {
+  const pattern = normalizeSearchText(ti.pattern || ti.query || ti.glob_pattern || '');
+  const glob = normalizeSearchText(ti.glob || '');
+  const root = searchRoot(ti, cwd);
+  return `${toolKind}:${pattern}:${root}:${glob}`;
+}
+
+function newestMtimeUnder(rootPath, options = {}) {
+  const maxFiles = options.maxFiles || TREE_MTIME_MAX_FILES;
+  if (!rootPath || !fs.existsSync(rootPath)) return null;
+  let newest;
+  let count = 0;
+  const visit = (p) => {
+    if (count >= maxFiles) return;
+    let st;
+    try {
+      st = fs.statSync(p);
+    } catch {
+      return;
+    }
+    count++;
+    if (newest === undefined || st.mtimeMs > newest) newest = st.mtimeMs;
+    if (!st.isDirectory()) return;
+    let entries;
+    try {
+      entries = fs.readdirSync(p, { withFileTypes: true });
+    } catch {
+      return;
+    }
+    for (const ent of entries) {
+      if (count >= maxFiles) return;
+      if (ent.name === 'node_modules' || ent.name === '.git') continue;
+      visit(path.join(p, ent.name));
+    }
+  };
+  visit(rootPath);
+  return newest ?? null;
+}
+
+function decideSearch(input, toolKind, options = {}) {
+  const stateDir = options.stateDir || defaultStateDir(options.env);
+  const state = options.state || loadState(stateDir);
+  const cwd = options.cwd || process.cwd();
+  const convId = conversationId(input);
+  const ti = toolInput(input);
+  const key = searchQueryKey(toolKind, ti, cwd);
+  const root = searchRoot(ti, cwd);
+
+  let treeMtime;
+  try {
+    treeMtime = newestMtimeUnder(fs.existsSync(root) ? root : cwd, options);
+  } catch {
+    return { permission: 'allow', state };
+  }
+  if (treeMtime === null) return { permission: 'allow', state };
+
+  const c = convState(state, convId);
+  const seen = c.searches[key];
+  if (seen && seen.treeMtime === treeMtime) {
+    return {
+      permission: 'deny',
+      agent_message: `Already ran this ${toolKind} on an unchanged tree in this chat. Use the earlier tool result or change the pattern/path.`,
+      state,
+    };
+  }
+
+  c.searches[key] = { treeMtime };
+  return { permission: 'allow', state };
+}
+
+function decideGrep(input, options = {}) {
+  return decideSearch(input, 'grep', options);
+}
+
+function decideGlob(input, options = {}) {
+  return decideSearch(input, 'glob', options);
+}
+
+const EXACT_GIT_COMMANDS = new Set(['git status', 'git diff', 'git log -n']);
+
+function gitWorktreeFingerprint(cwd = process.cwd()) {
+  try {
+    const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+    const porcelain = execSync('git status --porcelain', {
+      cwd,
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return `${head}:${porcelain}`;
+  } catch {
+    return null;
+  }
 }
 
 function shellKey(command, cwd = process.cwd()) {
   const t = String(command || '').trim().replace(/\s+/g, ' ');
   if (!t) return null;
+  if (EXACT_GIT_COMMANDS.has(t)) return t;
   if (/^npm test(\s|$)/.test(t)) return 'npm test';
   if (/^go test \.\/\.\.\./.test(t)) return 'go test ./...';
   const nodeTest = t.match(/^node --test(?:\s+)(.+)$/);
@@ -149,11 +323,26 @@ function decideShell(input, options = {}) {
   const stateDir = options.stateDir || defaultStateDir(options.env);
   const state = options.state || loadState(stateDir);
   const convId = conversationId(input);
+  const cwd = options.cwd || process.cwd();
   const command = input.command || input.shell_command || toolInput(input).command;
-  const key = shellKey(command, options.cwd);
+  const key = shellKey(command, cwd);
   if (!key) return { permission: 'allow', state };
 
   const c = convState(state, convId);
+  if (EXACT_GIT_COMMANDS.has(key)) {
+    const fp = gitWorktreeFingerprint(cwd);
+    if (!fp) return { permission: 'allow', state };
+    if (c.shell[key] === fp) {
+      return {
+        permission: 'deny',
+        agent_message: `Already ran \`${key}\` on this unchanged worktree in this chat. Use the earlier output.`,
+        state,
+      };
+    }
+    c.shell[key] = fp;
+    return { permission: 'allow', state };
+  }
+
   if (c.shell[key]) {
     return {
       permission: 'deny',
@@ -176,7 +365,7 @@ function formatResponse(result) {
 }
 
 async function main() {
-  const mode = process.argv[2] === 'shell' ? 'shell' : 'read';
+  const mode = process.argv[2] || 'read';
   let input = {};
   try {
     const chunks = [];
@@ -190,9 +379,11 @@ async function main() {
 
   try {
     const stateDir = defaultStateDir();
-    const result = mode === 'shell'
-      ? decideShell(input, { stateDir })
-      : decideRead(input, { stateDir });
+    let result;
+    if (mode === 'shell') result = decideShell(input, { stateDir });
+    else if (mode === 'grep') result = decideGrep(input, { stateDir });
+    else if (mode === 'glob') result = decideGlob(input, { stateDir });
+    else result = decideRead(input, { stateDir });
     if (!process.env.CAVEMAN_CURSOR_HOOK_NO_SAVE) saveState(stateDir, result.state);
     process.stdout.write(formatResponse(result));
   } catch {
@@ -206,11 +397,19 @@ if (require.main === module) {
 
 module.exports = {
   HOOK_SCRIPT_NAME,
+  MAX_CONVERSATIONS,
   decideRead,
   decideShell,
+  decideGrep,
+  decideGlob,
+  decideSearch,
   loadState,
   saveState,
+  trimConversations,
   stateFilePath,
   defaultStateDir,
   shellKey,
+  gitWorktreeFingerprint,
+  newestMtimeUnder,
+  searchQueryKey,
 };
