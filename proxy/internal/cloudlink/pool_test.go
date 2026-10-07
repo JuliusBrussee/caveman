@@ -100,9 +100,15 @@ func TestPoolAnswerLocalLoginBecomesATarget(t *testing.T) {
 	if target == nil || answer.Outcome != "routed" || answer.Model != "" || answer.Effort != "high" || answer.Reject == nil {
 		t.Fatalf("answer = %+v", answer)
 	}
-	if target.Via != "local" || target.Host != "openai" || target.Wire != "chat" || target.URL != "https://api.openai.com/v1/chat/completions" ||
-		target.Header.Get("authorization") != "Bearer sk-openai" || target.Translate.Model != "gpt-6.1-sol" || target.Translate.MaxTokensField != "max_completion_tokens" {
+	if target.Via != "local" || target.Host != "openai" || target.Wire != "responses" || target.URL != "https://api.openai.com/v1/responses" ||
+		target.Header.Get("authorization") != "Bearer sk-openai" || target.Translate.Model != "gpt-6.1-sol" {
 		t.Fatalf("target = %+v", target)
+	}
+	// A target that failed: the rest of the ask runs the asked model at the answered effort.
+	link := newLink(home)
+	link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))().Reject()
+	if again := link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))(); again.Target != nil || again.Model != "" || again.Effort != "high" {
+		t.Fatalf("after reject = %+v", again)
 	}
 }
 

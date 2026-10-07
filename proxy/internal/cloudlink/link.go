@@ -477,6 +477,12 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	answer := d.answer
 	if answer.Model != "" || answer.Effort != "" || answer.Target != nil {
 		k := string(key[:])
+		rejected := gateway.RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
+		if answer.Target != nil {
+			// A pool target that failed: the rest of this ask runs the asked
+			// model, still at the answered effort (the same fallback every turn).
+			rejected.Effort, rejected.EffortMode, rejected.DefaultEffort = answer.Effort, answer.EffortMode, answer.DefaultEffort
+		}
 		answer.Reject = func() {
 			// The provider refused the routed model or effort: the rest of this
 			// ask keeps what the agent asked for instead of failing over every turn.
@@ -484,7 +490,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 			close(done)
 			l.mu.Lock()
 			if l.decisions != nil {
-				l.decisions[k] = &decision{done: done, answer: gateway.RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}}
+				l.decisions[k] = &decision{done: done, answer: rejected}
 			}
 			l.mu.Unlock()
 		}

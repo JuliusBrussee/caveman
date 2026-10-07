@@ -72,15 +72,21 @@ type targetResult struct {
 // serveTarget sends body (the caller's grammar) to target at effort and, when
 // the target answers 2xx, writes its answer to w in the caller's grammar,
 // naming asked as the model. Nothing reaches w on any failure before that.
-func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter providers.Adapter, run *routeRun, endpoint string, body []byte, target *RouteTarget, effort, asked string) targetResult {
+func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeRun, harnessKey, endpoint string, body []byte, target *RouteTarget, effort, asked string) targetResult {
 	grammar := grammarOf(endpoint)
 	var payload []byte
 	var reply *translate.Reply
 	if target.Via == "cloud" {
 		payload = body // as the agent sent it: x-caveman-route decides the model and effort
+		reply = translate.Relay(grammar, body, asked)
 	} else {
 		opts := target.Translate
 		opts.Shown, opts.Effort = asked, effort
+		if opts.Route == "openai" && target.Wire == translate.Responses && target.Header.Get("authorization") != "Bearer "+harnessKey {
+			// Another OpenAI login (another organisation, maybe): its encrypted
+			// reasoning is tagged so the harness's own key never gets it back.
+			opts.Route = "openai-login"
+		}
 		out, translated, err := translateRequest(grammar, target.Wire, body, opts)
 		if err != nil {
 			return targetResult{errMsg: "pool_translate_failed"}
@@ -104,6 +110,9 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 			header.Set(name, value)
 		}
 	}
+	if target.Via == "cloud" && effort != "" {
+		header.Set("x-caveman-effort", effort) // the gateway applies it in the target's own shape
+	}
 	if target.Affinity != "" && run != nil && run.key != "" {
 		header.Set(target.Affinity, affinityKey(run.key))
 	}
@@ -123,32 +132,21 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return targetResult{errMsg: fmt.Sprintf("pool_%d", resp.StatusCode)}
 	}
-	if reply != nil {
-		counter := &countingWriter{w: w}
-		usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
-		if errors.Is(err, translate.ErrNotServed) {
-			// A 2xx that failed or ended before any content: nothing reached
-			// the agent, so the asked model still runs.
-			return targetResult{errMsg: "pool_failed_before_content"}
-		}
-		out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, usage: providers.UsageObservation{
-			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
-			CachedInputTokens: usage.CacheReadTokens, CacheCreationInputTokens: usage.CacheWriteTokens, CacheStatus: "unknown",
-		}}
-		if err != nil {
-			out.errMsg = "cave_upstream_body_read_failed"
-		}
-		return out
+	counter := &countingWriter{w: w}
+	usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
+	if errors.Is(err, translate.ErrNotServed) {
+		// A 2xx that failed or ended before any content: nothing reached the
+		// agent, so the asked model still runs.
+		return targetResult{errMsg: "pool_failed_before_content"}
 	}
-	// via cloud: the caller's grammar both ways; the agent reads the model it asked for.
-	stream := streamingResponse(resp.Header)
-	copySafeResponseHeaders(w.Header(), resp.Header)
-	w.Header().Del("Content-Length")
-	w.WriteHeader(resp.StatusCode)
-	scanner := adapter.NewUsageScanner(resp.Header)
-	src := io.Reader(newShownModel(io.TeeReader(resp.Body, scanner), target.Model, asked))
-	counter, copyErr := s.streamResponse(w, r, src, stream, "")
-	return targetResult{served: true, stream: stream, bytes: counter.n, usage: scanner.Usage(), errMsg: copyErr}
+	out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, usage: providers.UsageObservation{
+		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
+		CachedInputTokens: usage.CacheReadTokens, CacheCreationInputTokens: usage.CacheWriteTokens, CacheStatus: "unknown",
+	}}
+	if err != nil {
+		out.errMsg = "cave_upstream_body_read_failed"
+	}
+	return out
 }
 
 // translateRequest is translate.Request with a panic in the ported parsers

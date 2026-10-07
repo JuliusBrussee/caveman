@@ -29,6 +29,7 @@ type poolStub struct {
 	respSSE  string // the Responses host's stream
 	respCode int
 	gwCode   int
+	gwSSE    string // the gateway's stream, when set
 	cloud    *fakeCloud
 }
 
@@ -55,7 +56,7 @@ func (p *poolStub) server(t *testing.T) *Server {
 			}
 			w.Header().Set("content-type", "application/json")
 			_, _ = io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"gpt-6.1-sol","choices":[{"index":0,"message":{"role":"assistant","content":"pool says hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3}}`)
-		case "/responses":
+		case "/responses", "/v1/responses":
 			if p.respCode != 0 {
 				w.WriteHeader(p.respCode)
 				return
@@ -65,6 +66,11 @@ func (p *poolStub) server(t *testing.T) *Server {
 		case "/gw/v1/messages":
 			if p.gwCode != 0 {
 				w.WriteHeader(p.gwCode)
+				return
+			}
+			if p.gwSSE != "" {
+				w.Header().Set("content-type", "text/event-stream")
+				_, _ = io.WriteString(w, p.gwSSE)
 				return
 			}
 			w.Header().Set("content-type", "application/json")
@@ -109,10 +115,10 @@ func (p *poolStub) last(path string) (*http.Request, string) {
 
 func localTarget(host string) *RouteTarget {
 	header := http.Header{}
-	header.Set("authorization", "Bearer sk-openai")
-	return &RouteTarget{PoolID: "openai/gpt-6.1-sol", Via: "local", Host: "openai", Model: "gpt-6.1-sol", Wire: translate.Chat,
+	header.Set("authorization", "Bearer sk-fireworks")
+	return &RouteTarget{PoolID: "fireworks/kimi-k3", Via: "local", Host: "fireworks", Model: "kimi-k3", Wire: translate.Chat,
 		URL: "https://" + host + "/chat/completions", Header: header, Affinity: "x-session-affinity",
-		Translate: translate.Options{Model: "gpt-6.1-sol", Dialect: "openai_chat", Route: "openai", MaxTokensField: "max_completion_tokens"}}
+		Translate: translate.Options{Model: "accounts/fireworks/models/kimi-k3", Dialect: "openai_chat", Route: "fireworks/kimi-k3"}}
 }
 
 func poolSend(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
@@ -154,13 +160,13 @@ func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	if req == nil {
 		t.Fatal("the pool host was not called")
 	}
-	if req.Header.Get("authorization") != "Bearer sk-openai" || req.Header.Get("x-api-key") != "" || req.Header.Get("x-session-affinity") == "" ||
+	if req.Header.Get("authorization") != "Bearer sk-fireworks" || req.Header.Get("x-api-key") != "" || req.Header.Get("x-session-affinity") == "" ||
 		strings.Contains(req.Header.Get("x-session-affinity"), "sess-1") {
 		t.Errorf("pool headers = %v", req.Header)
 	}
 	var sent map[string]any
 	_ = json.Unmarshal([]byte(body), &sent)
-	if sent["model"] != "gpt-6.1-sol" || sent["reasoning_effort"] != "high" || sent["max_completion_tokens"] == nil {
+	if sent["model"] != "accounts/fireworks/models/kimi-k3" || sent["reasoning_effort"] != "high" || sent["max_tokens"] == nil {
 		t.Errorf("pool body = %s", body)
 	}
 	if req, _ := c.stub.last("/v1/messages"); req != nil {
@@ -198,7 +204,7 @@ func TestPoolFailureBeforeTheFirstByteFallsBackToTheAskedModel(t *testing.T) {
 				t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 			}
 			req, body := c.stub.last("/v1/messages")
-			if req == nil || req.Header.Get("x-api-key") != "sk-byok" || !strings.Contains(body, `"claude-opus-5-5"`) || strings.Contains(body, `"effort"`) {
+			if req == nil || req.Header.Get("x-api-key") != "sk-byok" || !strings.Contains(body, `"claude-opus-5-5"`) || !strings.Contains(body, `"output_config":{"effort":"high"}`) {
 				t.Fatalf("fallback request = %v %s", req, body)
 			}
 			if rec.Header().Get("x-caveman-routed-from") != "" {
@@ -244,7 +250,7 @@ func TestHarnessPathDropsReasoningAPoolHostWrote(t *testing.T) {
 		t.Fatalf("pool turn: %s", rec.Body.String())
 	}
 	c.stub.cloud.answer = RouteAnswer{Outcome: "kept"}
-	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"caveman:v1:openai:gpt-6.1-sol"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
+	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"caveman:v1:fireworks/kimi-k3:accounts/fireworks/models/kimi-k3"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
 	if rec := poolSend(t, c.srv, body); rec.Code != 200 {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
@@ -332,7 +338,7 @@ func TestPoolHostGetsItsOwnReasoningBackOnTheNextTurn(t *testing.T) {
 		t.Fatalf("turn 1: %s", rec.Body.String())
 	}
 	turn2 := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"fix the bug"},` +
-		`{"role":"assistant","content":[{"type":"thinking","thinking":"my own plan","signature":"caveman:v1:openai:gpt-6.1-sol"},{"type":"text","text":"pool says hi"}]},` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"my own plan","signature":"caveman:v1:fireworks/kimi-k3:accounts/fireworks/models/kimi-k3"},{"type":"text","text":"pool says hi"}]},` +
 		`{"role":"user","content":"go on"}]}`
 	if rec := poolSend(t, c.srv, turn2); !strings.Contains(rec.Body.String(), "pool says hi") {
 		t.Fatalf("turn 2: %s", rec.Body.String())
@@ -350,5 +356,76 @@ func TestPoolFailureAfterHeadersBeforeContentFallsBack(t *testing.T) {
 	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
 	if !strings.Contains(rec.Body.String(), "harness says hi") || strings.Contains(rec.Body.String(), "busy") || c.rejected.Load() != 1 {
 		t.Fatalf("answer: %s", rec.Body.String())
+	}
+}
+
+// A Claude Code request with tools on an OpenAI API key goes out on the
+// Responses wire with function tools, at the answered effort.
+func TestPoolOpenAIKeyIsResponsesOnly(t *testing.T) {
+	header := http.Header{}
+	header.Set("authorization", "Bearer sk-openai")
+	target := &RouteTarget{PoolID: "openai/gpt-6.1-sol", Via: "local", Host: "openai", Model: "gpt-6.1-sol", Wire: translate.Responses,
+		URL: "https://api.openai.com/v1/responses", Header: header, Translate: translate.Options{Model: "gpt-6.1-sol", Route: "openai"}}
+	c := newPoolCase(t, target, "max")
+	c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"gpt says hi\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"tools":[{"name":"Bash","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"fix the bug"}]}`)
+	if !strings.Contains(rec.Body.String(), "gpt says hi") {
+		t.Fatalf("answer: %s", rec.Body.String())
+	}
+	req, body := c.stub.last("/v1/responses")
+	if req == nil {
+		t.Fatal("not sent on the Responses wire")
+	}
+	if got, _ := c.stub.last("/chat/completions"); got != nil {
+		t.Fatal("an OpenAI request went to chat completions")
+	}
+	var sent map[string]any
+	_ = json.Unmarshal([]byte(body), &sent)
+	if encode(sent["tools"]) != `[{"name":"Bash","parameters":{"type":"object"},"strict":false,"type":"function"}]` || encode(sent["reasoning"]) != `{"effort":"xhigh","summary":"auto"}` {
+		t.Fatalf("responses body = %s", body)
+	}
+}
+
+func TestPoolCloudTargetCarriesTheAnsweredEffort(t *testing.T) {
+	c := newPoolCase(t, cloudTarget(), "xhigh")
+	poolSend(t, c.srv, poolBody)
+	if req, body := c.stub.last("/gw/v1/messages"); req == nil || req.Header.Get("x-caveman-effort") != "xhigh" || body != poolBody {
+		t.Fatalf("gateway request = %v %s", req, body)
+	}
+	c = newPoolCase(t, cloudTarget(), "")
+	poolSend(t, c.srv, poolBody)
+	if req, _ := c.stub.last("/gw/v1/messages"); req == nil || req.Header.Values("x-caveman-effort") != nil {
+		t.Fatalf("an answer without effort sent x-caveman-effort: %v", req)
+	}
+}
+
+// A gateway 2xx that fails before content still falls back.
+func TestPoolCloudFailureBeforeContentFallsBack(t *testing.T) {
+	c := newPoolCase(t, cloudTarget(), "")
+	c.stub.gwSSE = "event: error\ndata: {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"
+	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+	if !strings.Contains(rec.Body.String(), "harness says hi") || strings.Contains(rec.Body.String(), "busy") {
+		t.Fatalf("answer: %s", rec.Body.String())
+	}
+}
+
+// An OpenAI login the pool holds is not the harness's credential unless it
+// is the same key: its reasoning comes back tagged to that login, never as
+// the harness's own OpenAI reasoning.
+func TestPoolOpenAILoginReasoningIsTaggedUnlessItIsTheHarnessKey(t *testing.T) {
+	for key, route := range map[string]string{"sk-openai": "openai-login", "sk-byok": "openai"} {
+		header := http.Header{}
+		header.Set("authorization", "Bearer "+key)
+		target := &RouteTarget{PoolID: "openai/gpt-6.1-sol", Via: "local", Host: "openai", Model: "gpt-6.1-sol", Wire: translate.Responses,
+			URL: "https://api.openai.com/v1/responses", Header: header, Translate: translate.Options{Model: "gpt-6.1-sol", Route: "openai"}}
+		c := newPoolCase(t, target, "")
+		c.stub.respSSE = "data: {\"type\":\"response.output_item.done\",\"item\":{\"type\":\"reasoning\",\"id\":\"rs_1\",\"summary\":[],\"encrypted_content\":\"BLOB\"}}\n\n" +
+			"data: {\"type\":\"response.output_text.delta\",\"delta\":\"gpt says hi\"}\n\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+		rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+		if !strings.Contains(rec.Body.String(), `"signature":"caveman:r1:`+route+`:BLOB"`) {
+			t.Fatalf("%s: want route %s:\n%s", key, route, rec.Body.String())
+		}
 	}
 }

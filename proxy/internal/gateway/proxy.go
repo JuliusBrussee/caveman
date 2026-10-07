@@ -412,7 +412,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				sent = body
 			}
 			w.Header().Set("x-caveman-routed-from", modelRequested)
-			result := s.serveTarget(w, r, adapter, run, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, modelRequested)
 			if result.served {
 				evidence.route = answer
 				evidence.acceptedBody = sent
@@ -438,7 +438,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if answer.Reject != nil {
 				answer.Reject() // the rest of this ask stays on the asked model
 			}
-			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID}
+			// The asked model runs at the answered effort, as a non-pool answer would.
+			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID,
+				Effort: answer.Effort, EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
 		}
 		// The harness's own path: reasoning another host wrote earlier in the
 		// conversation goes no further than that host; a body without any goes
@@ -458,6 +460,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
+	} else {
+		// Every other request to Anthropic or OpenAI too (pass-through, encoded,
+		// subscription, a custom origin): byte for byte when it carries nothing
+		// another host wrote.
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 	}
 	transformedHash := sha256.Sum256(transform.Body)
 	evidence.acceptedBody = transform.Body

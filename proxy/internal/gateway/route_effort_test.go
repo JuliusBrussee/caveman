@@ -1837,3 +1837,44 @@ func TestTakeoverKeepsTheDropBlockRefusal(t *testing.T) {
 		t.Fatalf("main thread after a takeover: status %d after %d calls", rec.Code, len(log.bodies)-before)
 	}
 }
+
+// The harness path's cleaning never touches the session's per-message marks:
+// a history carrying reasoning another host wrote is cleaned, and the marks
+// still go in byte for byte, earlier ones unchanged, a "top" answer becoming
+// one more mark once marks exist.
+func TestCleaningKeepsPerMessageMarks(t *testing.T) {
+	aForeign := `{"role":"assistant","content":[{"type":"thinking","thinking":"elsewhere","signature":"caveman:v1:fireworks:kimi"},{"type":"text","text":"Three steps."}]}`
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}}
+	srv, log := effortServer(t, cloud, nil)
+	post(t, srv, convo("high", uA, aForeign, uC), nil)
+	sent1, _ := log.last()
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "high", EffortMode: "message"}
+	post(t, srv, convo("high", uA, aForeign, uC, aD, uTR, aE, uF), nil)
+	sent2, _ := log.last()
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "top"}
+	post(t, srv, convo("high", uA, aForeign, uC, aD, uTR, aE, uF, aG, uTR2), nil)
+	sent3, _ := log.last()
+	for i, sent := range [][]byte{sent1, sent2, sent3} {
+		if bytes.Contains(sent, []byte("caveman:")) {
+			t.Fatalf("request %d kept another host's reasoning: %s", i+1, sent)
+		}
+	}
+	for _, effort := range []string{"medium"} {
+		if !bytes.Contains(sent1, []byte(mark(effort))) {
+			t.Fatalf("request 1 lacks the %s mark: %s", effort, sent1)
+		}
+	}
+	if bytes.Count(sent2, []byte(`"role":"system"`)) != 2 || !bytes.Contains(sent2, []byte(mark("medium"))) || !bytes.Contains(sent2, []byte(mark("high"))) {
+		t.Fatalf("request 2 marks: %s", sent2)
+	}
+	if bytes.Count(sent3, []byte(`"role":"system"`)) != 3 || !bytes.Contains(sent3, []byte(mark("low"))) {
+		t.Fatalf("a top answer on a marked session is one more mark: %s", sent3)
+	}
+	// The cached prefix holds: each request starts with the previous one up to its newest mark.
+	for i, pair := range [][2][]byte{{sent1, sent2}, {sent2, sent3}} {
+		cut := bytes.LastIndex(pair[0], []byte(`{"role":"system"`))
+		if cut < 0 || !bytes.HasPrefix(pair[1], pair[0][:cut]) {
+			t.Fatalf("the prefix changed between requests %d and %d:\n%s\n%s", i+1, i+2, pair[0], pair[1])
+		}
+	}
+}
