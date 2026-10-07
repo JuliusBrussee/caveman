@@ -89,6 +89,9 @@ function withIndexLock<T>(fn: () => T): T {
         if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
           const aside = `${lock}.break.${token}`;
           renameSync(lock, aside);
+          // ponytail: a writer that takes the lock between our stat and rename
+          // loses it here until linkSync puts it back; a lock file holding the
+          // owner's pid (or flock) closes that window if it ever bites.
           if (Date.now() - statSync(aside).mtimeMs <= LOCK_STALE_MS) {
             try { linkSync(aside, lock); } catch { /* another writer took the place */ }
           }
@@ -110,8 +113,9 @@ function withIndexLock<T>(fn: () => T): T {
 }
 
 const LOCK_STALE_MS = 10_000;
-// Each keychain command stays well under the stale-lock age.
-const SECURITY_TIMEOUT_MS = 4_000;
+// One write under the lock runs at most three keychain commands (add, read
+// back, delete the old copy): 3 x 2.5 s stays under the stale-lock age.
+const SECURITY_TIMEOUT_MS = 2_500;
 
 function writeIndex(index: Index) {
   mkdirSync(cavemanHome(), { recursive: true, mode: 0o700 });
