@@ -3,12 +3,14 @@ package gateway
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -331,5 +333,32 @@ func TestPinnedFailureRetriesTheEntryUnpinned(t *testing.T) {
 	}
 	if req, _ := c.stub.last("/v1/messages"); req != nil {
 		t.Error("the asked model ran too")
+	}
+}
+
+// A transport error on a pinned send may come after OpenRouter read the
+// request: never sent to OpenRouter again; the pin goes and the asked model runs.
+func TestPinnedTransportErrorIsNeverResent(t *testing.T) {
+	c := newPoolCase(t, openRouterTarget(), "")
+	c.stub.poolJSON = orAnswer("Novita", 2800)
+	poolSend(t, c.srv, poolBody)
+	poolSend(t, c.srv, poolBody) // pinned from here
+	var orSends atomic.Int32
+	inner := c.srv.httpClient.Transport
+	c.srv.httpClient = &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Host == "openrouter.ai" {
+			_, _ = io.ReadAll(r.Body) // the request reached the host
+			orSends.Add(1)
+			return nil, errors.New("read tcp: connection reset by peer")
+		}
+		return inner.RoundTrip(r)
+	})}
+	before := len(c.stub.bodies["/v1/messages"])
+	rec := poolSend(t, c.srv, poolBody)
+	if orSends.Load() != 1 || len(c.stub.bodies["/v1/messages"])-before != 1 || !strings.Contains(rec.Body.String(), "harness says hi") {
+		t.Fatalf("OpenRouter sends %d, harness sends %d: %s", orSends.Load(), len(c.stub.bodies["/v1/messages"])-before, rec.Body.String())
+	}
+	if pin := c.srv.routes.pinned("sess-1", "openrouter/kimi-k3"); pin != "" {
+		t.Errorf("pin kept after a transport error: %q", pin)
 	}
 }

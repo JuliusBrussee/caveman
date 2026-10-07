@@ -191,6 +191,7 @@ type routeRun struct {
 	effort string
 	wire   effortWire // where the per-message marks go
 	keyed  bool       // the route stage added the session's prompt_cache_key
+	record bool       // record mode: never keyed
 }
 
 // effortWire is where an effort goes on one wire: Anthropic Messages (a
@@ -291,10 +292,16 @@ func (w effortWire) noUpdates(body []byte) bool {
 	if truncation, _ := jsonsplice.StringField(body, root, "truncation"); truncation == "auto" {
 		return true
 	}
-	for _, name := range []string{"context_management", "multi_agent"} {
-		if span, set := jsonsplice.Field(body, root, name); set && string(body[span.Start:span.End]) != "null" && string(body[span.Start:span.End]) != "false" {
+	if span, set := jsonsplice.Field(body, root, "context_management"); set {
+		if value := strings.Join(strings.Fields(string(body[span.Start:span.End])), ""); value != "null" && value != "[]" {
 			return true
 		}
+	}
+	if span, set := jsonsplice.Field(body, root, "multi_agent"); set {
+		value := string(body[span.Start:span.End])
+		enabled, found := jsonsplice.Field(body, span, "enabled")
+		off := value == "null" || value == "false" || found && string(body[enabled.Start:enabled.End]) == "false"
+		return !off
 	}
 	return false
 }

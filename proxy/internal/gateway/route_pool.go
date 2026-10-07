@@ -102,7 +102,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		case target.Host == "openrouter":
 			pinned = s.routes.pinned(run.key, target.PoolID)
 			payload = withProviderPin(payload, pinned)
-		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages:
+		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages && !run.record:
 			payload = withCacheKey(payload, run.key)
 		}
 	}
@@ -151,13 +151,13 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		})
 	}
 	resp, err := send(payload)
-	if pinned != "" && (err != nil || resp.StatusCode >= 300) {
-		// The provider the session was pinned to failed: once more on the same
-		// entry wherever OpenRouter routes it, before the asked model runs.
-		if err == nil {
-			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
-			_ = resp.Body.Close()
-		}
+	if pinned != "" && err == nil && resp.StatusCode >= 300 {
+		// The provider the session was pinned to refused: once more on the same
+		// entry wherever OpenRouter routes it, before the asked model runs. A
+		// transport error may come after the request was written (only failed
+		// connection setup is proven unsent), so it is never sent again here.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
 		unpin()
 		pinned = ""
 		resp, err = send(unpinned)

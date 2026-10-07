@@ -62,14 +62,15 @@ func withCacheKey(body []byte, session string) []byte {
 	return out
 }
 
-// withCacheKey gives an OpenAI request of the session its key, whatever the
-// route answer (off, a stateful chain, signed out): it only steers OpenAI's
-// cache routing, and a key that came and went would send follow-ups to a cold
-// machine. It goes in before the effort, so a marks heal (built from the
-// unmarked body) keeps it, and the original-bytes retry keeps it too.
+// withCacheKey gives an OpenAI request of the session its key while the
+// route stage is on for it (a stateful chain, answered off for a reason,
+// included: a key that came and went would send follow-ups to a cold
+// machine); routing off, signed out and record mode stay byte for byte. It
+// goes in before the effort, so a marks heal (built from the unmarked body)
+// keeps it, and the original-bytes retry keeps it too.
 func (run *routeRun) withCacheKey(provider string, body []byte) []byte {
-	if provider != "openai" {
-		return body
+	if provider != "openai" || run.record {
+		return body // record mode never transforms
 	}
 	keyed := withCacheKey(body, run.key)
 	run.keyed = run.keyed || len(keyed) != len(body)

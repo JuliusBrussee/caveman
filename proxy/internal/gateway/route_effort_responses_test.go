@@ -13,8 +13,15 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 )
 
-// responsesServer is an OpenAI proxy whose stub provider answers with respond.
+// responsesServer is an OpenAI proxy whose stub provider answers with
+// respond, in compress mode without a compressor: no rewriting, but not
+// record mode, which the route stage never keys.
 func responsesServer(t *testing.T, cloud CloudLink, respond func(body []byte) (int, string)) (*Server, *upstreamLog) {
+	t.Helper()
+	return responsesServerMode(t, "compress", cloud, respond)
+}
+
+func responsesServerMode(t *testing.T, mode string, cloud CloudLink, respond func(body []byte) (int, string)) (*Server, *upstreamLog) {
 	t.Helper()
 	log := &upstreamLog{}
 	var mu sync.Mutex
@@ -37,7 +44,7 @@ func responsesServer(t *testing.T, cloud CloudLink, respond func(body []byte) (i
 	}))
 	t.Cleanup(upstream.Close)
 	return New(Config{
-		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: mode}},
 		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
 	}), log
 }
@@ -297,7 +304,7 @@ func TestNoUpdateWhereOpenAIForbidsIt(t *testing.T) {
 			t.Errorf("%s: sent %s", extra, sent)
 		}
 	}
-	for _, extra := range []string{`"truncation":"disabled",`, `"context_management":null,`, `"multi_agent":false,`} {
+	for _, extra := range []string{`"truncation":"disabled",`, `"context_management":null,`, `"context_management":[ ],`, `"multi_agent":false,`, `"multi_agent":{"enabled":false},`} {
 		srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
 		postResponses(t, srv, `{"model":"gpt-6-sol",`+extra+`"prompt_cache_key":"k","reasoning":{"effort":"high"},"input":[`+rA+`,`+rB+`,`+rC+`]}`)
 		if sent, _ := log.last(); !bytes.Contains(sent, []byte("configuration_update")) {
@@ -324,5 +331,74 @@ func TestRefusalWordingVariantsHealAndLatch(t *testing.T) {
 	}
 	if sends[0] != 2 || sends[1] != 1 || sends[2] != 1 || !cloud.asks[len(cloud.asks)-1].PerMessageOff {
 		t.Fatalf("sends per request %v, latched %v", sends, cloud.asks[len(cloud.asks)-1].PerMessageOff)
+	}
+}
+
+// Record mode and routing off (or signed out) stay byte for byte: never a
+// key. A stateful chain, answered off for a reason, keeps it (above).
+func TestRecordModeAndRoutingOffAreNeverKeyed(t *testing.T) {
+	in := `{"model":"gpt-6-sol","input":[` + rA + `]}`
+	for _, c := range []struct {
+		mode   string
+		answer RouteAnswer
+	}{
+		{"record", RouteAnswer{Outcome: "off"}},
+		{"record", RouteAnswer{Outcome: "kept"}},
+		{"record", RouteAnswer{Outcome: "off", Reason: "stateful_chain"}},
+		{"compress", RouteAnswer{Outcome: "off"}},
+	} {
+		srv, log := responsesServerMode(t, c.mode, &fakeCloud{answer: c.answer}, nil)
+		postResponses(t, srv, in)
+		if sent, _ := log.last(); string(sent) != in {
+			t.Errorf("%s %+v: sent %s", c.mode, c.answer, sent)
+		}
+	}
+}
+
+// Routing off: a 429 on a compressed OpenAI request replays the original as
+// it always has (nothing the route stage did is in the bytes).
+func TestCompressed429WithRoutingOffReplaysAsBefore(t *testing.T) {
+	comp := &stubCompressor{out: []byte("X"), before: 100, after: 40, handle: "ccr_test"}
+	rt := &captureTransport{statuses: []int{http.StatusTooManyRequests}}
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, Compressor: comp, HTTPClient: &http.Client{Transport: rt},
+		Cloud: &fakeCloud{answer: RouteAnswer{Outcome: "off"}},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatReqBody))
+	req.Header.Set("authorization", "Bearer sk-proj-api-key")
+	req.Header.Set("session_id", "codex-1")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if len(rt.bodies) != 2 || string(rt.bodies[0]) == chatReqBody || string(rt.bodies[1]) != chatReqBody {
+		t.Fatalf("%d sends; first compressed %v, second original %v", len(rt.bodies), string(rt.bodies[0]) != chatReqBody, len(rt.bodies) == 2 && string(rt.bodies[1]) == chatReqBody)
+	}
+}
+
+// A 4xx that names prompt_cache_key replays the agent's own bytes, without it.
+func TestARefusedCacheKeyReplaysWithoutIt(t *testing.T) {
+	srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"prompt_cache_key"`)) {
+			return http.StatusBadRequest, `{"error":{"message":"Unrecognized request argument supplied: prompt_cache_key","param":"prompt_cache_key"}}`
+		}
+		return 0, ""
+	})
+	in := `{"model":"gpt-6-sol","input":[` + rA + `]}`
+	if rec := postResponses(t, srv, in); rec.Code != http.StatusOK || len(log.bodies) != 2 || string(log.bodies[1]) != in {
+		t.Fatalf("status %d after %d sends", rec.Code, len(log.bodies))
+	}
+}
+
+// A session's updates survive a request that may carry none.
+func TestUpdatesComeBackAfterATruncationRequest(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := responsesServer(t, cloud, nil)
+	postResponses(t, srv, thread("high", rA, rB, rC))
+	postResponses(t, srv, strings.Replace(thread("high", rA, rB, rC, rD, rTR), `"input":`, `"truncation":"auto","input":`, 1))
+	if sent, _ := log.last(); bytes.Contains(sent, []byte("configuration_update")) {
+		t.Fatalf("update sent with truncation auto: %s", sent)
+	}
+	postResponses(t, srv, thread("high", rA, rB, rC, rD, rTR, rE, rF))
+	if sent, _ := log.last(); !bytes.Contains(sent, []byte(update("low")+","+rC)) {
+		t.Fatalf("the session's update did not come back: %s", sent)
 	}
 }

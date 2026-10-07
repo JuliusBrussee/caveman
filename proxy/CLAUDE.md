@@ -250,13 +250,15 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   again without `cache_ttl`, then `pool` (never a field a 200 already came back for), and the field
   whose removal got the 200 stays off for the login. Host affinity headers key on the session
   family (the parent's for a child): hashed `x-session-id` (OpenRouter), `x-session-affinity`
-  (Fireworks), `x-grok-conv-id` (xAI); every OpenAI request the route stage sees (whatever the
-  answer: off, a stateful chain) that carries no `prompt_cache_key` gets the session's own (hashed,
-  added before the effort so a heal keeps it; the original-bytes retry keeps it too, and a request
-  it only keyed is never replayed). Once an
+  (Fireworks), `x-grok-conv-id` (xAI); an OpenAI request the route stage is on for (a stateful
+  chain, answered off for a reason, included) that carries no `prompt_cache_key` gets the
+  session's own (hashed, added before the effort so a heal keeps it; the original-bytes retry keeps
+  it unless the 4xx names it, and a request it only keyed is never replayed). Routing off, signed
+  out and record mode stay byte for byte. Once an
   OpenRouter pool entry reports cache reads or writes, the session pins the provider its answer
-  named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure drops the pin and is sent
-  once more to the same entry unpinned before the asked model runs. Fresh sibling children of one
+  named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure drops the pin, and a
+  pinned non-2xx is sent once more to the same entry unpinned before the asked model runs (a
+  transport error is never resent: it may come after the request was written). Fresh sibling children of one
   parent on the same model, tools, system prompt and `prompt_cache_key` go one first and the
   rest wait for its first content (a JSON answer's first byte; an event stream's first event past
   comments, pings, message_start and response.created/in_progress; 5 s at most, or their own

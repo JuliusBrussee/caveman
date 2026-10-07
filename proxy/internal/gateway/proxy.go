@@ -241,7 +241,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				exact = evidence.SessionID
 			}
 			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
-			run.asked = meta.Model
+			run.asked, run.record = meta.Model, effectiveRuntimeMode == "record"
 			if countTokens {
 				run.perRequest, run.replay = true, true
 				break
@@ -462,12 +462,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
-		transform.Body = run.withCacheKey(meta.Provider, transform.Body)
+		if answer.Outcome != "off" || answer.Reason != "" { // routing off or signed out: byte for byte
+			transform.Body = run.withCacheKey(meta.Provider, transform.Body)
+		}
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
-		transform.Body = run.withCacheKey(meta.Provider, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
 	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
 		// Every other request to Anthropic's or OpenAI's own API too (encoded,
@@ -640,12 +641,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// (effort, marks, strip, drop_block) is the provider's rate limit, not its
 	// bytes: retrying the original (without the session's marks) cannot help.
 	// On a moved model it falls back to the asked one as before. The original
-	// keeps the session's prompt_cache_key (route_cache.go): a request the route
-	// stage only keyed is not sent again.
+	// keeps the session's prompt_cache_key (route_cache.go), so a request the
+	// route stage only keyed is not sent again, unless the 4xx names the key:
+	// then the agent's own bytes go.
 	original, originalHash := body, rawHash
-	if run != nil && run.keyed {
-		original = withCacheKey(body, run.key)
-		originalHash = sha256.Sum256(original)
+	if run != nil && run.keyed && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		if head, _ := peekError(resp); !bytes.Contains(bytes.ToLower(head), []byte("prompt_cache_key")) {
+			original = withCacheKey(body, run.key)
+			originalHash = sha256.Sum256(original)
+		}
 	}
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) &&
 		!(run != nil && (run.applied || run.keyed || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
