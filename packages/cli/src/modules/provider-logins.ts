@@ -10,7 +10,7 @@
 // runtime (proxy/internal/pool) reads both; its providers.json is the
 // registry this list mirrors (a test keeps them in step).
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { cavemanHome } from "./config-home.js";
 
@@ -46,7 +46,7 @@ export const REFUSED_LOGINS: Record<string, string> = {
 
 const KEYCHAIN_SERVICE = "caveman-provider";
 
-type Index = { version: number; logins: { id: string; kind: string; store: "keychain" | "file"; added_at?: string }[] };
+type Index = { version: number; cloud?: boolean; logins: { id: string; kind: string; store: "keychain" | "file"; added_at?: string }[] };
 
 function indexPath() {
   return join(cavemanHome(), "provider-logins.json");
@@ -59,9 +59,39 @@ function secretPath(id: string) {
 function readIndex(): Index {
   try {
     const parsed = JSON.parse(readFileSync(indexPath(), "utf8")) as Partial<Index>;
-    return { version: 1, logins: Array.isArray(parsed.logins) ? parsed.logins : [] };
+    return { ...parsed, version: 1, logins: Array.isArray(parsed.logins) ? parsed.logins : [] };
   } catch {
     return { version: 1, logins: [] };
+  }
+}
+
+// withIndexLock runs one read-modify-write of the index under
+// provider-logins.json.lock, the lock the runtime takes too (a background
+// token refresh). A lock older than 10 s is a crashed writer's and is broken.
+function withIndexLock<T>(fn: () => T): T {
+  mkdirSync(cavemanHome(), { recursive: true, mode: 0o700 });
+  const lock = `${indexPath()}.lock`;
+  const deadline = Date.now() + 3000;
+  for (;;) {
+    try {
+      closeSync(openSync(lock, "wx", 0o600));
+      break;
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+      try {
+        if (Date.now() - statSync(lock).mtimeMs > 10_000) {
+          unlinkSync(lock);
+          continue;
+        }
+      } catch { /* released meanwhile */ }
+      if (Date.now() > deadline) throw new Error("caveman: provider-logins.json is locked by another caveman process; try again");
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
+    }
+  }
+  try {
+    return fn();
+  } finally {
+    try { unlinkSync(lock); } catch { /* already gone */ }
   }
 }
 
@@ -139,35 +169,61 @@ export function providersAdd(argv: string[], readStdin: () => string): Record<st
     throw new Error(`caveman: no key for ${provider.id}: set ${from}, or pipe it: caveman providers add ${provider.id} --stdin`);
   }
   if (/\s/.test(key) || key.length > 4096) throw new Error("caveman: that does not look like an API key");
-  let store: "keychain" | "file" = "file";
-  if (useKeychain() && keychainSet(provider.id, key)) {
-    store = "keychain";
-  } else {
-    mkdirSync(join(cavemanHome(), "provider-logins"), { recursive: true, mode: 0o700 });
-    writeFileSync(secretPath(provider.id), key, { mode: 0o600 });
-    chmodSync(secretPath(provider.id), 0o600);
+  return withIndexLock(() => {
+    const index = readIndex();
+    const previous = index.logins.find((entry) => entry.id === provider.id);
+    let store: "keychain" | "file" = "file";
+    if (useKeychain() && keychainSet(provider.id, key)) {
+      store = "keychain";
+      removeSecretFile(provider.id); // a key never lives in both stores
+    } else {
+      mkdirSync(join(cavemanHome(), "provider-logins"), { recursive: true, mode: 0o700 });
+      writeFileSync(secretPath(provider.id), key, { mode: 0o600 });
+      chmodSync(secretPath(provider.id), 0o600);
+      if (previous?.store === "keychain" && useKeychain()) keychainDelete(provider.id);
+    }
+    index.logins = index.logins.filter((entry) => entry.id !== provider.id);
+    index.logins.push({ id: provider.id, kind: "api_key", store, added_at: previous?.added_at ?? new Date().toISOString() });
+    writeIndex(index);
+    return { added: provider.id, name: provider.name, store, from: source };
+  });
+}
+
+function removeSecretFile(id: string) {
+  try {
+    unlinkSync(secretPath(id));
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
   }
-  const index = readIndex();
-  const previous = index.logins.find((entry) => entry.id === provider.id);
-  index.logins = index.logins.filter((entry) => entry.id !== provider.id);
-  index.logins.push({ id: provider.id, kind: "api_key", store, added_at: previous?.added_at ?? new Date().toISOString() });
-  writeIndex(index);
-  return { added: provider.id, name: provider.name, store, from: source };
 }
 
 export function providersRemove(argv: string[]): Record<string, unknown> {
   const provider = find(argv[0]);
-  const index = readIndex();
-  const entry = index.logins.find((login) => login.id === provider.id);
-  if (entry?.store === "keychain" || (!entry && useKeychain())) keychainDelete(provider.id);
-  try {
-    unlinkSync(secretPath(provider.id));
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+  return withIndexLock(() => {
+    const index = readIndex();
+    const entry = index.logins.find((login) => login.id === provider.id);
+    if (entry?.store === "keychain" || (!entry && useKeychain())) keychainDelete(provider.id);
+    removeSecretFile(provider.id);
+    index.logins = index.logins.filter((login) => login.id !== provider.id);
+    writeIndex(index);
+    return { removed: provider.id, was_added: Boolean(entry) };
+  });
+}
+
+// providersCloud is `caveman providers cloud on|off`: whether routing may send
+// a request through Caveman Cloud (on by default while signed in). Off, such
+// an answer runs the model the agent asked for on its own credential.
+export function providersCloud(argv: string[]): Record<string, unknown> {
+  const setting = argv[0];
+  if (setting !== "on" && setting !== "off") {
+    return { cloud: readIndex().cloud === false ? "off" : "on" };
   }
-  index.logins = index.logins.filter((login) => login.id !== provider.id);
-  writeIndex(index);
-  return { removed: provider.id, was_added: Boolean(entry) };
+  return withIndexLock(() => {
+    const index = readIndex();
+    index.cloud = setting === "on";
+    writeIndex(index);
+    return { cloud: setting };
+  });
 }
 
 export function providersLocal(): Record<string, unknown> {
@@ -179,8 +235,9 @@ export function providersLocal(): Record<string, unknown> {
     });
   return {
     logins,
+    cloud: readIndex().cloud === false ? "off" : "on",
     available: PROVIDER_LOGINS.map((provider) => `${provider.id} (${provider.kind === "oauth" ? "login" : "key"})`),
-    traffic: "Requests routed to one of these go straight from this machine to that provider. Only requests routed to a Caveman Cloud model pass through Caveman Cloud.",
+    traffic: "Requests routed to one of these go straight from this machine to that provider. Only requests routed to a Caveman Cloud model pass through Caveman Cloud, whole (system prompt, tool results, code), on your Caveman project's stored provider key; `caveman providers cloud off` stops that.",
   };
 }
 

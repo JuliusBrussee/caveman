@@ -79,7 +79,7 @@ import { modulesDoctor } from "./modules/doctor.js";
 import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
-import { providersAdd, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
+import { providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -360,12 +360,13 @@ const CLOUD_HANDLERS: Record<string, CommandHandler> = {
     if (argv[0] === "add") return print(providersAdd(argv.slice(1), () => readFileSync(0, "utf8")));
     if (argv[0] === "remove") return print(providersRemove(argv.slice(1)));
     if (argv[0] === "local") return print(providersLocal());
+    if (argv[0] === "cloud") return print(providersCloud(argv.slice(1)));
     if (argv[0] === "login") {
       const status = providersLogin(argv.slice(1), cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN"));
       if (status !== 0) process.exitCode = status;
       return;
     }
-    return commandUsage("providers list|verify <id> | add <id> [--key-env NAME|--stdin] | remove <id> | login chatgpt | local");
+    return commandUsage("providers list|verify <id> | add <id> [--key-env NAME|--stdin] | remove <id> | login chatgpt | local | cloud [on|off]");
   },
   billing: (argv) => {
     if (argv.length === 0) return billingCommand();

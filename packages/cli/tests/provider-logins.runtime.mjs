@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { chmodSync, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isolatedCliEnv, runCli } from "./_cli.mjs";
@@ -95,4 +95,53 @@ test("the CLI's provider list matches the runtime registry", async () => {
   const registry = JSON.parse(readFileSync(join(here, "..", "..", "..", "proxy", "internal", "pool", "providers.json"), "utf8"));
   const shape = (rows) => rows.map(({ id, kind, env }) => ({ id, kind, env: env ?? [] }));
   assert.deepEqual(shape(PROVIDER_LOGINS), shape(registry.providers));
+});
+
+test("providers cloud off|on is persisted where the runtime reads it", async () => {
+  const iso = isolatedCliEnv({ GROQ_API_KEY: "gq" });
+  try {
+    assert.deepEqual(json(await runCli(["providers", "cloud"], { env: iso.env })), { cloud: "on" });
+    json(await runCli(["providers", "add", "groq"], { env: iso.env }));
+    assert.deepEqual(json(await runCli(["providers", "cloud", "off"], { env: iso.env })), { cloud: "off" });
+    const index = JSON.parse(readFileSync(join(iso.home, "provider-logins.json"), "utf8"));
+    assert.equal(index.cloud, false);
+    assert.equal(index.logins[0].id, "groq", "switching cloud off keeps the logins");
+    assert.equal(json(await runCli(["providers", "local"], { env: iso.env })).cloud, "off");
+    json(await runCli(["providers", "cloud", "on"], { env: iso.env }));
+    assert.equal(JSON.parse(readFileSync(join(iso.home, "provider-logins.json"), "utf8")).cloud, true);
+  } finally {
+    iso.cleanup();
+  }
+});
+
+test("a held index lock makes a writer wait, and a stale one is broken", async () => {
+  const iso = isolatedCliEnv({ GROQ_API_KEY: "gq" });
+  try {
+    const lock = join(iso.home, "provider-logins.json.lock");
+    writeFileSync(lock, "");
+    const held = await runCli(["providers", "add", "groq"], { env: iso.env, timeoutMs: 15_000 });
+    assert.notEqual(held.code, 0);
+    assert.match(held.stderr, /locked by another caveman process/);
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
+    json(await runCli(["providers", "add", "groq"], { env: iso.env }));
+    assert.equal(existsSync(lock), false, "the lock is released after the write");
+  } finally {
+    iso.cleanup();
+  }
+});
+
+test("re-adding a key in the file store after the keychain drops the keychain copy", async () => {
+  if (process.platform === "win32") return;
+  const iso = isolatedCliEnv({ GROQ_API_KEY: "gq-2" });
+  try {
+    // An index that says the key was in the keychain; this run uses the file store.
+    writeFileSync(join(iso.home, "provider-logins.json"), JSON.stringify({ version: 1, logins: [{ id: "groq", kind: "api_key", store: "keychain" }] }));
+    json(await runCli(["providers", "add", "groq"], { env: iso.env }));
+    const index = JSON.parse(readFileSync(join(iso.home, "provider-logins.json"), "utf8"));
+    assert.deepEqual(index.logins.map(({ id, store }) => ({ id, store })), [{ id: "groq", store: "file" }]);
+    assert.equal(readFileSync(join(iso.home, "provider-logins", "groq"), "utf8"), "gq-2");
+  } finally {
+    iso.cleanup();
+  }
 });
