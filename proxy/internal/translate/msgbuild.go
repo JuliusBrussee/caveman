@@ -68,10 +68,9 @@ func newMsgBuilder(size int) *msgBuilder {
 	b := &msgBuilder{dropped: map[int]bool{}}
 	if pooled, ok := arenas.Get().(*[]byte); ok && cap(*pooled) >= size {
 		b.arena = (*pooled)[:0]
-	} else if size <= maxHint { // the bound capHint applies, as a guard CodeQL sees
-		b.arena = make([]byte, 0, size+size/8+1024)
 	} else {
-		b.arena = make([]byte, 0, maxHint)
+		size = capHint(size, 0) // bounded: the eighth more below cannot overflow
+		b.arena = make([]byte, 0, capHint(size, size/8+1024))
 	}
 	return b
 }
