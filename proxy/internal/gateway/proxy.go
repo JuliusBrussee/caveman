@@ -401,16 +401,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// Route: the answer moves the compressed request to another model of the
 	// same provider and sets its effort, or sends it to a pool entry on another
 	// login or the Cloud gateway. Anything else keeps the asked model.
-	if run != nil && (s.routes.wasPooled(run.key) || run.parent != "" && s.routes.wasPooled(run.parent)) {
-		// Reasoning a pool host produced earlier in this conversation goes no
-		// further than that host; a clean body goes byte for byte.
-		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
-	}
 	if awaitRoute != nil {
 		answer := awaitRoute()
 		if target := answer.Target; target != nil {
 			// The bytes compression produced go, unless they lean on the
 			// retrieve tool loop, which only runs on the harness's own path.
+			// Unstripped: the translator hands each host its own reasoning.
 			sent := transform.Body
 			if retrieveInjected {
 				sent = body
@@ -429,7 +425,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				if run != nil && run.key != "" {
 					// last stays the harness's own previous request (contracts: a
 					// model outside models is skipped); Cloud's state carries the move.
-					s.routes.markPooled(run.key)
+					s.routes.markMoved(run.key)
 				}
 				estimateWG.Wait()
 				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, false, compressionEligible)
@@ -444,6 +440,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID}
 		}
+		// The harness's own path: reasoning another host wrote earlier in the
+		// conversation goes no further than that host; a body without any goes
+		// byte for byte.
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		if answer.Model != "" && answer.Model != meta.Model {
 			if routed, ok := setModel(transform.Body, answer.Model); ok {
 				transform.Body = routed
@@ -456,6 +456,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
 	} else if run != nil {
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
 	}
 	transformedHash := sha256.Sum256(transform.Body)

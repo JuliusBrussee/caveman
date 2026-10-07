@@ -77,7 +77,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 	var payload []byte
 	var reply *translate.Reply
 	if target.Via == "cloud" {
-		payload = withTopEffort(grammar, body, effort)
+		payload = body // as the agent sent it: x-caveman-route decides the model and effort
 	} else {
 		opts := target.Translate
 		opts.Shown, opts.Effort = asked, effort
@@ -126,6 +126,11 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 	if reply != nil {
 		counter := &countingWriter{w: w}
 		usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
+		if errors.Is(err, translate.ErrNotServed) {
+			// A 2xx that failed or ended before any content: nothing reached
+			// the agent, so the asked model still runs.
+			return targetResult{errMsg: "pool_failed_before_content"}
+		}
 		out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, usage: providers.UsageObservation{
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CachedInputTokens: usage.CacheReadTokens, CacheCreationInputTokens: usage.CacheWriteTokens, CacheStatus: "unknown",
@@ -167,23 +172,6 @@ type countedResponse struct {
 func (c *countedResponse) Write(p []byte) (int, error) { return c.counter.Write(p) }
 
 func (c *countedResponse) Flush() { _ = http.NewResponseController(c.ResponseWriter).Flush() }
-
-// withTopEffort sets a top-level effort in the caller's own grammar ("" keeps
-// the body as it is).
-func withTopEffort(grammar string, body []byte, effort string) []byte {
-	if effort == "" {
-		return body
-	}
-	path := []string{"output_config", "effort"}
-	switch grammar {
-	case translate.Responses:
-		path = []string{"reasoning", "effort"}
-	case translate.Chat:
-		path = []string{"reasoning_effort"}
-	}
-	out, _ := setString(body, effort, path...)
-	return out
-}
 
 // nativeHistory removes from a request bound for the harness's own provider
 // the reasoning another host produced in this conversation (a pool request's

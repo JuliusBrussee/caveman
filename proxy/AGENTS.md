@@ -182,28 +182,30 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   stage.
 - **pool routing** (`internal/pool`, `internal/translate`, `internal/gateway/route_pool.go`):
   the provider keys and logins a person adds (`caveman providers add|login`;
-  `$CAVEMAN_HOME/provider-logins.json` lists ids and where each secret lives, the secret is in the
-  keychain service `caveman-provider` or a 0600 file under `provider-logins/`) become the ask's
-  additive `pool` (`harness/<model>` for the harness's own models, then `<host>/<model>` for each
-  login times the static catalog models its host serves, on a wire `translate.Supported` reaches
-  from the caller's grammar; at most 64; left out when no login adds one; a 400 to an ask with pool
-  is asked again without it and pool stays off for that login). An answer's `pool_id` + `via`:
-  a harness entry applies like `model`; a login entry sends the request straight to that host on
-  that login (`RouteTarget`, translated when its grammar differs, top-level effort only, the
-  agent's copy naming the asked model); `via: cloud` sends it in the caller's grammar to the
-  Cloud gateway (`cloud.json` `gatewayUrl`, else `baseURL`) with `x-caveman-route: <pool_id>` on
-  the link's project key, and that request DOES pass through Caveman Cloud. Any failure before
-  the first byte (translation refused, connect error, any non-2xx) falls back to the asked model
-  on the harness's own credential and marks the ask rejected; a translator panic counts as such a
-  failure, and a stream cut after the first byte aborts HTTP framing. A pool turn is not `last`
-  (Cloud's state carries the move) and books no dollars off Anthropic/OpenAI list prices. Later
-  requests of a session a pool host served drop, on the harness's own Anthropic/OpenAI path, the
-  reasoning that host wrote (`translate.AnthropicNative`/`OpenAINative`; translated Responses
-  reasoning always carries the envelope, never a bare id); other sessions go byte for byte. Messages reaches Responses hosts (a Claude Code
-  session on the ChatGPT login); chat to Messages or Responses is not translated (those hosts stay
-  out of a chat caller's pool). Terms: no Claude
-  Pro/Max, Google or Copilot login is ever added; every OAuth row in `providers.json` carries a
-  terms note.
+  `$CAVEMAN_HOME/provider-logins.json` lists ids, where each secret lives and the `cloud` switch,
+  written under `provider-logins.json.lock` by the CLI and the runtime alike; the secret is in the
+  keychain service `caveman-provider` or a 0600 file under `provider-logins/`, never both) become
+  the ask's additive `pool` (`harness/<model>`, then `<host>/<model>` per login times the static
+  catalog models its host serves, on a wire `translate.Supported` reaches from the caller's
+  grammar; at most 64; left out when no login adds one; only a 400 naming `pool` is asked again
+  without it, and pool then stays off for that login). An answer's `pool_id` + `via`: a harness
+  entry applies like `model`; a login entry goes straight to that host on that login
+  (`RouteTarget`, translated when its grammar differs, the unstripped body so each host gets its own
+  reasoning back, top-level effort, the agent's copy naming the asked model); `via: cloud`
+  (`cloud:<provider>:<model>`) sends the agent's own bytes in its grammar to the Cloud gateway
+  (`gatewayUrl`, else `baseURL`) with `x-caveman-route` on the project gateway key only (the gateway
+  refuses login tokens; no key, or `caveman providers cloud off`, runs the asked model), and that
+  whole request DOES pass through Caveman Cloud. Route asks to the gateway use the project key too.
+  Any failure before content reaches the agent (refused translation, translator panic, connect
+  error, non-2xx, or a 2xx that fails or ends first: `translate.ErrNotServed`, the translator holds
+  its output until the first content) falls back to the asked model on the harness credential and
+  marks the ask rejected; a stream cut after content aborts HTTP framing and never closes a
+  half-finished tool call. A pool turn is not `last` and books no dollars off Anthropic/OpenAI list
+  prices. Every request on the harness's own Anthropic/OpenAI path drops reasoning another host
+  wrote (`translate.AnthropicNative`/`OpenAINative`, byte for byte when there is none; a Responses
+  host's encrypted reasoning is route-tagged so only that host gets it back). Chat callers reach
+  chat hosts only. Terms: no Claude Pro/Max, Google or Copilot login is ever added; every OAuth row
+  in `providers.json` carries a terms note.
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
 
 See ../../CLAUDE.md (root)

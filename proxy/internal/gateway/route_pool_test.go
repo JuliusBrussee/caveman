@@ -214,8 +214,8 @@ func TestPoolFailureBeforeTheFirstByteFallsBackToTheAskedModel(t *testing.T) {
 func cloudTarget() *RouteTarget {
 	header := http.Header{}
 	header.Set("authorization", "Bearer cave_project_key")
-	header.Set("x-caveman-route", "cloud/gpt-6.1-sol")
-	return &RouteTarget{PoolID: "cloud/gpt-6.1-sol", Via: "cloud", Host: "cloud", Model: "gpt-6.1-sol", Wire: translate.Messages,
+	header.Set("x-caveman-route", "cloud:openai:gpt-6.1-sol")
+	return &RouteTarget{PoolID: "cloud:openai:gpt-6.1-sol", Via: "cloud", Host: "cloud", Model: "gpt-6.1-sol", Wire: translate.Messages,
 		URL: "https://cloud.example/gw/v1/messages", Header: header}
 }
 
@@ -229,12 +229,12 @@ func TestPoolCloudTargetSendsTheCallersGrammarToTheGateway(t *testing.T) {
 	if req == nil {
 		t.Fatal("the gateway was not called")
 	}
-	if req.Header.Get("x-caveman-route") != "cloud/gpt-6.1-sol" || req.Header.Get("authorization") != "Bearer cave_project_key" ||
+	if req.Header.Get("x-caveman-route") != "cloud:openai:gpt-6.1-sol" || req.Header.Get("authorization") != "Bearer cave_project_key" ||
 		req.Header.Get("x-api-key") != "" || req.Header.Get("anthropic-version") == "" {
 		t.Errorf("gateway headers = %v", req.Header)
 	}
-	if !strings.Contains(body, `"model":"claude-opus-5-5"`) || !strings.Contains(body, `"output_config":{"effort":"low"}`) {
-		t.Errorf("gateway body = %s", body)
+	if body != poolBody {
+		t.Errorf("gateway body = %s, want the agent's own bytes", body)
 	}
 }
 
@@ -251,13 +251,14 @@ func TestHarnessPathDropsReasoningAPoolHostWrote(t *testing.T) {
 	if _, sent := c.stub.last("/v1/messages"); strings.Contains(sent, "caveman:v1") || !strings.Contains(sent, `"text":"b"`) {
 		t.Fatalf("harness body = %s", sent)
 	}
-	// A session no pool host served goes byte for byte.
+	// A session this process never saw pooled (a restart, an evicted entry,
+	// a resumed conversation) is cleaned all the same.
 	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-claude-code-session-id", "another-session")
 	c.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
-	if _, sent := c.stub.last("/v1/messages"); sent != body {
-		t.Fatalf("an unpooled session's body changed: %s", sent)
+	if _, sent := c.stub.last("/v1/messages"); strings.Contains(sent, "caveman:v1") {
+		t.Fatalf("an unseen session's foreign reasoning reached Anthropic: %s", sent)
 	}
 	if out := nativeHistory("anthropic", "/v1/messages", []byte(poolBody)); string(out) != poolBody {
 		t.Fatalf("a clean body changed: %s", out)
@@ -319,4 +320,35 @@ func TestPoolClaudeCodeOnTheChatGPTLogin(t *testing.T) {
 func encode(value any) string {
 	raw, _ := json.Marshal(value)
 	return string(raw)
+}
+
+// The pool host gets its own reasoning back on the next turn: the harness
+// path's cleaning never touches what the pool host is sent.
+func TestPoolHostGetsItsOwnReasoningBackOnTheNextTurn(t *testing.T) {
+	target := localTarget("api.openai.com")
+	target.Translate.Replay = true
+	c := newPoolCase(t, target, "")
+	if rec := poolSend(t, c.srv, poolBody); !strings.Contains(rec.Body.String(), "pool says hi") {
+		t.Fatalf("turn 1: %s", rec.Body.String())
+	}
+	turn2 := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"fix the bug"},` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"my own plan","signature":"caveman:v1:openai:gpt-6.1-sol"},{"type":"text","text":"pool says hi"}]},` +
+		`{"role":"user","content":"go on"}]}`
+	if rec := poolSend(t, c.srv, turn2); !strings.Contains(rec.Body.String(), "pool says hi") {
+		t.Fatalf("turn 2: %s", rec.Body.String())
+	}
+	_, body := c.stub.last("/chat/completions")
+	if !strings.Contains(body, `"reasoning_content":"my own plan"`) {
+		t.Fatalf("turn 2 lost the host's reasoning: %s", body)
+	}
+}
+
+// A 2xx that fails before any content still falls back to the asked model.
+func TestPoolFailureAfterHeadersBeforeContentFallsBack(t *testing.T) {
+	c := newPoolCase(t, localTarget("api.openai.com"), "")
+	c.stub.poolSSE = "data: {\"error\":{\"type\":\"overloaded_error\",\"message\":\"busy\"}}\n\n"
+	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+	if !strings.Contains(rec.Body.String(), "harness says hi") || strings.Contains(rec.Body.String(), "busy") || c.rejected.Load() != 1 {
+		t.Fatalf("answer: %s", rec.Body.String())
+	}
 }
