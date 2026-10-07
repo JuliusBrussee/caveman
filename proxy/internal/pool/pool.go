@@ -311,30 +311,54 @@ func (s *Store) CloudOff() bool {
 }
 
 // lockIndex takes $CAVEMAN_HOME/provider-logins.json.lock, the lock the CLI
-// takes too, for one read-modify-write of the index. A lock older than 10 s
-// is a crashed writer's and is broken.
+// takes too, for one read-modify-write of the index. The lock file holds a
+// token of its own: unlock removes it only while it still holds that token.
+// A lock older than 10 s is a crashed writer's: it is renamed aside first, so
+// of two waiters only one breaks it, and a fresh lock that slipped in between
+// is put back.
 func lockIndex(home string) (func(), error) {
 	path := filepath.Join(home, indexFile+".lock")
+	token := randomToken()
 	deadline := time.Now().Add(3 * time.Second)
 	for {
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
+			_, werr := file.WriteString(token)
 			file.Close()
-			return func() { _ = os.Remove(path) }, nil
+			if werr != nil {
+				_ = os.Remove(path)
+				return nil, werr
+			}
+			return func() {
+				if held, err := os.ReadFile(path); err == nil && string(held) == token {
+					_ = os.Remove(path)
+				}
+			}, nil
 		}
 		if !errors.Is(err, os.ErrExist) {
 			return nil, err
 		}
-		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Second {
-			_ = os.Remove(path)
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > lockStale {
+			aside := path + ".break." + token
+			if os.Rename(path, aside) == nil {
+				if info, err := os.Stat(aside); err == nil && time.Since(info.ModTime()) <= lockStale {
+					_ = os.Link(aside, path) // a fresh lock: back where it was, unless another took the place
+				}
+				_ = os.Remove(aside)
+			}
 			continue
 		}
 		if time.Now().After(deadline) {
-			return nil, errors.New("provider-logins.json is locked")
+			return nil, errIndexLocked
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
 }
+
+// lockStale is when a lock counts as a crashed writer's.
+const lockStale = 10 * time.Second
+
+var errIndexLocked = errors.New("provider-logins.json is locked")
 
 // Entry is one pool entry: a catalog model on one login (contracts
 // route-ask-v1 pool[]). The unexported fields say how to reach it.
@@ -475,8 +499,12 @@ func macKeychainGet(account string) (string, error) {
 	return string(out), err
 }
 
+// macKeychainDelete removes a login's keychain copy. It runs even under
+// CAVE_NO_KEYCHAIN (which only stops new keychain writes): an older copy the
+// index names must not outlive a move to the file store. Deleting never
+// prompts.
 func macKeychainDelete(account string) error {
-	if runtime.GOOS != "darwin" || os.Getenv("CAVE_NO_KEYCHAIN") != "" {
+	if runtime.GOOS != "darwin" {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)

@@ -10,7 +10,8 @@
 // runtime (proxy/internal/pool) reads both; its providers.json is the
 // registry this list mirrors (a test keeps them in step).
 import { execFileSync, spawnSync } from "node:child_process";
-import { chmodSync, closeSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from "node:fs";
+import { randomBytes } from "node:crypto";
+import { chmodSync, closeSync, linkSync, mkdirSync, openSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from "node:fs";
 import { join } from "node:path";
 import { cavemanHome } from "./config-home.js";
 
@@ -67,23 +68,34 @@ function readIndex(): Index {
 
 // withIndexLock runs one read-modify-write of the index under
 // provider-logins.json.lock, the lock the runtime takes too (a background
-// token refresh). A lock older than 10 s is a crashed writer's and is broken.
+// token refresh). The lock holds a token of its own and is removed only while
+// it still holds it. A lock older than 10 s is a crashed writer's: it is
+// renamed aside first, so of two waiters only one breaks it, and a fresh lock
+// that slipped in between is put back.
 function withIndexLock<T>(fn: () => T): T {
   mkdirSync(cavemanHome(), { recursive: true, mode: 0o700 });
   const lock = `${indexPath()}.lock`;
+  const token = randomBytes(16).toString("hex");
   const deadline = Date.now() + 3000;
   for (;;) {
     try {
-      closeSync(openSync(lock, "wx", 0o600));
+      const fd = openSync(lock, "wx", 0o600);
+      writeSync(fd, token);
+      closeSync(fd);
       break;
     } catch (error) {
       if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
       try {
-        if (Date.now() - statSync(lock).mtimeMs > 10_000) {
-          unlinkSync(lock);
+        if (Date.now() - statSync(lock).mtimeMs > LOCK_STALE_MS) {
+          const aside = `${lock}.break.${token}`;
+          renameSync(lock, aside);
+          if (Date.now() - statSync(aside).mtimeMs <= LOCK_STALE_MS) {
+            try { linkSync(aside, lock); } catch { /* another writer took the place */ }
+          }
+          unlinkSync(aside);
           continue;
         }
-      } catch { /* released meanwhile */ }
+      } catch { /* released or broken meanwhile */ }
       if (Date.now() > deadline) throw new Error("caveman: provider-logins.json is locked by another caveman process; try again");
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 20);
     }
@@ -91,13 +103,19 @@ function withIndexLock<T>(fn: () => T): T {
   try {
     return fn();
   } finally {
-    try { unlinkSync(lock); } catch { /* already gone */ }
+    try {
+      if (readFileSync(lock, "utf8") === token) unlinkSync(lock);
+    } catch { /* already gone */ }
   }
 }
 
+const LOCK_STALE_MS = 10_000;
+// Each keychain command stays well under the stale-lock age.
+const SECURITY_TIMEOUT_MS = 4_000;
+
 function writeIndex(index: Index) {
   mkdirSync(cavemanHome(), { recursive: true, mode: 0o700 });
-  const tmp = `${indexPath()}.tmp`;
+  const tmp = `${indexPath()}.${process.pid}.tmp`;
   writeFileSync(tmp, JSON.stringify(index, null, 2) + "\n", { mode: 0o600 });
   renameSync(tmp, indexPath());
 }
@@ -109,10 +127,10 @@ function useKeychain() {
 // keychainSet sends the secret on stdin through `security -i`, never argv.
 function keychainSet(id: string, secret: string): boolean {
   const quote = (value: string) => `"${value.replaceAll("\\", "\\\\").replaceAll('"', '\\"')}"`;
-  const run = spawnSync("security", ["-i"], { input: `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a ${quote(id)} -w ${quote(secret)}\n`, stdio: ["pipe", "ignore", "ignore"] });
+  const run = spawnSync("security", ["-i"], { input: `add-generic-password -U -s ${KEYCHAIN_SERVICE} -a ${quote(id)} -w ${quote(secret)}\n`, stdio: ["pipe", "ignore", "ignore"], timeout: SECURITY_TIMEOUT_MS });
   if (run.status !== 0) return false;
   try {
-    return execFileSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", id, "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim() === secret;
+    return execFileSync("security", ["find-generic-password", "-s", KEYCHAIN_SERVICE, "-a", id, "-w"], { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: SECURITY_TIMEOUT_MS }).trim() === secret;
   } catch {
     return false;
   }
@@ -120,7 +138,7 @@ function keychainSet(id: string, secret: string): boolean {
 
 function keychainDelete(id: string) {
   try {
-    execFileSync("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", id], { stdio: "ignore" });
+    execFileSync("security", ["delete-generic-password", "-s", KEYCHAIN_SERVICE, "-a", id], { stdio: "ignore", timeout: SECURITY_TIMEOUT_MS });
   } catch (error) {
     if ((error as { status?: unknown }).status !== 44) throw new Error("could not remove the key from macOS Keychain");
   }
@@ -180,7 +198,9 @@ export function providersAdd(argv: string[], readStdin: () => string): Record<st
       mkdirSync(join(cavemanHome(), "provider-logins"), { recursive: true, mode: 0o700 });
       writeFileSync(secretPath(provider.id), key, { mode: 0o600 });
       chmodSync(secretPath(provider.id), 0o600);
-      if (previous?.store === "keychain" && useKeychain()) keychainDelete(provider.id);
+      // Even under CAVE_NO_KEYCHAIN, which only stops new keychain writes: an
+      // older keychain copy must not outlive the move. Deleting never prompts.
+      if (previous?.store === "keychain" && process.platform === "darwin") keychainDelete(provider.id);
     }
     index.logins = index.logins.filter((entry) => entry.id !== provider.id);
     index.logins.push({ id: provider.id, kind: "api_key", store, added_at: previous?.added_at ?? new Date().toISOString() });
@@ -202,7 +222,7 @@ export function providersRemove(argv: string[]): Record<string, unknown> {
   return withIndexLock(() => {
     const index = readIndex();
     const entry = index.logins.find((login) => login.id === provider.id);
-    if (entry?.store === "keychain" || (!entry && useKeychain())) keychainDelete(provider.id);
+    if (process.platform === "darwin" && (entry?.store === "keychain" || (!entry && useKeychain()))) keychainDelete(provider.id);
     removeSecretFile(provider.id);
     index.logins = index.logins.filter((login) => login.id !== provider.id);
     writeIndex(index);

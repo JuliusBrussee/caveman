@@ -1,5 +1,5 @@
 {
-  "_doc": "Providers a person can add to the local runtime with `caveman providers add|login`. One row per host. models are catalog model names (Cloud's) with the host's own wire id; wire pins a model to one wire. Every OAuth row carries a terms note. Left out on purpose: Claude Pro/Max logins (Anthropic allows them only in its own apps), Gemini CLI / Antigravity Google logins (Google bans accounts for third-party use), GitHub Copilot (supported only through OpenCode's own login), Codex's own ~/.codex/auth.json (another app's login; Sign in with ChatGPT below is the sanctioned path).",
+  "_doc": "Providers a person can add to the local runtime with `caveman providers add|login`. One row per host. models are catalog model names (Cloud's) with the host's own wire id; wire pins a model to one wire. Every OAuth row carries a terms note. OpenAI's GPT models run on the Responses wire only (their tool calls are not served on chat completions), so no host offers them on chat. Left out on purpose: Claude Pro/Max logins (Anthropic allows them only in its own apps), Gemini CLI / Antigravity Google logins (Google bans accounts for third-party use), GitHub Copilot (supported only through OpenCode's own login), Codex's own ~/.codex/auth.json (another app's login; Sign in with ChatGPT below is the sanctioned path).",
   "providers": [
     {
       "id": "anthropic", "name": "Anthropic", "kind": "api_key", "env": ["ANTHROPIC_API_KEY"],
@@ -11,13 +11,11 @@
     {
       "id": "openai", "name": "OpenAI", "kind": "api_key", "env": ["OPENAI_API_KEY"],
       "base_url": "https://api.openai.com/v1",
-      "wires": {
-        "responses": {"path": "/responses", "auth": "bearer"},
-        "chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}
-      },
+      "wires": {"responses": {"path": "/responses", "auth": "bearer"}},
       "models": [{"model": "gpt-6.1-sol"}, {"model": "gpt-6-sol"}, {"model": "gpt-6-astra"}, {"model": "gpt-6-luna"}],
-      "max_tokens_field": "max_completion_tokens", "drop_params": ["user"],
-      "billing": "metered"
+      "drop_params": ["user"],
+      "billing": "metered",
+      "terms": "Responses only: these models take tool calls on the Responses API alone, so a chat-format agent gets no OpenAI entries."
     },
     {
       "id": "chatgpt", "name": "ChatGPT plan (Sign in with ChatGPT)", "kind": "oauth",
@@ -53,7 +51,6 @@
       },
       "models": [
         {"model": "claude-opus-5-5", "id": "anthropic/claude-opus-5.5"}, {"model": "claude-sonnet-5-5", "id": "anthropic/claude-sonnet-5.5"},
-        {"model": "gpt-6.1-sol", "id": "openai/gpt-6.1-sol", "wire": "chat"}, {"model": "gpt-6-luna", "id": "openai/gpt-6-luna", "wire": "chat"},
         {"model": "deepseek-v4-pro", "id": "deepseek/deepseek-v4-pro", "wire": "chat"}, {"model": "kimi-k3", "id": "moonshotai/kimi-k3", "wire": "chat"},
         {"model": "glm-5.3", "id": "z-ai/glm-5.3", "wire": "chat"}
       ],

@@ -60,10 +60,11 @@ func TestEntriesFollowWhatThePersonSetUpAndWhatTheRuntimeCanTranslate(t *testing
 		"openai": "sk-openai", "chatgpt": chatgptRecord(time.Now().Add(time.Hour), false), "deepseek": "sk-ds",
 		"zai-coding-plan": "zai", "unknown-host": "x",
 	}))
-	// A Claude Code request (Messages): OpenAI on its chat wire, the ChatGPT
-	// login on Responses (its only wire), DeepSeek on its Messages wire.
+	// A Claude Code request (Messages): OpenAI and the ChatGPT login on
+	// Responses (their only wire: GPT tool calls are not served on chat),
+	// DeepSeek on its Messages wire.
 	got := strings.Join(ids(store.Entries("messages", "claude", 64, nil)), " ")
-	want := "openai/gpt-6.1-sol@chat openai/gpt-6-sol@chat openai/gpt-6-astra@chat openai/gpt-6-luna@chat " +
+	want := "openai/gpt-6.1-sol@responses openai/gpt-6-sol@responses openai/gpt-6-astra@responses openai/gpt-6-luna@responses " +
 		"chatgpt/gpt-6.1-sol@responses chatgpt/gpt-6-sol@responses chatgpt/gpt-6-astra@responses chatgpt/gpt-6-luna@responses " +
 		"deepseek/deepseek-v4-pro@messages deepseek/deepseek-v4-flash@messages zai-coding-plan/glm-5.3@messages"
 	if got != want {
@@ -75,10 +76,18 @@ func TestEntriesFollowWhatThePersonSetUpAndWhatTheRuntimeCanTranslate(t *testing
 	if !strings.Contains(got, "chatgpt/gpt-6.1-sol@responses") || !strings.Contains(got, "openai/gpt-6-sol@responses") || strings.Contains(got, "zai-coding-plan") {
 		t.Fatalf("responses pool = %s", got)
 	}
-	// A chat caller reaches chat wires only; skip drops the harness's own entries; limit bounds it.
-	got = strings.Join(ids(store.Entries("chat", "opencode", 3, func(host, model string) bool { return host == "openai" && model == "gpt-6.1-sol" })), " ")
-	if got != "openai/gpt-6-sol@chat openai/gpt-6-astra@chat openai/gpt-6-luna@chat" {
+	// A chat caller reaches chat wires only, so no OpenAI entry at all; skip
+	// drops the harness's own entries; limit bounds it.
+	got = strings.Join(ids(store.Entries("chat", "opencode", 1, func(host, model string) bool { return host == "deepseek" && model == "deepseek-v4-pro" })), " ")
+	if got != "deepseek/deepseek-v4-flash@chat" {
 		t.Fatalf("chat pool = %s", got)
+	}
+	for _, grammar := range []string{"messages", "responses", "chat"} {
+		for _, entry := range store.Entries(grammar, "claude", 64, nil) {
+			if (entry.Host == "openai" || entry.Host == "chatgpt" || strings.HasPrefix(entry.Model, "gpt-")) && entry.wire == "chat" {
+				t.Errorf("%s caller: OpenAI model on the chat wire: %s", grammar, entry.ID)
+			}
+		}
 	}
 	if entries := NewStore(t.TempDir()).Entries("messages", "claude", 64, nil); len(entries) != 0 {
 		t.Fatalf("no logins, pool = %v", ids(entries))
@@ -317,5 +326,59 @@ func TestCloudOffIsReadFromTheIndex(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(dir, indexFile), []byte(`{"version":1,"cloud":false,"logins":[]}`), 0o600)
 	if !store.CloudOff() {
 		t.Fatal("cloud off not read")
+	}
+}
+
+// A holder only ever removes its own lock: after a stale break handed the
+// lock to another writer, the first holder's unlock leaves it alone.
+func TestUnlockRemovesOnlyItsOwnLock(t *testing.T) {
+	dir := t.TempDir()
+	unlock, err := lockIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, indexFile+".lock")
+	_ = os.WriteFile(lock, []byte("another-writer"), 0o600) // as if broken and retaken
+	unlock()
+	if held, _ := os.ReadFile(lock); string(held) != "another-writer" {
+		t.Fatalf("the first holder removed another writer's lock: %q", held)
+	}
+}
+
+func TestMovingToTheFileStoreDropsTheKeychainCopyEvenWithoutKeychainWrites(t *testing.T) {
+	t.Setenv("CAVE_NO_KEYCHAIN", "1")
+	dir := t.TempDir()
+	_ = os.WriteFile(filepath.Join(dir, indexFile), []byte(`{"version":1,"logins":[{"id":"openai","kind":"api_key","store":"keychain"}]}`), 0o600)
+	store := NewStore(dir)
+	deleted := ""
+	store.deleteKeychain = func(account string) error { deleted = account; return nil }
+	if err := store.Save("openai", "api_key", "sk-new"); err != nil {
+		t.Fatal(err)
+	}
+	if deleted != "openai" || store.Logins()[0].Store != "file" {
+		t.Fatalf("deleted %q, logins %+v", deleted, store.Logins())
+	}
+}
+
+// A refresh whose save meets a held lock tries once more, so a single-use
+// refresh token is not lost to contention.
+func TestRefreshRetriesASaveThatMetTheLock(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"access_token":"rotated","refresh_token":"rotated-refresh","expires_in":3600,"scope":"chatgpt.tokens.use.direct"}`)
+	}))
+	defer issuer.Close()
+	dir := home(t, map[string]string{"chatgpt": chatgptRecord(time.Now().Add(time.Minute), false)})
+	store := NewStore(dir)
+	store.setKeychain = func(string, string) error { return os.ErrPermission }
+	var token chatgptToken
+	raw, _ := os.ReadFile(filepath.Join(dir, secretDir, "chatgpt"))
+	_ = json.Unmarshal(raw, &token)
+	token.Issuer = issuer.URL
+	lock := filepath.Join(dir, indexFile+".lock")
+	_ = os.WriteFile(lock, []byte("busy"), 0o600)
+	go func() { time.Sleep(3500 * time.Millisecond); _ = os.Remove(lock) }()
+	store.refreshChatGPT(token)
+	if secret, _ := os.ReadFile(filepath.Join(dir, secretDir, "chatgpt")); !strings.Contains(string(secret), "rotated-refresh") {
+		t.Fatalf("the rotated token was lost: %s", secret)
 	}
 }

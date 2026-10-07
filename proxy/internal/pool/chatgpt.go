@@ -227,12 +227,17 @@ func (s *Store) refreshChatGPT(token chatgptToken) {
 		token = fresh
 	}
 	raw, _ := json.Marshal(token)
-	_ = s.saveIf(chatgptLogin, "oauth", string(raw), func(current string) bool {
+	keep := func(current string) bool {
 		// Only over the record this refresh started from: a login removed or
 		// signed in again meanwhile wins.
 		var stored chatgptToken
 		return json.Unmarshal([]byte(current), &stored) == nil && stored.RefreshToken == started
-	})
+	}
+	if err := s.saveIf(chatgptLogin, "oauth", string(raw), keep); errors.Is(err, errIndexLocked) {
+		// A refresh token is single-use: one more try rather than lose the new one.
+		time.Sleep(time.Second)
+		_ = s.saveIf(chatgptLogin, "oauth", string(raw), keep)
+	}
 }
 
 type chatgptTokenAnswer struct {
