@@ -26,7 +26,7 @@ type messagesTop struct {
 	thinking                string // thinking.type
 	budget                  int    // thinking.budget_tokens
 	effort                  string // output_config.effort
-	format                  []byte // output_config.format (or the beta's output_format): a json_schema format
+	schema                  []byte // output_config.format's (or the beta's output_format's) schema: a json_schema format
 	toolChoice              obj
 	disableParallel, stream bool
 }
@@ -39,10 +39,10 @@ func readMessagesTop(top map[string]json.RawMessage) messagesTop {
 	}
 	if output, ok := parseObj(top["output_config"]); ok {
 		m.effort = output.str("effort")
-		m.format = jsonSchemaFormat(output.get("format"))
+		m.schema = jsonSchemaOf(output.get("format"))
 	}
-	if m.format == nil {
-		m.format = jsonSchemaFormat(top["output_format"])
+	if m.schema == nil {
+		m.schema = jsonSchemaOf(top["output_format"])
 	}
 	if choice, ok := parseObj(top["tool_choice"]); ok {
 		m.toolChoice = choice
@@ -51,13 +51,14 @@ func readMessagesTop(top map[string]json.RawMessage) messagesTop {
 	return m
 }
 
-// jsonSchemaFormat is a Messages format object when it is a json_schema one.
-func jsonSchemaFormat(raw []byte) []byte {
+// jsonSchemaOf is a Messages format object's schema when it is a
+// json_schema one.
+func jsonSchemaOf(raw []byte) []byte {
 	format, ok := parseObj(raw)
 	if !ok || format.str("type") != "json_schema" || isNull(format.get("schema")) {
 		return nil
 	}
-	return raw
+	return format.get("schema")
 }
 
 // effortFor is the effort a translated Messages body runs at: Options' own,
@@ -213,9 +214,8 @@ func messagesChatBody(top map[string]json.RawMessage, opts Options) (map[string]
 	if choice := chatToolChoice(m.toolChoice); choice != nil {
 		out["tool_choice"] = choice
 	}
-	if m.format != nil {
-		format, _ := parseObj(m.format)
-		out["response_format"] = appendChatSchemaFormat(nil, []byte(`"output"`), format.get("schema"), strictFor(format.get("schema")), nil)
+	if m.schema != nil {
+		out["response_format"] = appendChatSchemaFormat(nil, []byte(`"output"`), m.schema, strictFor(m.schema), nil)
 	}
 	effort := m.effortFor(opts)
 	switch {
@@ -247,38 +247,61 @@ func strictFor(schema []byte) []byte {
 }
 
 func strictSchema(value []byte) bool {
-	switch {
-	case len(value) == 0:
-		return false
-	case value[0] == '[':
-		for _, element := range items(value) {
-			if !strictSchema(element) {
+	nodes, ok := parseTree(value)
+	return ok && strictNode(nodes, 0)
+}
+
+// strictNode checks the schema at nodes[at] and every schema under it: an
+// object type or properties needs additionalProperties false, every property
+// required. A properties map's keys are names, not keywords.
+func strictNode(nodes []node, at int) bool {
+	n := nodes[at]
+	switch n.val[0] {
+	case '[':
+		for child := at + 1; child < n.next; child = nodes[child].next {
+			if !strictNode(nodes, child) {
 				return false
 			}
 		}
-	case value[0] == '{':
-		node, ok := parseObj(value)
-		if !ok {
+		return true
+	case '{':
+	default:
+		return true
+	}
+	properties, object, closed := -1, false, false
+	var required []byte
+	for child := at + 1; child < n.next; child = nodes[child].next {
+		value := nodes[child].val
+		switch string(unescapedKey(nodes[child].key)) {
+		case "properties":
+			if value[0] == '{' {
+				properties = child
+				continue // checked below, as names
+			}
+		case "additionalProperties":
+			closed = string(value) == "false"
+		case "required":
+			required = value
+		case "type":
+			object = string(value) == `"object"` || value[0] == '[' && bytes.Contains(value, []byte(`"object"`))
+		}
+		if !strictNode(nodes, child) {
 			return false
 		}
-		if properties, ok := parseObj(node.get("properties")); ok {
-			if string(node.get("additionalProperties")) != "false" {
-				return false
-			}
-			required := map[string]bool{}
-			for _, name := range items(node.get("required")) {
-				required[jstr(name)] = true
-			}
-			for _, property := range properties {
-				if !required[string(property.key)] {
-					return false
-				}
-			}
-		}
-		for _, member := range node {
-			if (member.val[0] == '{' || member.val[0] == '[') && !strictSchema(member.val) {
-				return false
-			}
+	}
+	if (object || properties >= 0) && !closed {
+		return false
+	}
+	if properties < 0 {
+		return true
+	}
+	names := map[string]bool{}
+	for _, name := range items(required) {
+		names[jstr(name)] = true
+	}
+	for property := properties + 1; property < nodes[properties].next; property = nodes[property].next {
+		if !names[string(unescapedKey(nodes[property].key))] || !strictNode(nodes, property) {
+			return false
 		}
 	}
 	return true
@@ -574,13 +597,17 @@ func messagesResponsesBody(top map[string]json.RawMessage, opts Options) (map[st
 	if limit := top["max_tokens"]; !isNull(limit) && string(limit) != "0" {
 		out["max_output_tokens"] = limit
 	}
-	if effort := fitOpenAIEffort(m.effortFor(opts), openAIEfforts(opts.Model)); effort != "" {
-		if effort == "none" {
+	// "none" only for a model the catalog lists with levels: one that does
+	// not reason (gpt-4.1) refuses any reasoning field.
+	_, reasons := catalog.EffortLevels("openai", opts.Model)
+	switch effort := fitOpenAIEffort(m.effortFor(opts), openAIEfforts(opts.Model)); {
+	case effort == "none":
+		if reasons {
 			out["reasoning"] = json.RawMessage(`{"effort":"none"}`)
-		} else {
-			out["reasoning"] = mustJSON(map[string]string{"effort": effort, "summary": "auto"})
-			out["include"] = json.RawMessage(`["reasoning.encrypted_content"]`)
 		}
+	case effort != "":
+		out["reasoning"] = mustJSON(map[string]string{"effort": effort, "summary": "auto"})
+		out["include"] = json.RawMessage(`["reasoning.encrypted_content"]`)
 	}
 	tools, err := responsesTools(top["tools"])
 	if err != nil {
@@ -600,9 +627,8 @@ func messagesResponsesBody(top map[string]json.RawMessage, opts Options) (map[st
 	case "tool":
 		out["tool_choice"] = append(append([]byte(`{"type":"function","name":`), tok(m.toolChoice.get("name"))...), '}')
 	}
-	if m.format != nil {
-		format, _ := parseObj(m.format)
-		out["text"] = appendResponsesSchemaFormat(nil, []byte(`"output"`), format.get("schema"), strictFor(format.get("schema")), nil)
+	if m.schema != nil {
+		out["text"] = appendResponsesSchemaFormat(nil, []byte(`"output"`), m.schema, strictFor(m.schema), nil)
 	}
 	if opts.ChatGPTLogin {
 		chatgptLoginBody(out)

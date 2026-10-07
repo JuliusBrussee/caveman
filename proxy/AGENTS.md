@@ -216,8 +216,8 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages and chat callers reach it
   through Messages→Responses and chat→Responses, and chat callers (OpenCode, Aider) reach Claude through
   chat→Messages; a chat caller gets another host's reasoning as `reasoning_content` plus a
-  `reasoning_details` envelope that goes back only to that host, and every chat API (OpenAI's own on the
-  harness path included, `translate.ChatNative`) gets both removed. Documents, structured output,
+  `reasoning_details` envelope that goes back only to that host, and every chat API (on the harness path
+  too, whatever the origin and with routing off, `translate.ChatNative`) gets both removed. Documents, structured output,
   `disable_parallel_tool_use`/`parallel_tool_calls` and refusals cross every direction; a part the target
   cannot take (a document by URL on chat, an OpenAI file id on Claude, audio) refuses the translation, so
   the pool falls back. A refusal reaches Codex as `response.incomplete` `content_filter` (its own

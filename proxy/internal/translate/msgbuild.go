@@ -45,14 +45,15 @@ func (b *msgBuilder) blockCount() int {
 }
 
 // cacheLast puts a caller's cache_control on the last block pushed, when one
-// was pushed since there were before blocks and it carries none yet.
+// was pushed since there were before blocks and it carries none yet; never on
+// thinking, which Anthropic refuses it on.
 func (b *msgBuilder) cacheLast(before int, cache []byte) {
 	if b.blockCount() <= before {
 		return
 	}
 	message := &b.messages[len(b.messages)-1]
 	block := &message.blocks[len(message.blocks)-1]
-	if block.end != len(b.arena) || bytes.Contains(b.arena[block.start:block.end], []byte(`"cache_control"`)) {
+	if block.kind == "thinking" || block.kind == "redacted_thinking" || block.end != len(b.arena) || bytes.Contains(b.arena[block.start:block.end], []byte(`"cache_control"`)) {
 		return
 	}
 	b.arena = append(append(append(b.arena[:block.end-1], `,"cache_control":`...), cache...), '}')
@@ -206,14 +207,14 @@ func (b *msgBuilder) thinking(block json.RawMessage, route string) {
 		Signature string `json:"signature"`
 		Data      string `json:"data"`
 	}
-	if json.Unmarshal(block, &fields) != nil {
-		return
+	if json.Unmarshal(block, &fields) != nil || fields.Type != "thinking" && fields.Type != "redacted_thinking" {
+		return // a crafted envelope's other blocks are not thinking
 	}
 	value := fields.Signature
 	if fields.Type == "redacted_thinking" {
 		value = fields.Data
 	}
-	own, ours := strings.CutPrefix(value, signaturePrefix+route+":")
+	own, ours := strings.CutPrefix(value, signaturePrefix+routeTag(route))
 	switch {
 	case route == anthropicRoute && value != "" && !strings.HasPrefix(value, signaturePrefix):
 		own = value

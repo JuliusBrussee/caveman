@@ -60,11 +60,11 @@ func (s *sessionGen) step() {
 		case "anthropic":
 			blocks = append(blocks, `{"type":"thinking","thinking":`+encode(s.text())+`,"signature":"EqAnthropic`+fmt.Sprint(s.turn)+`"}`)
 		case "r1":
-			blocks = append(blocks, `{"type":"thinking","thinking":"r","signature":"caveman:r1:chatgpt:ENC`+fmt.Sprint(s.turn)+`"}`)
+			blocks = append(blocks, `{"type":"thinking","thinking":"r","signature":"caveman:r1:7:chatgpt:ENC`+fmt.Sprint(s.turn)+`"}`)
 		case "v1":
-			blocks = append(blocks, `{"type":"thinking","thinking":"v","signature":"caveman:v1:deepseek:deepseek-v4-pro"}`)
+			blocks = append(blocks, `{"type":"thinking","thinking":"v","signature":"caveman:v1:8:deepseek:deepseek-v4-pro"}`)
 		case "ns":
-			blocks = append(blocks, `{"type":"thinking","thinking":"n","signature":"caveman:moonshot:sigK`+fmt.Sprint(s.turn)+`"}`)
+			blocks = append(blocks, `{"type":"thinking","thinking":"n","signature":"caveman:8:moonshot:sigK`+fmt.Sprint(s.turn)+`"}`)
 		case "unsigned":
 			blocks = append(blocks, `{"type":"thinking","thinking":"u","signature":""}`)
 		}
@@ -88,7 +88,7 @@ func (s *sessionGen) step() {
 		case "route":
 			s.items = append(s.items, `{"type":"reasoning","summary":[],"encrypted_content":"`+envelopeOf(`[]`, "chatgpt", "BLOB"+fmt.Sprint(s.turn))+`"}`)
 		case "chat":
-			s.items = append(s.items, `{"type":"reasoning","summary":[],"encrypted_content":"`+envelopeOf(`[{"type":"thinking","thinking":"c","signature":"caveman:v1:deepseek:deepseek-v4-pro"}]`, "", "")+`"}`)
+			s.items = append(s.items, `{"type":"reasoning","summary":[],"encrypted_content":"`+envelopeOf(`[{"type":"thinking","thinking":"c","signature":"caveman:v1:8:deepseek:deepseek-v4-pro"}]`, "", "")+`"}`)
 		}
 		if s.rnd.Intn(2) == 0 {
 			s.items = append(s.items, `{"type":"message","role":"assistant","content":[{"type":"output_text","text":`+encode(s.text())+`}]}`)

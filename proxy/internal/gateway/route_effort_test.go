@@ -1843,7 +1843,7 @@ func TestTakeoverKeepsTheDropBlockRefusal(t *testing.T) {
 // still go in byte for byte, earlier ones unchanged, a "top" answer becoming
 // one more mark once marks exist.
 func TestCleaningKeepsPerMessageMarks(t *testing.T) {
-	aForeign := `{"role":"assistant","content":[{"type":"thinking","thinking":"elsewhere","signature":"caveman:v1:fireworks:kimi"},{"type":"text","text":"Three steps."}]}`
+	aForeign := `{"role":"assistant","content":[{"type":"thinking","thinking":"elsewhere","signature":"caveman:v1:9:fireworks:kimi"},{"type":"text","text":"Three steps."}]}`
 	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "medium", EffortMode: "message"}}
 	srv, log := effortServer(t, cloud, nil)
 	post(t, srv, convo("high", uA, aForeign, uC), nil)

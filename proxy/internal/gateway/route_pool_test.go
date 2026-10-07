@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -254,7 +255,7 @@ func TestHarnessPathDropsReasoningAPoolHostWrote(t *testing.T) {
 		t.Fatalf("pool turn: %s", rec.Body.String())
 	}
 	c.stub.cloud.answer = RouteAnswer{Outcome: "kept"}
-	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"caveman:v1:fireworks/kimi-k3:accounts/fireworks/models/kimi-k3"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
+	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"caveman:v1:17:fireworks/kimi-k3:accounts/fireworks/models/kimi-k3"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
 	if rec := poolSend(t, c.srv, body); rec.Code != 200 {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
@@ -352,7 +353,7 @@ func TestPoolHostGetsItsOwnReasoningBackOnTheNextTurn(t *testing.T) {
 		t.Fatalf("turn 1: %s", rec.Body.String())
 	}
 	turn2 := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"fix the bug"},` +
-		`{"role":"assistant","content":[{"type":"thinking","thinking":"my own plan","signature":"caveman:v1:fireworks/kimi-k3:accounts/fireworks/models/kimi-k3"},{"type":"text","text":"pool says hi"}]},` +
+		`{"role":"assistant","content":[{"type":"thinking","thinking":"my own plan","signature":"caveman:v1:17:fireworks/kimi-k3:accounts/fireworks/models/kimi-k3"},{"type":"text","text":"pool says hi"}]},` +
 		`{"role":"user","content":"go on"}]}`
 	if rec := poolSend(t, c.srv, turn2); !strings.Contains(rec.Body.String(), "pool says hi") {
 		t.Fatalf("turn 2: %s", rec.Body.String())
@@ -438,7 +439,7 @@ func TestPoolOpenAILoginReasoningIsTaggedUnlessItIsTheHarnessKey(t *testing.T) {
 			"data: {\"type\":\"response.output_text.delta\",\"delta\":\"gpt says hi\"}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
 		rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
-		if !strings.Contains(rec.Body.String(), `"signature":"caveman:r1:`+route+`:BLOB"`) {
+		if !strings.Contains(rec.Body.String(), `"signature":"caveman:r1:`+strconv.Itoa(len(route))+":"+route+`:BLOB"`) {
 			t.Fatalf("%s: want route %s:\n%s", key, route, rec.Body.String())
 		}
 	}
@@ -482,7 +483,7 @@ func TestPoolFallbackFitsTheEffortToTheAskedModel(t *testing.T) {
 // Pass-through traffic and other origins are never cleaned: only the
 // provider's own API refuses another host's reasoning.
 func TestHarnessCleaningOnlyOnTheProvidersOwnAPI(t *testing.T) {
-	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"caveman:v1:fireworks:kimi"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
+	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"x","signature":"caveman:v1:9:fireworks:kimi"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
 	stub := &poolStub{cloud: &fakeCloud{}}
 	pooled := stub.server(t)
 	server := func(origin string) *Server { // no Cloud: the harness path outside the route stage
@@ -512,6 +513,41 @@ func TestHarnessCleaningOnlyOnTheProvidersOwnAPI(t *testing.T) {
 	other := server("https://llm.example.com")
 	if sent := send(other, ""); sent != body || len(stub.got["/v1/messages"]) != 3 {
 		t.Fatalf("another origin was changed (%d sent): %s", len(stub.got["/v1/messages"]), sent)
+	}
+}
+
+// A chat request carries the runtime's reasoning envelopes to no chat API,
+// whatever its origin (routing off included): DeepSeek never gets another
+// host's reasoning. A clean body goes byte for byte, pass-through untouched.
+func TestHarnessChatCleaningOnEveryOrigin(t *testing.T) {
+	envelope := base64.StdEncoding.EncodeToString([]byte(`{"caveman":"v1","blocks":[{"type":"thinking","thinking":"t","signature":"sig"}]}`))
+	dirty := `{"model":"deepseek-chat","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b","reasoning_content":"t","reasoning_details":[{"type":"reasoning.encrypted","data":"` + envelope + `"}]},{"role":"user","content":"c"}]}`
+	clean := `{"model":"deepseek-chat",  "messages":[{"role":"user","content":"a"}]}`
+	stub := &poolStub{cloud: &fakeCloud{}}
+	pooled := stub.server(t)
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.deepseek.com")},
+		Auth:     stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds:    stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: pooled.httpClient,
+	})
+	send := func(body, header string) string {
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body))
+		req.Header.Set("authorization", "Bearer sk-deepseek")
+		if header != "" {
+			req.Header.Set("x-cave-transforms", header)
+		}
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		_, sent := stub.last("/v1/chat/completions")
+		return sent
+	}
+	if sent := send(dirty, ""); strings.Contains(sent, envelope) || strings.Contains(sent, "reasoning_content") || !strings.Contains(sent, `"content":"b"`) {
+		t.Fatalf("another host's reasoning reached the chat API: %s", sent)
+	}
+	if sent := send(clean, ""); sent != clean {
+		t.Fatalf("a clean body was changed: %s", sent)
+	}
+	if sent := send(dirty, "caveman.pass-through.v1"); sent != dirty {
+		t.Fatalf("pass-through was changed: %s", sent)
 	}
 }
 

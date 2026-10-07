@@ -497,9 +497,6 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 			out.keepalive()
 			continue
 		}
-		if out.finished {
-			continue // drain
-		}
 		data, ok := sseData(line)
 		if !ok {
 			continue
@@ -601,6 +598,9 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 		case "error":
 			out.fail(responsesFailureFor(anthropicErrorStatus(event.Error.Type), mustJSON(map[string]any{"error": event.Error}), ""))
 		}
+		if out.finished {
+			break // failed: an upstream that lingers holds neither the answer nor the fallback
+		}
 	}
 	if out.finished {
 		return
@@ -683,9 +683,6 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 			out.keepalive()
 			continue
 		}
-		if out.finished {
-			continue
-		}
 		data, ok := sseData(line)
 		if !ok {
 			continue
@@ -711,7 +708,7 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 				}
 			}
 			out.fail(responsesFailureFor(status, data, ""))
-			continue
+			break // an upstream that lingers holds neither the answer nor the fallback
 		}
 		if chunk.Usage != nil {
 			usage := &responsesUsage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens}

@@ -165,11 +165,23 @@ func parseObj(b []byte) (obj, bool) {
 
 func (o obj) get(key string) []byte {
 	for i := len(o) - 1; i >= 0; i-- {
-		if string(o[i].key) == key {
+		if o[i].is(key) {
 			return o[i].val
 		}
 	}
 	return nil
+}
+
+// is reports a member named name (its key decoded when it holds an escape).
+func (m kv) is(name string) bool { return string(unescapedKey(m.key)) == name }
+
+// unescapedKey is a key as written between its quotes, decoded when it holds
+// an escape ("r\u006fle" is "role").
+func unescapedKey(key []byte) []byte {
+	if bytes.IndexByte(key, '\\') < 0 {
+		return key
+	}
+	return []byte(jstr(append(append([]byte{'"'}, key...), '"')))
 }
 
 func (o obj) has(key string) bool { return o.get(key) != nil }
@@ -360,11 +372,7 @@ func topFields(body []byte) (map[string]json.RawMessage, error) {
 	}
 	out := make(map[string]json.RawMessage, len(kvs)+4)
 	for _, member := range kvs {
-		key := string(member.key)
-		if bytes.IndexByte(member.key, '\\') >= 0 {
-			key = jstr(append(append([]byte{'"'}, member.key...), '"'))
-		}
-		out[key] = member.val
+		out[string(unescapedKey(member.key))] = member.val
 	}
 	return out, nil
 }
@@ -505,3 +513,155 @@ func editArray(arr []byte, edit func(raw []byte, o obj) (replacement []byte, dro
 	}
 	return append(out, ']'), true
 }
+
+// --- schemas ------------------------------------------------------------------
+
+// maxSchemaDepth bounds the walks over a caller's JSON schema (a tool's may
+// come from any MCP server): deeper, a schema counts as not strict and keeps
+// the bytes it came with.
+const maxSchemaDepth = 64
+
+// node is one value of a tree read in document order: a container's members
+// follow it, and next is the index after its last descendant.
+type node struct {
+	key  []byte // the member key as written between its quotes; nil outside an object
+	val  []byte // the value as written
+	next int
+}
+
+// parseTree reads the value b (space around it allowed) in one pass; false
+// when b is not one value or nests deeper than maxSchemaDepth.
+func parseTree(b []byte) ([]node, bool) {
+	nodes, end, ok := treeAt(nil, b, skipSpace(b, 0), 0, nil)
+	return nodes, ok && skipSpace(b, end) == len(b)
+}
+
+func treeAt(nodes []node, b []byte, i, depth int, key []byte) ([]node, int, bool) {
+	at := len(nodes)
+	nodes = append(nodes, node{key: key})
+	if i >= len(b) {
+		return nodes, 0, false
+	}
+	end, ok := 0, true
+	switch b[i] {
+	case '{', '[':
+		if depth == maxSchemaDepth {
+			return nodes, 0, false
+		}
+		closer := byte(']')
+		if b[i] == '{' {
+			closer = '}'
+		}
+		j := skipSpace(b, i+1)
+		if j < len(b) && b[j] == closer {
+			end = j + 1
+			break
+		}
+		for {
+			var member []byte
+			if closer == '}' {
+				if j >= len(b) || b[j] != '"' {
+					return nodes, 0, false
+				}
+				keyEnd, ok := stringEnd(b, j)
+				if !ok {
+					return nodes, 0, false
+				}
+				member, j = b[j+1:keyEnd-1], skipSpace(b, keyEnd)
+				if j >= len(b) || b[j] != ':' {
+					return nodes, 0, false
+				}
+				j = skipSpace(b, j+1)
+			}
+			if nodes, j, ok = treeAt(nodes, b, j, depth+1, member); !ok {
+				return nodes, 0, false
+			}
+			j = skipSpace(b, j)
+			if j < len(b) && b[j] == ',' {
+				j = skipSpace(b, j+1)
+				continue
+			}
+			if j >= len(b) || b[j] != closer {
+				return nodes, 0, false
+			}
+			end = j + 1
+			break
+		}
+	default:
+		if end, ok = valueEnd(b, i); !ok {
+			return nodes, 0, false
+		}
+	}
+	nodes[at].val, nodes[at].next = b[i:end], len(nodes)
+	return nodes, end, true
+}
+
+// --- text ---------------------------------------------------------------------
+
+// validText is body with every invalid UTF-8 byte and every lone surrogate
+// escape (half of a pair, as an agent cutting a long string can leave) as
+// \ufffd, the way encoding/json decodes them: providers refuse both. body
+// itself when it has neither.
+func validText(body []byte) []byte {
+	if utf8.Valid(body) && !surrogateEscapes(body) {
+		return body
+	}
+	out := make([]byte, 0, len(body)+64)
+	for i := 0; i < len(body); {
+		switch c := body[i]; {
+		case c == '\\' && i+1 < len(body):
+			high, low := surrogate(body[i:])
+			switch _, paired := surrogate(body[min(i+6, len(body)):]); {
+			case high && paired:
+				out, i = append(out, body[i:i+12]...), i+12
+			case high || low:
+				out, i = append(out, `\ufffd`...), i+6
+			default:
+				out, i = append(out, c, body[i+1]), i+2
+			}
+		case c >= utf8.RuneSelf:
+			if r, size := utf8.DecodeRune(body[i:]); r != utf8.RuneError || size != 1 {
+				out, i = append(out, body[i:i+size]...), i+size
+			} else {
+				out, i = append(out, `\ufffd`...), i+1
+			}
+		default:
+			out, i = append(out, c), i+1
+		}
+	}
+	return out
+}
+
+// surrogateEscapes reports any escape of a UTF-16 surrogate in b, in one
+// pass over its backslashes.
+func surrogateEscapes(b []byte) bool {
+	for i := 0; ; {
+		at := bytes.IndexByte(b[i:], '\\')
+		if at < 0 {
+			return false
+		}
+		if i += at + 2; i >= len(b) {
+			return false
+		}
+		if b[i-1] == 'u' && b[i]|0x20 == 'd' {
+			return true
+		}
+	}
+}
+
+// surrogate reports b starting with the escape of a high or a low UTF-16
+// surrogate (\ud800-\udbff, \udc00-\udfff).
+func surrogate(b []byte) (high, low bool) {
+	if len(b) < 6 || b[0] != '\\' || b[1] != 'u' || b[2]|0x20 != 'd' || !isHex(b[4]) || !isHex(b[5]) {
+		return false, false
+	}
+	switch b[3] | 0x20 {
+	case '8', '9', 'a', 'b':
+		return true, false
+	case 'c', 'd', 'e', 'f':
+		return false, true
+	}
+	return false, false
+}
+
+func isHex(c byte) bool { return c >= '0' && c <= '9' || c|0x20 >= 'a' && c|0x20 <= 'f' }

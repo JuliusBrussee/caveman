@@ -399,11 +399,14 @@ func chatResponsesBody(top map[string]json.RawMessage, opts Options) (map[string
 	}
 	// A model the catalog lists with effort levels reasons, so its reasoning
 	// comes back (encrypted) to be replayed even when the caller named no
-	// effort; any other model gets reasoning fields only when one was asked.
+	// effort; any other model gets reasoning fields only when one was asked
+	// ("none" not even then: there is no reasoning to switch off).
 	_, reasons := catalog.EffortLevels("openai", opts.Model)
 	switch effort := fitOpenAIEffort(c.effort, openAIEfforts(opts.Model)); {
 	case effort == "none":
-		out["reasoning"] = json.RawMessage(`{"effort":"none"}`)
+		if reasons {
+			out["reasoning"] = json.RawMessage(`{"effort":"none"}`)
+		}
 	case effort != "" || reasons:
 		reasoning := []byte(`{"summary":"auto"}`)
 		if effort != "" {
@@ -549,14 +552,16 @@ func stripChatEnvelopes(fields map[string]json.RawMessage) bool {
 			return nil, false
 		}
 		var kept []byte
-		eachItem(message.get("reasoning_details"), func(entry []byte, detail obj) {
+		if !eachItem(message.get("reasoning_details"), func(entry []byte, detail obj) {
 			if !bytes.HasPrefix(inner(detail.get("data")), envelopeMarker) {
 				kept = append(openElem(kept), entry...)
 			}
-		})
+		}) {
+			return nil, false // a malformed array is never rewritten into a shorter valid one
+		}
 		out := []byte{'{'}
 		for _, member := range message {
-			switch string(member.key) {
+			switch string(unescapedKey(member.key)) {
 			case "reasoning_content", "reasoning":
 				continue
 			case "reasoning_details":

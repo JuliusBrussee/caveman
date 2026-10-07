@@ -188,7 +188,12 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 			stream.out.event("ping", map[string]any{"type": "ping"})
 			continue
 		}
-		stream.consume(line)
+		if stream.consume(line); stream.errored {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
+	}
+	if stream.errored {
+		return stream.usage, ErrUpstreamFailed // before content Serve makes it ErrNotServed
 	}
 	var truncated error
 	switch err := cut(); {
@@ -197,7 +202,7 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 		// as a finished turn.
 		stream.fail("api_error", "upstream stream ended early: "+err.Error())
 		truncated = fmt.Errorf("%w: %w", errStreamTruncated, err)
-	case !stream.finished && !stream.errored:
+	case !stream.finished:
 		// A clean EOF before any finish_reason or [DONE] is a cut too: half an
 		// answer or half a tool call must never read as end_turn.
 		stream.fail("api_error", "upstream stream ended without a finish_reason")

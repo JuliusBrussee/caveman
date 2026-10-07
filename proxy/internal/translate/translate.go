@@ -73,7 +73,7 @@ func (o Options) route() string {
 // chatSignature signs the thinking a chat route's reasoning becomes for a
 // Messages caller: "caveman:" (so Anthropic never sees it), naming the route
 // and model so only that pair gets it back as reasoning_content.
-func (o Options) chatSignature() string { return signaturePrefix + "v1:" + o.Route + ":" + o.Model }
+func (o Options) chatSignature() string { return signaturePrefix + "v1:" + routeTag(o.Route) + o.Model }
 
 // replay is the signature whose thinking a chat route takes back as
 // reasoning_content, "" for a route that replays none.
@@ -140,7 +140,7 @@ func (h *headBuffer) firstID() string {
 func (r *Reply) Stream() bool { return r.stream }
 
 // namespaces: the answer comes from a Messages host other than Anthropic's
-// own API, so its thinking signatures are rewritten to "caveman:<route>:…".
+// own API, so its thinking signatures are rewritten to "caveman:<n>:<route>:…".
 func (r *Reply) namespaces() bool { return r.to == Messages && r.opts.route() != anthropicRoute }
 
 // Request renders the caller's body (grammar from) for upstream wire to.
@@ -197,6 +197,11 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 	}
 	if err != nil {
 		return nil, nil, err
+	}
+	if from != to {
+		// A body built anew carries no text a provider refuses; one in its
+		// own grammar goes as the caller wrote it.
+		return validText(rawObject(fields)), reply, nil
 	}
 	return rawObject(fields), reply, nil
 }
@@ -509,8 +514,11 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 				streamChatToResponses(out, body, r.tools, r.opts.replay())
 			}
 		})
-		if out.failure != nil && *out.failure == streamCut {
+		switch {
+		case out.failure != nil && *out.failure == streamCut:
 			return out.usage.usage(), errStreamTruncated
+		case out.failure != nil:
+			return out.usage.usage(), ErrUpstreamFailed // before content Serve makes it ErrNotServed
 		}
 		return out.usage.usage(), nil
 	case !r.upstreamStream:
@@ -871,8 +879,8 @@ func withModel(data []byte, shown string) []byte {
 // --- thinking signatures from Messages hosts other than Anthropic -----------
 
 // namespaceStream relays a Messages stream with every thinking signature
-// (redacted_thinking: its data) rewritten to "caveman:<route>:<signature>".
-// A thinking block the host left unsigned gets "caveman:<route>:" so it still
+// (redacted_thinking: its data) rewritten to "caveman:<n>:<route>:<signature>".
+// A thinking block the host left unsigned gets "caveman:<n>:<route>:" so it still
 // never reaches another host. Events are rewritten whole; every other event
 // passes byte for byte. A read error reaches the reader as it came.
 func namespaceStream(upstream io.Reader, route string) io.ReadCloser {
@@ -926,7 +934,7 @@ func namespaceEvent(event []byte, route string, thinking map[int]bool) []byte {
 	var index int
 	_ = json.Unmarshal(fields["type"], &kind)
 	_ = json.Unmarshal(fields["index"], &index)
-	prefix := signaturePrefix + route + ":"
+	prefix := signaturePrefix + routeTag(route)
 	switch kind {
 	case "content_block_start":
 		var block map[string]json.RawMessage
@@ -988,7 +996,7 @@ func namespaceAnswer(answer []byte, route string) []byte {
 	if json.Unmarshal(answer, &body) != nil || json.Unmarshal(body["content"], &blocks) != nil {
 		return answer
 	}
-	prefix, changed := signaturePrefix+route+":", false
+	prefix, changed := signaturePrefix+routeTag(route), false
 	for _, block := range blocks {
 		var kind, value string
 		_ = json.Unmarshal(block["type"], &kind)

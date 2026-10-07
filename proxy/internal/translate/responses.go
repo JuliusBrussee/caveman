@@ -132,15 +132,21 @@ type bridgedTool struct {
 }
 
 type responsesTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	Parameters  json.RawMessage `json:"parameters"`
-	Format      *struct {
-		Syntax     string `json:"syntax"`
-		Definition string `json:"definition"`
-	} `json:"format"`
-	Tools []responsesTool `json:"tools"`
+	Type, Name, Description string
+	Parameters              json.RawMessage
+	Syntax, Definition      string // a custom tool's format
+}
+
+// readResponsesTool reads one Responses tool, its schema as written (never
+// decoded: a tool list comes every turn).
+func readResponsesTool(raw []byte) (responsesTool, obj, bool) {
+	o, ok := parseObj(raw)
+	if !ok {
+		return responsesTool{}, nil, false
+	}
+	format, _ := parseObj(o.get("format"))
+	return responsesTool{Type: o.str("type"), Name: o.str("name"), Description: o.str("description"), Parameters: o.get("parameters"),
+		Syntax: format.str("syntax"), Definition: format.str("definition")}, o, true
 }
 
 // customToolParameters is the schema a freeform tool becomes: one string, the
@@ -177,21 +183,23 @@ func bridgeTools(raw []json.RawMessage) ([]bridgedTool, toolBridge) {
 		case "custom":
 			// The grammar goes into the description so the model can follow
 			// it (LiteLLM custom_tool_grammar_suffix).
-			if tool.Format != nil && tool.Format.Definition != "" {
-				description += "\n\nFormat:\n```" + tool.Format.Syntax + "\n" + tool.Format.Definition + "\n```"
+			if tool.Definition != "" {
+				description += "\n\nFormat:\n```" + tool.Syntax + "\n" + tool.Definition + "\n```"
 			}
 			out = append(out, bridgedTool{Name: wire, Description: description, Parameters: customToolParameters})
 			bridge[wire] = toolOrigin{Name: tool.Name, Namespace: namespace, Custom: true}
 		}
 	}
 	for _, entry := range raw {
-		var tool responsesTool
-		if json.Unmarshal(entry, &tool) != nil || tool.Name == "" && tool.Type != "namespace" {
+		tool, fields, ok := readResponsesTool(entry)
+		if !ok || tool.Name == "" && tool.Type != "namespace" {
 			continue
 		}
 		if tool.Type == "namespace" {
-			for _, child := range tool.Tools {
-				add(child, tool.Name, tool.Description)
+			for _, child := range items(fields.get("tools")) {
+				if child, _, ok := readResponsesTool(child); ok {
+					add(child, tool.Name, tool.Description)
+				}
 			}
 			continue
 		}
@@ -303,7 +311,7 @@ func encodeThinking(blocks []json.RawMessage) *string {
 // decodeThinking returns the blocks an envelope carries that the Messages
 // host `route` may see, or false for anything the runtime did not write:
 // Anthropic-signed blocks, plus that host's own namespaced ones
-// ("caveman:<route>:…"), which stripForeignThinking restores.
+// ("caveman:<n>:<route>:…"), which stripForeignThinking restores.
 func decodeThinking(encrypted *string, route string) ([]json.RawMessage, bool) {
 	if encrypted == nil || *encrypted == "" {
 		return nil, false
@@ -330,7 +338,7 @@ func decodeThinking(encrypted *string, route string) ([]json.RawMessage, bool) {
 		// Rebuilt from the known fields only: nothing else in the envelope
 		// reaches Anthropic.
 		switch {
-		case fields.Type == "thinking" && (fields.Signature != "" && !strings.HasPrefix(fields.Signature, signaturePrefix) || route != anthropicRoute && strings.HasPrefix(fields.Signature, signaturePrefix+route+":")):
+		case fields.Type == "thinking" && (fields.Signature != "" && !strings.HasPrefix(fields.Signature, signaturePrefix) || route != anthropicRoute && strings.HasPrefix(fields.Signature, signaturePrefix+routeTag(route))):
 			signed = append(signed, mustJSON(map[string]string{"type": "thinking", "thinking": fields.Thinking, "signature": fields.Signature}))
 		case fields.Type == "redacted_thinking" && fields.Data != "":
 			signed = append(signed, mustJSON(map[string]string{"type": "redacted_thinking", "data": fields.Data}))
@@ -383,57 +391,50 @@ func clampEffort(effort string, levels []string) string {
 // --- Responses -> Anthropic Messages ---------------------------------------
 
 // canonicalJSON is raw compacted with every object's keys sorted (the last
-// of duplicates kept) and every scalar as written; raw itself when it does
-// not parse. Byte-level: a schema is never decoded.
+// of duplicates kept, as encoding/json does) and every scalar as written; raw
+// itself when it does not parse or nests past maxSchemaDepth. Byte-level and
+// one pass: a schema is never decoded.
 func canonicalJSON(raw json.RawMessage) json.RawMessage {
-	value, ok := trimValue(raw)
+	nodes, ok := parseTree(raw)
 	if !ok {
 		return raw
 	}
-	out, ok := appendCanonical(make([]byte, 0, len(value)), value)
-	if !ok {
-		return raw
-	}
-	return out
+	return appendCanonical(make([]byte, 0, len(raw)), nodes, 0)
 }
 
-func appendCanonical(dst, value []byte) ([]byte, bool) {
-	switch value[0] {
-	case '{':
-		members, ok := objectKVs(value, nil)
-		if !ok {
-			return dst, false
-		}
-		slices.SortStableFunc(members, func(a, b kv) int { return bytes.Compare(a.key, b.key) })
-		dst = append(dst, '{')
-		for at, member := range members {
-			if at+1 < len(members) && bytes.Equal(member.key, members[at+1].key) {
-				continue // a duplicate: the last one counts
-			}
-			dst = append(appendComma(dst), '"')
-			dst = append(append(dst, member.key...), '"', ':')
-			if dst, ok = appendCanonical(dst, member.val); !ok {
-				return dst, false
-			}
-		}
-		return append(dst, '}'), true
+func appendCanonical(dst []byte, nodes []node, at int) []byte {
+	switch n := nodes[at]; n.val[0] {
 	case '[':
-		elements, ok := arrayItems(value, nil)
-		if !ok {
-			return dst, false
-		}
 		dst = append(dst, '[')
-		for at, element := range elements {
-			if at > 0 {
+		for child := at + 1; child < n.next; child = nodes[child].next {
+			if child > at+1 {
 				dst = append(dst, ',')
 			}
-			if dst, ok = appendCanonical(dst, element); !ok {
-				return dst, false
-			}
+			dst = appendCanonical(dst, nodes, child)
 		}
-		return append(dst, ']'), true
+		return append(dst, ']')
+	case '{':
+		type member struct {
+			name []byte
+			at   int
+		}
+		var members []member
+		for child := at + 1; child < n.next; child = nodes[child].next {
+			members = append(members, member{unescapedKey(nodes[child].key), child})
+		}
+		slices.SortStableFunc(members, func(a, b member) int { return bytes.Compare(a.name, b.name) })
+		dst = append(dst, '{')
+		for i, m := range members {
+			if i+1 < len(members) && bytes.Equal(m.name, members[i+1].name) {
+				continue // a duplicate: the last one counts
+			}
+			dst = append(append(append(appendComma(dst), '"'), nodes[m.at].key...), '"', ':')
+			dst = appendCanonical(dst, nodes, m.at)
+		}
+		return append(dst, '}')
+	default:
+		return append(dst, n.val...)
 	}
-	return append(dst, value...), true
 }
 
 // --- Responses -> OpenAI chat ---------------------------------------------

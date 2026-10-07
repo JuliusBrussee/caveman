@@ -320,9 +320,6 @@ func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
 			e.keepalive()
 			continue
 		}
-		if e.failed {
-			continue
-		}
 		data, ok := sseData(line)
 		if !ok {
 			continue
@@ -410,10 +407,13 @@ func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
 		case "error":
 			e.fail(anthropicErrorStatus(event.Error.Type), cmpOrString(event.Error.Type, "api_error"), event.Error.Message)
 		}
+		if e.failed {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
 	}
 	e.usage = chatUsageOf(usage.InputTokens+usage.CacheReadInputTokens+usage.CacheCreationInputTokens, usage.CacheReadInputTokens, usage.CacheCreationInputTokens, usage.OutputTokens, 0)
 	if e.failed {
-		return nil
+		return ErrUpstreamFailed // before content Serve makes it ErrNotServed
 	}
 	if err := cut(); err != nil || !stopped {
 		e.fail(http.StatusBadGateway, "api_error", "upstream stream ended before the answer completed")
@@ -440,7 +440,7 @@ func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) err
 			e.keepalive()
 			continue
 		}
-		if e.failed || finished {
+		if finished {
 			continue
 		}
 		data, ok := sseData(line)
@@ -522,9 +522,12 @@ func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) err
 			}
 			e.fail(status, kind, cmpOrString(message, "upstream response failed"))
 		}
+		if e.failed {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
 	}
 	if e.failed {
-		return nil
+		return ErrUpstreamFailed // before content Serve makes it ErrNotServed
 	}
 	if err := cut(); err != nil || !finished {
 		e.fail(http.StatusBadGateway, "api_error", "upstream stream ended before the response completed")

@@ -24,13 +24,14 @@
 // that Anthropic did not mint:
 //
 //   - a chat upstream's reasoning becomes a thinking block signed
-//     "caveman:v1:<route>:<model>", replayed as reasoning_content only to that
+//     "caveman:v1:<n>:<route>:<model>", replayed as reasoning_content only to that
 //     route and model (Options.Replay);
 //   - a Responses upstream's reasoning becomes a thinking block signed
-//     "caveman:r1:<route>:<encrypted_content>", replayed as a reasoning item
+//     "caveman:r1:<n>:<route>:<encrypted_content>", replayed as a reasoning item
 //     only to that route;
 //   - a non-Anthropic Messages host's own signatures come back as
-//     "caveman:<route>:<signature>" and are restored for that route only;
+//     "caveman:<n>:<route>:<signature>" and are restored for that route only
+//     (<n> is the route id's length: no route's mark starts another's);
 //   - Anthropic thinking a Responses caller carries is stashed, signed, in a
 //     reasoning item's encrypted_content under a "caveman" envelope;
 //   - a chat caller gets the same envelope (signed thinking, or a Responses

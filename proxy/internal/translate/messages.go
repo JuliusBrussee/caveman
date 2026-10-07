@@ -12,6 +12,7 @@ package translate
 import (
 	"bytes"
 	"encoding/json"
+	"strconv"
 	"strings"
 )
 
@@ -189,6 +190,11 @@ const anthropicRoute = "anthropic"
 // signaturePrefix marks every thinking signature Anthropic did not mint.
 const signaturePrefix = "caveman:"
 
+// routeTag is "<length>:<route>:", the route a signature names, length
+// first so no route's tag starts another's (an id may hold ':', as "x" and
+// "x:free" do).
+func routeTag(route string) string { return strconv.Itoa(len(route)) + ":" + route + ":" }
+
 // stripForeignThinking makes a conversation that visited another provider
 // sendable to the Messages host `route` again. Anthropic rejects a thinking
 // block without its own signature, and Claude Code answers that rejection by
@@ -196,7 +202,7 @@ const signaturePrefix = "caveman:"
 //
 // A Messages host other than Anthropic signs its thinking with its own
 // signature; the runtime hands it to the harness as
-// "caveman:<route>:<signature>" (redacted_thinking: its data), so it is
+// "caveman:<n>:<route>:<signature>" (redacted_thinking: its data), so it is
 // restored for that same route and stripped for every other. Only Anthropic
 // keeps an unprefixed signature (Anthropic minted it); unsigned thinking is
 // stripped everywhere. A message left empty keeps a placeholder so the turn
@@ -284,7 +290,7 @@ func stripBlocks(content []byte, route string) (out []byte, stripped, restored b
 			field = "data"
 		}
 		signature := block.str(field)
-		own, ours := strings.CutPrefix(signature, signaturePrefix+route+":")
+		own, ours := strings.CutPrefix(signature, signaturePrefix+routeTag(route))
 		anthropicMinted := signature != "" && !strings.HasPrefix(signature, signaturePrefix)
 		switch {
 		case ours && own != "":
@@ -320,7 +326,7 @@ func objectWith(o obj, key string, value []byte) []byte {
 	for _, member := range o {
 		out = append(appendComma(out), '"')
 		out = append(append(out, member.key...), '"', ':')
-		if string(member.key) == key {
+		if member.is(key) {
 			out, found = append(out, value...), true
 		} else {
 			out = append(out, member.val...)
@@ -336,7 +342,7 @@ func objectWith(o obj, key string, value []byte) []byte {
 func setMember(o obj, key string, value []byte) obj {
 	out := make(obj, 0, len(o))
 	for _, member := range o {
-		if string(member.key) == key {
+		if member.is(key) {
 			member.val = value
 		}
 		out = append(out, member)

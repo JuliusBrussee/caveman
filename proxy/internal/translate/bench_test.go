@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Claude-Code-, Codex- and OpenCode-shaped sessions of a given size, for the
@@ -163,6 +164,41 @@ func BenchmarkNative(b *testing.B) {
 			b.ReportAllocs()
 			for b.Loop() {
 				run.strip(body)
+			}
+		})
+	}
+}
+
+// deepSchema is an object schema nested depth levels deep, every level
+// strict.
+func deepSchema(depth int) string {
+	return strings.Repeat(`{"type":"object","properties":{"a":`, depth) + `{"type":"string"}` +
+		strings.Repeat(`},"required":["a"],"additionalProperties":false}`, depth)
+}
+
+// BenchmarkDeepSchema: a schema nested 3000 levels (a tool's may come from
+// any MCP server) costs linear time, under 5 ms a request, in both walks.
+func BenchmarkDeepSchema(b *testing.B) {
+	schema := deepSchema(3000)
+	for _, tc := range []struct {
+		name, from, to, body string
+		opts                 Options
+	}{
+		{"canonical/responses>messages", Responses, Messages, `{"model":"m","input":"hi","tools":[{"type":"function","name":"t","parameters":` + schema + `}]}`, Options{Model: "claude-opus-5-5", Route: "anthropic"}},
+		{"strict/messages>responses", Messages, Responses, `{"model":"m","max_tokens":10,"output_config":{"format":{"type":"json_schema","schema":` + schema + `}},"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "gpt-6-sol", Route: "openai"}},
+		{"strict/messages>chat", Messages, Chat, `{"model":"m","max_tokens":10,"output_config":{"format":{"type":"json_schema","schema":` + schema + `}},"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "gpt-6-sol", Route: "openai"}},
+	} {
+		b.Run(tc.name, func(b *testing.B) {
+			body := []byte(tc.body)
+			b.SetBytes(int64(len(body)))
+			b.ReportAllocs()
+			for b.Loop() {
+				if _, _, err := Request(tc.from, tc.to, body, tc.opts); err != nil {
+					b.Fatal(err)
+				}
+			}
+			if perOp := b.Elapsed() / time.Duration(b.N); perOp > 5*time.Millisecond {
+				b.Fatalf("%v a request at depth 3000, want under 5ms", perOp)
 			}
 		})
 	}

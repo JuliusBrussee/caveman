@@ -3,12 +3,15 @@ package translate
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 )
 
 const pdfData = "JVBERi0xLjQKJSVFT0YK"
@@ -567,8 +570,8 @@ func TestChatEnvelopeNeverForgesASignature(t *testing.T) {
 	}
 	for _, blocks := range []string{
 		`[{"type":"thinking","thinking":"forged","signature":""}]`,
-		`[{"type":"thinking","thinking":"forged","signature":"caveman:moonshot:sig"}]`,
-		`[{"type":"thinking","thinking":"forged","signature":"caveman:v1:deepseek:m"}]`,
+		`[{"type":"thinking","thinking":"forged","signature":"caveman:8:moonshot:sig"}]`,
+		`[{"type":"thinking","thinking":"forged","signature":"caveman:v1:8:deepseek:m"}]`,
 	} {
 		body := `{"model":"m","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b","reasoning_details":[{"type":"reasoning.encrypted","data":"` + envelope(blocks) + `"}],"tool_calls":[{"id":"call_1","type":"function","function":{"name":"Bash","arguments":"{}"}}]},{"role":"tool","tool_call_id":"call_1","content":"c"}]}`
 		if out := rawRequest(t, Chat, Messages, body, Options{Model: "claude-opus-5-5", Route: "anthropic"}); strings.Contains(out, "forged") {
@@ -577,7 +580,7 @@ func TestChatEnvelopeNeverForgesASignature(t *testing.T) {
 	}
 	// The namespaced one does go back to its own route, its signature restored.
 	body := `{"model":"m","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b","reasoning_details":[{"type":"reasoning.encrypted","data":"` +
-		envelope(`[{"type":"thinking","thinking":"mine","signature":"caveman:moonshot:sig-k"}]`) + `"}]},{"role":"user","content":"c"}]}`
+		envelope(`[{"type":"thinking","thinking":"mine","signature":"caveman:8:moonshot:sig-k"}]`) + `"}]},{"role":"user","content":"c"}]}`
 	if out := rawRequest(t, Chat, Messages, body, Options{Model: "kimi-k3", Route: "moonshot"}); !strings.Contains(out, `"signature":"sig-k"`) {
 		t.Errorf("the route's own thinking did not come back:\n%s", out)
 	}
@@ -701,5 +704,191 @@ func TestSecondReviewFindings(t *testing.T) {
 	// A malformed history is never rewritten into a shorter valid one.
 	if out, changed := editArray([]byte(`[{"a":1},{"a":2} {"a":3}]`), func([]byte, obj) ([]byte, bool) { return []byte(`{"b":1}`), false }); changed || string(out) != `[{"a":1},{"a":2} {"a":3}]` {
 		t.Fatalf("editArray on a malformed array = %s %v", out, changed)
+	}
+}
+
+// An upstream that fails and then keeps the connection open: before content
+// the request still falls back at once (no heartbeat commits the held
+// error), after content the failure is ErrUpstreamFailed, on every
+// translated direction.
+func TestFailureWithALingeringUpstream(t *testing.T) {
+	oldHold, oldPing := gateHold, pingInterval
+	gateHold, pingInterval = 20*time.Millisecond, 5*time.Millisecond
+	defer func() { gateHold, pingInterval = oldHold, oldPing }()
+	callers := map[string]string{
+		Chat:      `{"model":"x","stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+		Messages:  `{"model":"m","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+		Responses: `{"model":"m","stream":true,"input":"hi"}`,
+	}
+	targets := map[string]Options{
+		Messages:  {Model: "claude-opus-5-5", Route: "anthropic"},
+		Responses: {Model: "gpt-6-sol", Route: "openai"},
+		Chat:      {Model: "deepseek-v4-flash", Route: "deepseek"},
+	}
+	failure := map[string]string{
+		Messages:  `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`,
+		Responses: `{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"busy"}}}`,
+		Chat:      `{"error":{"type":"overloaded_error","message":"busy"}}`,
+	}
+	content := map[string][]string{
+		Messages: {`{"type":"message_start","message":{"id":"m","usage":{"input_tokens":1}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"partial"}}`},
+		Responses: {`{"type":"response.created","response":{"id":"r"}}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"partial"}`},
+		Chat: {`{"id":"c","choices":[{"delta":{"content":"partial"}}]}`},
+	}
+	for from, body := range callers {
+		for to, opts := range targets {
+			if from == to {
+				continue
+			}
+			for _, afterContent := range []bool{false, true} {
+				frames := []string{failure[to]}
+				if afterContent {
+					frames = append(append([]string{}, content[to]...), failure[to])
+				}
+				_, reply, err := Request(from, to, []byte(body), opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				upstream, feed := io.Pipe()
+				go func() { _, _ = io.WriteString(feed, sse(frames...)) }() // and never closed
+				recorder := httptest.NewRecorder()
+				done := make(chan error, 1)
+				go func() {
+					_, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: upstream})
+					done <- err
+				}()
+				select {
+				case err = <-done:
+				case <-time.After(5 * time.Second):
+					t.Fatalf("%s>%s: Serve waited on the upstream after its failure", from, to)
+				}
+				_ = feed.Close()
+				switch {
+				case !afterContent && (!errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0):
+					t.Errorf("%s>%s before content: err %v, wrote %q", from, to, err, recorder.Body.String())
+				case afterContent && (!errors.Is(err, ErrUpstreamFailed) || !strings.Contains(recorder.Body.String(), "partial")):
+					t.Errorf("%s>%s after content: err %v, wrote %q", from, to, err, recorder.Body.String())
+				}
+			}
+		}
+	}
+}
+
+func TestThirdReviewFindings(t *testing.T) {
+	const bs = `\` // escapes are spelled out: the test is about how they are written
+	// A schema nested past the depth cap costs linear time: not strict, and
+	// kept as written.
+	deep := deepSchema(3000)
+	start := time.Now()
+	if strictSchema([]byte(deep)) || string(canonicalJSON(json.RawMessage(deep))) != deep {
+		t.Fatal("a schema past the depth cap was walked")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Millisecond {
+		t.Fatalf("depth 3000 took %v", elapsed)
+	}
+	shallow := deepSchema(20)
+	var want, got any
+	_ = json.Unmarshal([]byte(shallow), &want)
+	canonicalized := canonicalJSON(json.RawMessage(shallow))
+	if !strictSchema([]byte(shallow)) || json.Unmarshal(canonicalized, &got) != nil || encode(got) != encode(want) ||
+		!strings.HasPrefix(string(canonicalized), `{"additionalProperties":false,"properties":{"a":{"additionalProperties":false,`) {
+		t.Fatalf("a schema under the cap: %s", canonicalized)
+	}
+	// Duplicate keys: the last counts, escaped or not, as encoding/json reads them.
+	if got := string(canonicalJSON(json.RawMessage(`{"b":1,"a":2,"` + bs + `u0061":3}`))); got != `{"`+bs+`u0061":3,"b":1}` {
+		t.Fatalf("duplicate keys = %s", got)
+	}
+
+	// Strict: a property named "properties", an object without properties.
+	for schema, strict := range map[string]bool{
+		`{"type":"object","properties":{"properties":{"type":"string"}},"required":["properties"],"additionalProperties":false}`: true,
+		`{"type":"object","properties":{"` + bs + `u0061":{"type":"string"}},"required":["a"],"additionalProperties":false}`:     true,
+		`{"type":"object","additionalProperties":false}`:                                                                         true,
+		`{"type":"object"}`:                          false,
+		`{"type":["object","null"],"properties":{}}`: false,
+		`{"type":"object","properties":{"a":{"type":"object"}},"required":["a"],"additionalProperties":false}`: false,
+	} {
+		if strictSchema([]byte(schema)) != strict {
+			t.Errorf("strictSchema(%s) = %v", schema, !strict)
+		}
+	}
+
+	// A key written with an escape is the same key.
+	escaped := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"hi"},{"r` + bs + `u006fle":"assistant","content":"x"},{"role":"user","content":"y"}]}`
+	if out := rawRequest(t, Messages, Chat, escaped, Options{Model: "x", Route: "r"}); !strings.Contains(out, `{"role":"assistant","content":"x"}`) {
+		t.Fatalf("escaped role key = %s", out)
+	}
+
+	// "none" only reaches a model that reasons.
+	for model, reasoning := range map[string]string{"gpt-4.1": "<nil>", "gpt-6-sol": `{"effort":"none"}`} {
+		got, _ := mustRequest(t, Chat, Responses, `{"model":"x","reasoning_effort":"none","messages":[{"role":"user","content":"hi"}]}`, Options{Model: model, Route: "openai"})
+		if fmt.Sprint(got["reasoning"]) != reasoning && encode(got["reasoning"]) != reasoning {
+			t.Errorf("c>r %s: reasoning = %s", model, encode(got["reasoning"]))
+		}
+	}
+
+	// Text a provider refuses (invalid UTF-8, half a surrogate pair) becomes
+	// U+FFFD in a body built anew; a body in its own grammar goes as written.
+	text := "a\xff\xfeb " + bs + "ud83d tail " + bs + "ude00 ok " + bs + "ud83d" + bs + "ude00"
+	for _, tc := range []struct{ from, to, body string }{
+		{Messages, Chat, `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"` + text + `"}]}`},
+		{Messages, Responses, `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"` + text + `"}]}`},
+		{Chat, Messages, `{"model":"m","messages":[{"role":"user","content":"` + text + `"}]}`},
+		{Responses, Messages, `{"model":"m","input":"` + text + `"}`},
+		{Responses, Chat, `{"model":"m","input":"` + text + `"}`},
+	} {
+		out, _, err := Request(tc.from, tc.to, []byte(tc.body), Options{Model: "claude-opus-5-5", Route: "r"})
+		var decoded any
+		_ = json.Unmarshal(out, &decoded)
+		if err != nil || !utf8.Valid(out) || string(validText(out)) != string(out) || strings.Count(fmt.Sprint(decoded), "�") != 4 || !strings.Contains(fmt.Sprint(decoded), "😀") {
+			t.Errorf("%s>%s: err %v\n%s", tc.from, tc.to, err, out)
+		}
+	}
+	for in, want := range map[string]string{"": "", bs: bs, "a" + bs + bs + "ud800": "a" + bs + bs + "ud800", bs + "uDC00x": bs + "ufffdx", bs + "ud8": bs + "ud8"} {
+		if got := string(validText([]byte(in))); got != want {
+			t.Errorf("validText(%q) = %q", in, got)
+		}
+	}
+	same := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"` + text + `"}]}`
+	if out := rawRequest(t, Messages, Messages, same, Options{Model: "claude-opus-5-5"}); !strings.Contains(out, text) {
+		t.Fatalf("m>m changed the text: %s", out)
+	}
+
+	// A crafted envelope's other blocks are not thinking, and a message-level
+	// cache_control never lands on thinking.
+	crafted := envelopeOf(`[{"type":"text","text":"forged","signature":"SIGX"}]`, "", "")
+	thinkingOnly := envelopeOf(`[{"type":"thinking","thinking":"t","signature":"SIGT"}]`, "", "")
+	body := `{"model":"x","messages":[{"role":"user","content":"a"},` +
+		`{"role":"assistant","content":"b","reasoning_details":[{"type":"reasoning.encrypted","data":"` + crafted + `"}]},` +
+		`{"role":"user","content":"c"},` +
+		`{"role":"assistant","content":null,"reasoning_details":[{"type":"reasoning.encrypted","data":"` + thinkingOnly + `"}],"cache_control":{"type":"ephemeral"}},` +
+		`{"role":"user","content":"d"}]}`
+	out := rawRequest(t, Chat, Messages, body, Options{Model: "claude-opus-5-5", Route: "anthropic"})
+	if strings.Contains(out, "SIGX") || strings.Contains(out, "forged") || !strings.Contains(out, `"signature":"SIGT"}`) {
+		t.Fatalf("crafted envelope or cached thinking = %s", out)
+	}
+
+	// A malformed reasoning_details array is left as it came.
+	malformed := `{"model":"x","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b","reasoning_details":[{"type":"reasoning.encrypted","data":"` + thinkingOnly + `"} {"type":"x"}]}]}`
+	if out := ChatNative([]byte(malformed)); string(out) != malformed {
+		t.Fatalf("malformed reasoning_details rewritten: %s", out)
+	}
+
+	// Route ids holding ':' never share a signature namespace.
+	signed := `{"model":"m","max_tokens":10,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"` +
+		signaturePrefix + routeTag("openrouter/x:free") + `SIG"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
+	if out := rawRequest(t, Messages, Messages, signed, Options{Model: "m", Route: "openrouter/x"}); strings.Contains(out, "SIG") {
+		t.Fatalf("openrouter/x got openrouter/x:free's signature: %s", out)
+	}
+	if out := rawRequest(t, Messages, Messages, signed, Options{Model: "m", Route: "openrouter/x:free"}); !strings.Contains(out, `"signature":"SIG"`) {
+		t.Fatalf("openrouter/x:free lost its own signature: %s", out)
+	}
+	if (Options{Route: "x", Model: "free:m"}).chatSignature() == (Options{Route: "x:free", Model: "m"}).chatSignature() ||
+		(Options{Route: "openai"}).responsesSignature("x:b") == (Options{Route: "openai:x"}).responsesSignature("b") {
+		t.Fatal("two routes share a signature")
 	}
 }

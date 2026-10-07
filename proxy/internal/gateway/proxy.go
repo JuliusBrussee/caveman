@@ -468,10 +468,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
 	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
 		// Every other request to Anthropic's or OpenAI's own API too (encoded,
-		// subscription, routing off): byte for byte when it carries nothing
-		// another host wrote. Pass-through and other origins are left alone:
-		// only the provider's own API refuses another host's reasoning.
-		if upstream, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{}); err == nil && statsPricingOriginKnown(meta.Provider, upstream) {
+		// subscription, routing off), and every chat request whatever its
+		// origin (the reasoning envelopes are this runtime's own: DeepSeek or
+		// OpenRouter would get another host's reasoning): byte for byte when
+		// it carries nothing another host wrote. Pass-through and other
+		// origins are left alone: only the provider's own API refuses another
+		// host's reasoning.
+		chat := strings.HasSuffix(meta.Endpoint, "/chat/completions")
+		if upstream, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{}); chat || err == nil && statsPricingOriginKnown(meta.Provider, upstream) {
 			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		}
 	}

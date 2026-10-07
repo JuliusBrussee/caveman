@@ -7,7 +7,7 @@ package translate
 // non-streaming caller gets the message assembled from that stream.
 //
 // Reasoning: the upstream's summary becomes a thinking block whose signature
-// carries the item's encrypted_content ("caveman:r1:<route>:<blob>"), so the
+// carries the item's encrypted_content ("caveman:r1:<n>:<route>:<blob>"), so the
 // next turn to the same route replays it as a reasoning item and every other
 // host, Anthropic included, gets it stripped (AnthropicNative).
 //
@@ -28,7 +28,7 @@ var responsesEfforts = []string{"none", "minimal", "low", "medium", "high", "xhi
 // responsesSignature is the thinking signature that carries a Responses
 // reasoning item's encrypted_content back to the route that wrote it.
 func (o Options) responsesSignature(encrypted string) string {
-	return signaturePrefix + "r1:" + o.route() + ":" + encrypted
+	return signaturePrefix + "r1:" + routeTag(o.route()) + encrypted
 }
 
 // responsesEvent is the union of the Responses stream events read here.
@@ -233,18 +233,21 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 			}
 			continue
 		}
-		t.consume(line)
+		if t.consume(line); t.m.errored {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
 	}
 	usage := anthropicUsageFromChat(t.usage).usage()
 	var truncated error
-	switch err := cut(); {
-	case err != nil:
+	if t.m.errored {
+		truncated = ErrUpstreamFailed // before content Serve makes it ErrNotServed
+	} else if err := cut(); err != nil {
 		t.m.fail("api_error", "upstream stream ended early: "+err.Error())
 		truncated = fmt.Errorf("%w: %w", errStreamTruncated, err)
-	case !t.finished && !t.m.errored:
+	} else if !t.finished {
 		t.m.fail("api_error", "upstream stream ended without response.completed")
 		truncated = fmt.Errorf("%w: no response.completed", errStreamTruncated)
-	default:
+	} else {
 		t.m.finish()
 	}
 	if stream {
