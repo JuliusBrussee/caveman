@@ -240,6 +240,14 @@ func TestGateHoldIsBoundedUnderSteadyHeldLines(t *testing.T) {
 		{"messages relay", sse(`{"type":"ping"}`), sse(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`), func() *Reply {
 			return Relay(Messages, []byte(`{"stream":true}`), "m")
 		}},
+		{"chat from messages", sse(`{"type":"ping"}`), sse(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`), func() *Reply {
+			_, r := mustRequest(t, Chat, Messages, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "claude-opus-5-5"})
+			return r
+		}},
+		{"chat from responses", ": keepalive\n\n", upstreamResponses(`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"busy"}}}`), func() *Reply {
+			_, r := mustRequest(t, Chat, Responses, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "gpt-6-sol"})
+			return r
+		}},
 	} {
 		gateHold = time.Hour
 		recorder := httptest.NewRecorder()

@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"iter"
 	"net/http"
 	"sync"
 	"time"
@@ -55,15 +56,18 @@ func (s sseWriter) flush() {
 }
 
 // sseLines reads upstream lines on a goroutine so the caller can emit a ping
-// on silence: a nil line means "nothing arrived for pingInterval", and one
-// more comes at gateHold however busy the upstream is with lines that carry
-// no content (comments, pings), so the gate opens on time. The
-// first returned func reports how the body ended once the channel is closed:
-// nil for a clean EOF, the read error otherwise. The second stops both
-// goroutines (and their timers) when the caller returns before the end; the
-// reader still waits on its upstream read until the body is closed.
-func sseLines(upstream io.Reader) (<-chan []byte, func() error, func()) {
-	raw := make(chan []byte)
+// on silence: ranging over the first result yields each line, and a nil line
+// when nothing arrived for pingInterval, plus one at gateHold however busy the
+// upstream is with lines that carry no content (comments, pings), so the gate
+// opens on time. The clocks run in the caller's goroutine (one goroutine per
+// stream, not two). The second result reports how the body ended once the
+// range is over: nil for a clean EOF, the read error otherwise. The third
+// stops the reader when the caller returns before the end; the reader still
+// waits on its upstream read until the body is closed.
+func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func()) {
+	// Buffered: a burst of lines crosses to the caller without a handoff per
+	// line.
+	raw := make(chan []byte, 64)
 	done := make(chan struct{})
 	var cut error
 	go func() {
@@ -86,44 +90,33 @@ func sseLines(upstream io.Reader) (<-chan []byte, func() error, func()) {
 			}
 		}
 	}()
-	out := make(chan []byte)
-	ping := pingInterval
-	timer, hold := time.NewTimer(ping), time.NewTimer(gateHold)
-	go func() {
-		defer close(out)
+	lines := func(yield func([]byte) bool) {
+		timer, hold := time.NewTimer(pingInterval), time.NewTimer(gateHold)
 		defer timer.Stop()
 		defer hold.Stop()
-		send := func(line []byte) bool {
-			select {
-			case out <- line:
-				return true
-			case <-done:
-				return false
-			}
-		}
 		for {
 			select {
 			case line, ok := <-raw:
-				if !ok || !send(line) {
+				if !ok || !yield(line) {
 					return
 				}
 			case <-hold.C:
-				if !send(nil) {
+				if !yield(nil) {
 					return
 				}
 				continue // the ping clock runs on
 			case <-timer.C:
-				if !send(nil) {
+				if !yield(nil) {
 					return
 				}
 			case <-done:
 				return
 			}
-			timer.Reset(ping)
+			timer.Reset(pingInterval)
 		}
-	}()
+	}
 	var once sync.Once
-	return out, func() error { return cut }, func() { once.Do(func() { close(done) }) }
+	return lines, func() error { return cut }, func() { once.Do(func() { close(done) }) }
 }
 
 // sseData is the payload of one `data:` line, false for any other line.
@@ -185,7 +178,7 @@ type messageStream struct {
 func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string, estimateFrom []byte) (chatUsage, error) {
 	stream := &messageStream{
 		out: newSSEWriter(w), model: model, signature: signature, estimateFrom: estimateFrom,
-		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: "msg_stream",
+		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: responsesItemID("msg"),
 	}
 	lines, cut, stop := sseLines(upstream)
 	defer stop()
@@ -244,9 +237,6 @@ func (m *messageStream) consume(line []byte) {
 	var chunk chatStreamChunk
 	if json.Unmarshal(data, &chunk) != nil {
 		return
-	}
-	if chunk.ID != "" && m.id == "msg_stream" {
-		m.id = "msg_" + chunk.ID
 	}
 	m.start()
 	if chunk.Error != nil {
@@ -420,39 +410,62 @@ func anthropicStreamUsage(data []byte, usage *anthropicUsage) {
 }
 
 // estimateInputTokens counts a Messages request's input without a tokenizer:
-// a token per four characters of its strings (text, tool schemas, the
-// system prompt), and a flat 1600 for each base64 image or document, whose
-// bytes are not text.
+// a token per four characters of its string values (text, tool schemas, the
+// system prompt; not model or type names), and a flat 1600 for each base64
+// image or document, whose bytes are not text. One pass over the body.
 // ponytail: chars/4 runs a few percent off on code; the host's exact count
 // replaces it in message_delta.
 func estimateInputTokens(body []byte) int {
-	var request any
-	if json.Unmarshal(body, &request) != nil {
-		return 0
+	type level struct {
+		base64 bool
+		chars  int // the characters of this object's strings, nested ones included
 	}
 	chars, media := 0, 0
-	var walk func(any)
-	walk = func(value any) {
-		switch typed := value.(type) {
-		case string:
-			chars += len(typed)
-		case []any:
-			for _, item := range typed {
-				walk(item)
-			}
-		case map[string]any:
-			if source, ok := typed["source"].(map[string]any); ok && source["type"] == "base64" {
-				media++
-				return
-			}
-			for key, item := range typed {
-				if key != "model" && key != "type" {
-					walk(item)
+	stack := make([]level, 0, 16)
+	var key []byte
+	for i := 0; i < len(body); i++ {
+		switch body[i] {
+		case '{':
+			stack = append(stack, level{})
+		case '}':
+			if n := len(stack); n > 0 {
+				top := stack[n-1]
+				stack = stack[:n-1]
+				switch {
+				case top.base64:
+					media++ // a base64 source: its bytes are not text
+				case n > 1:
+					stack[n-2].chars += top.chars
+				default:
+					chars += top.chars
 				}
 			}
+		case '"':
+			end, ok := stringEnd(body, i)
+			if !ok {
+				return chars/4 + media*1600
+			}
+			value := body[i+1 : end-1]
+			if next := skipSpace(body, end); next < len(body) && body[next] == ':' {
+				key = value
+			} else {
+				switch string(key) {
+				case "model":
+				case "type":
+					if string(value) == "base64" && len(stack) > 0 {
+						stack[len(stack)-1].base64 = true
+					}
+				default:
+					if n := len(stack); n > 0 {
+						stack[n-1].chars += len(value)
+					} else {
+						chars += len(value)
+					}
+				}
+			}
+			i = end - 1
 		}
 	}
-	walk(request)
 	return chars/4 + media*1600
 }
 

@@ -132,7 +132,7 @@ func TestResponsesStreamToMessages(t *testing.T) {
 	if got := eventNames(events); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
-	if message := events[0].data["message"].(map[string]any); message["model"] != "claude-opus-5-5" || message["id"] != "msg_resp_1" {
+	if message := events[0].data["message"].(map[string]any); message["model"] != "claude-opus-5-5" || !opaqueID(message["id"], "msg_", "resp_1") {
 		t.Fatalf("message_start = %v", message)
 	}
 	if delta := events[4].data["delta"].(map[string]any); delta["type"] != "signature_delta" || delta["signature"] != "caveman:r1:chatgpt:ENC-XYZ" {
@@ -207,7 +207,11 @@ func TestResponsesAnswerAssembledForANonStreamingCaller(t *testing.T) {
 		t.Fatalf("err %v headers %v", err, recorder.Header())
 	}
 	answer := decode(t, recorder.Body.String())
-	want := `{"content":[{"signature":"caveman:r1:chatgpt:ENC-XYZ","thinking":"thinking hard","type":"thinking"},{"text":"hello world","type":"text"},{"id":"call_abc","input":{"path":"x"},"name":"Read","type":"tool_use"}],"id":"msg_resp_1","model":"claude-opus-5-5","role":"assistant","stop_reason":"tool_use","stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":600,"input_tokens":400,"output_tokens":80}}`
+	if !opaqueID(answer["id"], "msg_", "resp_1") {
+		t.Fatalf("answer id %v", answer["id"])
+	}
+	answer["id"] = "msg_x"
+	want := `{"content":[{"signature":"caveman:r1:chatgpt:ENC-XYZ","thinking":"thinking hard","type":"thinking"},{"text":"hello world","type":"text"},{"id":"call_abc","input":{"path":"x"},"name":"Read","type":"tool_use"}],"id":"msg_x","model":"claude-opus-5-5","role":"assistant","stop_reason":"tool_use","stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":600,"input_tokens":400,"output_tokens":80}}`
 	if encode(answer) != want {
 		t.Fatalf("answer =\n%s\nwant\n%s", encode(answer), want)
 	}

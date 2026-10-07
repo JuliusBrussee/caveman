@@ -21,12 +21,12 @@ func TestSupported(t *testing.T) {
 	}{
 		{Messages, Messages, true}, {Chat, Chat, true}, {Responses, Responses, true},
 		{Messages, Chat, true}, {Responses, Messages, true}, {Responses, Chat, true}, {Messages, Responses, true},
-		{Chat, Messages, false}, {Chat, Responses, false}, {"x", Chat, false},
+		{Chat, Messages, true}, {Chat, Responses, true}, {"x", Chat, false}, {Chat, "x", false},
 	} {
 		if got := Supported(tc.from, tc.to); got != tc.want {
 			t.Errorf("Supported(%s, %s) = %v", tc.from, tc.to, got)
 		}
-		if _, _, err := Request(tc.from, tc.to, []byte(`{"model":"m","messages":[],"input":"hi"}`), Options{Model: "m"}); (err == nil) != tc.want {
+		if _, _, err := Request(tc.from, tc.to, []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"input":"hi"}`), Options{Model: "m"}); (err == nil) != tc.want {
 			t.Errorf("Request(%s, %s) err = %v", tc.from, tc.to, err)
 		}
 	}
@@ -138,7 +138,10 @@ func TestMessagesToChatEffortDialects(t *testing.T) {
 		{"caller output_config", `"output_config":{"effort":"xhigh"},`, "", "", map[string]any{"reasoning_effort": `"xhigh"`, "output_config": ""}},
 		{"caller adaptive thinking", `"thinking":{"type":"adaptive"},`, "", "", map[string]any{"reasoning_effort": `"medium"`, "reasoning": ""}},
 		{"caller budget on openrouter", `"thinking":{"type":"enabled","budget_tokens":2048},`, "", "openrouter", map[string]any{"reasoning": `{"max_tokens":2048}`}},
-		{"caller thinking off", `"thinking":{"type":"disabled"},`, "", "", map[string]any{"reasoning_effort": "", "reasoning": ""}},
+		// Thinking off is effort "none" wherever the dialect can say it.
+		{"caller thinking off", `"thinking":{"type":"disabled"},`, "", "", map[string]any{"reasoning_effort": `"none"`, "reasoning": ""}},
+		{"caller thinking off on openrouter", `"thinking":{"type":"disabled"},`, "", "openrouter", map[string]any{"reasoning": `{"effort":"none"}`}},
+		{"caller thinking off on a toggle", `"thinking":{"type":"disabled"},`, "", "toggle", map[string]any{"thinking": `{"type":"disabled"}`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sent, _ := mustRequest(t, Messages, Chat, body(tc.extra), Options{Model: "m", Effort: tc.effort, Dialect: tc.dialect})
@@ -207,7 +210,7 @@ func TestChatAnswerToMessages(t *testing.T) {
 		t.Fatalf("usage = %+v", usage)
 	}
 	answer := decode(t, recorder.Body.String())
-	if answer["id"] != "msg_cmpl-9" || answer["type"] != "message" || answer["role"] != "assistant" || answer["model"] != "openai/gpt-5.6" ||
+	if !opaqueID(answer["id"], "msg_", "cmpl-9") || answer["type"] != "message" || answer["role"] != "assistant" || answer["model"] != "openai/gpt-5.6" ||
 		answer["stop_reason"] != "tool_use" || answer["stop_sequence"] != nil {
 		t.Fatalf("envelope = %v", answer)
 	}
@@ -266,7 +269,7 @@ func TestChatStreamToMessages(t *testing.T) {
 	if got := eventNames(events); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
-	if message := events[0].data["message"].(map[string]any); message["model"] != "auto" || message["id"] != "msg_cmpl-s" {
+	if message := events[0].data["message"].(map[string]any); message["model"] != "auto" || !opaqueID(message["id"], "msg_", "cmpl-s") {
 		t.Fatalf("message_start = %v", message)
 	}
 	if signature := events[4].data["delta"].(map[string]any); signature["type"] != "signature_delta" || signature["signature"] != "caveman:v1:deepseek:deepseek-v4-flash" {

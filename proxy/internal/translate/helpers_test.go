@@ -295,3 +295,11 @@ func codexBody(model, effort, tools, input string) string {
 
 const userHello = `[{"type":"message","role":"developer","content":[{"type":"input_text","text":"sandbox: workspace-write"}]},
   {"type":"message","role":"user","content":[{"type":"input_text","text":"say hello"}]}]`
+
+// opaqueID: a translated answer's id is the runtime's own (prefix plus 24
+// hex), never one naming the upstream's.
+func opaqueID(id any, prefix, upstream string) bool {
+	text, _ := id.(string)
+	rest, ok := strings.CutPrefix(text, prefix)
+	return ok && len(rest) == 24 && !strings.Contains(text, upstream)
+}

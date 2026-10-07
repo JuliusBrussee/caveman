@@ -22,16 +22,14 @@ const (
 	Responses = "responses" // OpenAI Responses
 )
 
-// Supported: a caller body in grammar from can run on an upstream wire to.
-// True for (m,m) (c,c) (r,r) (m,c) (m,r) (r,m) (r,c); false otherwise (c->m
-// and c->r are not built).
+// Supported: a caller body in grammar from can run on an upstream wire to:
+// every pair of the three grammars.
 func Supported(from, to string) bool {
-	switch from + ">" + to {
-	case Messages + ">" + Messages, Chat + ">" + Chat, Responses + ">" + Responses,
-		Messages + ">" + Chat, Messages + ">" + Responses, Responses + ">" + Messages, Responses + ">" + Chat:
-		return true
-	}
-	return false
+	return isGrammar(from) && isGrammar(to)
+}
+
+func isGrammar(grammar string) bool {
+	return grammar == Messages || grammar == Chat || grammar == Responses
 }
 
 // Options fit a request to one upstream.
@@ -100,6 +98,7 @@ type Reply struct {
 	upstreamStream bool // the upstream was asked for one
 	tools          toolBridge
 	upstreamID     string // the host's own id for the answer (UpstreamID)
+	includeUsage   bool   // a streamed chat caller asked for the usage chunk
 }
 
 // UpstreamID is the host's own id for the answer it gave (OpenRouter's gen-…,
@@ -154,38 +153,43 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 	if !Supported(from, to) {
 		return nil, nil, fmt.Errorf("translate: a %s caller cannot run on a %s upstream", from, to)
 	}
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
+	fields, err := topFields(body)
+	if err != nil {
 		return nil, nil, fmt.Errorf("translate: %s body: %w", from, err)
 	}
-	reply := &Reply{from: from, to: to, opts: opts, stream: probe.Stream, upstreamStream: probe.Stream}
-	if from == Messages && to != Messages && probe.Stream {
+	stream := string(fields["stream"]) == "true"
+	reply := &Reply{from: from, to: to, opts: opts, stream: stream, upstreamStream: stream}
+	if from == Messages && to != Messages && stream {
 		reply.opts.estimateFrom = body // counted when message_start goes, not before the send
 	}
-	var fields map[string]json.RawMessage
-	var err error
+	if options, ok := parseObj(fields["stream_options"]); ok && from == Chat {
+		reply.includeUsage = string(options.get("include_usage")) == "true"
+	}
 	switch {
 	case from == Messages && to == Messages:
-		fields, err = messagesBody(body, opts)
+		messagesBody(fields, opts)
 	case from == Messages && to == Chat:
-		fields, err = messagesChatBody(body, opts)
+		fields, err = messagesChatBody(fields, opts)
 	case from == Messages && to == Responses:
-		fields, err = messagesResponsesBody(body, opts)
+		fields, err = messagesResponsesBody(fields, opts)
+		reply.upstreamStream = true
+	case from == Chat && to == Chat:
+		stripChatEnvelopes(fields)
+		fitChat(fields, opts, stream, chatCallerEffort(fields, opts))
+	case from == Chat && to == Messages:
+		fields, err = chatMessagesBody(fields, opts)
 		reply.upstreamStream = true
 	case from == Chat:
-		if err = json.Unmarshal(body, &fields); err == nil {
-			fitChat(fields, opts, probe.Stream, chatCallerEffort(fields, opts))
-		}
+		fields, err = chatResponsesBody(fields, opts)
+		reply.upstreamStream = true
 	case to == Messages:
-		fields, reply.tools, err = responsesMessagesBody(body, opts)
+		fields, reply.tools, err = responsesMessagesBody(fields, opts)
 		reply.upstreamStream = true
 	case to == Chat:
-		fields, reply.tools, err = responsesChatBody(body, opts)
+		fields, reply.tools, err = responsesChatBody(fields, opts)
 		reply.upstreamStream = true
 	default:
-		if fields, err = responsesNativeBody(body, opts.Model, opts.Effort, opts.Route); err == nil && opts.ChatGPTLogin {
+		if err = responsesNativeBody(fields, opts.Model, opts.Effort, opts.Route); err == nil && opts.ChatGPTLogin {
 			chatgptLoginBody(fields)
 			reply.upstreamStream = true
 		}
@@ -194,68 +198,32 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return nil, nil, err
-	}
-	if from == Messages && to == Messages && opts.route() == anthropicRoute {
-		out = anthropicToolIDs(out) // another host's tool ids (OpenRouter's Kimi "functions.Bash:0") would fail Claude
-	}
-	return out, reply, nil
+	return rawObject(fields), reply, nil
 }
 
-// messagesBody is the caller's Messages body for a Messages host: the
-// upstream's model id, the thinking this host may see, the effort, and the
-// route's parameter rules.
-func messagesBody(raw []byte, opts Options) (map[string]json.RawMessage, error) {
-	fields, err := routeBody(raw, opts.Model, opts.route())
-	if err != nil {
-		return nil, err
-	}
+// messagesBody fits the caller's Messages body to a Messages host: the
+// upstream's model id, the thinking this host may see, the effort, the
+// route's parameter rules, and (on Anthropic's own API) tool ids Anthropic
+// accepts (OpenRouter's Kimi "functions.Bash:0" would fail Claude).
+func messagesBody(fields map[string]json.RawMessage, opts Options) {
+	fields["model"] = mustJSON(opts.Model)
+	stripForeignThinking(fields, opts.route())
 	if opts.Effort != "" && opts.Dialect != dialectNone {
 		applyNativeEffort(fields, opts.Model, opts.Effort)
 	} else if raw, set := fields["thinking"]; set {
 		// No effort to apply: the caller's own thinking still has to be one
 		// this host's model takes (at the caller's own effort).
-		var output struct {
-			Effort string `json:"effort"`
-		}
-		_ = json.Unmarshal(fields["output_config"], &output)
-		if thinking, keep := nativeThinking(raw, fields["max_tokens"], opts.Model, output.Effort); keep {
+		output, _ := parseObj(fields["output_config"])
+		if thinking, keep := nativeThinking(raw, fields["max_tokens"], opts.Model, output.str("effort")); keep {
 			fields["thinking"] = thinking
 		} else {
 			delete(fields, "thinking")
 		}
 	}
 	fitRoute(fields, opts, false)
-	return fields, nil
-}
-
-// messagesChatBody is a Messages body translated for a chat upstream. The
-// translation drops output_config, so the caller's own effort (else its
-// thinking, at the middle effort) is set anew in the upstream's dialect.
-func messagesChatBody(raw []byte, opts Options) (map[string]json.RawMessage, error) {
-	var request anthropicRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, err
+	if opts.route() == anthropicRoute {
+		fixToolIDs(fields)
 	}
-	translated, err := anthropicToChat(request, opts.Model, opts.replay())
-	if err != nil {
-		return nil, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(mustJSON(translated), &fields); err != nil {
-		return nil, err
-	}
-	effort := opts.Effort
-	if effort == "" && request.OutputConfig != nil {
-		effort = request.OutputConfig.Effort
-	}
-	if _, thinking := fields["reasoning"]; effort == "" && thinking && opts.dialect() != dialectOpenRouter {
-		effort = "medium" // chatReasoning wrote OpenRouter's field; only OpenRouter takes it as is
-	}
-	fitChat(fields, opts, request.Stream, effort)
-	return fields, nil
 }
 
 // chatCallerEffort is the effort a chat caller's body goes with: Options'
@@ -331,64 +299,6 @@ func dropParams(fields map[string]json.RawMessage, opts Options) {
 	for _, name := range opts.DropParams {
 		delete(fields, name)
 	}
-}
-
-// responsesMessagesBody is a Responses body translated for a Messages host:
-// the effort becomes thinking fitted to the model (adaptive, or a manual
-// budget where adaptive is not accepted) plus output_config.effort where the
-// model takes one.
-func responsesMessagesBody(raw []byte, opts Options) (map[string]json.RawMessage, toolBridge, error) {
-	var request responsesRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, nil, err
-	}
-	effort := opts.Effort
-	if effort == "" {
-		effort = request.effort()
-	}
-	_, _, levels, _ := claudeThinking(opts.Model)
-	effort = clampEffort(effort, levels)
-	maxTokens := request.MaxOutputTokens
-	if maxTokens <= 0 {
-		maxTokens = cmpOr(opts.MaxOutputTokens, anthropicDefaultMaxTokens)
-	}
-	var thinking json.RawMessage
-	if effort != "" && effort != "none" {
-		if fitted, keep := nativeThinking(json.RawMessage(`{"type":"adaptive"}`), mustJSON(maxTokens), opts.Model, effort); keep {
-			thinking = fitted
-		}
-	}
-	fields, tools, err := responsesToAnthropic(request, opts.Model, maxTokens, thinking, opts.route())
-	if err != nil {
-		return nil, nil, err
-	}
-	if effort != "" && effort != "none" && len(levels) > 0 {
-		fields["output_config"] = mustJSON(map[string]string{"effort": effort})
-	}
-	fitRoute(fields, opts, false)
-	return fields, tools, nil
-}
-
-// responsesChatBody is a Responses body translated for a chat upstream.
-func responsesChatBody(raw []byte, opts Options) (map[string]json.RawMessage, toolBridge, error) {
-	var request responsesRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, nil, err
-	}
-	translated, tools, err := responsesToChat(request, opts.Model, opts.replay())
-	if err != nil {
-		return nil, nil, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(mustJSON(translated), &fields); err != nil {
-		return nil, nil, err
-	}
-	effort := opts.Effort
-	if effort == "" {
-		effort = request.effort()
-	}
-	fitChat(fields, opts, true, clampEffort(effort, nil))
-	return fields, tools, nil
 }
 
 func cmpOr(value, fallback int) int {
@@ -582,6 +492,15 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 		answer, usage := chatToAnthropic(raw, shown, r.opts.chatSignature())
 		writeJSON(w, answer)
 		return usage.usage(), nil
+	case r.from == Chat && r.to != Chat:
+		out := newChatEmitter(w, r.stream, r.includeUsage, shown)
+		var err error
+		if r.to == Messages {
+			err = streamAnthropicToChat(out, body)
+		} else {
+			err = streamResponsesToChat(out, body, r.opts.route())
+		}
+		return out.usage.usage(), err
 	case r.from == Responses && r.to != Responses:
 		out := finishTranslated(w, r.stream, shown, func(out *responsesStream) {
 			if r.to == Messages {
@@ -1091,8 +1010,30 @@ func namespaceAnswer(answer []byte, route string) []byte {
 
 // --- native bodies ----------------------------------------------------------
 
-// unsignedThinking finds a thinking signature or redacted data left empty.
-var unsignedThinking = regexp.MustCompile(`"(?:signature|data)"\s*:\s*""`)
+// unsignedThinking reports a thinking signature or redacted data left empty
+// ("signature":"" or "data":"", any spacing): a scan for "" and a look back,
+// as fast as bytes.Index.
+func unsignedThinking(body []byte) bool {
+	for i := 0; ; {
+		at := bytes.Index(body[i:], []byte(`""`))
+		if at < 0 {
+			return false
+		}
+		at += i
+		j := at - 1
+		for j >= 0 && isSpace(body[j]) {
+			j--
+		}
+		if j >= 0 && body[j] == ':' {
+			for j--; j >= 0 && isSpace(body[j]); j-- {
+			}
+			if key := body[:j+1]; bytes.HasSuffix(key, []byte(`"signature"`)) || bytes.HasSuffix(key, []byte(`"data"`)) {
+				return true
+			}
+		}
+		i = at + 2
+	}
+}
 
 // AnthropicNative returns a Messages body bound for Anthropic's own API with
 // every thinking block Anthropic did not mint removed (signed "caveman:…", or
@@ -1104,18 +1045,14 @@ var unsignedThinking = regexp.MustCompile(`"(?:signature|data)"\s*:\s*""`)
 // ponytail: a thinking block with no signature field at all skips the fast
 // path's notice; Anthropic's grammar always sends the field.
 func AnthropicNative(body []byte) []byte {
-	if !bytes.Contains(body, []byte(signaturePrefix)) && !unsignedThinking.Match(body) && !bytes.Contains(body, []byte(`"enabled"`)) {
+	if !bytes.Contains(body, []byte(signaturePrefix)) && !unsignedThinking(body) && !bytes.Contains(body, []byte(`"enabled"`)) {
 		return body
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil || !stripForeignThinking(fields, anthropicRoute) {
+	fields, err := topFields(body)
+	if err != nil || !stripForeignThinking(fields, anthropicRoute) {
 		return body
 	}
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return body
-	}
-	return out
+	return rawObject(fields)
 }
 
 // OpenAINative returns a Responses body bound for OpenAI with the reasoning
@@ -1126,13 +1063,9 @@ func OpenAINative(body []byte) []byte {
 	if !bytes.Contains(body, envelopeMarker) {
 		return body
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil || !dropReasoning(fields, func(*string) bool { return false }) {
+	fields, err := topFields(body)
+	if err != nil || !dropReasoning(fields) {
 		return body
 	}
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return body
-	}
-	return out
+	return rawObject(fields)
 }
