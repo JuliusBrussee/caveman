@@ -483,7 +483,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 			// A pool target that failed: the rest of this ask runs the asked
 			// model, still at the answered effort fitted to that model's levels
 			// (the same fallback every turn).
-			rejected.Effort = translate.FitEffort(request.Endpoint, ask.Model, answer.Effort)
+			rejected.Effort = translate.FitEffort(request.Endpoint, ask.Model, answer.Effort, ask.Body)
 			rejected.EffortMode, rejected.DefaultEffort = answer.EffortMode, answer.DefaultEffort
 		}
 		answer.Reject = func() {

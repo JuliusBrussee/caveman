@@ -108,7 +108,10 @@ CREATE TABLE IF NOT EXISTS requests (
   price_cache_read_per_million REAL,
   price_cache_write_per_million REAL,
   price_cache_write_1h_per_million REAL,
-  price_reasoning_per_million REAL
+  price_reasoning_per_million REAL,
+  route_pool_id TEXT,
+  route_reason TEXT,
+  upstream_response_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -325,6 +328,9 @@ var migrations = []string{
 	`ALTER TABLE requests ADD COLUMN cache_bust INTEGER`,
 	`ALTER TABLE requests ADD COLUMN compression_eligible INTEGER`,
 	`ALTER TABLE requests ADD COLUMN request_hash_complete INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE requests ADD COLUMN route_pool_id TEXT`,
+	`ALTER TABLE requests ADD COLUMN route_reason TEXT`,
+	`ALTER TABLE requests ADD COLUMN upstream_response_id TEXT`,
 	`ALTER TABLE usage_events ADD COLUMN cache_creation_input_tokens INTEGER`,
 	`ALTER TABLE learn_sinks ADD COLUMN tokens_observed INTEGER`,
 }
@@ -530,8 +536,9 @@ func (s *Store) Record(rec gateway.RequestRecord) {
             request_token_basis, request_measurement_status, request_estimated_input_delta_usd, request_savings_basis,
             pricing_known, pricing_provider, pricing_model, pricing_catalog_version,
             price_input_per_million, price_output_per_million, price_cache_read_per_million,
-            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million,
+            route_pool_id, route_reason, upstream_response_id
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
 		rec.ContextBill, rec.TransformTrace, rec.TransformLocation, rec.CacheEpoch, rec.CachePrefixSHA256,
 		rec.ProviderCachePrefixSHA256, rec.ProviderCacheComponentSHA256, rec.CacheBoundaryKnown, rec.CacheBust, rec.CompressionEligible,
@@ -547,6 +554,7 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.PricingKnown, rec.PricingProvider, rec.PricingModel, rec.PricingCatalogVersion,
 		rec.PriceInputPerMillion, rec.PriceOutputPerMillion, rec.PriceCacheReadPerMillion,
 		rec.PriceCacheWritePerMillion, rec.PriceCacheWrite1hPerMillion, rec.PriceReasoningPerMillion,
+		rec.RoutePoolID, rec.RouteReason, rec.UpstreamResponseID,
 	)
 	if err != nil && s.logger != nil {
 		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)

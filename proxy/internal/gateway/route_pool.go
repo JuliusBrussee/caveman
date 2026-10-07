@@ -67,6 +67,8 @@ type targetResult struct {
 	usage  providers.UsageObservation
 	bytes  int64
 	errMsg string // a cut stream once served; why it fell back otherwise
+	// upstreamID is the host's own id for its answer (translate.Reply.UpstreamID).
+	upstreamID string
 }
 
 // serveTarget sends body (the caller's grammar) to target at effort and, when
@@ -137,9 +139,9 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 	if errors.Is(err, translate.ErrNotServed) {
 		// A 2xx that failed or ended before any content: nothing reached the
 		// agent, so the asked model still runs.
-		return targetResult{errMsg: "pool_failed_before_content"}
+		return targetResult{errMsg: "pool_failed_before_content", upstreamID: reply.UpstreamID()}
 	}
-	out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, usage: providers.UsageObservation{
+	out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, upstreamID: reply.UpstreamID(), usage: providers.UsageObservation{
 		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 		CachedInputTokens: usage.CacheReadTokens, CacheCreationInputTokens: usage.CacheWriteTokens, CacheStatus: "unknown",
 	}}

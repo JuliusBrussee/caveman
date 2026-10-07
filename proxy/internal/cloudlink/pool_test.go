@@ -223,15 +223,21 @@ func TestOtherBadRequestsAreNeverRetried(t *testing.T) {
 // fallback fits it to the asked model's levels (minimal is low on Claude,
 // max is xhigh on OpenAI, none is no effort on Claude).
 func TestRejectFitsTheEffortToTheAskedModel(t *testing.T) {
-	responses := gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: "gpt-6-sol", SessionID: "s1",
-		Body: []byte(`{"model":"gpt-6-sol","input":[{"role":"user","content":"fix the bug please"}]}`)}
+	responses := func(model string) gateway.RouteAsk {
+		return gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: model, SessionID: "s1",
+			Body: []byte(`{"model":"` + model + `","input":[{"role":"user","content":"fix the bug please"}]}`)}
+	}
+	thinkingOff := messagesAsk("claude-sonnet-5-5")
+	thinkingOff.Body = []byte(`{"model":"claude-sonnet-5-5","thinking":{"type":"between_tools"},"messages":[{"role":"user","content":"fix the bug please"}]}`)
 	for _, tc := range []struct {
 		ask            gateway.RouteAsk
 		answered, want string
 	}{
 		{messagesAsk("claude-opus-5-5"), "minimal", "low"},
 		{messagesAsk("claude-opus-5-5"), "none", ""},
-		{responses, "max", "xhigh"},
+		{responses("gpt-6.1-sol"), "max", "xhigh"}, // not in the catalog: OpenAI's common set
+		{responses("gpt-6-sol"), "max", "max"},     // the catalog lists max
+		{thinkingOff, "max", "high"},
 	} {
 		fake := &poolCloud{answer: func(map[string]any) (int, string) {
 			return 200, `{"pool_id":"fireworks/kimi-k3","via":"local","model":"kimi-k3","effort":"` + tc.answered + `","decision_id":"d1"}`

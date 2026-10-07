@@ -414,6 +414,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 			w.Header().Set("x-caveman-routed-from", modelRequested)
 			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
+			if result.errMsg != "" && s.logger != nil {
+				s.logger.Warn("pool target failed", "pool_id", target.PoolID, "via", target.Via, "reason", result.errMsg, "served", result.served, "request_id", requestID)
+			}
 			if result.served {
 				evidence.route = answer
 				evidence.acceptedBody = sent
@@ -442,7 +446,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			// The asked model runs at the answered effort, as a non-pool answer
 			// would, fitted to that model's levels (the word was chosen for the target).
 			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID,
-				Effort: translate.FitEffort(grammarOf(meta.Endpoint), meta.Model, answer.Effort), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
+				Effort: translate.FitEffort(grammarOf(meta.Endpoint), meta.Model, answer.Effort, transform.Body), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
 		}
 		// The harness's own path: reasoning another host wrote earlier in the
 		// conversation goes no further than that host; a body without any goes
@@ -913,6 +917,9 @@ type requestEvidence struct {
 	// route is the route stage's answer; modelRequested what the agent asked for.
 	route          RouteAnswer
 	modelRequested string
+	// poolID is the pool entry the request went to first; upstreamID the
+	// host's own answer id (translate.Reply.UpstreamID).
+	poolID, upstreamID string
 }
 
 func requestEvidenceFromHeaders(headers http.Header) requestEvidence {
@@ -1645,6 +1652,8 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		RouteOutcome:                 evidence.route.Outcome,
 		RouteReason:                  evidence.route.Reason,
 		RouteDecisionID:              evidence.route.DecisionID,
+		RoutePoolID:                  evidence.poolID,
+		UpstreamResponseID:           evidence.upstreamID,
 		ProviderOriginKnown:          evidence.statsPricingUnsupportedReason != "custom_provider_origin",
 		Endpoint:                     meta.Endpoint,
 		Stream:                       meta.Stream,

@@ -236,11 +236,17 @@ type RequestRecord struct {
 	Model     string
 	RouteFrom string
 	RouteTo   string
-	// The route stage's outcome for the runtime/v1 sender (see route.go); not
-	// stored. Empty when no route stage ran.
+	// The route stage's outcome for the runtime/v1 sender (see route.go); the
+	// reason is stored too. Empty when no route stage ran.
 	RouteOutcome    string
 	RouteReason     string
 	RouteDecisionID string
+	// RoutePoolID is the pool entry the route stage sent the request to (on
+	// a fallback row too, with RouteReason saying why it failed);
+	// UpstreamResponseID the host's own id for the answer (OpenRouter's
+	// gen-…), to look the call up there. Stored, with RouteReason.
+	RoutePoolID        string
+	UpstreamResponseID string
 	// ProviderOriginKnown: the request went to the provider's own API, so its
 	// model ids are catalog names rather than local paths. Not stored.
 	ProviderOriginKnown      bool

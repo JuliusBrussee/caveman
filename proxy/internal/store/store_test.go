@@ -127,3 +127,22 @@ func TestRecentRequests(t *testing.T) {
 		t.Fatalf("recent[0] = %+v, want newest checkout anthropic row", recent[0])
 	}
 }
+
+// A pool attempt is on its row: the entry, why it fell back, and the host's
+// own answer id to look the call up there.
+func TestRecordKeepsThePoolAttempt(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	s.Record(gateway.RequestRecord{RequestID: "req-pool", Provider: "anthropic", Model: "claude-opus-5-5", Endpoint: "/v1/messages",
+		RoutePoolID: "openrouter/deepseek-v4-pro", RouteReason: "pool_400", UpstreamResponseID: "gen-1"})
+	var pool, reason, upstream string
+	if err := s.db.QueryRow(`SELECT route_pool_id, route_reason, upstream_response_id FROM requests WHERE request_id = 'req-pool'`).Scan(&pool, &reason, &upstream); err != nil {
+		t.Fatal(err)
+	}
+	if pool != "openrouter/deepseek-v4-pro" || reason != "pool_400" || upstream != "gen-1" {
+		t.Fatalf("row = %q %q %q", pool, reason, upstream)
+	}
+}

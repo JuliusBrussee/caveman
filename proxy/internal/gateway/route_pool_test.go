@@ -32,6 +32,7 @@ type poolStub struct {
 	gwCode   int
 	gwSSE    string // the gateway's stream, when set
 	cloud    *fakeCloud
+	sink     *captureSink
 }
 
 func (p *poolStub) server(t *testing.T) *Server {
@@ -87,6 +88,7 @@ func (p *poolStub) server(t *testing.T) *Server {
 	}))
 	t.Cleanup(stub.Close)
 	target, _ := url.Parse(stub.URL)
+	p.sink = &captureSink{}
 	transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		if r.URL.Host == "down.example" {
 			return nil, errors.New("connection refused")
@@ -98,7 +100,7 @@ func (p *poolStub) server(t *testing.T) *Server {
 		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com"), openai.New("https://api.openai.com")},
 		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
 		Creds:      stubCreds{key: "sk-byok"},
-		Sink:       &captureSink{},
+		Sink:       p.sink,
 		HTTPClient: &http.Client{Transport: transport},
 		Cloud:      p.cloud,
 	})
@@ -446,16 +448,23 @@ func TestPoolFallbackFitsTheEffortToTheAskedModel(t *testing.T) {
 		t.Fatalf("none on Claude: %s", body)
 	}
 	c = newPoolCase(t, localTarget("down.example"), "max")
-	c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"harness says hi\"}\n\n" +
-		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-sol","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`))
-	req.Header.Set("authorization", "Bearer sk-proj-harness")
-	req.Header.Set("x-cave-agent", "codex")
-	req.Header.Set("session_id", "thread-1")
-	rec := httptest.NewRecorder()
-	c.srv.Handler().ServeHTTP(rec, req)
-	if _, body := c.stub.last("/v1/responses"); !strings.Contains(rec.Body.String(), "harness says hi") || !strings.Contains(body, `"reasoning":{"effort":"xhigh"}`) {
-		t.Fatalf("max on OpenAI: %s\nanswer %s", body, rec.Body.String())
+	poolSend(t, c.srv, `{"model":"claude-sonnet-5-5","max_tokens":50,"thinking":{"type":"between_tools"},"messages":[{"role":"user","content":"fix the bug"}]}`)
+	if _, body := c.stub.last("/v1/messages"); !strings.Contains(body, `"output_config":{"effort":"high"}`) {
+		t.Fatalf("max with thinking off: %s", body)
+	}
+	for model, want := range map[string]string{"gpt-6.1-sol": "xhigh", "gpt-6-sol": "max"} { // the catalog lists max for gpt-6-sol
+		c = newPoolCase(t, localTarget("down.example"), "max")
+		c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"harness says hi\"}\n\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"`+model+`","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`))
+		req.Header.Set("authorization", "Bearer sk-proj-harness")
+		req.Header.Set("x-cave-agent", "codex")
+		req.Header.Set("session_id", "thread-1")
+		rec := httptest.NewRecorder()
+		c.srv.Handler().ServeHTTP(rec, req)
+		if _, body := c.stub.last("/v1/responses"); !strings.Contains(rec.Body.String(), "harness says hi") || !strings.Contains(body, `"reasoning":{"effort":"`+want+`"}`) {
+			t.Fatalf("max on %s: %s\nanswer %s", model, body, rec.Body.String())
+		}
 	}
 }
 
@@ -507,5 +516,26 @@ func TestPoolUpstreamFailureAfterContentEndsCleanly(t *testing.T) {
 	out := rec.Body.String()
 	if !strings.Contains(out, "partial") || strings.Count(out, "event: error") != 1 || strings.Contains(out, "harness says hi") {
 		t.Fatalf("answer: %s", out)
+	}
+}
+
+// The row says a pool attempt happened: on a fallback, the entry and why it
+// failed; on a served answer, the entry and the host's own answer id.
+func TestPoolAttemptIsOnTheRow(t *testing.T) {
+	last := func(c poolCase) RequestRecord {
+		c.stub.sink.mu.Lock()
+		defer c.stub.sink.mu.Unlock()
+		return c.stub.sink.rows[len(c.stub.sink.rows)-1]
+	}
+	c := newPoolCase(t, localTarget("api.fireworks.ai"), "")
+	c.stub.poolCode = 400
+	poolSend(t, c.srv, poolBody)
+	if row := last(c); row.RoutePoolID != "fireworks/kimi-k3" || row.RouteReason != "pool_400" || row.Model != "claude-opus-5-5" {
+		t.Fatalf("fallback row = %q %q %q", row.RoutePoolID, row.RouteReason, row.Model)
+	}
+	c = newPoolCase(t, localTarget("api.fireworks.ai"), "")
+	poolSend(t, c.srv, poolBody)
+	if row := last(c); row.RoutePoolID != "fireworks/kimi-k3" || row.UpstreamResponseID != "c1" {
+		t.Fatalf("served row = %q %q", row.RoutePoolID, row.UpstreamResponseID)
 	}
 }
