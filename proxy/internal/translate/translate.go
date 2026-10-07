@@ -428,7 +428,7 @@ func (g *gate) WriteHeader(status int) {
 
 func (g *gate) Write(p []byte) (int, error) {
 	if g.open {
-		return g.w.Write(p)
+		return g.send(p)
 	}
 	return g.buf.Write(p)
 }
@@ -441,19 +441,34 @@ func (g *gate) Flush() {
 
 // commit sends what was held and passes everything after it straight on.
 func (g *gate) commit() {
-	if g.open {
-		return
+	if !g.open {
+		_, _ = g.send(nil)
+		g.Flush()
 	}
-	g.open = true
-	for name, values := range g.header {
-		g.w.Header()[name] = values
+}
+
+// send is the one way bytes reach the agent. The first call (commit) opens
+// the gate and sends the held head and bytes before p. An answer is JSON or
+// SSE, never a page: the head always names a type (JSON when no path set
+// one, so net/http never sniffs one from the bytes) and says nosniff.
+func (g *gate) send(p []byte) (int, error) {
+	if !g.open {
+		g.open = true
+		header := g.w.Header()
+		for name, values := range g.header {
+			header[name] = values
+		}
+		if header.Get("Content-Type") == "" {
+			header.Set("Content-Type", "application/json")
+		}
+		header.Set("X-Content-Type-Options", "nosniff")
+		if g.status == 0 {
+			g.status = http.StatusOK
+		}
+		g.w.WriteHeader(g.status)
+		_, _ = g.w.Write(g.buf.Bytes())
 	}
-	if g.status == 0 {
-		g.status = http.StatusOK
-	}
-	g.w.WriteHeader(g.status)
-	_, _ = g.w.Write(g.buf.Bytes())
-	g.Flush()
+	return g.w.Write(p)
 }
 
 // commitOn commits w when it is a gate.
