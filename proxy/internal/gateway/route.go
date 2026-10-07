@@ -190,6 +190,7 @@ type routeRun struct {
 	// did not set it (then it is read back from the bytes).
 	effort string
 	wire   effortWire // where the per-message marks go
+	keyed  bool       // the route stage added the session's prompt_cache_key
 }
 
 // effortWire is where an effort goes on one wire: Anthropic Messages (a
@@ -250,17 +251,31 @@ func (w effortWire) itemEffort(body []byte, item jsonsplice.Span) (string, bool)
 	return jsonsplice.StringField(body, object, "effort")
 }
 
-// fresh reports a conversation without a model turn yet.
+// fresh reports a conversation without a model turn yet (a Responses chain
+// continuing a stored response is not one).
 func (w effortWire) fresh(body []byte) bool {
-	_, _, items, _ := w.spans(body)
+	root, _, items, _ := w.spans(body)
+	if w.responses {
+		if span, ok := jsonsplice.Field(body, root, "previous_response_id"); ok && string(body[span.Start:span.End]) != "null" {
+			return false
+		}
+	}
 	for _, item := range items {
-		role, _ := jsonsplice.StringField(body, item, "role")
-		kind, _ := jsonsplice.StringField(body, item, "type")
-		if role == "assistant" || w.responses && (kind == "reasoning" || strings.HasSuffix(kind, "_call")) {
+		if w.modelTurn(body, item) {
 			return false
 		}
 	}
 	return true
+}
+
+// modelTurn reports an item a model turn produced or answered: an assistant
+// message, and on Responses reasoning, a tool call or its output, a
+// compaction or a reference to a stored item.
+func (w effortWire) modelTurn(body []byte, item jsonsplice.Span) bool {
+	role, _ := jsonsplice.StringField(body, item, "role")
+	kind, _ := jsonsplice.StringField(body, item, "type")
+	return role == "assistant" || w.responses && (kind == "reasoning" || kind == "compaction" || kind == "item_reference" ||
+		strings.HasSuffix(kind, "_call") || strings.HasSuffix(kind, "_call_output"))
 }
 
 // mark is one per-message effort mark, byte-identical every time. Efforts
@@ -431,6 +446,9 @@ type effortState struct {
 	strip                       int
 	stripFirst, stripAnchor     [32]byte
 	noDropBlock, noHeal         bool
+	// responses: the state was made on OpenAI Responses, not Anthropic
+	// Messages; a session id sent on the other wire starts afresh there.
+	responses bool
 }
 
 // pendingMarks are the marks of a conversation that matched none of the
@@ -667,6 +685,10 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 			work.defaultEffort, work.defaultModel = parent.defaultEffort, parent.defaultModel
 		}
 	}
+	if work.started() && work.responses != run.wire.responses {
+		work = effortState{salt: work.salt} // marks, top-level effort and heals of the other wire mean nothing here
+	}
+	work.responses = run.wire.responses
 	if answer.DefaultEffort != "" {
 		work.defaultEffort, work.defaultModel = answer.DefaultEffort, run.asked
 	}
@@ -795,7 +817,7 @@ func perMessage(body []byte, w effortWire, state *effortState, ask markAsk) (out
 	matching := func(marks []effortMark) []effortMark {
 		kept := marks[:0:0]
 		for _, mark := range marks {
-			if mark.at > len(items) || anchorAt(body, items, state.salt, mark.at) != mark.anchor {
+			if mark.at > len(items) || w.responses && mark.at == len(items) || anchorAt(body, items, state.salt, mark.at) != mark.anchor {
 				break
 			}
 			kept = append(kept, mark)
@@ -904,10 +926,10 @@ func perMessage(body []byte, w effortWire, state *effortState, ask markAsk) (out
 // the agent's own; -1 when there is no place. Anthropic: just before the last
 // user turn, or at the end when that turn carries a tool result (never between
 // a tool_use and its tool_result). Responses: just before the last user
-// message, never at the end and never next to another configuration_update
-// (the API rejects adjacent updates); a tool loop that resumes after a
-// restart, which would put it next to its turn's mark, keeps the effort in
-// force.
+// message while nothing has answered it yet, never at the end and never next
+// to another configuration_update (the API rejects adjacent updates); a tool
+// loop under way keeps the effort in force (an update there would rewrite
+// history already sent).
 func (w effortWire) markAt(body []byte, items []jsonsplice.Span, agentAt int, marks []effortMark) int {
 	at := len(items)
 	if w.responses {
@@ -932,6 +954,11 @@ func (w effortWire) markAt(body []byte, items []jsonsplice.Span, agentAt int, ma
 	}
 	if w.responses && (at >= len(items) || at == last || w.update(body, items[at]) || at > 0 && w.update(body, items[at-1])) {
 		return -1
+	}
+	for _, item := range items[at:] {
+		if w.responses && w.modelTurn(body, item) {
+			return -1 // that user message was answered already: history the provider has cached
+		}
 	}
 	return at
 }

@@ -9,6 +9,8 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -79,7 +81,23 @@ func (l *liveRecorder) RoundTrip(r *http.Request) (*http.Response, error) {
 			} `json:"prompt_tokens_details"`
 		} `json:"usage"`
 	}
-	_ = json.Unmarshal(raw, &answer)
+	if strings.Contains(resp.Header.Get("content-type"), "event-stream") {
+		// A stream: the largest of each count its events carry, and its provider.
+		largest := func(field string) (n float64) {
+			for _, m := range regexp.MustCompile(`"`+field+`"\s*:\s*([0-9.eE+-]+)`).FindAllSubmatch(raw, -1) {
+				v, _ := strconv.ParseFloat(string(m[1]), 64)
+				n = max(n, v)
+			}
+			return n
+		}
+		answer.Usage.InputTokens, answer.Usage.CacheRead = int(largest("input_tokens")), int(largest("cache_read_input_tokens"))
+		answer.Usage.CacheWrite, answer.Usage.Cost = int(largest("cache_creation_input_tokens")), largest("cost")
+		if m := regexp.MustCompile(`"provider"\s*:\s*"([^"]+)"`).FindSubmatch(raw); m != nil {
+			answer.Provider = string(m[1])
+		}
+	} else {
+		_ = json.Unmarshal(raw, &answer)
+	}
 	u := answer.Usage
 	call := liveCall{
 		session: r.Header.Get("x-session-id") != "", pin: bytes.Contains(sent, []byte(`"allow_fallbacks":false`)),
@@ -149,8 +167,8 @@ func TestLiveOpenRouterCache(t *testing.T) {
 		HTTPClient: &http.Client{Transport: rec, Timeout: 2 * time.Minute},
 		Cloud:      link,
 	})
-	send := func(session, agent, system string, messages ...string) {
-		body := fmt.Sprintf(`{"model":"claude-opus-5-5","max_tokens":8,"system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"messages":[%s]}`, system, strings.Join(messages, ","))
+	send := func(stream bool, session, agent, system string, messages ...string) {
+		body := fmt.Sprintf(`{"model":"claude-opus-5-5","max_tokens":8,"stream":%v,"system":[{"type":"text","text":%q,"cache_control":{"type":"ephemeral"}}],"messages":[%s]}`, stream, system, strings.Join(messages, ","))
 		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 		req.Header.Set("x-api-key", "sk-ant-api03-live")
 		req.Header.Set("x-cave-agent", "claude")
@@ -178,7 +196,7 @@ func TestLiveOpenRouterCache(t *testing.T) {
 	history := []string{user("Say hi.")}
 	session := fmt.Sprintf("live-%d", time.Now().UnixNano())
 	for turn := range 4 {
-		send(session, "", system, history...)
+		send(false, session, "", system, history...)
 		history = append(history, assistant, user(fmt.Sprintf("Turn %d: say ok.", turn+2)))
 	}
 	calls := rec.take()
@@ -193,8 +211,9 @@ func TestLiveOpenRouterCache(t *testing.T) {
 		t.Errorf("session: %d calls, %d of turns 2-4 read the cache", len(calls), reads)
 	}
 
-	// (2) Four siblings on one new prefix, Claude Sonnet 5.5 (messages wire,
-	// cache_control kept): gated (one parent), then ungated (four parents).
+	// (2) Four streamed siblings on one new prefix, Claude Sonnet 5.5
+	// (messages wire, cache_control kept): gated (one parent), then ungated
+	// (four parents). The gate opens at the leader's first content event.
 	mu.Lock()
 	poolID = "openrouter/claude-sonnet-5-5"
 	mu.Unlock()
@@ -205,7 +224,7 @@ func TestLiveOpenRouterCache(t *testing.T) {
 			wg.Add(1)
 			go func() {
 				defer wg.Done()
-				send(parent(i), fmt.Sprintf("child-%d", i), system, user(fmt.Sprintf("Child %d: say ok.", i)))
+				send(true, parent(i), fmt.Sprintf("child-%d", i), system, user(fmt.Sprintf("Child %d: say ok.", i)))
 			}()
 		}
 		wg.Wait()

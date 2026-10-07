@@ -146,7 +146,7 @@ func TestResponsesFreshThread(t *testing.T) {
 
 	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
 	postResponses(t, srv, `{"model":"gpt-6-sol","input":"go"}`)
-	if sent, _ := log.last(); string(sent) != `{"model":"gpt-6-sol","input":"go","reasoning":{"effort":"low"},"prompt_cache_key":"`+openai.SessionCacheKey("codex-1")+`"}` {
+	if sent, _ := log.last(); string(sent) != `{"model":"gpt-6-sol","input":"go","prompt_cache_key":"`+openai.SessionCacheKey("codex-1")+`","reasoning":{"effort":"low"}}` {
 		t.Fatalf("input string: %s", sent)
 	}
 }
@@ -189,5 +189,62 @@ func TestResponsesUpdatesSurviveACloudFailure(t *testing.T) {
 	postResponses(t, srv, thread("high", rA, rB, rC, rD, rTR, rE, rF))
 	if sent, _ := log.last(); string(sent) != thread("high", rA, rB, update("low"), rC, rD, rTR, rE, update("high"), rF) {
 		t.Fatalf("after a failure: %s", sent)
+	}
+}
+
+// An effort that first differs mid tool loop never goes back before the user
+// message the model already answered: that history is cached as sent.
+func TestResponsesUpdateNeverRewritesAnsweredHistory(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "high", EffortMode: "message"}}
+	srv, log := responsesServer(t, cloud, nil)
+	postResponses(t, srv, thread("high", rA, rB, rC)) // same as in force: nothing goes in
+	first, _ := log.last()
+	cloud.answer = RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}
+	postResponses(t, srv, thread("high", rA, rB, rC, rD, rTR))
+	if sent, _ := log.last(); !bytes.HasPrefix(sent, first[:len(first)-2]) || bytes.Contains(sent, []byte("configuration_update")) {
+		t.Fatalf("mid-loop update rewrote history: %s", sent)
+	}
+	// A request ending right where a mark goes never ends with it.
+	postResponses(t, srv, thread("high", rA, rB, rC, rD, rTR, rE, rF))
+	postResponses(t, srv, thread("high", rA, rB, rC, rD, rTR, rE))
+	if sent, _ := log.last(); bytes.HasSuffix(sent, []byte(update("low")+`]}`)) {
+		t.Fatalf("an update ended the input: %s", sent)
+	}
+}
+
+// One session id on both wires: Anthropic's fixed effort and marks never
+// reach OpenAI.
+func TestEffortStateStaysOnItsWire(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "max", EffortMode: "message"}}
+	s := &Server{}
+	run := newRouteRun(http.Header{"X-Cave-Session": {"same"}}, "same", "/v1/messages", nil)
+	s.applyEffort(run, "anthropic", "/v1/messages", "claude-opus-5-5", []byte(convo("high", uA)), cloud.answer)
+	run = newRouteRun(http.Header{}, "same", "/v1/responses", nil)
+	got := s.applyEffort(run, "openai", "/v1/responses", "gpt-6-sol", []byte(thread("high", rA, rB, rC)), RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"})
+	if string(got) != thread("high", rA, rB, update("low"), rC) {
+		t.Fatalf("the Anthropic state leaked into Responses: %s", got)
+	}
+}
+
+// The heal of a refused update keeps the session's prompt_cache_key, and a
+// 429 on a request the route stage only keyed is not sent again.
+func TestCacheKeySurvivesTheHealAndA429IsNotDoubled(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := responsesServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"configuration_update"`)) {
+			return http.StatusBadRequest, `{"error":{"message":"The 'configuration_update' item type is not supported with pro or tournament models."}}`
+		}
+		return 0, ""
+	})
+	postResponses(t, srv, `{"model":"gpt-6-sol","reasoning":{"effort":"high"},"input":[`+rA+`,`+rB+`,`+rC+`]}`)
+	if len(log.bodies) != 2 || !bytes.Contains(log.bodies[1], []byte(`"prompt_cache_key":"`+openai.SessionCacheKey("codex-1")+`"`)) {
+		t.Fatalf("heal: %d attempts, %s", len(log.bodies), log.bodies[len(log.bodies)-1])
+	}
+
+	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, func([]byte) (int, string) {
+		return http.StatusTooManyRequests, `{"error":{"message":"rate limited"}}`
+	})
+	if rec := postResponses(t, srv, `{"model":"gpt-6-sol","input":"go"}`); rec.Code != http.StatusTooManyRequests || len(log.bodies) != 1 {
+		t.Fatalf("429: status %d after %d attempts", rec.Code, len(log.bodies))
 	}
 }

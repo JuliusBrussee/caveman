@@ -1,8 +1,10 @@
 package cloudlink
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
@@ -17,6 +19,7 @@ func TestCacheTTLIsReadFromTheBody(t *testing.T) {
 		{"messages", `{"system":[{"type":"text","text":"s","cache_control":{"type":"ephemeral","ttl":"1h"}}],"messages":[{"role":"user","content":[{"type":"text","text":"x","cache_control":{"type":"ephemeral"}}]}]}`, "1h"},
 		{"messages", `{"cache_control":{"type":"ephemeral","ttl":"1h"},"messages":[]}`, "1h"},
 		{"messages", `{"cache_control":{"type":"ephemeral","ttl":"2h"},"messages":[]}`, ""}, // a TTL the contract does not know
+		{"messages", `{"tools":[{"name":"t","input_schema":{"properties":{"cache_control":{"type":"object"}}}}],"messages":[]}`, ""},
 		{"messages", `{"messages":[{"role":"user","content":"\"cache_control\":{\"ttl\":\"1h\"}"}]}`, ""},
 		{"responses", `{"prompt_cache_options":{"ttl":"30m"},"input":[]}`, "30m"},
 		{"responses", `{"prompt_cache_retention":"24h","input":[]}`, "24h"},
@@ -55,19 +58,20 @@ func carries(body map[string]any) (ttl, pool bool) {
 }
 
 // Cloud's real refusal of an unknown field names none ("Router request
-// invalid."): the newest field goes first, then the next, and what Cloud then
-// accepts without stays out for the login.
+// invalid."): the newest field goes first, then the next; the one whose
+// removal got the 200 stays out for the login, so a Cloud that knows neither
+// converges on the next ask.
 func TestOlderCloudsGenericRefusalDropsTheNewestFieldsFirst(t *testing.T) {
 	const refusal = `{"error":{"type":"cave_gateway_error","code":"cave_router_request_invalid","message":"Router request invalid.","request_id":"r"}}`
 	for _, c := range []struct {
-		name       string
-		knowsPool  bool
-		wantAsks   int
-		wantPool   bool // the next ask still carries pool
-		wantTTLOff bool
+		name      string
+		knowsPool bool
+		wantAsks  int  // posts for the first ask
+		wantNext  int  // posts for the second
+		wantPool  bool // asks after that carry pool
 	}{
-		{"knows pool, not cache_ttl", true, 2, true, true},
-		{"knows neither", false, 3, false, true},
+		{"knows pool, not cache_ttl", true, 2, 1, true},
+		{"knows neither", false, 3, 2, false},
 	} {
 		fake := &poolCloud{answer: func(body map[string]any) (int, string) {
 			ttl, pool := carries(body)
@@ -86,12 +90,15 @@ func TestOlderCloudsGenericRefusalDropsTheNewestFieldsFirst(t *testing.T) {
 		if len(fake.bodies) != c.wantAsks {
 			t.Fatalf("%s: asked %d times, want %d", c.name, len(fake.bodies), c.wantAsks)
 		}
-		next := ttlAsk()
-		next.SessionID = "s2"
-		link.Ask(t.Context(), next)()
-		ttl, pool := carries(fake.bodies[len(fake.bodies)-1])
-		if len(fake.bodies) != c.wantAsks+1 || ttl || pool != c.wantPool {
-			t.Errorf("%s: next ask (%d bodies) carries cache_ttl %v, pool %v", c.name, len(fake.bodies), ttl, pool)
+		for i, want := range []int{c.wantNext, 1} {
+			before := len(fake.bodies)
+			next := ttlAsk()
+			next.SessionID = fmt.Sprintf("s%d", i+2)
+			link.Ask(t.Context(), next)()
+			ttl, pool := carries(fake.bodies[len(fake.bodies)-1])
+			if len(fake.bodies)-before != want || ttl || pool != c.wantPool {
+				t.Errorf("%s: ask %d took %d posts, carries cache_ttl %v, pool %v", c.name, i+2, len(fake.bodies)-before, ttl, pool)
+			}
 		}
 		cloud.Close()
 	}
@@ -122,5 +129,30 @@ func TestGenericRefusalOfABadAskLatchesNothing(t *testing.T) {
 	link.Ask(t.Context(), next)()
 	if ttl, pool := carries(fake.bodies[3]); !ttl || !pool {
 		t.Errorf("next ask carries cache_ttl %v, pool %v", ttl, pool)
+	}
+}
+
+// A field Cloud has answered 200 for is never blamed for a later generic
+// 400: a bad ask is not sent again without it.
+func TestAcceptedFieldsAreNeverDropped(t *testing.T) {
+	var bad atomic.Bool
+	fake := &poolCloud{answer: func(map[string]any) (int, string) {
+		if bad.Load() {
+			return 400, `{"error":{"code":"cave_router_request_invalid","message":"Router request invalid."}}`
+		}
+		return 200, `{"model":"claude-sonnet-5-5"}`
+	}}
+	cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer cloud.Close()
+	home := signedIn(t, cloud.URL)
+	addLogin(t, home, "openai", "sk-openai")
+	link := newLink(home)
+	link.Ask(t.Context(), ttlAsk())()
+	bad.Store(true)
+	next := ttlAsk()
+	next.SessionID = "s2"
+	link.Ask(t.Context(), next)()
+	if len(fake.bodies) != 2 {
+		t.Fatalf("asked %d times, want once each", len(fake.bodies))
 	}
 }

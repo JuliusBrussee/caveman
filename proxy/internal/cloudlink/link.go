@@ -101,6 +101,9 @@ type Link struct {
 	// request.cache_ttl with a 400 and answered it without: an older Cloud,
 	// asked without that field from then on.
 	noPool, noCacheTTL bool
+	// accepted are the additive fields a 200 came back for while the ask
+	// carried them: a generic 400 is never blamed on them.
+	accepted map[string]bool
 
 	events eventQueue
 
@@ -179,7 +182,7 @@ func (l *Link) settings() settings {
 		if (cfg.access != "" || cfg.key != "") && (cfg.access != previous.access || cfg.key != previous.key) {
 			// A new login starts fresh: no pause and no decision from the old one.
 			// Signing out needs no reset: nothing is asked while signed out.
-			l.pauseUntil, l.decisions, l.states, l.noPool, l.noCacheTTL = time.Time{}, nil, nil, false, false
+			l.pauseUntil, l.decisions, l.states, l.noPool, l.noCacheTTL, l.accepted = time.Time{}, nil, nil, false, false, nil
 			l.forgetLocked()
 		}
 	}
@@ -648,9 +651,10 @@ var (
 )
 
 // cacheTTL is the TTL the request writes its cache entries at, "" when it
-// says none: on Messages the longest cache_control ttl (none is 5m, a value
-// the contract does not know is left out); on OpenAI prompt_cache_options.ttl
-// (GPT-6's 30m), else prompt_cache_retention (24h; in_memory is 5m).
+// says none: on Messages the longest ephemeral cache_control ttl (none is 5m,
+// a value the contract does not know is left out); on OpenAI
+// prompt_cache_options.ttl (GPT-6's 30m), else prompt_cache_retention (24h;
+// in_memory is 5m).
 func cacheTTL(endpoint string, body []byte, root jsonsplice.Span) string {
 	if endpoint != "messages" {
 		options, _ := jsonsplice.Field(body, root, "prompt_cache_options")
@@ -667,6 +671,9 @@ func cacheTTL(endpoint string, body []byte, root jsonsplice.Span) string {
 	}
 	longest := -1
 	for _, marker := range cacheControlRE.FindAll(body, -1) {
+		if !bytes.Contains(marker, []byte(`"ephemeral"`)) {
+			continue // a tool schema's property of that name, say
+		}
 		ttl := "5m"
 		if match := ttlRE.FindSubmatch(marker); match != nil {
 			ttl = string(match[1])
@@ -954,12 +961,15 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	// An older Cloud refuses an additive field it does not know with a 400:
 	// by name, or with its generic refusal of any body it cannot decode. The
 	// ask goes again without the field the 400 names, else the newest one sent
-	// (cache_ttl came after pool), at most once per field; a field whose
-	// removal Cloud then accepts stays out for the rest of this login. Any
-	// other 400 is answered as before, never retried.
+	// that Cloud has not accepted before (cache_ttl came after pool), at most
+	// once per field; the field whose removal Cloud then answers with a 200
+	// stays out for the rest of this login. Any other 400 is answered as
+	// before, never retried.
 	var dropped []string
 	for response.StatusCode == http.StatusBadRequest {
-		field := refusedField(strings.ToLower(string(raw)), body)
+		l.mu.Lock()
+		field := refusedField(strings.ToLower(string(raw)), body, l.accepted)
+		l.mu.Unlock()
 		if field == "" {
 			break
 		}
@@ -976,13 +986,25 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 		raw, _ = io.ReadAll(io.LimitReader(response.Body, answerMax))
 		response.Body.Close()
 	}
-	if len(dropped) > 0 && response.StatusCode == http.StatusOK {
+	if response.StatusCode == http.StatusOK {
 		l.mu.Lock()
-		l.noPool = l.noPool || slices.Contains(dropped, "pool")
-		l.noCacheTTL = l.noCacheTTL || slices.Contains(dropped, "cache_ttl")
+		if l.accepted == nil {
+			l.accepted = map[string]bool{}
+		}
+		for _, field := range carriedFields(body) {
+			l.accepted[field] = true
+		}
+		if len(dropped) > 0 {
+			switch dropped[len(dropped)-1] {
+			case "pool":
+				l.noPool = true
+			case "cache_ttl":
+				l.noCacheTTL = true
+			}
+		}
 		l.mu.Unlock()
-		if l.logger != nil {
-			l.logger.Warn("Cloud refused newer route-ask fields; asking without them until the next login", "fields", strings.Join(dropped, ","))
+		if len(dropped) > 0 && l.logger != nil {
+			l.logger.Warn("Cloud refused a newer route-ask field; asking without it until the next login", "field", dropped[len(dropped)-1])
 		}
 	}
 	var answer struct {
@@ -1056,24 +1078,34 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	return out
 }
 
-// refusedField is the additive field a 400 (lower-cased) is about: one it
-// names that the ask still carries, else, for Cloud's generic refusal, the
-// newest one it carries; "" when the 400 is about none.
-func refusedField(refusal string, body routeAsk) string {
-	carried := []string{}
+// carriedFields are the additive fields an ask carries, newest first.
+func carriedFields(body routeAsk) []string {
+	var carried []string
 	if body.Request.CacheTTL != "" {
 		carried = append(carried, "cache_ttl")
 	}
 	if len(body.Pool) > 0 {
 		carried = append(carried, "pool")
 	}
+	return carried
+}
+
+// refusedField is the additive field a 400 (lower-cased) is about: one it
+// names that the ask still carries, else, for Cloud's generic refusal, the
+// newest one it carries that Cloud has not accepted; "" when none.
+func refusedField(refusal string, body routeAsk, accepted map[string]bool) string {
+	carried := carriedFields(body)
 	for _, field := range carried {
 		if strings.Contains(refusal, field) {
 			return field
 		}
 	}
-	if len(carried) > 0 && strings.Contains(refusal, "cave_router_request_invalid") {
-		return carried[0]
+	if strings.Contains(refusal, "cave_router_request_invalid") {
+		for _, field := range carried {
+			if !accepted[field] {
+				return field
+			}
+		}
 	}
 	return ""
 }

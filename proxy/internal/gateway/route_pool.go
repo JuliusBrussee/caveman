@@ -103,7 +103,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 			pinned = s.routes.pinned(run.key, target.PoolID)
 			payload = withProviderPin(payload, pinned)
 		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages:
-			payload = withCacheKey(payload, run.family())
+			payload = withCacheKey(payload, run.key)
 		}
 	}
 	if run != nil {
@@ -159,7 +159,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		return targetResult{errMsg: fmt.Sprintf("pool_%d", resp.StatusCode)}
 	}
 	sniff := &providerSniff{ReadCloser: resp.Body, stream: strings.Contains(resp.Header.Get("content-type"), "event-stream")}
-	resp.Body = releaseOnRead{ReadCloser: sniff, release: release, ok: true}
+	resp.Body = &releaseOnRead{ReadCloser: sniff, release: release, ok: true, stream: sseEvents(resp.Header)}
 	counter := &countingWriter{w: w}
 	usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
 	if errors.Is(err, translate.ErrNotServed) {

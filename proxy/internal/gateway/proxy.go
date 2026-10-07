@@ -462,10 +462,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
-		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
-		if !run.off && meta.Provider == "openai" {
-			transform.Body = withCacheKey(transform.Body, run.family()) // route_cache.go
+		if answer.Outcome != "off" && meta.Provider == "openai" {
+			// Before the effort, so a marks heal (built from the unmarked body) keeps it.
+			if keyed := withCacheKey(transform.Body, run.key); len(keyed) != len(transform.Body) { // route_cache.go
+				transform.Body, run.keyed = keyed, true
+			}
 		}
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
@@ -562,7 +565,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}, wholeBody(body), wholeBody(transform.Body))
 
 	// A fresh child on its siblings' new prefix waits for the first of them
-	// to have its first byte (route_cache.go fanout).
+	// to have its first content (route_cache.go fanout).
 	release := func(bool) {}
 	if run != nil && !run.off {
 		if key, ok := fanoutKey(run.parent, meta.Provider, meta.Model, grammarOf(meta.Endpoint), transform.Body); ok {
@@ -642,7 +645,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// bytes: retrying the original (without the session's marks) cannot help.
 	// On a moved model it falls back to the asked one as before.
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) &&
-		!(run != nil && (run.applied || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
+		!(run != nil && (run.applied || run.keyed || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
@@ -735,7 +738,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The response protocol is authoritative: Vertex and compressed requests may
 	// stream without a readable JSON stream flag. Never buffer their SSE/events.
-	resp.Body = releaseOnRead{ReadCloser: resp.Body, release: release, ok: resp.StatusCode < 300}
+	resp.Body = &releaseOnRead{ReadCloser: resp.Body, release: release, ok: resp.StatusCode < 300, stream: sseEvents(resp.Header)}
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.

@@ -1,11 +1,14 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"io"
+	"net/http"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,7 +20,8 @@ import (
 // Cache mechanics the route stage applies on its own: they keep a provider
 // cache the session already paid for and decide nothing about models.
 //   - prompt_cache_key: OpenAI routes a prefix to the machine holding it by
-//     this key; a request without one gets its session family's (hashed).
+//     this key; a request without one gets its session's (hashed; one key a
+//     session keeps each key under OpenAI's ~15 requests a minute).
 //   - OpenRouter: x-session-id (RouteTarget.Affinity, the family's) makes it
 //     sticky; once a
 //     session's pool entry is warm on one of OpenRouter's providers it is
@@ -25,14 +29,14 @@ import (
 //     a provider error never spreads it to a cold one. A pinned request that
 //     fails drops the pin: the next one is routed afresh.
 //   - fan-out: sibling children starting on one new prefix go one first; the
-//     rest wait for its first byte (or fanoutWait), then read its cache write.
+//     rest wait for its first content (or fanoutWait), then read its cache write.
 //   - context tokens: the session's own bytes-to-tokens ratio, from the
 //     provider's count, a child taking its parent's.
 
-// family is the session a request's cache affinity keys on: its parent's
-// for a child (siblings share their tools and system prompt, a forked child
-// its parent's whole history, so all of them belong on one provider machine),
-// else its own.
+// family is the session a host's affinity header keys on: its parent's for a
+// child (siblings share their tools and system prompt, a forked child its
+// parent's whole history, so all of them belong on one provider), else its
+// own.
 func (run *routeRun) family() string {
 	if run.parent != "" {
 		return run.parent
@@ -159,11 +163,11 @@ func (p *providerSniff) provider() string {
 }
 
 // fanout holds sibling children that start on the same new prefix: the first
-// one goes, the others wait until it has its first byte (the provider writes
+// one goes, the others wait until its answer has content (the provider writes
 // a prefix's cache entry before it answers), fanoutWait at most or until
 // their own request is cancelled, then read that one write instead of each
 // writing it again (cache.md rule 16: N parallel requests on one new prefix
-// write N times). A prefix with a first byte in the last fanoutWarm is warm:
+// write N times). A prefix with content in the last fanoutWarm is warm:
 // nobody waits on it.
 type fanout struct {
 	mu      sync.Mutex
@@ -181,7 +185,7 @@ const (
 
 // enter waits behind key's leader, or makes this request the leader. The
 // release it returns (idempotent; a follower's does nothing) lets the
-// followers go; ok marks the prefix warm (the leader got a first byte of a
+// followers go; ok marks the prefix warm (the leader got content in a
 // 2xx answer).
 func (f *fanout) enter(ctx context.Context, key [32]byte) (release func(ok bool)) {
 	f.mu.Lock()
@@ -266,18 +270,66 @@ func fanoutKey(parent, upstream, model, grammar string, body []byte) (key [32]by
 	return [32]byte(hash.Sum(nil)), shared
 }
 
-// releaseOnRead releases a fan-out leader at its answer's first byte (or its
-// end, or an error).
+// releaseOnRead releases a fan-out leader once its answer has content: a
+// whole JSON answer at its first byte; an event stream at its first event
+// that is not a comment, a ping or an opening event sent before the prompt is
+// read (message_start, response.created, response.in_progress), and as not
+// warm when that event is an error. The end of the body, or 64 KiB of
+// openings, releases too.
 type releaseOnRead struct {
 	io.ReadCloser
 	release func(bool)
-	ok      bool
+	ok      bool // a 2xx answer
+	stream  bool
+	pending []byte // the stream's bytes since its last whole event
 }
 
-func (r releaseOnRead) Read(p []byte) (int, error) {
+func (r *releaseOnRead) Read(p []byte) (int, error) {
 	n, err := r.ReadCloser.Read(p)
-	if n > 0 || err != nil {
-		r.release(r.ok && n > 0)
+	switch {
+	case r.release == nil:
+	case !r.stream:
+		if n > 0 || err != nil {
+			r.done(r.ok && n > 0)
+		}
+	default:
+		r.pending = append(r.pending, bytes.ReplaceAll(p[:n], []byte("\r\n"), []byte("\n"))...)
+		for r.release != nil {
+			end := bytes.Index(r.pending, []byte("\n\n"))
+			if end < 0 {
+				break
+			}
+			event := r.pending[:end]
+			r.pending = r.pending[end+2:]
+			switch {
+			case openingEventRE.Match(event) || !dataLineRE.Match(event):
+			case errorEventRE.Match(event):
+				r.done(false)
+			default:
+				r.done(r.ok)
+			}
+		}
+		if r.release != nil && (err != nil || len(r.pending) > 64<<10) {
+			r.done(false)
+		}
 	}
 	return n, err
 }
+
+// sseEvents: an uncompressed text/event-stream, whose events the gate reads.
+func sseEvents(header http.Header) bool {
+	encoding := strings.TrimSpace(header.Get("Content-Encoding"))
+	return strings.Contains(strings.ToLower(header.Get("Content-Type")), "text/event-stream") && (encoding == "" || strings.EqualFold(encoding, "identity"))
+}
+
+func (r *releaseOnRead) done(ok bool) {
+	r.release(ok)
+	r.release, r.pending = nil, nil
+}
+
+var (
+	// dataLineRE: an event with a line that is not a comment (":" first).
+	dataLineRE     = regexp.MustCompile(`(?m)^[^:\n]`)
+	openingEventRE = regexp.MustCompile(`"type"\s*:\s*"(?:message_start|ping|response\.created|response\.in_progress)"`)
+	errorEventRE   = regexp.MustCompile(`(?m)^event:\s*error|"type"\s*:\s*"(?:error|response\.failed)"`)
+)

@@ -121,8 +121,9 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `mid-conversation-output-config-2026-07-01` appended to `anthropic-beta`) before the last user
   turn, or at the end after a tool result; on OpenAI Responses (GPT-6) the mark is a
   `{"type":"configuration_update","reasoning":{"effort":…}}` input item before the last user
-  message, never at the end and never next to another one (no place: the effort in force holds), no
-  beta; a 400 naming `configuration_update` heals like a refused mark. Only `effort_mode: message` ever starts marks; a "top"
+  message while nothing has answered it yet, never at the end and never next to another one (no
+  place, as mid tool loop: the effort in force holds), no beta; a 400 naming `configuration_update`
+  heals like a refused mark. Effort state made on one wire starts afresh on the other. Only `effort_mode: message` ever starts marks; a "top"
   answer on history carrying the session's marks goes in as one more mark (never wiping them; for
   a compaction or side request, that request's only), and on any other history sets the top-level
   field. Marks are remembered per session with a salted hash of the message before each
@@ -223,14 +224,18 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `request.cache_ttl` is the longest Anthropic `cache_control` ttl (none = 5m), else OpenAI
   `prompt_cache_options.ttl` / `prompt_cache_retention` (24h; in_memory = 5m); Cloud's generic
   400 (`cave_router_request_invalid`, which names no field) or one naming the field is asked
-  again without `cache_ttl`, then `pool`, and what a 200 then comes without stays off for the login.
-  Cache affinity keys on the session family (the parent's for a child): hashed `x-session-id`
-  (OpenRouter), `x-session-affinity` (Fireworks), `x-grok-conv-id` (xAI), and a
-  `prompt_cache_key` on OpenAI requests the route stage handles that carry none. Once an
+  again without `cache_ttl`, then `pool` (never a field a 200 already came back for), and the field
+  whose removal got the 200 stays off for the login. Host affinity headers key on the session
+  family (the parent's for a child): hashed `x-session-id` (OpenRouter), `x-session-affinity`
+  (Fireworks), `x-grok-conv-id` (xAI); OpenAI requests the route stage handles that carry no
+  `prompt_cache_key` get the session's own (hashed, added before the effort so a heal keeps it;
+  a 429 on such a request is not replayed). Once an
   OpenRouter pool entry reports cache reads or writes, the session pins the provider its answer
   named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure drops the pin. Fresh
   sibling children of one parent on the same model, tools and system prompt go one first and the
-  rest wait for its first byte (5 s at most, or their own cancellation): one cache write, not N;
+  rest wait for its first content (a JSON answer's first byte; an event stream's first event past
+  comments, pings, message_start and response.created/in_progress; 5 s at most, or their own
+  cancellation): one cache write, not N;
   a prefix with a first byte in the last 5 min waits for nobody. `signals.context_tokens` is the
   request's bytes times the provider's own tokens per byte, the parent session's first.
   Live check: `CAVEMAN_LIVE_OPENROUTER_KEY=<key file> go test ./proxy/internal/cloudlink -run

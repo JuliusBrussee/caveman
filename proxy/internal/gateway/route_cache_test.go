@@ -249,3 +249,48 @@ func TestChildrenShareTheirParentsAffinity(t *testing.T) {
 		t.Errorf("affinity: parent %q, child %q", parent.Header.Get("x-session-affinity"), child.Header.Get("x-session-affinity"))
 	}
 }
+
+// An event stream releases the leader at its first content event: comments,
+// pings and the openings sent before the prompt is read wait; an error
+// releases as not warm.
+func TestFanoutReleasesAtTheFirstContentEvent(t *testing.T) {
+	for _, c := range []struct {
+		name, stream string
+		at           int // bytes read when released, -1 never before the end
+		warm         bool
+	}{
+		{"anthropic", "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: ping\ndata: {\"type\": \"ping\"}\n\nevent: content_block_start\ndata: {\"type\":\"content_block_start\"}\n\n", 3, true},
+		{"responses", "event: response.created\ndata: {\"type\":\"response.created\"}\n\nevent: response.in_progress\ndata: {\"type\":\"response.in_progress\"}\n\nevent: response.output_item.added\ndata: {\"type\":\"response.output_item.added\"}\n\n", 3, true},
+		{"openrouter comment", ": OPENROUTER PROCESSING\r\n\r\ndata: {\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\r\n\r\n", 2, true},
+		{"error", "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: error\ndata: {\"type\":\"error\"}\n\n", 2, false},
+	} {
+		events := strings.SplitAfter(c.stream, "\n\n")
+		if strings.Contains(c.stream, "\r\n\r\n") {
+			events = strings.SplitAfter(c.stream, "\r\n\r\n")
+		}
+		released, warm, reads := -1, false, 0
+		body := &releaseOnRead{ReadCloser: io.NopCloser(io.MultiReader(func() []io.Reader {
+			var readers []io.Reader
+			for _, e := range events {
+				if e != "" {
+					readers = append(readers, strings.NewReader(e))
+				}
+			}
+			return readers
+		}()...)), ok: true, stream: true, release: func(ok bool) {
+			if released < 0 {
+				released, warm = reads, ok
+			}
+		}}
+		buf := make([]byte, 1<<10)
+		for {
+			reads++
+			if _, err := body.Read(buf); err != nil {
+				break
+			}
+		}
+		if released != c.at || warm != c.warm {
+			t.Errorf("%s: released at read %d (warm %v), want %d (warm %v)", c.name, released, warm, c.at, c.warm)
+		}
+	}
+}
