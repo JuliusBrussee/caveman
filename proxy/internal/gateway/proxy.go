@@ -241,7 +241,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				exact = evidence.SessionID
 			}
 			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
-			run.asked = meta.Model
+			run.asked, run.record = meta.Model, effectiveRuntimeMode == "record"
 			if countTokens {
 				run.perRequest, run.replay = true, true
 				break
@@ -251,6 +251,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
 				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
 				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
+				ContextTokens: int(float64(len(body)) * s.routes.tokensPerByte(run.key, run.parent)),
 			})
 		}
 	}
@@ -461,6 +462,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
+		// Routing off or signed out stays byte for byte, and so does a session
+		// whose key a provider refused.
+		if (answer.Outcome != "off" || answer.Reason != "") && !s.routes.keyRefused(run.key) {
+			transform.Body = run.withCacheKey(meta.Provider, transform.Body)
+		}
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
 	} else if run != nil {
@@ -521,7 +527,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		case meta.Model != modelRequested:
 			// An identity answer, so the agent's copy can name the model it asked for.
 			upstreamHeaders.Del("accept-encoding")
-		case !run.off || run.heal:
+		case !run.off || run.heal || run.keyed: // a refused key is read from the error too
 			withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
 		}
 		if run.dropBlocks {
@@ -529,7 +535,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
-	if run != nil && run.marked {
+	if run != nil && run.marked && !run.wire.responses {
 		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
 	}
 	// Each retry attempt needs a fresh body reader, so the request is built per
@@ -557,6 +563,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		Optimizers:  strings.Join(transform.OptimizerIDs, ","),
 	}, wholeBody(body), wholeBody(transform.Body))
 
+	// A fresh child on its siblings' new prefix waits for the first of them
+	// to have its first content (route_cache.go fanout).
+	release := func(bool) {}
+	if run != nil && !run.off && !run.record {
+		if key, ok := fanoutKey(run.parent, meta.Provider, meta.Model, grammarOf(meta.Endpoint), transform.Body); ok {
+			release = s.fanout.enter(r.Context(), key)
+			defer release(false)
+		}
+	}
 	resp, err := s.doUpstream(r.Context(), buildUpstream(transform.Body, upstreamHeaders))
 	s.inflight.Add(-1)
 	if err != nil {
@@ -567,8 +582,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// A 400 naming the thinking binding or the per-message marks earns one heal
 	// retry (route.go routeHeal); if that is refused too, the original-bytes
-	// retry below still runs.
-	if run != nil && resp.StatusCode == http.StatusBadRequest && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
+	// retry below still runs. On Responses only marks (configuration_update) heal.
+	if run != nil && resp.StatusCode == http.StatusBadRequest && (meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") ||
+		meta.Provider == "openai" && strings.HasSuffix(meta.Endpoint, "/responses") && run.marked) {
 		if retry, kind, from := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
 			headers := healHeaders
 			switch kind {
@@ -626,15 +642,27 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// A 429 on the asked model of a request whose bytes the route stage changed
 	// (effort, marks, strip, drop_block) is the provider's rate limit, not its
 	// bytes: retrying the original (without the session's marks) cannot help.
-	// On a moved model it falls back to the asked one as before.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) &&
+	// On a moved model it falls back to the asked one as before. The original
+	// keeps the session's prompt_cache_key (route_cache.go), so a request the
+	// route stage only keyed is not sent again, unless the 4xx names the key:
+	// then the agent's own bytes go.
+	original, originalHash := body, rawHash
+	if run != nil && run.keyed && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		if head, _ := peekError(resp); !bytes.Contains(bytes.ToLower(head), []byte("prompt_cache_key")) {
+			original = withCacheKey(body, run.key)
+			originalHash = sha256.Sum256(original)
+		} else {
+			s.routes.refuseKey(run.key) // later requests of the session go without it
+		}
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) &&
 		!(run != nil && (run.applied || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
+		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), original)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
 			providerHeaderError(w, r, rerr)
@@ -645,13 +673,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		s.applyUpstreamAuthFallback(adapter.Name(), credential, retryHeaders)
 		s.inflight.Add(1)
-		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(body, retryHeaders))
+		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(original, retryHeaders))
 		s.inflight.Add(-1)
 		if derr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
 			estimateWG.Wait() // join the observe estimate; passed uniformly (zeroed at Record on this failed status)
-			evidence.acceptedBody = body
-			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, rawHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+			evidence.acceptedBody = original
+			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
 			return
 		}
 		resp = retryResp
@@ -667,10 +695,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Del("x-caveman-routed-from")
 			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
 		}
-		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
-		evidence.acceptedBody = body
-		transformedHash = rawHash
-		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, body, meta)
+		transform = providers.TransformResult{Body: original, OptimizerIDs: []string{}}
+		evidence.acceptedBody = original
+		transformedHash = originalHash
+		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, original, meta)
 		comp = nil
 		toolSchemaHandle = ""
 		breakpointPlanned = false
@@ -686,7 +714,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Endpoint:      meta.Endpoint,
 			RuntimeMode:   effectiveRuntimeMode,
 			RetryOriginal: true,
-		}, wholeBody(body), wholeBody(body))
+		}, wholeBody(body), wholeBody(original))
 	}
 	var retrieveCalls []providers.UsageObservation
 	var retrieved bool
@@ -721,6 +749,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The response protocol is authoritative: Vertex and compressed requests may
 	// stream without a readable JSON stream flag. Never buffer their SSE/events.
+	resp.Body = &releaseOnRead{ReadCloser: resp.Body, release: release, ok: resp.StatusCode < 300, stream: sseEvents(resp.Header)}
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
@@ -845,7 +874,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
 			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
 			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
-		}, time.Now(), meta.Model != modelRequested && !run.perRequest)
+		}, time.Now(), meta.Model != modelRequested && !run.perRequest, len(body))
 	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {

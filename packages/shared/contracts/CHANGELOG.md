@@ -29,6 +29,14 @@
   `x-caveman-route: <pool_id>`, pool_id `cloud:<provider>:<model>`, on the
   project gateway key only). A Cloud whose 400 names `pool` is asked once
   more without it.
+- `route-ask-v1` (additive): optional `request.cache_ttl` (`5m` | `30m` |
+  `1h` | `24h`), the TTL the request writes its provider cache entries at,
+  read from the body: the longest Anthropic `cache_control` ttl (none is
+  `5m`), else OpenAI `prompt_cache_options.ttl` or `prompt_cache_retention`
+  (`24h`; `in_memory` is `5m`). A Cloud that refuses it with a 400 (by name
+  or with its generic `cave_router_request_invalid`) is asked again without
+  it, and the same now holds for `pool`. `effort_mode` `message` also covers
+  GPT-6 on OpenAI Responses, applied as a `configuration_update` input item.
 - Schema `$id`s name `contracts-v2.1.0`.
 
 ## 2.0.0 — 2026-09-24

@@ -457,7 +457,7 @@ func TestRouteEffortAndLastOnOpenAI(t *testing.T) {
 		{
 			"/v1/chat/completions", `{"model":"gpt-6-sol","messages":[{"role":"user","content":"go"}]}`,
 			`{"id":"c","object":"chat.completion","model":"gpt-6-sol-2026-09-01","choices":[],"usage":{"prompt_tokens":1000,"completion_tokens":5,"total_tokens":1005,"prompt_tokens_details":{"cached_tokens":800}}}`,
-			`{"model":"gpt-6-sol","messages":[{"role":"user","content":"go"}],"reasoning_effort":"low"}`,
+			`{"model":"gpt-6-sol","messages":[{"role":"user","content":"go"}],"reasoning_effort":"low"}`, // record mode: never keyed
 		},
 		{
 			"/v1/responses", `{"model":"gpt-6-sol","input":"go"}`,

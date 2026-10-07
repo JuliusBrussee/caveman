@@ -397,6 +397,8 @@ type Server struct {
 	cloud   CloudLink
 	// routes is what the route stage remembers per session (route.go).
 	routes routeSessions
+	// fanout staggers sibling children on one new prefix (route_cache.go).
+	fanout fanout
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
