@@ -399,9 +399,48 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Route: the answer moves the compressed request to another model of the
-	// same provider and sets its effort. Anything else keeps the asked model.
+	// same provider and sets its effort, or sends it to a pool entry on another
+	// login or the Cloud gateway. Anything else keeps the asked model.
+	if run != nil {
+		// Reasoning a pool host produced earlier in this conversation goes no
+		// further than that host; a clean body goes byte for byte.
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+	}
 	if awaitRoute != nil {
 		answer := awaitRoute()
+		if target := answer.Target; target != nil {
+			// The bytes compression produced go, unless they lean on the
+			// retrieve tool loop, which only runs on the harness's own path.
+			sent := transform.Body
+			if retrieveInjected {
+				sent = body
+			}
+			w.Header().Set("x-caveman-routed-from", modelRequested)
+			result := s.serveTarget(w, r, adapter, run, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			if result.served {
+				evidence.route = answer
+				evidence.acceptedBody = sent
+				routed := meta
+				routed.Provider, routed.Model = target.Host, target.Model
+				if run != nil && !run.auxiliary && run.key != "" && result.errMsg == "" {
+					s.routes.served(run.key, RouteLast{
+						Model: target.Model, Effort: answer.Effort, InputTokens: result.usage.InputTokens,
+						CacheReadTokens: result.usage.CachedInputTokens, CacheWriteTokens: result.usage.CacheCreationInputTokens, Compacted: run.compacted,
+					}, time.Now(), !run.perRequest)
+				}
+				estimateWG.Wait()
+				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, false, compressionEligible)
+				if result.errMsg != "" && target.Via == "cloud" {
+					panic(http.ErrAbortHandler) // a cut relay never ends as a clean EOF
+				}
+				return
+			}
+			w.Header().Del("x-caveman-routed-from")
+			if answer.Reject != nil {
+				answer.Reject() // the rest of this ask stays on the asked model
+			}
+			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID}
+		}
 		if answer.Model != "" && answer.Model != meta.Model {
 			if routed, ok := setModel(transform.Body, answer.Model); ok {
 				transform.Body = routed

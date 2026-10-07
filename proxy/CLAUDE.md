@@ -201,6 +201,26 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   none in `/me` means `counts`, an unreadable `/me` lowers it to `counts`, `off` or no level sends
   nothing. Model ids from other origins go as `custom`. Signing in or out never changes another
   stage.
+- **pool routing** (`internal/pool`, `internal/translate`, `internal/gateway/route_pool.go`):
+  the provider keys and logins a person adds (`caveman providers add|login`;
+  `$CAVEMAN_HOME/provider-logins.json` lists ids and where each secret lives, the secret is in the
+  keychain service `caveman-provider` or a 0600 file under `provider-logins/`) become the ask's
+  additive `pool` (`harness/<model>` for the harness's own models, then `<host>/<model>` for each
+  login times the static catalog models its host serves, on a wire `translate.Supported` reaches
+  from the caller's grammar; at most 64; left out when no login adds one; a 400 to an ask with pool
+  is asked again without it and pool stays off for that login). An answer's `pool_id` + `via`:
+  a harness entry applies like `model`; a login entry sends the request straight to that host on
+  that login (`RouteTarget`, translated when its grammar differs, top-level effort only, the
+  agent's copy naming the asked model); `via: cloud` sends it in the caller's grammar to the
+  Cloud gateway (`cloud.json` `gatewayUrl`, else `baseURL`) with `x-caveman-route: <pool_id>` on
+  the link's project key, and that request DOES pass through Caveman Cloud. Any failure before
+  the first byte (translation refused, connect error, any non-2xx) falls back to the asked model
+  on the harness's own credential and marks the ask rejected. Requests to the harness's own
+  Anthropic/OpenAI path drop reasoning a pool host wrote (`translate.AnthropicNative`/
+  `OpenAINative`), byte-identical when there is none. Not translated yet: Messages to Responses,
+  chat to Messages or Responses (those hosts stay out of that caller's pool). Terms: no Claude
+  Pro/Max, Google or Copilot login is ever added; every OAuth row in `providers.json` carries a
+  terms note.
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
 
 See ../../CLAUDE.md (root)

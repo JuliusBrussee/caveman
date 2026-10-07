@@ -44,6 +44,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/internal/pool"
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
 
@@ -76,6 +77,9 @@ type Link struct {
 	now    func() time.Time
 	// keychain reads the CLI's macOS keychain entry; tests replace it.
 	keychain func() string
+	// logins are the provider logins the person added (`caveman providers
+	// add|login`): the pool an ask sends beyond the harness's own models.
+	logins *pool.Store
 
 	mu        sync.Mutex
 	stamp     string
@@ -92,6 +96,9 @@ type Link struct {
 	recheckAt  time.Time           // the last /me check of a limit pause
 	rechecking bool
 	pausePlan  string // the plan /me named while the limit held
+	// noPool: this login's Cloud refused an ask carrying pool with a 400 and
+	// answered it without: an older Cloud, asked without pool from then on.
+	noPool bool
 
 	events eventQueue
 
@@ -114,6 +121,7 @@ func New(home string, logger *slog.Logger) *Link {
 		logger:   logger,
 		now:      time.Now,
 		keychain: macKeychain,
+		logins:   pool.NewStore(home),
 	}
 }
 
@@ -169,7 +177,7 @@ func (l *Link) settings() settings {
 		if (cfg.access != "" || cfg.key != "") && (cfg.access != previous.access || cfg.key != previous.key) {
 			// A new login starts fresh: no pause and no decision from the old one.
 			// Signing out needs no reset: nothing is asked while signed out.
-			l.pauseUntil, l.decisions, l.states = time.Time{}, nil, nil
+			l.pauseUntil, l.decisions, l.states, l.noPool = time.Time{}, nil, nil, false
 			l.forgetLocked()
 		}
 	}
@@ -413,6 +421,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 		return gateway.RouteAnswer{Outcome: "off", Reason: "stateful_chain"}
 	}
 	request := requestFor(ask, root)
+	entries := l.poolEntries(ask, request.Endpoint, models)
 	if ask.PerRequest {
 		// A compaction or side request is answered on its own, without the ask.
 		l.mu.Lock()
@@ -422,7 +431,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 			l.recheckPause(cfg)
 			return answer
 		}
-		return l.ask(cfg, bearer, ask, request, nil, models, deadline)
+		return l.ask(cfg, bearer, ask, request, nil, models, entries, deadline)
 	}
 	text := askTextFor(ask.Endpoint, ask.Body, root)
 	if text.Text == "" {
@@ -451,12 +460,12 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if !seen {
 		func() {
 			defer close(d.done) // waiters on this ask never hang, even on a panic
-			d.answer = l.ask(cfg, bearer, ask, request, &text, models, deadline)
+			d.answer = l.ask(cfg, bearer, ask, request, &text, models, entries, deadline)
 		}()
 	}
 	<-d.done
 	answer := d.answer
-	if answer.Model != "" || answer.Effort != "" {
+	if answer.Model != "" || answer.Effort != "" || answer.Target != nil {
 		k := string(key[:])
 		answer.Reject = func() {
 			// The provider refused the routed model or effort: the rest of this
@@ -478,6 +487,36 @@ func statefulChain(body []byte, root jsonsplice.Span) bool {
 	return ok && string(body[span.Start:span.End]) != "null"
 }
 
+// harnessPrefix marks the pool entries that are the harness's own models on
+// its own credential: an answer naming one applies like a models answer.
+const harnessPrefix = "harness/"
+
+// poolEntries is the pool an ask sends (contracts route-ask-v1 pool): the
+// harness's own models first, then every login's models this runtime can
+// reach in the caller's grammar, at most 64. Nil when no login adds an entry
+// (models says it all) or this login's Cloud is an older one that refuses pool.
+func (l *Link) poolEntries(ask gateway.RouteAsk, grammar string, models []string) []pool.Entry {
+	l.mu.Lock()
+	off := l.noPool
+	l.mu.Unlock()
+	if off || l.logins == nil {
+		return nil
+	}
+	out := make([]pool.Entry, 0, len(models))
+	for _, model := range models {
+		out = append(out, pool.Entry{ID: harnessPrefix + model, Model: model, Host: ask.Provider, Via: "local"})
+	}
+	logins := l.logins.Entries(grammar, ask.Agent, poolMax-len(out), func(host, model string) bool {
+		return host == ask.Provider && slices.Contains(models, model) // the harness's own credential serves those
+	})
+	if len(logins) == 0 {
+		return nil
+	}
+	return append(out, logins...)
+}
+
+const poolMax = 64
+
 func poolFor(provider, model string) []string {
 	pool := pools[provider]
 	if !slices.Contains(pool, model) {
@@ -497,6 +536,7 @@ var (
 // (left out for a compaction or side request).
 type routeAsk struct {
 	Models      []string           `json:"models"`
+	Pool        []pool.Entry       `json:"pool,omitempty"`
 	Signals     signals            `json:"signals"`
 	Ask         *askText           `json:"ask,omitempty"`
 	Request     routeRequest       `json:"request"`
@@ -793,7 +833,7 @@ func signalsFor(ask gateway.RouteAsk) signals {
 	}
 }
 
-func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared routeRequest, text *askText, models []string, deadline time.Time) gateway.RouteAnswer {
+func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared routeRequest, text *askText, models []string, entries []pool.Entry, deadline time.Time) gateway.RouteAnswer {
 	var last *gateway.RouteLast
 	if ask.Last != nil {
 		bounded := *ask.Last
@@ -806,32 +846,57 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 		}
 		last = &bounded
 	}
-	raw := askBody(routeAsk{
-		Models: models, Signals: signalsFor(ask), Ask: text, Request: declared, Last: last,
+	body := routeAsk{
+		Models: models, Pool: entries, Signals: signalsFor(ask), Ask: text, Request: declared, Last: last,
 		State: l.state(ask.SessionID), ParentState: l.state(ask.ParentSessionID),
-	})
-	if raw == nil {
-		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
 	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
-	request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.gateway+"/v1/route", bytes.NewReader(raw))
-	if err != nil {
-		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: "bad_cloud_url"})
-	}
-	request.Header.Set("content-type", "application/json")
-	request.Header.Set("authorization", "Bearer "+bearer)
-	response, err := l.client.Do(request)
-	if err != nil {
-		reason := "cloud_unreachable"
-		if errors.Is(err, context.DeadlineExceeded) {
-			reason = "timeout"
+	post := func(body routeAsk) (*http.Response, gateway.RouteAnswer, bool) {
+		raw := askBody(body)
+		if raw == nil {
+			return nil, gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}, false
 		}
-		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: reason})
+		request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.gateway+"/v1/route", bytes.NewReader(raw))
+		if err != nil {
+			return nil, l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: "bad_cloud_url"}), false
+		}
+		request.Header.Set("content-type", "application/json")
+		request.Header.Set("authorization", "Bearer "+bearer)
+		response, err := l.client.Do(request)
+		if err != nil {
+			reason := "cloud_unreachable"
+			if errors.Is(err, context.DeadlineExceeded) {
+				reason = "timeout"
+			}
+			return nil, l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: reason}), false
+		}
+		return response, gateway.RouteAnswer{}, true
+	}
+	response, failed, ok := post(body)
+	if !ok {
+		return failed
+	}
+	if response.StatusCode == http.StatusBadRequest && len(entries) > 0 {
+		// An older Cloud refuses the unknown pool field: ask again without it,
+		// and keep leaving it out for this login once that is answered.
+		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, answerMax))
+		response.Body.Close()
+		body.Pool, entries = nil, nil
+		if response, failed, ok = post(body); !ok {
+			return failed
+		}
+		if response.StatusCode == http.StatusOK {
+			l.mu.Lock()
+			l.noPool = true
+			l.mu.Unlock()
+		}
 	}
 	defer response.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
+	raw, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
 	var answer struct {
+		PoolID     string `json:"pool_id"`
+		Via        string `json:"via"`
 		Model      string `json:"model"`
 		Effort     string `json:"effort"`
 		EffortMode string `json:"effort_mode"`
@@ -845,7 +910,7 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 			Code string `json:"code"`
 		} `json:"error"`
 	}
-	unreadable := json.Unmarshal(body, &answer) != nil
+	unreadable := json.Unmarshal(raw, &answer) != nil
 	limit := answer.Reason
 	for _, known := range []string{"allowance", "billing_limit"} {
 		if strings.Contains(answer.Error.Code, known) {
@@ -871,8 +936,10 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: fmt.Sprintf("cloud_%d", response.StatusCode)})
 	case unreadable:
 		return l.pause(failurePause, gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_unreadable"})
-	case !slices.Contains(models, answer.Model):
-		return gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_outside_pool"}
+	}
+	target, model, reason := l.poolAnswer(cfg, bearer, declared.Endpoint, models, entries, answer.PoolID, answer.Via, answer.Model)
+	if reason != "" {
+		return gateway.RouteAnswer{Outcome: "degraded", Reason: reason}
 	}
 	l.forget()
 	l.keepState(ask.SessionID, answer.State)
@@ -884,11 +951,70 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	if slices.Contains(contractEfforts, answer.DefaultEffort) {
 		out.DefaultEffort = answer.DefaultEffort
 	}
-	if answer.Model != ask.Model {
-		out.Model, out.Outcome = answer.Model, "routed"
+	switch {
+	case target != nil:
+		out.Target, out.Outcome = target, "routed"
+	case model != ask.Model:
+		out.Model, out.Outcome = model, "routed"
 	}
 	return out
 }
+
+// poolIDRE bounds a pool id Cloud names for a via "cloud" entry, which the
+// runtime only sends back in x-caveman-route.
+var poolIDRE = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:/-]{0,127}$`)
+
+// poolAnswer reads where an answer sends the request. Without pool_id it is
+// one of models (route-ask-v1 as before). A pool_id names one of the entries
+// sent (via "local", the model it carries), a harness entry applying like a
+// models answer and any other a login's Target; or, via "cloud", an entry
+// Cloud added, sent to the Cloud gateway in the caller's grammar. Anything
+// else, or a login whose secret cannot be read, is outside the pool: the
+// request keeps the asked model (no pause, the next ask may differ).
+func (l *Link) poolAnswer(cfg settings, bearer, grammar string, models []string, entries []pool.Entry, id, via, model string) (*gateway.RouteTarget, string, string) {
+	if id == "" {
+		if !slices.Contains(models, model) {
+			return nil, "", "answer_outside_pool"
+		}
+		return nil, model, ""
+	}
+	switch via {
+	case "cloud":
+		if !poolIDRE.MatchString(id) || len(model) > 128 || cfg.gateway == "" {
+			return nil, "", "answer_outside_pool"
+		}
+		key := cfg.key // the project gateway key, else the session token
+		if key == "" {
+			key = bearer
+		}
+		header := http.Header{}
+		header.Set("authorization", "Bearer "+key)
+		header.Set("x-caveman-route", id)
+		return &gateway.RouteTarget{PoolID: id, Via: "cloud", Host: "cloud", Model: model, Wire: grammar,
+			URL: cfg.gateway + cloudPaths[grammar], Header: header}, "", ""
+	case "", "local":
+		for _, entry := range entries {
+			if entry.ID != id {
+				continue
+			}
+			if model != "" && model != entry.Model {
+				return nil, "", "answer_outside_pool"
+			}
+			if strings.HasPrefix(id, harnessPrefix) {
+				return nil, entry.Model, ""
+			}
+			target, err := l.logins.Target(entry)
+			if err != nil {
+				return nil, "", "login_unusable"
+			}
+			return &target, "", ""
+		}
+	}
+	return nil, "", "answer_outside_pool"
+}
+
+// cloudPaths are the Cloud gateway's routes for each caller grammar.
+var cloudPaths = map[string]string{"messages": "/v1/messages", "chat": "/v1/chat/completions", "responses": "/v1/responses"}
 
 // state is Cloud's opaque state for a session key, "" when none.
 func (l *Link) state(key string) string {
