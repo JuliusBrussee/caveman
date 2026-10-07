@@ -529,7 +529,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
-	if run != nil && run.marked {
+	if run != nil && run.marked && !run.wire.responses {
 		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
 	}
 	// Each retry attempt needs a fresh body reader, so the request is built per
@@ -567,8 +567,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// A 400 naming the thinking binding or the per-message marks earns one heal
 	// retry (route.go routeHeal); if that is refused too, the original-bytes
-	// retry below still runs.
-	if run != nil && resp.StatusCode == http.StatusBadRequest && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
+	// retry below still runs. On Responses only marks (configuration_update) heal.
+	if run != nil && resp.StatusCode == http.StatusBadRequest && (meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") ||
+		meta.Provider == "openai" && strings.HasSuffix(meta.Endpoint, "/responses") && run.marked) {
 		if retry, kind, from := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
 			headers := healHeaders
 			switch kind {

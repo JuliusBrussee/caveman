@@ -185,6 +185,87 @@ type routeRun struct {
 	// effort is the effort in force in the body sent, "" when the route stage
 	// did not set it (then it is read back from the bytes).
 	effort string
+	wire   effortWire // where the per-message marks go
+}
+
+// effortWire is where an effort goes on one wire: Anthropic Messages (a
+// per-message mark is an empty system message carrying output_config.effort)
+// or OpenAI Responses (a configuration_update input item carrying
+// reasoning.effort, which GPT-6 takes in single-agent mode: "Keep the original
+// request-level setting; the item updates the conversation", placed "before
+// the next user message in the input array", never next to another one;
+// developers.openai.com/api/docs/guides/reasoning "Change reasoning
+// mid-conversation", read 2026-10-06). Both keep the cached prefix.
+type effortWire struct {
+	list      string   // the conversation array
+	top       []string // the top-level effort's path
+	responses bool
+}
+
+var (
+	messagesWire  = effortWire{list: "messages", top: []string{"output_config", "effort"}}
+	responsesWire = effortWire{list: "input", top: []string{"reasoning", "effort"}, responses: true}
+)
+
+func (w effortWire) spans(body []byte) (root, array jsonsplice.Span, items []jsonsplice.Span, ok bool) {
+	if root, ok = objectRoot(body); !ok {
+		return
+	}
+	array, _ = jsonsplice.Field(body, root, w.list)
+	items, ok = jsonsplice.Elements(body, array)
+	return
+}
+
+func (w effortWire) topEffort(body []byte, root jsonsplice.Span) string {
+	object, _ := jsonsplice.Field(body, root, w.top[0])
+	effort, _ := jsonsplice.StringField(body, object, w.top[1])
+	return effort
+}
+
+// update reports a per-message item: an Anthropic system message, a
+// Responses configuration_update.
+func (w effortWire) update(body []byte, item jsonsplice.Span) bool {
+	if w.responses {
+		kind, _ := jsonsplice.StringField(body, item, "type")
+		return kind == "configuration_update"
+	}
+	role, _ := jsonsplice.StringField(body, item, "role")
+	return role == "system"
+}
+
+// itemEffort is the effort a per-message item sets, the agent's own or a mark.
+func (w effortWire) itemEffort(body []byte, item jsonsplice.Span) (string, bool) {
+	if !w.update(body, item) {
+		return "", false
+	}
+	config := "output_config"
+	if w.responses {
+		config = "reasoning"
+	}
+	object, _ := jsonsplice.Field(body, item, config)
+	return jsonsplice.StringField(body, object, "effort")
+}
+
+// fresh reports a conversation without a model turn yet.
+func (w effortWire) fresh(body []byte) bool {
+	_, _, items, _ := w.spans(body)
+	for _, item := range items {
+		role, _ := jsonsplice.StringField(body, item, "role")
+		kind, _ := jsonsplice.StringField(body, item, "type")
+		if role == "assistant" || w.responses && (kind == "reasoning" || strings.HasSuffix(kind, "_call")) {
+			return false
+		}
+	}
+	return true
+}
+
+// mark is one per-message effort mark, byte-identical every time. Efforts
+// reaching here are lower-case letters only (the link checks).
+func (w effortWire) mark(effort string) []byte {
+	if w.responses {
+		return []byte(`{"type":"configuration_update","reasoning":{"effort":"` + effort + `"}}`)
+	}
+	return markBytes(effort)
 }
 
 // newRouteRun reads the labels and the session keys. The session is the
@@ -515,25 +596,27 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		answer.Effort, answer.EffortMode = "", ""
 	}
 	switch {
-	case strings.HasSuffix(endpoint, "/responses"):
-		if answer.Effort != "" {
-			body, run.applied = setString(body, answer.Effort, "reasoning", "effort")
-			run.effort = answer.Effort
-		}
-		return body
 	case strings.HasSuffix(endpoint, "/chat/completions"):
 		if answer.Effort != "" {
 			body, run.applied = setString(body, answer.Effort, "reasoning_effort")
 			run.effort = answer.Effort
 		}
 		return body
-	case provider != "anthropic":
+	case strings.HasSuffix(endpoint, "/responses"):
+		run.wire = responsesWire
+	case provider == "anthropic":
+		run.wire = messagesWire
+	default:
 		return body
 	}
 	mode := answer.EffortMode
 	if mode == "" && answer.Effort != "" {
 		mode = "top"
 	}
+	if _, _, _, ok := run.wire.spans(body); !ok && run.wire.responses && mode == "message" {
+		mode = "top" // a Responses input string is one user turn: no item to put a mark before
+	}
+	top := run.wire.top
 	// Work on a copy so a body is never spliced under the lock; only a turn's
 	// own requests write it back.
 	s.routes.mu.Lock()
@@ -545,7 +628,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		s.routes.mu.Unlock()
 		run.heal = !run.off && !blockBinding(body)
 		if mode == "top" {
-			body, run.applied = setString(body, answer.Effort, "output_config", "effort")
+			body, run.applied = setString(body, answer.Effort, top...)
 			run.effort = answer.Effort
 		}
 		return body
@@ -568,7 +651,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 			}
 			refusals[refused] = true
 		}
-		if !freshConversation(body) {
+		if !run.wire.fresh(body) {
 			work, moved = parent.effortState, moved || parent.moved
 		} else if work.defaultModel == "" {
 			work.defaultEffort, work.defaultModel = parent.defaultEffort, parent.defaultModel
@@ -586,13 +669,13 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		// This model refused marks: Cloud's effort goes top-level, as the heal
 		// that found out sent it.
 		if answer.Effort != "" {
-			body, run.applied = setString(body, answer.Effort, "output_config", "effort")
+			body, run.applied = setString(body, answer.Effort, top...)
 			run.effort = answer.Effort
 		}
 	case mode == "top" && len(work.marks) == 0:
 		root, _ := objectRoot(body)
-		own := topEffort(body, root)
-		body, run.applied = setString(body, answer.Effort, "output_config", "effort")
+		own := run.wire.topEffort(body, root)
+		body, run.applied = setString(body, answer.Effort, top...)
 		run.effort = answer.Effort
 		if !run.perRequest {
 			// The cache restarts here: later marks start from this level, or
@@ -612,7 +695,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		if work.defaultModel == model {
 			fallback = work.defaultEffort
 		}
-		out, run.unmarked, run.marks, run.effort = perMessage(body, &work, markAsk{
+		out, run.unmarked, run.marks, run.effort = perMessage(body, run.wire, &work, markAsk{
 			effort: answer.Effort, top: mode == "top", fallback: fallback,
 			allowNew: !run.perRequest || mode == "top", restore: restore, moved: model != run.asked,
 		})
@@ -620,7 +703,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		run.applied = run.marked || !bytes.Equal(out, body)
 		body = out
 	}
-	if work.dropBlocks {
+	if work.dropBlocks && !run.wire.responses {
 		if out, ok := withDropBlock(body); ok {
 			body, run.dropBlocks = out, true
 		}
@@ -634,17 +717,6 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		s.routes.mu.Unlock()
 	}
 	return body
-}
-
-// freshConversation reports a Messages body without an assistant turn yet.
-func freshConversation(body []byte) bool {
-	_, _, items, _ := messageSpans(body)
-	for _, item := range items {
-		if role, _ := jsonsplice.StringField(body, item, "role"); role == "assistant" {
-			return false
-		}
-	}
-	return true
 }
 
 // applyStrip strips the thinking blocks a served binding heal stripped, while
@@ -705,8 +777,8 @@ type markAsk struct {
 // and a mark it gets is its own, kept as pending (see pendingMarks) until a
 // request continuing that conversation takes the session over; the session's
 // marks then become pending in turn.
-func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []byte, sent []effortMark, inForce string) {
-	root, array, items, ok := messageSpans(body)
+func perMessage(body []byte, w effortWire, state *effortState, ask markAsk) (out, unmarked []byte, sent []effortMark, inForce string) {
+	root, array, items, ok := w.spans(body)
 	if !ok {
 		return body, nil, nil, ""
 	}
@@ -720,7 +792,7 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 		}
 		return kept
 	}
-	own, effort, allowNew := topEffort(body, root), ask.effort, ask.allowNew
+	own, effort, allowNew := w.topEffort(body, root), ask.effort, ask.allowNew
 	marks := matching(state.marks)
 	main := len(marks) > 0 || len(state.marks) == 0
 	var first [32]byte
@@ -737,7 +809,7 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 		}
 	}
 	if ask.top && len(marks) == 0 { // no marks in this history: the top-level field, this body only
-		out, _ := setString(body, effort, "output_config", "effort")
+		out, _ := setString(body, effort, w.top...)
 		return out, nil, nil, effort
 	}
 	if ask.restore {
@@ -771,14 +843,14 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 	if main {
 		if state.top == nil {
 			top := own
-			if own != "" && effort != "" && freshConversation(body) {
+			if own != "" && effort != "" && w.fresh(body) {
 				top = effort
 			}
 			state.top = &top
 		}
 		if *state.top != "" && own != *state.top {
-			set, _ := setString(body, *state.top, "output_config", "effort")
-			if _, array, items, ok = messageSpans(set); !ok {
+			set, _ := setString(body, *state.top, w.top...)
+			if _, array, items, ok = w.spans(set); !ok {
 				return body, nil, nil, ""
 			}
 			body, own = set, *state.top
@@ -788,33 +860,19 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 	// and the marks, else the top-level field.
 	inForce, agentAt := own, -1
 	for i := len(items) - 1; i >= 0; i-- {
-		if role, _ := jsonsplice.StringField(body, items[i], "role"); role == "system" {
-			config, _ := jsonsplice.Field(body, items[i], "output_config")
-			if agentEffort, found := jsonsplice.StringField(body, config, "effort"); found {
-				inForce, agentAt = agentEffort, i
-				break
-			}
+		if agentEffort, found := w.itemEffort(body, items[i]); found {
+			inForce, agentAt = agentEffort, i
+			break
 		}
 	}
 	if len(marks) > 0 && marks[len(marks)-1].at > agentAt {
 		inForce = marks[len(marks)-1].effort
 	}
 	if allowNew && effort != "" && effort != inForce {
-		at := len(items)
-		for i := len(items) - 1; i >= 0; i-- {
-			if role, _ := jsonsplice.StringField(body, items[i], "role"); role == "user" {
-				if !carriesToolResult(body, items[i]) {
-					at = i
-				}
-				break
-			}
+		if at := w.markAt(body, items, agentAt, marks); at >= 0 {
+			marks = append(marks, effortMark{at: at, anchor: anchorAt(body, items, state.salt, at), effort: effort})
+			inForce = effort
 		}
-		at = max(at, agentAt+1)
-		if len(marks) > 0 {
-			at = max(at, marks[len(marks)-1].at)
-		}
-		marks = append(marks, effortMark{at: at, anchor: anchorAt(body, items, state.salt, at), effort: effort})
-		inForce = effort
 	}
 	switch {
 	case main && len(marks) > 0:
@@ -828,7 +886,44 @@ func perMessage(body []byte, state *effortState, ask markAsk) (out, unmarked []b
 	if len(marks) == 0 {
 		return body, nil, nil, inForce
 	}
-	return insertMarks(body, array, items, marks), body, marks, inForce
+	return insertMarks(body, w, array, items, marks), body, marks, inForce
+}
+
+// markAt is where a new mark goes among the agent's own items (agentAt: its
+// newest per-message item, -1 none), never before an earlier mark or one of
+// the agent's own; -1 when there is no place. Anthropic: just before the last
+// user turn, or at the end when that turn carries a tool result (never between
+// a tool_use and its tool_result). Responses: just before the last user
+// message, never at the end and never next to another configuration_update
+// (the API rejects adjacent updates); a tool loop that resumes after a
+// restart, which would put it next to its turn's mark, keeps the effort in
+// force.
+func (w effortWire) markAt(body []byte, items []jsonsplice.Span, agentAt int, marks []effortMark) int {
+	at := len(items)
+	if w.responses {
+		at = -1
+	}
+	for i := len(items) - 1; i >= 0; i-- {
+		if role, _ := jsonsplice.StringField(body, items[i], "role"); role == "user" {
+			if w.responses || !carriesToolResult(body, items[i]) {
+				at = i
+			}
+			break
+		}
+	}
+	if at < 0 {
+		return -1
+	}
+	at = max(at, agentAt+1)
+	last := -1
+	if len(marks) > 0 {
+		last = marks[len(marks)-1].at
+		at = max(at, last)
+	}
+	if w.responses && (at >= len(items) || at == last || w.update(body, items[at]) || at > 0 && w.update(body, items[at-1])) {
+		return -1
+	}
+	return at
 }
 
 // addPending puts set first among pending, in place of one for the same
@@ -851,7 +946,7 @@ func markBytes(effort string) []byte {
 
 // insertMarks splices the marks into the messages array; every byte of the
 // agent's own messages stays as it was.
-func insertMarks(body []byte, array jsonsplice.Span, items []jsonsplice.Span, marks []effortMark) []byte {
+func insertMarks(body []byte, w effortWire, array jsonsplice.Span, items []jsonsplice.Span, marks []effortMark) []byte {
 	var out bytes.Buffer
 	out.Grow(len(body) + len(marks)*80)
 	prev := 0
@@ -859,20 +954,20 @@ func insertMarks(body []byte, array jsonsplice.Span, items []jsonsplice.Span, ma
 		switch {
 		case mark.at < len(items):
 			out.Write(body[prev:items[mark.at].Start])
-			out.Write(markBytes(mark.effort))
+			out.Write(w.mark(mark.effort))
 			out.WriteByte(',')
 			prev = items[mark.at].Start
 		case len(items) > 0:
 			out.Write(body[prev:items[len(items)-1].End])
 			out.WriteByte(',')
-			out.Write(markBytes(mark.effort))
+			out.Write(w.mark(mark.effort))
 			prev = items[len(items)-1].End
 		default: // an empty array: the first mark opens it
 			out.Write(body[prev : array.Start+1])
 			if prev > array.Start {
 				out.WriteByte(',')
 			}
-			out.Write(markBytes(mark.effort))
+			out.Write(w.mark(mark.effort))
 			prev = array.Start + 1
 		}
 	}
@@ -924,18 +1019,7 @@ func objectRoot(body []byte) (jsonsplice.Span, bool) {
 }
 
 func messageSpans(body []byte) (root, array jsonsplice.Span, items []jsonsplice.Span, ok bool) {
-	if root, ok = objectRoot(body); !ok {
-		return
-	}
-	array, _ = jsonsplice.Field(body, root, "messages")
-	items, ok = jsonsplice.Elements(body, array)
-	return
-}
-
-func topEffort(body []byte, root jsonsplice.Span) string {
-	config, _ := jsonsplice.Field(body, root, "output_config")
-	effort, _ := jsonsplice.StringField(body, config, "effort")
-	return effort
+	return messagesWire.spans(body)
 }
 
 func carriesToolResult(body []byte, message jsonsplice.Span) bool {
@@ -992,34 +1076,30 @@ func setString(body []byte, value string, path ...string) ([]byte, bool) {
 	return body, false
 }
 
-// effortInForce is the effort the bytes sent run at: on Anthropic the newest
-// per-message mark, else output_config.effort; reasoning.effort on Responses;
-// reasoning_effort on chat. "" when none.
+// effortInForce is the effort the bytes sent run at: the newest per-message
+// mark (an Anthropic system message, a Responses configuration_update), else
+// the top-level field (output_config.effort, reasoning.effort); chat's
+// reasoning_effort. "" when none.
 func effortInForce(endpoint string, body []byte) string {
 	root, ok := objectRoot(body)
 	if !ok {
 		return ""
 	}
+	w := messagesWire
 	switch {
 	case strings.HasSuffix(endpoint, "/responses"):
-		reasoning, _ := jsonsplice.Field(body, root, "reasoning")
-		effort, _ := jsonsplice.StringField(body, reasoning, "effort")
-		return effort
+		w = responsesWire
 	case strings.HasSuffix(endpoint, "/chat/completions"):
 		effort, _ := jsonsplice.StringField(body, root, "reasoning_effort")
 		return effort
 	}
-	list, _ := jsonsplice.Field(body, root, "messages")
-	items, _ := jsonsplice.Elements(body, list)
+	_, _, items, _ := w.spans(body)
 	for i := len(items) - 1; i >= 0; i-- {
-		if role, _ := jsonsplice.StringField(body, items[i], "role"); role == "system" {
-			config, _ := jsonsplice.Field(body, items[i], "output_config")
-			if effort, ok := jsonsplice.StringField(body, config, "effort"); ok {
-				return effort
-			}
+		if effort, ok := w.itemEffort(body, items[i]); ok {
+			return effort
 		}
 	}
-	return topEffort(body, root)
+	return w.topEffort(body, root)
 }
 
 // withoutBrotli drops br from a routed request's accept-encoding: the heal
@@ -1120,13 +1200,16 @@ func blockBinding(body []byte) bool {
 // On a marked request a 400 naming output_config.effort, a message's
 // output_config, per-turn effort or the beta counts as the marks' fault (a
 // provider that rejects the field outright answers "messages.N.output_config:
-// Extra inputs are not permitted").
+// Extra inputs are not permitted"); on Responses one naming
+// configuration_update ("The 'configuration_update' item type is not supported
+// with pro or tournament models.", openrouter.ai GPT-6 migration guide, read
+// 2026-10-06).
 var (
 	bindingRE     = regexp.MustCompile("(?i)bound to a different conversation|invalid `signature` in `thinking` block")
 	prefixRE      = regexp.MustCompile(`(?i)bound to a different conversation`)
 	bindingPathRE = regexp.MustCompile(`messages\.(\d+)\.content\.\d+:`)
 	refusalRE     = regexp.MustCompile(`(?i)supports per-turn effort|effort cannot change`)
-	markErrRE     = regexp.MustCompile(`(?i)output_config\.effort|messages\.\d+\.output_config|per-turn|mid-conversation`)
+	markErrRE     = regexp.MustCompile(`(?i)output_config\.effort|messages\.\d+\.output_config|per-turn|mid-conversation|configuration_update`)
 )
 
 // healKind is the retry a provider 400 earned.
@@ -1177,7 +1260,7 @@ func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, mode
 			return out, healStrip, max(from, 0)
 		}
 	case run.marked && (refusalRE.Match(head) || markErrRE.Match(head)):
-		top, _ := setString(run.unmarked, run.effort, "output_config", "effort")
+		top, _ := setString(run.unmarked, run.effort, run.wire.top...)
 		if run.dropBlocks {
 			top, _ = withDropBlock(top)
 		}
