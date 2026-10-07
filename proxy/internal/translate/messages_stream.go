@@ -117,6 +117,13 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(
 					return
 				}
 			case <-deadline:
+				// What already arrived still goes (the clock ran while the
+				// caller wrote), and nothing after it.
+				for queued := len(raw); queued > 0; queued-- {
+					if line, ok := <-raw; !ok || !yield(line) {
+						return
+					}
+				}
 				return
 			case <-done:
 				return
@@ -230,18 +237,18 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 	}
 	var truncated error
 	switch err := cut(); {
+	case stream.finished:
+		stream.finish() // the answer was over: a reset after it changes nothing
 	case err != nil:
 		// The body ended without a clean EOF: a truncated answer must not read
 		// as a finished turn.
 		stream.fail("api_error", "upstream stream ended early: "+err.Error())
 		truncated = fmt.Errorf("%w: %w", errStreamTruncated, err)
-	case !stream.finished:
+	default:
 		// A clean EOF before any finish_reason or [DONE] is a cut too: half an
 		// answer or half a tool call must never read as end_turn.
 		stream.fail("api_error", "upstream stream ended without a finish_reason")
 		truncated = fmt.Errorf("%w: no finish_reason", errStreamTruncated)
-	default:
-		stream.finish()
 	}
 	return stream.usage, truncated
 }

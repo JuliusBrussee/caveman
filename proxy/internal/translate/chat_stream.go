@@ -302,7 +302,7 @@ func chatUsageOf(input, cacheRead, cacheWrite, output, reasoning int) chatUsage 
 // reasoning_content and, signed, as a reasoning_details envelope (unsigned
 // thinking is shown but never carried).
 func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
-	lines, cut, stop, _ := sseLines(upstream)
+	lines, _, stop, _ := sseLines(upstream)
 	defer stop()
 	type block struct {
 		kind      string
@@ -415,7 +415,7 @@ func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
 	if e.failed {
 		return ErrUpstreamFailed // before content Serve makes it ErrNotServed
 	}
-	if err := cut(); err != nil || !stopped {
+	if !stopped { // past message_stop a reset changes nothing
 		e.fail(http.StatusBadGateway, "api_error", "upstream stream ended before the answer completed")
 		return errStreamTruncated
 	}
@@ -430,7 +430,7 @@ func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
 // reasoning_details envelope tagged with the route, so only that route gets
 // it back.
 func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) error {
-	lines, cut, stop, _ := sseLines(upstream)
+	lines, _, stop, _ := sseLines(upstream)
 	defer stop()
 	calls := map[string]*chatCallOut{} // item id -> call
 	texted := map[string]bool{}        // message item id -> its text streamed
@@ -526,7 +526,7 @@ func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) err
 	if e.failed {
 		return ErrUpstreamFailed // before content Serve makes it ErrNotServed
 	}
-	if err := cut(); err != nil || !finished {
+	if !finished { // past response.completed a reset changes nothing
 		e.fail(http.StatusBadGateway, "api_error", "upstream stream ended before the response completed")
 		return errStreamTruncated
 	}

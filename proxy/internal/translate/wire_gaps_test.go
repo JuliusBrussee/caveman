@@ -962,3 +962,144 @@ func TestTerminalEventEndsTheStream(t *testing.T) {
 		}
 	}
 }
+
+// relayServe relays stream to a grammar caller; with linger the upstream
+// keeps the connection open after it.
+func relayServe(t *testing.T, grammar, body, stream string, linger bool) (string, Usage, error) {
+	t.Helper()
+	reply := Relay(grammar, []byte(body), "shown")
+	upstream, feed := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(feed, stream)
+		if !linger {
+			_ = feed.Close()
+		}
+	}()
+	defer feed.Close()
+	recorder := httptest.NewRecorder()
+	usage, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: upstream})
+	return recorder.Body.String(), usage, err
+}
+
+// The relay decides the end and a failure by the event's own type: a delta
+// whose text reads "message_stop", "response.completed" or "response.failed"
+// is content, and an empty finish_reason starts no clock.
+func TestRelayDecidesByEventType(t *testing.T) {
+	messages := sse(
+		`{"type":"message_start","message":{"id":"msg_1","model":"m","usage":{"input_tokens":10,"output_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"message_stop"}}`,
+		`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":" AFTER"}}`,
+		`{"type":"content_block_stop","index":0}`,
+		`{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":50}}`,
+		`{"type":"message_stop"}`)
+	if out, usage, err := relayServe(t, Messages, `{"model":"m","max_tokens":10,"stream":true,"messages":[]}`, messages, false); err != nil || !strings.Contains(out, "AFTER") || usage.OutputTokens != 50 {
+		t.Errorf("messages: err %v usage %+v\n%s", err, usage, out)
+	}
+	for _, text := range []string{"response.completed", "response.failed", "response.incomplete"} {
+		responses := sse(
+			`{"type":"response.created","response":{"id":"r"}}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"`+text+`"}`,
+			`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":" AFTER"}`,
+			`{"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":10,"output_tokens":50,"total_tokens":60}}}`)
+		if out, usage, err := relayServe(t, Responses, `{"model":"m","stream":true,"input":"hi"}`, responses, false); err != nil || !strings.Contains(out, "AFTER") || usage.OutputTokens != 50 {
+			t.Errorf("responses %q: err %v usage %+v\n%s", text, err, usage, out)
+		}
+	}
+	upstream, feed := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(feed, sse(`{"id":"c","choices":[{"delta":{"content":"one"},"finish_reason":""}]}`))
+		time.Sleep(usageGrace * 3)
+		_, _ = io.WriteString(feed, chatStream(`{"id":"c","choices":[{"delta":{"content":" AFTER"},"finish_reason":""}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`))
+		_ = feed.Close()
+	}()
+	recorder := httptest.NewRecorder()
+	if _, err := Relay(Chat, []byte(`{"model":"x","stream":true,"messages":[]}`), "shown").Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: upstream}); err != nil || !strings.Contains(recorder.Body.String(), "AFTER") {
+		t.Errorf("chat with empty finish_reason: err %v\n%s", err, recorder.Body.String())
+	}
+	// [DONE] is not doubled; nothing follows an upstream error.
+	done := chatStream(`{"id":"c","choices":[{"delta":{"content":"one"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`, `{"id":"c","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":50}}`)
+	if out, _, _ := relayServe(t, Chat, `{"model":"x","stream":true,"messages":[]}`, done, true); strings.Count(out, "[DONE]") != 1 {
+		t.Errorf("[DONE] count %d\n%s", strings.Count(out, "[DONE]"), out)
+	}
+	failed := sse(`{"id":"c","choices":[{"delta":{"content":"one"}}]}`, `{"error":{"type":"overloaded_error","message":"busy"}}`)
+	if out, _, err := relayServe(t, Chat, `{"model":"x","stream":true,"messages":[]}`, failed, true); !errors.Is(err, ErrUpstreamFailed) || !strings.HasSuffix(out, `"busy"}}`+"\n\n") {
+		t.Errorf("chat error: err %v %q", err, out)
+	}
+}
+
+// slowWriter stalls once, on the write that carries marker, as a client whose
+// socket buffer is full would.
+type slowWriter struct {
+	*httptest.ResponseRecorder
+	marker string
+	stall  time.Duration
+	once   bool
+}
+
+func (s *slowWriter) Write(p []byte) (int, error) {
+	if !s.once && strings.Contains(string(p), s.marker) {
+		s.once = true
+		time.Sleep(s.stall)
+	}
+	return s.ResponseRecorder.Write(p)
+}
+
+func (s *slowWriter) Flush() {}
+
+// A client slower than usageGrace on the finish chunk still gets the usage
+// and [DONE] the upstream had already sent.
+func TestSlowClientKeepsTheUsage(t *testing.T) {
+	stream := chatStream(`{"id":"c","choices":[{"delta":{"content":"one"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`, `{"id":"c","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":50}}`)
+	for run := 0; run < 5; run++ {
+		for name, serve := range map[string]func(*slowWriter, io.ReadCloser) (Usage, error){
+			"relay": func(w *slowWriter, body io.ReadCloser) (Usage, error) {
+				w.marker = `"finish_reason":"stop"`
+				return Relay(Chat, []byte(`{"model":"x","stream":true,"messages":[]}`), "shown").Serve(w, &http.Response{StatusCode: 200, Header: http.Header{}, Body: body})
+			},
+			"messages>chat": func(w *slowWriter, body io.ReadCloser) (Usage, error) {
+				w.marker = `"text_delta"`
+				_, reply, err := Request(Messages, Chat, []byte(`{"model":"m","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}`), Options{Model: "deepseek-v4-flash", Route: "deepseek"})
+				if err != nil {
+					return Usage{}, err
+				}
+				return reply.Serve(w, &http.Response{StatusCode: 200, Header: http.Header{}, Body: body})
+			},
+		} {
+			upstream, feed := io.Pipe()
+			go func() { _, _ = io.WriteString(feed, stream) }() // then lingers
+			w := &slowWriter{ResponseRecorder: httptest.NewRecorder(), stall: usageGrace + 50*time.Millisecond}
+			usage, err := serve(w, upstream)
+			_ = feed.Close()
+			if err != nil || usage.OutputTokens != 50 || !strings.Contains(w.Body.String(), "[DONE]") && name == "relay" {
+				t.Errorf("%s run %d: err %v usage %+v\n%s", name, run, err, usage, w.Body.String())
+			}
+		}
+	}
+}
+
+// A reset right after the terminal event: the answer is whole, so no error
+// follows it.
+func TestResetAfterTheAnswerIsNoError(t *testing.T) {
+	resetAfter := func(answer string) io.ReadCloser {
+		upstream, feed := io.Pipe()
+		go func() {
+			_, _ = io.WriteString(feed, answer)
+			_ = feed.CloseWithError(io.ErrUnexpectedEOF)
+		}()
+		return upstream
+	}
+	for run := 0; run < 5; run++ {
+		recorder := httptest.NewRecorder()
+		_, err := Relay(Messages, []byte(`{"model":"m","max_tokens":10,"stream":true,"messages":[]}`), "shown").Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: resetAfter(anthropicText("hi"))})
+		if out := recorder.Body.String(); err != nil || strings.Contains(out, "event: error") {
+			t.Fatalf("run %d: err %v\n%s", run, err, out)
+		}
+		_, reply, _ := Request(Chat, Messages, []byte(`{"model":"x","stream":true,"messages":[{"role":"user","content":"hi"}]}`), Options{Model: "claude-opus-5-5", Route: "anthropic"})
+		recorder = httptest.NewRecorder()
+		if _, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: resetAfter(anthropicText("hi"))}); err != nil || !strings.Contains(recorder.Body.String(), "[DONE]") {
+			t.Fatalf("run %d chat>messages: err %v\n%s", run, err, recorder.Body.String())
+		}
+	}
+}

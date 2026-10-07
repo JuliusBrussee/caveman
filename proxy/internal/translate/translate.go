@@ -578,7 +578,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		commit := false
 		if data, ok := sseData(line); ok {
 			openData = true
-			failed := bytes.Contains(data, []byte(`"type":"error"`)) || bytes.Contains(data, []byte(`"error":{`)) || bytes.Contains(data, []byte(`"response.failed"`))
+			failed := relayFailed(data)
 			if failed && !gated(w) {
 				return usage, ErrNotServed // an error before any content: nothing reached the caller
 			}
@@ -620,9 +620,11 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			break // the answer is over: an upstream that lingers holds nothing
 		}
 	}
+	err := cut()
 	if terminal && tail == nil {
 		// Ended at the answer's end without the upstream closing the
-		// stream: the last event is ended, and chat's [DONE] sent.
+		// stream: the last event is ended, and chat's [DONE] sent. A reset
+		// after the end changes nothing.
 		if openData {
 			_, _ = w.Write([]byte("\n"))
 		}
@@ -630,8 +632,8 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		}
 		out.flush()
+		err = nil
 	}
-	err := cut()
 	if err == nil && tail != nil {
 		// A clean end without a final newline: the line goes when it ends the
 		// answer (or the answer was already over); otherwise the stream is
@@ -691,12 +693,19 @@ var ErrUpstreamFailed = errors.New("upstream failed mid-answer")
 // event or a ping, and for chat not a chunk that only opens the message (a
 // role with empty content).
 func relayContent(grammar string, data []byte) bool {
-	for _, held := range []string{`"message_start"`, `"response.created"`, `"response.in_progress"`, `"type":"ping"`} {
-		if bytes.Contains(data, []byte(held)) {
-			return false
+	if grammar != Chat {
+		for _, held := range []string{`"message_start"`, `"response.created"`, `"response.in_progress"`, `"ping"`} {
+			if bytes.Contains(data, []byte(held)) {
+				switch string(eventType(data)) { // by the event's own type, not text that reads like one
+				case "message_start", "response.created", "response.in_progress", "ping":
+					return false
+				}
+				break
+			}
 		}
+		return true
 	}
-	if grammar != Chat || bytes.Equal(data, []byte("[DONE]")) {
+	if bytes.Equal(data, []byte("[DONE]")) {
 		return true
 	}
 	var chunk chatStreamChunk
@@ -727,11 +736,48 @@ func Relay(grammar string, body []byte, shown string) *Reply {
 func relayTerminal(grammar string, data []byte) bool {
 	switch grammar {
 	case Messages:
-		return bytes.Contains(data, []byte(`"message_stop"`))
+		return bytes.Contains(data, []byte(`"message_stop"`)) && string(eventType(data)) == "message_stop"
 	case Chat:
-		return bytes.Equal(data, []byte("[DONE]")) || bytes.Contains(data, []byte(`"finish_reason":"`))
+		return bytes.Equal(data, []byte("[DONE]")) || finishReason(data)
 	}
-	return bytes.Contains(data, []byte(`"response.completed"`)) || bytes.Contains(data, []byte(`"response.incomplete"`))
+	if !bytes.Contains(data, []byte(`"response.completed"`)) && !bytes.Contains(data, []byte(`"response.incomplete"`)) {
+		return false
+	}
+	kind := eventType(data)
+	return string(kind) == "response.completed" || string(kind) == "response.incomplete"
+}
+
+// eventType is a stream event's own top-level "type", as written (the
+// substring tests before it are only a filter: a delta's text can read like
+// any event).
+func eventType(data []byte) []byte { return inner(topMember(data, "type")) }
+
+// relayFailed reports the upstream's own failure event: by its type, or a
+// chat chunk's top-level error object, never text that merely reads like one.
+func relayFailed(data []byte) bool {
+	if !bytes.Contains(data, []byte(`error`)) && !bytes.Contains(data, []byte(`"response.failed"`)) {
+		return false
+	}
+	kind, failure := eventType(data), topMember(data, "error")
+	return string(kind) == "error" || string(kind) == "response.failed" || len(failure) > 0 && failure[0] == '{'
+}
+
+// finishReason reports a chat chunk carrying a non-empty finish_reason. A
+// raw `"finish_reason"` followed by a colon is always a key: inside a JSON
+// string every quote is escaped.
+func finishReason(data []byte) bool {
+	for rest := data; ; {
+		at := bytes.Index(rest, []byte(`"finish_reason"`))
+		if at < 0 {
+			return false
+		}
+		rest = rest[at+len(`"finish_reason"`):]
+		if i := skipSpace(rest, 0); i < len(rest) && rest[i] == ':' {
+			if i = skipSpace(rest, i+1); i+1 < len(rest) && rest[i] == '"' && rest[i+1] != '"' {
+				return true
+			}
+		}
+	}
 }
 
 // assembleResponses answers a non-streaming Responses caller from a streamed

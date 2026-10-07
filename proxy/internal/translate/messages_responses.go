@@ -241,14 +241,14 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 	var truncated error
 	if t.m.errored {
 		truncated = ErrUpstreamFailed // before content Serve makes it ErrNotServed
+	} else if t.finished {
+		t.m.finish() // past response.completed a reset changes nothing
 	} else if err := cut(); err != nil {
 		t.m.fail("api_error", "upstream stream ended early: "+err.Error())
 		truncated = fmt.Errorf("%w: %w", errStreamTruncated, err)
-	} else if !t.finished {
+	} else {
 		t.m.fail("api_error", "upstream stream ended without response.completed")
 		truncated = fmt.Errorf("%w: no response.completed", errStreamTruncated)
-	} else {
-		t.m.finish()
 	}
 	if stream {
 		return usage, truncated

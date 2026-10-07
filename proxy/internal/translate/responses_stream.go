@@ -487,7 +487,7 @@ type anthropicStreamBlock struct {
 // declared.
 func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge) {
 	out.start()
-	lines, cut, stop, _ := sseLines(upstream)
+	lines, _, stop, _ := sseLines(upstream)
 	defer stop()
 	blocks := map[int]*anthropicStreamBlock{}
 	var usage anthropicUsage
@@ -605,7 +605,7 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 	if out.finished {
 		return
 	}
-	if cut() != nil || !stopped {
+	if !stopped { // past message_stop a reset changes nothing
 		out.fail(streamCut)
 		return
 	}
@@ -653,7 +653,7 @@ func (c *chatStreamCall) open(out *responsesStream, bridge toolBridge) {
 // index opens a call whose complete arguments are sent when the stream ends.
 func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge, replay string) {
 	out.start()
-	lines, cut, stop, endBy := sseLines(upstream)
+	lines, _, stop, endBy := sseLines(upstream)
 	defer stop()
 	var reasoning, text *streamItem
 	// calls is keyed by the order calls opened in: an upstream that sends
@@ -769,7 +769,7 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 	if out.finished {
 		return
 	}
-	if cut() != nil || !finished {
+	if !finished { // past the finish a reset changes nothing
 		// Only the failure: no output_item.done for a half-finished call, so
 		// Codex never runs a tool on cut-off arguments.
 		out.fail(streamCut)

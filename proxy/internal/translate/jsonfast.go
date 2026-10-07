@@ -440,6 +440,39 @@ func eachItem(arr []byte, fn func(raw []byte, o obj)) bool {
 	}
 }
 
+// topMember is the value of key among the members of the object data (the
+// last of duplicates), nil when absent or data is no object. It reads the
+// members in place and keeps none: no allocation.
+func topMember(data []byte, key string) []byte {
+	i := skipSpace(data, 0)
+	if i >= len(data) || data[i] != '{' {
+		return nil
+	}
+	var found []byte
+	for i = skipSpace(data, i+1); i < len(data) && data[i] == '"'; {
+		keyEnd, ok := stringEnd(data, i)
+		if !ok {
+			return nil
+		}
+		name := data[i+1 : keyEnd-1]
+		if i = skipSpace(data, keyEnd); i >= len(data) || data[i] != ':' {
+			return nil
+		}
+		i = skipSpace(data, i+1)
+		end, ok := valueEnd(data, i)
+		if !ok {
+			return nil
+		}
+		if (kv{key: name}).is(key) {
+			found = data[i:end]
+		}
+		if i = skipSpace(data, end); i < len(data) && data[i] == ',' {
+			i = skipSpace(data, i+1)
+		}
+	}
+	return found
+}
+
 // objectAt reads the object starting at b[i] into dst and returns its end.
 func objectAt(b []byte, i int, dst []kv) ([]kv, int, bool) {
 	i = skipSpace(b, i+1)
