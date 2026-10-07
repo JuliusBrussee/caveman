@@ -215,7 +215,7 @@ func messagesChatBody(top map[string]json.RawMessage, opts Options) (map[string]
 	}
 	if m.format != nil {
 		format, _ := parseObj(m.format)
-		out["response_format"] = appendChatSchemaFormat(nil, []byte(`"output"`), format.get("schema"), []byte(`true`), nil)
+		out["response_format"] = appendChatSchemaFormat(nil, []byte(`"output"`), format.get("schema"), strictFor(format.get("schema")), nil)
 	}
 	effort := m.effortFor(opts)
 	switch {
@@ -233,6 +233,55 @@ func messagesChatBody(top map[string]json.RawMessage, opts Options) (map[string]
 	}
 	fitChat(out, opts, m.stream, effort)
 	return out, nil
+}
+
+// strictFor is the strict flag an Anthropic schema goes with on OpenAI: true
+// (Anthropic constrains its output to the schema) when the schema meets
+// OpenAI's strict rules, every object closed and every property required;
+// false otherwise, which OpenAI would refuse under strict.
+func strictFor(schema []byte) []byte {
+	if strictSchema(schema) {
+		return []byte(`true`)
+	}
+	return []byte(`false`)
+}
+
+func strictSchema(value []byte) bool {
+	switch {
+	case len(value) == 0:
+		return false
+	case value[0] == '[':
+		for _, element := range items(value) {
+			if !strictSchema(element) {
+				return false
+			}
+		}
+	case value[0] == '{':
+		node, ok := parseObj(value)
+		if !ok {
+			return false
+		}
+		if properties, ok := parseObj(node.get("properties")); ok {
+			if string(node.get("additionalProperties")) != "false" {
+				return false
+			}
+			required := map[string]bool{}
+			for _, name := range items(node.get("required")) {
+				required[jstr(name)] = true
+			}
+			for _, property := range properties {
+				if !required[string(property.key)] {
+					return false
+				}
+			}
+		}
+		for _, member := range node {
+			if (member.val[0] == '{' || member.val[0] == '[') && !strictSchema(member.val) {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 // appendChatSchemaFormat is chat's response_format for a JSON schema.
@@ -553,7 +602,7 @@ func messagesResponsesBody(top map[string]json.RawMessage, opts Options) (map[st
 	}
 	if m.format != nil {
 		format, _ := parseObj(m.format)
-		out["text"] = appendResponsesSchemaFormat(nil, []byte(`"output"`), format.get("schema"), []byte(`true`), nil)
+		out["text"] = appendResponsesSchemaFormat(nil, []byte(`"output"`), format.get("schema"), strictFor(format.get("schema")), nil)
 	}
 	if opts.ChatGPTLogin {
 		chatgptLoginBody(out)

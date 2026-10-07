@@ -606,12 +606,16 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	}
 	err := cut()
 	if err == nil && tail != nil {
-		// A clean end without a final newline: the line is whole.
+		// A clean end without a final newline: the line goes when it ends the
+		// answer (or the answer was already over); otherwise the stream is
+		// short of its end and the line is dropped like a cut one.
 		if data, ok := sseData(tail); ok {
 			terminal = terminal || relayTerminal(r.from, data)
 		}
-		_, _ = w.Write(tail)
-		out.flush()
+		if terminal {
+			_, _ = w.Write(tail)
+			out.flush()
+		}
 	}
 	if err == nil && !terminal {
 		if !gated(w) {

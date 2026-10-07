@@ -272,7 +272,7 @@ func stripForeignThinking(body map[string]json.RawMessage, route string) bool {
 func stripBlocks(content []byte, route string) (out []byte, stripped, restored bool) {
 	var kept []byte
 	count := 0
-	eachItem(content, func(raw []byte, block obj) {
+	whole := eachItem(content, func(raw []byte, block obj) {
 		kind := block.str("type")
 		if kind != "thinking" && kind != "redacted_thinking" {
 			kept = append(openElem(kept), raw...)
@@ -302,7 +302,7 @@ func stripBlocks(content []byte, route string) (out []byte, stripped, restored b
 		}
 		count++
 	})
-	if !stripped && !restored {
+	if !whole || !stripped && !restored {
 		return nil, false, false
 	}
 	if count == 0 {

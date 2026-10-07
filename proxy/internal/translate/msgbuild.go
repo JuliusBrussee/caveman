@@ -321,10 +321,15 @@ func messagesFinish(body map[string]json.RawMessage, b *msgBuilder, opts Options
 	if thinking != nil && !(manualThinking(thinking) && b.lastAssistantForeign()) {
 		body["thinking"] = thinking
 	} else if thinking == nil {
-		if !isNull(temperature) {
+		// Anthropic takes temperature in 0..1 (chat allows 0..2), and current
+		// models refuse temperature and top_p together: temperature wins.
+		var value float64
+		switch {
+		case !isNull(temperature) && json.Unmarshal(temperature, &value) == nil && value > 1:
+			body["temperature"] = json.RawMessage(`1`)
+		case !isNull(temperature):
 			body["temperature"] = temperature
-		}
-		if !isNull(topP) {
+		case !isNull(topP):
 			body["top_p"] = topP
 		}
 	}

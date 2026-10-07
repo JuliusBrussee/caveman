@@ -88,6 +88,7 @@ func chatMessagesBody(top map[string]json.RawMessage, opts Options) (map[string]
 	b := newMsgBuilder(len(top["messages"]))
 	b.strict = true // a chat client may not send reasoning back: no thinking left is no thinking
 	route := opts.route()
+	calls := map[string]bool{} // tool call ids the conversation made
 	var system []byte
 	leading := true
 	var err error
@@ -145,9 +146,19 @@ func chatMessagesBody(top map[string]json.RawMessage, opts Options) (map[string]
 				if len(arguments) <= 2 {
 					arguments = []byte(`"{}"`)
 				}
+				calls[call.str("id")] = true
 				b.toolUse(safeCallID(call.str("id")), function.str("name"), arguments, nil)
 			})
 		case "tool":
+			if id := message.str("tool_call_id"); !calls[id] {
+				// A result whose call is gone (compacted away): plain text, as
+				// a tool_result without its tool_use is refused.
+				start := b.mark()
+				b.arena = appendJoined(append(b.arena, `{"type":"text","text":`...), "Tool output ("+id+"):\n", chatTexts(content), `\n`)
+				b.arena = append(b.arena, '}')
+				b.push("user", "text", start, "")
+				return
+			}
 			start := b.mark()
 			b.arena = appendString(append(b.arena, `{"type":"tool_result","tool_use_id":`...), safeCallID(message.str("tool_call_id")))
 			if isStr(content) {
@@ -310,6 +321,7 @@ func chatResponsesBody(top map[string]json.RawMessage, opts Options) (map[string
 	dst = append(dst, '[')
 	var instructions [][]byte
 	leading := true
+	calls := map[string]bool{} // tool call ids the conversation made
 	var err error
 	ok := eachItem(top["messages"], func(_ []byte, message obj) {
 		if err != nil || message == nil {
@@ -341,11 +353,19 @@ func chatResponsesBody(top map[string]json.RawMessage, opts Options) (map[string
 				if len(arguments) <= 2 {
 					arguments = []byte(`"{}"`)
 				}
+				calls[call.str("id")] = true
 				dst = appendString(append(appendComma(dst), `{"type":"function_call","call_id":`...), safeCallID(call.str("id")))
 				dst = append(append(dst, `,"name":`...), tok(function.get("name"))...)
 				dst = append(append(append(dst, `,"arguments":`...), arguments...), '}')
 			})
 		case "tool":
+			if id := message.str("tool_call_id"); !calls[id] {
+				// A result whose call is gone: plain text, as an output
+				// without its call is refused.
+				dst = appendJoined(append(appendComma(dst), `{"type":"message","role":"user","content":[{"type":"input_text","text":`...), "Tool output ("+id+"):\n", chatTexts(content), `\n`)
+				dst = append(dst, "}]}"...)
+				return
+			}
 			dst = appendString(append(appendComma(dst), `{"type":"function_call_output","call_id":`...), safeCallID(message.str("tool_call_id")))
 			if isStr(content) {
 				dst = append(append(dst, `,"output":`...), content...)

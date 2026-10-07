@@ -475,11 +475,12 @@ func slicesContains(values []string, value string) bool { return slices.Contains
 func effortRank(level string) int { return slices.Index(effortOrder, level) }
 
 // editArray returns arr with the elements edit changes: a replacement, or
-// drop. It copies nothing and returns arr itself when edit changes none.
+// drop. It copies nothing and returns arr itself when edit changes none or
+// arr does not read as an array to its end.
 func editArray(arr []byte, edit func(raw []byte, o obj) (replacement []byte, drop bool)) ([]byte, bool) {
 	var raws [][]byte
 	var changes map[int][]byte // index -> replacement, nil to drop
-	eachItem(arr, func(raw []byte, o obj) {
+	ok := eachItem(arr, func(raw []byte, o obj) {
 		if replacement, drop := edit(raw, o); drop || replacement != nil {
 			if changes == nil {
 				changes = map[int][]byte{}
@@ -488,8 +489,8 @@ func editArray(arr []byte, edit func(raw []byte, o obj) (replacement []byte, dro
 		}
 		raws = append(raws, raw)
 	})
-	if changes == nil {
-		return arr, false
+	if changes == nil || !ok {
+		return arr, false // a malformed array is never rewritten into a shorter valid one
 	}
 	out := make([]byte, 0, len(arr)+64)
 	out = append(out, '[')

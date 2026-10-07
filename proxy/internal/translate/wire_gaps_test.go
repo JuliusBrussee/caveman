@@ -663,3 +663,43 @@ func TestChatCallerReviewFindings(t *testing.T) {
 		t.Fatalf("manual thinking kept on a bare tool turn: %s", encode(got))
 	}
 }
+
+// The rest of the review's findings, pinned.
+func TestSecondReviewFindings(t *testing.T) {
+	// A relayed stream that ends cleanly on an unterminated, non-final line
+	// is short of its end: the line is dropped, the error stands alone.
+	recorder, _, err := serve(t, Relay(Chat, []byte(`{"stream":true}`), "m"),
+		"data: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\"hi\"}}]}\n\ndata: {\"id\":\"x\",\"choices\":[{\"delta\":{\"content\":\" there\"}}]}", false)
+	if got := sdkDecode(Chat, recorder.Body.String()); err == nil || !strings.HasPrefix(got, "APIError") || strings.Contains(recorder.Body.String(), "there") {
+		t.Fatalf("unterminated tail: err %v, SDK sees %s\n%s", err, got, recorder.Body.String())
+	}
+
+	// Sampling knobs: temperature in Anthropic's 0..1, and not with top_p.
+	got, _ := mustRequest(t, Chat, Messages, `{"model":"x","temperature":1.5,"top_p":0.9,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "claude-opus-5-5"})
+	if got["temperature"] != 1.0 || got["top_p"] != nil {
+		t.Fatalf("sampling = %v %v", got["temperature"], got["top_p"])
+	}
+	if got, _ = mustRequest(t, Chat, Messages, `{"model":"x","top_p":0.9,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "claude-opus-5-5"}); got["top_p"] != 0.9 {
+		t.Fatalf("top_p alone = %v", got["top_p"])
+	}
+
+	// A tool result whose call was compacted away goes as text.
+	orphan := `{"model":"x","messages":[{"role":"user","content":"a"},{"role":"tool","tool_call_id":"call_gone","content":"r"},{"role":"user","content":"b"}]}`
+	if out := rawRequest(t, Chat, Messages, orphan, Options{Model: "claude-opus-5-5"}); strings.Contains(out, "tool_result") || !strings.Contains(out, `Tool output (call_gone):\nr`) {
+		t.Fatalf("c>m orphan = %s", out)
+	}
+	if out := rawRequest(t, Chat, Responses, orphan, Options{Model: "gpt-6-sol"}); strings.Contains(out, "function_call_output") || !strings.Contains(out, `Tool output (call_gone):\nr`) {
+		t.Fatalf("c>r orphan = %s", out)
+	}
+
+	// strict only for a schema OpenAI's strict mode takes.
+	loose := `{"model":"m","max_tokens":10,"output_config":{"format":{"type":"json_schema","schema":{"type":"object","properties":{"a":{"type":"string"},"b":{"type":"string"}},"required":["a"],"additionalProperties":false}}},"messages":[{"role":"user","content":"x"}]}`
+	if got, _ = mustRequest(t, Messages, Chat, loose, Options{Model: "g"}); !strings.Contains(encode(got["response_format"]), `"strict":false`) {
+		t.Fatalf("loose schema = %s", encode(got["response_format"]))
+	}
+
+	// A malformed history is never rewritten into a shorter valid one.
+	if out, changed := editArray([]byte(`[{"a":1},{"a":2} {"a":3}]`), func([]byte, obj) ([]byte, bool) { return []byte(`{"b":1}`), false }); changed || string(out) != `[{"a":1},{"a":2} {"a":3}]` {
+		t.Fatalf("editArray on a malformed array = %s %v", out, changed)
+	}
+}
