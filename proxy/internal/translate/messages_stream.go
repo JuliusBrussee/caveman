@@ -174,14 +174,17 @@ type messageStream struct {
 	id            string
 	// signature marks translated thinking as the runtime's (caveman:…).
 	signature string
+	// estimateFrom is the caller's request when inputEstimate is counted
+	// from it, as message_start goes.
+	estimateFrom []byte
 }
 
 // streamChatToAnthropic re-emits a chat SSE stream as Anthropic events, with
 // pings on silence, and returns the usage the upstream reported plus
 // errStreamTruncated (wrapped) when the upstream cut the stream.
-func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string, inputEstimate int) (chatUsage, error) {
+func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string, estimateFrom []byte) (chatUsage, error) {
 	stream := &messageStream{
-		out: newSSEWriter(w), model: model, signature: signature, inputEstimate: inputEstimate,
+		out: newSSEWriter(w), model: model, signature: signature, estimateFrom: estimateFrom,
 		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: "msg_stream",
 	}
 	lines, cut, stop := sseLines(upstream)
@@ -287,6 +290,9 @@ func (m *messageStream) start() {
 		return
 	}
 	m.started = true
+	if m.estimateFrom != nil {
+		m.inputEstimate = estimateInputTokens(m.estimateFrom)
+	}
 	m.out.event("message_start", map[string]any{
 		"type": "message_start",
 		"message": map[string]any{
@@ -355,10 +361,16 @@ func (m *messageStream) finish() {
 	}
 	m.start()
 	m.closeBlock()
+	usage := anthropicUsageFromChat(m.usage)
+	if m.inputEstimate > 0 && usage.InputTokens == 0 && usage.CacheReadInputTokens+usage.CacheCreationInputTokens > 0 {
+		// All input cached: a client that keeps message_start's count when
+		// the delta's is 0 would add the estimate to the cache counts.
+		usage.InputTokens = 1
+	}
 	m.out.event("message_delta", map[string]any{
 		"type":  "message_delta",
 		"delta": map[string]any{"stop_reason": m.stop, "stop_sequence": nil},
-		"usage": anthropicUsageFromChat(m.usage),
+		"usage": usage,
 	})
 	m.out.event("message_stop", map[string]any{"type": "message_stop"})
 }
@@ -445,8 +457,8 @@ func estimateInputTokens(body []byte) int {
 }
 
 // markEstimate tells the agent message_start's input_tokens is an estimate.
-func markEstimate(w http.ResponseWriter, estimate int) {
-	if estimate > 0 {
+func markEstimate(w http.ResponseWriter, estimateFrom []byte) {
+	if estimateFrom != nil {
 		w.Header().Set("x-caveman-input-tokens", "estimated")
 	}
 }

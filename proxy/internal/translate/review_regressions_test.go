@@ -297,3 +297,55 @@ func TestUpstreamIDIsKept(t *testing.T) {
 		t.Fatalf("err %v id %q", err, reply.UpstreamID())
 	}
 }
+
+// All input cached: message_delta's input_tokens is not 0, so a client that
+// keeps message_start's count on a 0 does not add the estimate to the cache.
+func TestAllCachedInputLeavesNoEstimateStanding(t *testing.T) {
+	_, reply := mustRequest(t, Messages, Chat, `{"model":"m","stream":true,"messages":[{"role":"user","content":"`+strings.Repeat("x", 4000)+`"}]}`, Options{Model: "g"})
+	recorder, usage, _ := serve(t, reply, chatStream(`{"id":"c","choices":[{"delta":{"content":"hi"}}]}`,
+		`{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":300,"completion_tokens":2,"prompt_tokens_details":{"cached_tokens":300}}}`), false)
+	for _, event := range anthropicEvents(t, recorder.Body.String()) {
+		if event.name == "message_delta" {
+			if got := encode(event.data["usage"]); got != `{"cache_creation_input_tokens":0,"cache_read_input_tokens":300,"input_tokens":1,"output_tokens":2}` {
+				t.Fatalf("message_delta usage = %s", got)
+			}
+		}
+	}
+	if usage.InputTokens != 300 || usage.CacheReadTokens != 300 { // the runtime books the host's own counts
+		t.Fatalf("booked usage = %+v", usage)
+	}
+}
+
+func TestFitEffort(t *testing.T) {
+	for _, tc := range []struct{ grammar, model, effort, body, want string }{
+		{Messages, "claude-opus-5-5", "minimal", `{}`, "low"},
+		{Messages, "claude-opus-5-5", "none", `{}`, ""},
+		{Messages, "claude-sonnet-5", "max", `{"thinking":{"type":"disabled"}}`, "max"}, // Sonnet 5 takes thinking off at any effort
+		{Messages, "claude-sonnet-5-5", "max", `{"thinking":{"type":"between_tools"}}`, "high"},
+		{Messages, "claude-opus-5", "xhigh", `{"thinking":{"type":"disabled"}}`, "high"},
+		{Messages, "claude-opus-5", "xhigh", `{"thinking":{"type":"adaptive"}}`, "xhigh"},
+		{Responses, "gpt-6.1-sol", "max", ``, "xhigh"},
+		{Responses, "gpt-6-sol", "max", ``, "max"},
+	} {
+		if got := FitEffort(tc.grammar, tc.model, tc.effort, []byte(tc.body)); got != tc.want {
+			t.Errorf("FitEffort(%s, %s, %s, %s) = %q, want %q", tc.grammar, tc.model, tc.effort, tc.body, got, tc.want)
+		}
+	}
+}
+
+// A relayed stream cut inside an event ends that event first, so the error
+// is an event of its own.
+func TestRelayCutInsideAnEventKeepsFraming(t *testing.T) {
+	head := sse(`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`,
+		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
+	for name, tail := range map[string]string{
+		"after a whole line": "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}\n",
+		"mid-line":           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}",
+	} {
+		recorder, _, err := serve(t, Relay(Messages, []byte(`{"stream":true}`), "m"), head+tail, true)
+		out := recorder.Body.String()
+		if err == nil || !strings.Contains(out, "\n\nevent: error\n") || framingBroken(out) != "" {
+			t.Fatalf("%s: err %v, the error is not an event of its own: %s\n%s", name, err, framingBroken(out), out)
+		}
+	}
+}

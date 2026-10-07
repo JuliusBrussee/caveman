@@ -553,6 +553,25 @@ func TestMessagesEffortFitsTheModel(t *testing.T) {
 			t.Errorf("%s %s %s: thinking %s output_config %s", tc.model, tc.thinking, tc.effort, thinking, out)
 		}
 	}
+	// No answered effort: the caller's own thinking is still fitted to the
+	// host's model (at the caller's own effort), and its effort stays.
+	for _, tc := range []struct{ model, thinking, want string }{
+		{"deepseek-v4-flash", `{"type":"between_tools"}`, ``},
+		{"claude-opus-5-5", `{"type":"between_tools"}`, ``},
+		{"claude-sonnet-5", `{"type":"between_tools"}`, `{"type":"disabled"}`},
+		{"claude-sonnet-5-5", `{"type":"between_tools"}`, `{"type":"between_tools"}`},
+		{"claude-opus-5-5", `{"type":"enabled","budget_tokens":4000}`, `{"type":"adaptive"}`},
+	} {
+		body := `{"model":"auto","max_tokens":10000,"thinking":` + tc.thinking + `,"output_config":{"effort":"low"},"messages":[{"role":"user","content":"hi"}]}`
+		sent, _ := mustRequest(t, Messages, Messages, body, Options{Model: tc.model, Route: "openrouter/x"})
+		thinking := ""
+		if sent["thinking"] != nil {
+			thinking = encode(sent["thinking"])
+		}
+		if thinking != tc.want || encode(sent["output_config"]) != `{"effort":"low"}` {
+			t.Errorf("no effort, %s %s: thinking %s output_config %s", tc.model, tc.thinking, thinking, encode(sent["output_config"]))
+		}
+	}
 	// Dialect none: the body's own effort stays.
 	sent, _ := mustRequest(t, Messages, Messages, `{"model":"m","output_config":{"effort":"low"},"messages":[]}`, Options{Model: "local", Effort: "high", Dialect: "none", Route: "local"})
 	if encode(sent["output_config"]) != `{"effort":"low"}` {

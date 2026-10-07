@@ -172,8 +172,8 @@ func thinkingOff(raw json.RawMessage, id, effort string) (json.RawMessage, bool)
 // Claude table for Messages, else the catalog's levels for an OpenAI model,
 // else OpenAI's common set. "" when nothing fits (a Claude model without
 // effort levels, or "none" on one). A Messages body with thinking off
-// (disabled, between_tools) caps it at high: those models take thinking off
-// only up to high.
+// (disabled, between_tools) caps it at high where the model takes thinking
+// off only up to high (thinkingOff's rule; Sonnet 5 takes it at any effort).
 func FitEffort(grammar, model, effort string, body []byte) string {
 	if grammar != Messages {
 		return clampEffort(effort, openAIEfforts(model))
@@ -190,7 +190,9 @@ func FitEffort(grammar, model, effort string, body []byte) string {
 	}
 	if (effort == "xhigh" || effort == "max") && json.Unmarshal(body, &request) == nil &&
 		(request.Thinking.Type == "disabled" || request.Thinking.Type == "between_tools") {
-		return "high"
+		if _, takesOff := thinkingOff(json.RawMessage(`{"type":"disabled"}`), claudeID(model), effort); !takesOff {
+			return "high"
+		}
 	}
 	return effort
 }

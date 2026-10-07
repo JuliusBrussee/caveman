@@ -337,11 +337,11 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 	if !stream {
 		out = sseWriter{w: discardWriter{header: http.Header{}, w: &sink}}
 	} else {
-		markEstimate(w, opts.inputEstimate)
+		markEstimate(w, opts.estimateFrom)
 		startSSE(w)
 	}
 	t := &responsesToMessages{opts: opts, args: map[string]bool{}, m: &messageStream{
-		out: out, model: opts.shown(), signature: opts.responsesSignature(""), inputEstimate: opts.inputEstimate,
+		out: out, model: opts.shown(), signature: opts.responsesSignature(""), estimateFrom: opts.estimateFrom,
 		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: "msg_stream",
 	}}
 	lines, cut, stop := sseLines(upstream)

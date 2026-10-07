@@ -47,7 +47,7 @@ type Options struct {
 	MaxOutputTokens int      // Responses->Messages: max_tokens when the caller set none (0 = 32000)
 	ChatGPTLogin    bool     // Responses upstream is the Sign-in-with-ChatGPT preview: chatgptLoginBody fitting (always streamed upstream)
 
-	inputEstimate int // a streamed Messages caller's message_start input_tokens, estimated from its request (set by Request)
+	estimateFrom []byte // a streamed Messages caller's request: message_start's input_tokens is estimated from it (set by Request)
 }
 
 func (o Options) shown() string {
@@ -162,7 +162,7 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 	}
 	reply := &Reply{from: from, to: to, opts: opts, stream: probe.Stream, upstreamStream: probe.Stream}
 	if from == Messages && to != Messages && probe.Stream {
-		reply.opts.inputEstimate = estimateInputTokens(body)
+		reply.opts.estimateFrom = body // counted when message_start goes, not before the send
 	}
 	var fields map[string]json.RawMessage
 	var err error
@@ -214,6 +214,18 @@ func messagesBody(raw []byte, opts Options) (map[string]json.RawMessage, error) 
 	}
 	if opts.Effort != "" && opts.Dialect != dialectNone {
 		applyNativeEffort(fields, opts.Model, opts.Effort)
+	} else if raw, set := fields["thinking"]; set {
+		// No effort to apply: the caller's own thinking still has to be one
+		// this host's model takes (at the caller's own effort).
+		var output struct {
+			Effort string `json:"effort"`
+		}
+		_ = json.Unmarshal(fields["output_config"], &output)
+		if thinking, keep := nativeThinking(raw, fields["max_tokens"], opts.Model, output.Effort); keep {
+			fields["thinking"] = thinking
+		} else {
+			delete(fields, "thinking")
+		}
 	}
 	fitRoute(fields, opts, false)
 	return fields, nil
@@ -554,8 +566,8 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 	case r.from == Messages && r.to == Chat:
 		if r.upstreamStream {
 			startSSE(w)
-			markEstimate(w, r.opts.inputEstimate)
-			usage, err := streamChatToAnthropic(w, body, shown, r.opts.chatSignature(), r.opts.inputEstimate)
+			markEstimate(w, r.opts.estimateFrom)
+			usage, err := streamChatToAnthropic(w, body, shown, r.opts.chatSignature(), r.opts.estimateFrom)
 			return usage.usage(), err
 		}
 		raw, err := io.ReadAll(body)
@@ -611,6 +623,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	lines, cut, stop := sseLines(body)
 	defer stop()
 	boundary := true // the upstream's last line ended an event
+	var lastLine []byte
 	for line := range lines {
 		if line == nil {
 			heartbeat(w) // committing mid-event is safe: the rest follows
@@ -625,7 +638,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			}
 			continue
 		}
-		boundary = len(bytes.TrimRight(line, "\r\n")) == 0
+		boundary, lastLine = len(bytes.TrimRight(line, "\r\n")) == 0, line
 		commit := false
 		if data, ok := sseData(line); ok {
 			failed := bytes.Contains(data, []byte(`"type":"error"`)) || bytes.Contains(data, []byte(`"error":{`)) || bytes.Contains(data, []byte(`"response.failed"`))
@@ -677,6 +690,10 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		return usage, nil
 	}
 	message := "upstream stream ended early: " + err.Error()
+	if !boundary {
+		// The cut came inside an event: end it so the error is an event of its own.
+		_, _ = w.Write([]byte(endEvent(lastLine)))
+	}
 	switch r.from {
 	case Messages:
 		out.event("error", map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": message}})
@@ -687,6 +704,15 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		newResponsesStream(w, shown, true).fail(streamCut)
 	}
 	return usage, fmt.Errorf("%w: %w", errStreamTruncated, err)
+}
+
+// endEvent is what ends an SSE event whose last line was line: a blank line,
+// after the line's own newline when the cut came mid-line.
+func endEvent(line []byte) string {
+	if bytes.HasSuffix(line, []byte("\n")) {
+		return "\n"
+	}
+	return "\n\n"
 }
 
 // gated reports content already sent through w's gate (true for a plain writer).

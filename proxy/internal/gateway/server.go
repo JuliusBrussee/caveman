@@ -243,8 +243,9 @@ type RequestRecord struct {
 	RouteDecisionID string
 	// RoutePoolID is the pool entry the route stage sent the request to (on
 	// a fallback row too, with RouteReason saying why it failed);
-	// UpstreamResponseID the host's own id for the answer (OpenRouter's
-	// gen-…), to look the call up there. Stored, with RouteReason.
+	// UpstreamResponseID the pool host's own id for its answer (OpenRouter's
+	// gen-…), to look the call up there: on a fallback row it is the failed
+	// pool host's id, not the harness's. Stored, with RouteReason.
 	RoutePoolID        string
 	UpstreamResponseID string
 	// ProviderOriginKnown: the request went to the provider's own API, so its
