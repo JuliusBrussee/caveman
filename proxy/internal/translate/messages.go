@@ -200,7 +200,11 @@ func anthropicBlocksOf(raw json.RawMessage) []anthropicBlock {
 // `model`, sending the thinking blocks signed `replay` back as
 // reasoning_content ("" sends none). Server tools are an error.
 func anthropicToChat(request anthropicRequest, model, replay string) (map[string]any, error) {
-	messages := make([]openAIMessage, 0, len(request.Messages)+1)
+	size := 1 // a capacity hint (the system message), bounded so the sum cannot overflow
+	if len(request.Messages) < 1<<30 {
+		size = len(request.Messages) + 1
+	}
+	messages := make([]openAIMessage, 0, size)
 	if system := anthropicTextOf(request.System); system != "" {
 		messages = append(messages, openAIMessage{Role: "system", Content: system})
 	}
