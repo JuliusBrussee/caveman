@@ -264,17 +264,32 @@ func processAlive(pid int) bool {
 }
 
 func processExecutable(pid int) (string, error) {
-	if runtime.GOOS == "linux" {
+	return processExecutableFor(runtime.GOOS, pid)
+}
+
+// processExecutableFor resolves the executable backing pid for the platform's
+// own GOOS. The goos is a parameter so every branch is reachable from a test on
+// one host; processExecutable feeds it the real one. An unsupported platform
+// fails CLOSED: validate() then refuses to certify the listener and the CLI
+// treats it as foreign rather than routing operator keys into it (#945).
+func processExecutableFor(goos string, pid int) (string, error) {
+	// android is the GOOS a Termux-built proxy carries (install-local-cli.sh
+	// runs plain `go build`), and it is Linux underneath: /proc/<pid>/exe
+	// reads there exactly as it does on linux for every process sharing this
+	// UID — which is every proxy this CLI could own. Missing android here
+	// made `caveman-proxy status` answer owner unknown for a proxy wrap had
+	// just started, so every local session reported a foreign listener.
+	if goos == "linux" || goos == "android" {
 		return os.Readlink(filepath.Join("/proc", strconv.Itoa(pid), "exe"))
 	}
-	if runtime.GOOS == "darwin" {
+	if goos == "darwin" {
 		out, err := exec.Command("ps", "-o", "comm=", "-p", strconv.Itoa(pid)).Output()
 		return strings.TrimSpace(string(out)), err
 	}
-	if runtime.GOOS == "windows" {
+	if goos == "windows" {
 		return processExecutableWindows(pid)
 	}
-	return "", fmt.Errorf("executable identity unsupported on %s", runtime.GOOS)
+	return "", fmt.Errorf("executable identity unsupported on %s", goos)
 }
 
 func instanceMatches(listen, token string) bool {

@@ -436,6 +436,43 @@ process.exit(0);
   }
 });
 
+test("a wrap that starts the proxy itself reports it as its own, once", async (t) => {
+  if (!proxyBuilt) return t.skip("go toolchain not found");
+  const dir = mkdtempSync(join(suiteDir, "owned-"));
+  const home = join(dir, "home");
+  const binDir = join(dir, "bin");
+  const envFile = join(dir, "agent-env");
+  mkdirSync(binDir, { recursive: true });
+  writeEntitledConfig(home);
+  // A shell agent keeps this test runnable where /usr/bin/env is absent.
+  writeFileSync(join(binDir, "agent"), `#!/bin/sh
+printf '%s' "\${OPENAI_BASE_URL:-}" > ${JSON.stringify(envFile)}
+`, { mode: 0o755 });
+  const port = await freePort();
+  let spawnedPid = null;
+  try {
+    const out = await runCli(cli, ["wrap", "agent"], {
+      env: baseEnv(home, binDir, port),
+      cwd: dir,
+      timeoutMs: 12_000,
+    });
+    assert.equal(out.code, 0, out.stderr);
+    // The proxy wrap started must be certified as its own. Reading it as
+    // unknown blames the just-started listener as foreign and strands the
+    // session outside the compression layer (runstate identity probe).
+    assert.match(out.stderr, new RegExp(`→ started Caveman proxy on 127\\.0\\.0\\.1:${port} \\(compress\\)`));
+    assert.equal(out.stderr.match(/→ started Caveman proxy/g)?.length, 1, "one wrap, one proxy spawn");
+    assert.match(out.stderr, /caveman · compress · agent/);
+    assert.doesNotMatch(out.stderr, /something else is listening/);
+    const state = runState(home, port);
+    spawnedPid = state.pid;
+    assert.equal(state.owner, "wrap");
+    assert.equal(readFileSync(envFile, "utf8"), `http://127.0.0.1:${port}`, "agent must route through the proxy it started");
+  } finally {
+    if (spawnedPid) await stopPid(spawnedPid);
+  }
+});
+
 test("failed local proxy startup launches agent without a dead proxy base URL", async (t) => {
   if (!proxyBuilt) return t.skip("go toolchain not found");
   const dir = mkdtempSync(join(suiteDir, "startup-failed-"));
