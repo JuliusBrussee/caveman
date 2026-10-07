@@ -140,7 +140,10 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `output_config.effort`; Anthropic `effort_mode: message` instead inserts the byte-identical mark
   `{"role":"system","content":[],"output_config":{"effort":…}}` (beta
   `mid-conversation-output-config-2026-07-01` appended to `anthropic-beta`) before the last user
-  turn, or at the end after a tool result. Only `effort_mode: message` ever starts marks; a "top"
+  turn, or at the end after a tool result; on OpenAI Responses (GPT-6) the mark is a
+  `{"type":"configuration_update","reasoning":{"effort":…}}` input item before the last user
+  message, never at the end and never next to another one (no place: the effort in force holds), no
+  beta; a 400 naming `configuration_update` heals like a refused mark. Only `effort_mode: message` ever starts marks; a "top"
   answer on history carrying the session's marks goes in as one more mark (never wiping them; for
   a compaction or side request, that request's only), and on any other history sets the top-level
   field. Marks are remembered per session with a salted hash of the message before each
@@ -237,6 +240,22 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages callers reach it
   through Messages→Responses, chat callers get no OpenAI entry. Chat callers reach chat hosts only. Terms: no Claude Pro/Max, Google or Copilot login is ever added; every OAuth row
   in `providers.json` carries a terms note.
+- **cache mechanics** (`internal/gateway/route_cache.go`, cache.md 2026-10-06): the ask's
+  `request.cache_ttl` is the longest Anthropic `cache_control` ttl (none = 5m), else OpenAI
+  `prompt_cache_options.ttl` / `prompt_cache_retention` (24h; in_memory = 5m); Cloud's generic
+  400 (`cave_router_request_invalid`, which names no field) or one naming the field is asked
+  again without `cache_ttl`, then `pool`, and what a 200 then comes without stays off for the login.
+  Cache affinity keys on the session family (the parent's for a child): hashed `x-session-id`
+  (OpenRouter), `x-session-affinity` (Fireworks), `x-grok-conv-id` (xAI), and a
+  `prompt_cache_key` on OpenAI requests the route stage handles that carry none. Once an
+  OpenRouter pool entry reports cache reads or writes, the session pins the provider its answer
+  named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure drops the pin. Fresh
+  sibling children of one parent on the same model, tools and system prompt go one first and the
+  rest wait for its first byte (5 s at most, or their own cancellation): one cache write, not N;
+  a prefix with a first byte in the last 5 min waits for nobody. `signals.context_tokens` is the
+  request's bytes times the provider's own tokens per byte, the parent session's first.
+  Live check: `CAVEMAN_LIVE_OPENROUTER_KEY=<key file> go test ./proxy/internal/cloudlink -run
+  TestLiveOpenRouterCache -v` (throwaway home, $0.50 cap).
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
 
 See ../../CLAUDE.md (root)
