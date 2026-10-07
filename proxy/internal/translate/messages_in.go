@@ -322,11 +322,20 @@ func messagesToChat(top map[string]json.RawMessage, replay string) (json.RawMess
 // tool calls, replayed reasoning). Images and files inside tool results,
 // which a tool message cannot carry, open that message.
 func appendChatMessage(dst []byte, role string, content []byte, replay string) ([]byte, error) {
-	var parts, calls []byte
+	// segments are the message's parts in order: a text token, or a rendered
+	// image or file part. Texts are rendered as parts only when the message
+	// carries media; otherwise they join into one string, copied once.
+	type segment struct{ text, part []byte }
+	var segments []segment
+	var calls []byte
 	var texts, reasoning [][]byte
 	media := false
 	var err error
-	addPart := func(part []byte) { parts = append(openElem(parts), part...) }
+	addText := func(token []byte) {
+		texts = append(texts, token)
+		segments = append(segments, segment{text: token})
+	}
+	addPart := func(part []byte) { media, segments = true, append(segments, segment{part: part}) }
 	eachBlock(content, func(kind string, block obj) {
 		if err != nil {
 			return
@@ -337,12 +346,10 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 			if !isStr(text) {
 				return
 			}
-			texts = append(texts, text)
-			addPart(append(append([]byte(`{"type":"text","text":`), text...), '}'))
+			addText(text)
 		case "image":
 			part := []byte(`{"type":"image_url","image_url":{"url":`)
 			if part, err = appendImageURL(part, block); err == nil {
-				media = true
 				addPart(append(part, "}}"...))
 			}
 		case "document":
@@ -350,12 +357,10 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 			var text [][]byte
 			if part, text, err = chatDocument(block); err == nil {
 				if part != nil {
-					media = true
 					addPart(part)
 				}
 				for _, token := range text {
-					texts = append(texts, token)
-					addPart(append(append([]byte(`{"type":"text","text":`), token...), '}'))
+					addText(token)
 				}
 			}
 		case "tool_use":
@@ -372,8 +377,7 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 			var attached []byte
 			dst, attached, err = appendToolMessage(dst, block)
 			if attached != nil {
-				media = true
-				parts = append(openElem(parts), attached...)
+				addPart(attached)
 			}
 		case "thinking":
 			// Provider-private reasoning: replayed only to the route and model
@@ -386,14 +390,25 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 	if err != nil {
 		return dst, err
 	}
-	if parts == nil && calls == nil && reasoning == nil {
+	if segments == nil && calls == nil && reasoning == nil {
 		return dst, nil
 	}
 	dst = appendComma(dst)
 	dst = appendString(append(dst, `{"role":`...), role)
 	switch {
 	case media:
-		dst = append(append(append(dst, `,"content":`...), parts...), ']')
+		dst = append(dst, `,"content":[`...)
+		for at, segment := range segments {
+			if at > 0 {
+				dst = append(dst, ',')
+			}
+			if segment.part != nil {
+				dst = append(dst, segment.part...)
+			} else {
+				dst = append(append(append(dst, `{"type":"text","text":`...), segment.text...), '}')
+			}
+		}
+		dst = append(dst, ']')
 	case len(texts) > 0 && !(len(texts) == 1 && len(texts[0]) == 2):
 		dst = appendJoined(append(dst, `,"content":`...), "", texts, `\n`)
 	}

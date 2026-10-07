@@ -733,6 +733,9 @@ func (w *chatWriter) tool(id string, output []byte) error {
 // array) and reports whether any is an image or file; a file by URL, which
 // chat cannot take, is refused.
 func chatParts(content []byte) ([]byte, bool, error) {
+	if isStr(content) || !bytes.Contains(content, []byte(`"input_`)) || !bytes.Contains(content, []byte(`"input_image"`)) && !bytes.Contains(content, []byte(`"input_file"`)) {
+		return nil, false, nil // text only: the caller writes it as one string
+	}
 	var parts []byte
 	media := false
 	var err error
