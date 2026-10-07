@@ -377,7 +377,7 @@ type Entry struct {
 var wirePreference = map[string][]string{
 	translate.Messages:  {translate.Messages, translate.Chat, translate.Responses},
 	translate.Responses: {translate.Responses, translate.Messages, translate.Chat},
-	translate.Chat:      {translate.Chat},
+	translate.Chat:      {translate.Chat, translate.Messages, translate.Responses},
 }
 
 // Entries is the pool the logins reach for a caller speaking grammar, for

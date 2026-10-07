@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
@@ -271,6 +272,16 @@ func TestHarnessPathDropsReasoningAPoolHostWrote(t *testing.T) {
 	}
 	if out := nativeHistory("anthropic", "/v1/messages", []byte(poolBody)); string(out) != poolBody {
 		t.Fatalf("a clean body changed: %s", out)
+	}
+	// A chat caller's history: the reasoning a Messages or Responses host
+	// wrote (an envelope in reasoning_details, its text) goes to no chat API.
+	envelope := base64.StdEncoding.EncodeToString([]byte(`{"caveman":"v1","blocks":[{"type":"thinking","thinking":"t","signature":"sig"}]}`))
+	chat := `{"model":"gpt-x","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b","reasoning_content":"t","reasoning_details":[{"type":"reasoning.encrypted","data":"` + envelope + `"}]},{"role":"user","content":"c"}]}`
+	if out := string(nativeHistory("openai", "/v1/chat/completions", []byte(chat))); strings.Contains(out, envelope) || strings.Contains(out, `"t"`) || !strings.Contains(out, `"content":"b"`) {
+		t.Fatalf("chat history to OpenAI = %s", out)
+	}
+	if clean := `{"model":"gpt-x","messages":[{"role":"user","content":"a"}]}`; string(nativeHistory("openai", "/v1/chat/completions", []byte(clean))) != clean {
+		t.Fatal("a clean chat body changed")
 	}
 }
 
