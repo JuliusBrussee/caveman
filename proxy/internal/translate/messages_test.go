@@ -538,6 +538,7 @@ func TestMessagesEffortFitsTheModel(t *testing.T) {
 		{"claude-opus-5", `{"type":"between_tools"}`, "max", ``, `{"effort":"max"}`},
 		{"claude-opus-5-5", `{"type":"between_tools"}`, "low", ``, `{"effort":"low"}`},
 		{"claude-sonnet-4-5", `{"type":"between_tools"}`, "high", ``, ``},
+		{"deepseek-v4-flash", `{"type":"between_tools"}`, "high", ``, `{"effort":"high"}`},
 	} {
 		body := `{"model":"auto","max_tokens":10000,"thinking":` + tc.thinking + `,"output_config":{"effort":"low"},"reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`
 		sent, _ := mustRequest(t, Messages, Messages, body, Options{Model: tc.model, Effort: tc.effort, Route: "anthropic"})

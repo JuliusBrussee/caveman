@@ -980,7 +980,7 @@ func responsesNativeBody(raw []byte, model, effort, route string) (map[string]js
 		restoreReasoning(body, route)
 	}
 	dropReasoning(body, func(encrypted *string) bool { return encrypted == nil || *encrypted == "" })
-	if effort = clampEffort(effort, responsesEfforts); effort != "" {
+	if effort = clampEffort(effort, openAIEfforts(model)); effort != "" {
 		var reasoning map[string]json.RawMessage
 		_ = json.Unmarshal(body["reasoning"], &reasoning)
 		if reasoning == nil {

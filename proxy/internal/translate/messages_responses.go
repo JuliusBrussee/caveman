@@ -62,7 +62,7 @@ func messagesResponsesBody(raw []byte, opts Options) (map[string]json.RawMessage
 	if effort == "" && request.Thinking != nil && (request.Thinking.Type == "enabled" || request.Thinking.Type == "adaptive") {
 		effort = "medium"
 	}
-	if effort = clampEffort(effort, responsesEfforts); effort != "" {
+	if effort = clampEffort(effort, openAIEfforts(opts.Model)); effort != "" {
 		reasoning := map[string]any{"effort": effort}
 		if effort != "none" {
 			reasoning["summary"] = "auto"
@@ -337,13 +337,15 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 	if !stream {
 		out = sseWriter{w: discardWriter{header: http.Header{}, w: &sink}}
 	} else {
+		markEstimate(w, opts.inputEstimate)
 		startSSE(w)
 	}
 	t := &responsesToMessages{opts: opts, args: map[string]bool{}, m: &messageStream{
-		out: out, model: opts.shown(), signature: opts.responsesSignature(""),
+		out: out, model: opts.shown(), signature: opts.responsesSignature(""), inputEstimate: opts.inputEstimate,
 		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: "msg_stream",
 	}}
-	lines, cut := sseLines(upstream)
+	lines, cut, stop := sseLines(upstream)
+	defer stop()
 	for line := range lines {
 		if line == nil {
 			if stream {

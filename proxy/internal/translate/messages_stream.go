@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync"
 	"time"
 )
 
@@ -57,11 +58,13 @@ func (s sseWriter) flush() {
 // on silence: a nil line means "nothing arrived for pingInterval", and one
 // more comes at gateHold however busy the upstream is with lines that carry
 // no content (comments, pings), so the gate opens on time. The
-// returned func reports how the body ended once the channel is closed: nil
-// for a clean EOF, the read error otherwise.
-// ponytail: one goroutine pair per stream, ended by the upstream body closing.
-func sseLines(upstream io.Reader) (<-chan []byte, func() error) {
+// first returned func reports how the body ended once the channel is closed:
+// nil for a clean EOF, the read error otherwise. The second stops both
+// goroutines (and their timers) when the caller returns before the end; the
+// reader still waits on its upstream read until the body is closed.
+func sseLines(upstream io.Reader) (<-chan []byte, func() error, func()) {
 	raw := make(chan []byte)
+	done := make(chan struct{})
 	var cut error
 	go func() {
 		defer close(raw)
@@ -69,7 +72,11 @@ func sseLines(upstream io.Reader) (<-chan []byte, func() error) {
 		for {
 			line, err := reader.ReadBytes('\n')
 			if len(line) > 0 {
-				raw <- line
+				select {
+				case raw <- line:
+				case <-done:
+					return
+				}
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
@@ -86,23 +93,37 @@ func sseLines(upstream io.Reader) (<-chan []byte, func() error) {
 		defer close(out)
 		defer timer.Stop()
 		defer hold.Stop()
+		send := func(line []byte) bool {
+			select {
+			case out <- line:
+				return true
+			case <-done:
+				return false
+			}
+		}
 		for {
 			select {
 			case line, ok := <-raw:
-				if !ok {
+				if !ok || !send(line) {
 					return
 				}
-				out <- line
 			case <-hold.C:
-				out <- nil
+				if !send(nil) {
+					return
+				}
 				continue // the ping clock runs on
 			case <-timer.C:
-				out <- nil
+				if !send(nil) {
+					return
+				}
+			case <-done:
+				return
 			}
 			timer.Reset(ping)
 		}
 	}()
-	return out, func() error { return cut }
+	var once sync.Once
+	return out, func() error { return cut }, func() { once.Do(func() { close(done) }) }
 }
 
 // sseData is the payload of one `data:` line, false for any other line.
@@ -136,19 +157,21 @@ type chatStreamChunk struct {
 
 // messageStream tracks the one content block that is open.
 type messageStream struct {
-	out      sseWriter
-	model    string
-	index    int
-	open     string // "", text, thinking, tool_use
-	order    []int
-	current  map[int]int    // upstream index -> call key (the order calls opened in)
-	upstream map[int]string // call key -> the id the upstream gave it ("" = minted)
-	stop     string
-	started  bool
-	errored  bool
-	finished bool // a finish_reason or [DONE] arrived: the upstream ended the answer itself
-	usage    chatUsage
-	id       string
+	out   sseWriter
+	model string
+	// inputEstimate is message_start's input_tokens (estimateInputTokens).
+	inputEstimate int
+	index         int
+	open          string // "", text, thinking, tool_use
+	order         []int
+	current       map[int]int    // upstream index -> call key (the order calls opened in)
+	upstream      map[int]string // call key -> the id the upstream gave it ("" = minted)
+	stop          string
+	started       bool
+	errored       bool
+	finished      bool // a finish_reason or [DONE] arrived: the upstream ended the answer itself
+	usage         chatUsage
+	id            string
 	// signature marks translated thinking as the runtime's (caveman:…).
 	signature string
 }
@@ -156,12 +179,13 @@ type messageStream struct {
 // streamChatToAnthropic re-emits a chat SSE stream as Anthropic events, with
 // pings on silence, and returns the usage the upstream reported plus
 // errStreamTruncated (wrapped) when the upstream cut the stream.
-func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string) (chatUsage, error) {
+func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string, inputEstimate int) (chatUsage, error) {
 	stream := &messageStream{
-		out: newSSEWriter(w), model: model, signature: signature,
+		out: newSSEWriter(w), model: model, signature: signature, inputEstimate: inputEstimate,
 		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: "msg_stream",
 	}
-	lines, cut := sseLines(upstream)
+	lines, cut, stop := sseLines(upstream)
+	defer stop()
 	for line := range lines {
 		if line == nil { // silence
 			heartbeat(stream.out.w)
@@ -253,8 +277,11 @@ func (m *messageStream) consume(line []byte) {
 	}
 }
 
-// start emits message_start once, before any content. Input usage is not known
-// yet on this path, so it is reported as zero rather than guessed.
+// start emits message_start once, before any content. A chat or Responses
+// host reports input usage only at the end, and Claude Code reads
+// message_start's for its context meter, so it carries the estimate from the
+// request (marked by x-caveman-input-tokens); message_delta then carries the
+// host's exact counts, which the agent's SDK takes over.
 func (m *messageStream) start() {
 	if m.started {
 		return
@@ -265,7 +292,7 @@ func (m *messageStream) start() {
 		"message": map[string]any{
 			"id": m.id, "type": "message", "role": "assistant", "model": m.model,
 			"content": []any{}, "stop_reason": nil, "stop_sequence": nil,
-			"usage": anthropicUsage{},
+			"usage": anthropicUsage{InputTokens: m.inputEstimate},
 		},
 	})
 }
@@ -377,5 +404,49 @@ func anthropicStreamUsage(data []byte, usage *anthropicUsage) {
 		if event.Usage.CacheCreationInputTokens > 0 {
 			usage.CacheCreationInputTokens = event.Usage.CacheCreationInputTokens
 		}
+	}
+}
+
+// estimateInputTokens counts a Messages request's input without a tokenizer:
+// a token per four characters of its strings (text, tool schemas, the
+// system prompt), and a flat 1600 for each base64 image or document, whose
+// bytes are not text.
+// ponytail: chars/4 runs a few percent off on code; the host's exact count
+// replaces it in message_delta.
+func estimateInputTokens(body []byte) int {
+	var request any
+	if json.Unmarshal(body, &request) != nil {
+		return 0
+	}
+	chars, media := 0, 0
+	var walk func(any)
+	walk = func(value any) {
+		switch typed := value.(type) {
+		case string:
+			chars += len(typed)
+		case []any:
+			for _, item := range typed {
+				walk(item)
+			}
+		case map[string]any:
+			if source, ok := typed["source"].(map[string]any); ok && source["type"] == "base64" {
+				media++
+				return
+			}
+			for key, item := range typed {
+				if key != "model" && key != "type" {
+					walk(item)
+				}
+			}
+		}
+	}
+	walk(request)
+	return chars/4 + media*1600
+}
+
+// markEstimate tells the agent message_start's input_tokens is an estimate.
+func markEstimate(w http.ResponseWriter, estimate int) {
+	if estimate > 0 {
+		w.Header().Set("x-caveman-input-tokens", "estimated")
 	}
 }

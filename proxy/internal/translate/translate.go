@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"sync"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
@@ -45,6 +46,8 @@ type Options struct {
 	DropParams      []string // top-level fields the upstream refuses
 	MaxOutputTokens int      // Responses->Messages: max_tokens when the caller set none (0 = 32000)
 	ChatGPTLogin    bool     // Responses upstream is the Sign-in-with-ChatGPT preview: chatgptLoginBody fitting (always streamed upstream)
+
+	inputEstimate int // a streamed Messages caller's message_start input_tokens, estimated from its request (set by Request)
 }
 
 func (o Options) shown() string {
@@ -96,6 +99,42 @@ type Reply struct {
 	stream         bool // the caller asked for a stream
 	upstreamStream bool // the upstream was asked for one
 	tools          toolBridge
+	upstreamID     string // the host's own id for the answer (UpstreamID)
+}
+
+// UpstreamID is the host's own id for the answer it gave (OpenRouter's gen-…,
+// a resp_… or msg_…), read from the start of its body once Serve returns; ""
+// when it named none. The translated answer carries ids of its own, so this
+// is what looks the call up on the host (its cost, say).
+func (r *Reply) UpstreamID() string { return r.upstreamID }
+
+// headBuffer keeps the first bytes of an upstream body (the reader goroutine
+// writes while Serve may already be reading: hence the lock).
+type headBuffer struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+func (h *headBuffer) Write(p []byte) (int, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if room := 8<<10 - len(h.buf); room > 0 {
+		h.buf = append(h.buf, p[:min(room, len(p))]...)
+	}
+	return len(p), nil
+}
+
+var answerIDRE = regexp.MustCompile(`"id"\s*:\s*"([!-~]{1,200}?)"`)
+
+// firstID is the first "id" in the head: a chat chunk's or answer's own, a
+// Responses response.created's response, a Messages message_start's message.
+func (h *headBuffer) firstID() string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if match := answerIDRE.FindSubmatch(h.buf); match != nil {
+		return string(match[1])
+	}
+	return ""
 }
 
 // Stream reports whether the caller asked for a streamed answer.
@@ -122,6 +161,9 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 		return nil, nil, fmt.Errorf("translate: %s body: %w", from, err)
 	}
 	reply := &Reply{from: from, to: to, opts: opts, stream: probe.Stream, upstreamStream: probe.Stream}
+	if from == Messages && to != Messages && probe.Stream {
+		reply.opts.inputEstimate = estimateInputTokens(body)
+	}
 	var fields map[string]json.RawMessage
 	var err error
 	switch {
@@ -400,7 +442,14 @@ func chatgptLoginBody(body map[string]json.RawMessage) {
 // caller can still run the request elsewhere.
 func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, error) {
 	g := &gate{w: w, header: http.Header{}, started: time.Now()}
-	usage, err := r.serve(g, upstream)
+	head := &headBuffer{}
+	tapped := *upstream
+	tapped.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.TeeReader(upstream.Body, head), upstream.Body}
+	usage, err := r.serve(g, &tapped)
+	r.upstreamID = head.firstID()
 	if !g.open {
 		return usage, ErrNotServed
 	}
@@ -421,8 +470,9 @@ type gate struct {
 	started time.Time
 }
 
-// gateHold is how long a silent upstream keeps the answer behind the gate.
-// After it, the next silence tick commits the headers and pings start: the
+// gateHold is how long an upstream without content keeps the answer behind
+// the gate, silent or sending only comments and pings: sseLines ticks at it,
+// and that tick commits the headers and pings start (between events): the
 // agent's client must not time out waiting for headers (Node's undici gives
 // up at 300 s), and that liveness costs the fallback.
 var gateHold = 10 * time.Second
@@ -504,7 +554,8 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 	case r.from == Messages && r.to == Chat:
 		if r.upstreamStream {
 			startSSE(w)
-			usage, err := streamChatToAnthropic(w, body, shown, r.opts.chatSignature())
+			markEstimate(w, r.opts.inputEstimate)
+			usage, err := streamChatToAnthropic(w, body, shown, r.opts.chatSignature(), r.opts.inputEstimate)
 			return usage.usage(), err
 		}
 		raw, err := io.ReadAll(body)
@@ -557,10 +608,15 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	var usage Usage
 	terminal := false       // the upstream ended the answer itself
 	upstreamFailed := false // with a failure of its own
-	lines, cut := sseLines(body)
+	lines, cut, stop := sseLines(body)
+	defer stop()
+	boundary := true // the upstream's last line ended an event
 	for line := range lines {
 		if line == nil {
-			heartbeat(w)
+			heartbeat(w) // committing mid-event is safe: the rest follows
+			if !boundary {
+				continue // a ping never goes inside an event the upstream is still sending
+			}
 			if r.from == Messages {
 				out.event("ping", map[string]any{"type": "ping"})
 			} else { // an SSE comment: Codex's parser takes it for a keepalive, chat clients skip it
@@ -569,6 +625,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			}
 			continue
 		}
+		boundary = len(bytes.TrimRight(line, "\r\n")) == 0
 		commit := false
 		if data, ok := sseData(line); ok {
 			failed := bytes.Contains(data, []byte(`"type":"error"`)) || bytes.Contains(data, []byte(`"error":{`)) || bytes.Contains(data, []byte(`"response.failed"`))

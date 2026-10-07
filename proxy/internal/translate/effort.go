@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"encoding/json"
 	"strings"
+
+	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 )
 
 // Effort dialects: how a chat-completions upstream is told the reasoning
@@ -166,17 +168,40 @@ func thinkingOff(raw json.RawMessage, id, effort string) (json.RawMessage, bool)
 }
 
 // FitEffort maps an effort chosen for another model onto the levels model
-// takes on grammar's own API (the asked model when a pool target fails):
-// the Claude table for Messages, OpenAI's levels for Responses and chat.
-// "" when nothing fits (a Claude model without effort levels, or "none" on one).
-func FitEffort(grammar, model, effort string) string {
+// takes on grammar's own API (the asked model when a pool target fails): the
+// Claude table for Messages, else the catalog's levels for an OpenAI model,
+// else OpenAI's common set. "" when nothing fits (a Claude model without
+// effort levels, or "none" on one). A Messages body with thinking off
+// (disabled, between_tools) caps it at high: those models take thinking off
+// only up to high.
+func FitEffort(grammar, model, effort string, body []byte) string {
 	if grammar != Messages {
-		return clampEffort(effort, responsesEfforts)
+		return clampEffort(effort, openAIEfforts(model))
 	}
-	if _, _, levels, _ := claudeThinking(model); len(levels) > 0 {
-		return clampEffort(effort, levels)
+	_, _, levels, _ := claudeThinking(model)
+	if len(levels) == 0 {
+		return ""
 	}
-	return ""
+	effort = clampEffort(effort, levels)
+	var request struct {
+		Thinking struct {
+			Type string `json:"type"`
+		} `json:"thinking"`
+	}
+	if (effort == "xhigh" || effort == "max") && json.Unmarshal(body, &request) == nil &&
+		(request.Thinking.Type == "disabled" || request.Thinking.Type == "between_tools") {
+		return "high"
+	}
+	return effort
+}
+
+// openAIEfforts are the reasoning efforts an OpenAI model takes: the
+// catalog's when it lists the model, else the set every current one takes.
+func openAIEfforts(model string) []string {
+	if levels, ok := catalog.EffortLevels("openai", model); ok {
+		return levels
+	}
+	return responsesEfforts
 }
 
 // sameModel: id is model, or a dated snapshot of it ("claude-sonnet-5-20260101").
@@ -227,7 +252,9 @@ func nativeThinking(raw, maxTokens json.RawMessage, model, effort string) (json.
 	_ = json.Unmarshal(thinking["type"], &kind)
 	adaptive, manual, _, known := claudeThinking(model)
 	if !known {
-		return raw, true
+		// Another host's model: only Sonnet 5.5's own off switch is dropped,
+		// as nothing else takes it.
+		return raw, kind != "between_tools"
 	}
 	reshaped := map[string]json.RawMessage{}
 	if display, ok := thinking["display"]; ok {

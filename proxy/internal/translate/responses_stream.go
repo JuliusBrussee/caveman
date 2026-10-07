@@ -466,7 +466,8 @@ type anthropicStreamBlock struct {
 // declared.
 func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge) {
 	out.start()
-	lines, cut := sseLines(upstream)
+	lines, cut, stop := sseLines(upstream)
+	defer stop()
 	blocks := map[int]*anthropicStreamBlock{}
 	var usage anthropicUsage
 	stopped := false
@@ -618,7 +619,8 @@ func (c *chatStreamCall) open(out *responsesStream, bridge toolBridge) {
 // index opens a call whose complete arguments are sent when the stream ends.
 func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge, replay string) {
 	out.start()
-	lines, cut := sseLines(upstream)
+	lines, cut, stop := sseLines(upstream)
+	defer stop()
 	var reasoning, text *streamItem
 	// calls is keyed by the order calls opened in: an upstream that sends
 	// parallel calls all at index 0 (Gemini, Ollama) is told apart by id.

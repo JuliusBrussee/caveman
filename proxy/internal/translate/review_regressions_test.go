@@ -188,7 +188,8 @@ func TestAnsweredEffortOnEveryDirection(t *testing.T) {
 		{"messages to messages, thinking off", Messages, Messages, messagesOff, "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
 		{"responses to messages", Responses, Messages, codexBody("m", "high", "", userHello), "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
 		{"responses to chat", Responses, Chat, codexBody("m", "high", "", userHello), "low", "g", "reasoning_effort", `"low"`},
-		{"responses to responses", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6-sol", "reasoning", `{"effort":"xhigh","summary":"auto"}`},
+		{"responses to responses", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6.1-sol", "reasoning", `{"effort":"xhigh","summary":"auto"}`},
+		{"responses to responses, catalog lists max", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6-sol", "reasoning", `{"effort":"max","summary":"auto"}`},
 		{"chat to chat", Chat, Chat, chat, "low", "g", "reasoning_effort", `"low"`},
 		{"messages to chat at max", Messages, Chat, messages, "max", "g", "reasoning_effort", `"xhigh"`},
 		{"chat to chat at max", Chat, Chat, chat, "max", "g", "reasoning_effort", `"xhigh"`},
@@ -249,5 +250,50 @@ func TestGateHoldIsBoundedUnderSteadyHeldLines(t *testing.T) {
 		if _, err := tc.reply().Serve(recorder, busy(tc.comment, tc.failure)); errors.Is(err, ErrNotServed) || !strings.Contains(recorder.Body.String(), "busy") {
 			t.Errorf("%s after the hold: err %v body %q", tc.name, err, recorder.Body.String())
 		}
+	}
+}
+
+// A translated stream's message_start carries an input estimate (Claude
+// Code's context meter reads it), marked as one; message_delta carries the
+// host's exact count, and the usage the runtime books is the exact one.
+func TestTranslatedMessageStartEstimatesInput(t *testing.T) {
+	text := strings.Repeat("abcd", 500) // 2000 characters: 500 tokens, "user" one more
+	image := `{"type":"image","source":{"type":"base64","media_type":"image/png","data":"` + strings.Repeat("A", 40000) + `"}}`
+	body := `{"model":"m","stream":true,"messages":[{"role":"user","content":[{"type":"text","text":"` + text + `"},` + image + `]}]}`
+	for name, tc := range map[string]struct {
+		to, stream string
+	}{
+		"chat": {Chat, chatStream(`{"id":"c","choices":[{"delta":{"content":"hi"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":2140,"completion_tokens":2}}`)},
+		"responses": {Responses, upstreamResponses(`{"type":"response.output_text.delta","delta":"hi"}`,
+			`{"type":"response.completed","response":{"id":"r","usage":{"input_tokens":2140,"output_tokens":2,"total_tokens":2142}}}`)},
+	} {
+		_, reply := mustRequest(t, Messages, tc.to, body, Options{Model: "g", Route: "chatgpt"})
+		recorder, usage, err := serve(t, reply, tc.stream, false)
+		events := anthropicEvents(t, recorder.Body.String())
+		start := events[0].data["message"].(map[string]any)["usage"].(map[string]any)["input_tokens"]
+		var final any
+		for _, event := range events {
+			if event.name == "message_delta" {
+				final = event.data["usage"].(map[string]any)["input_tokens"]
+			}
+		}
+		if err != nil || start != float64(500+1+1600) || final != float64(2140) || usage.InputTokens != 2140 || recorder.Header().Get("x-caveman-input-tokens") != "estimated" {
+			t.Errorf("%s: err %v start %v final %v booked %d header %q", name, err, start, final, usage.InputTokens, recorder.Header().Get("x-caveman-input-tokens"))
+		}
+	}
+	// A non-streamed caller gets the exact count only.
+	_, quiet := mustRequest(t, Messages, Chat, strings.Replace(body, `"stream":true`, `"stream":false`, 1), Options{Model: "g"})
+	if recorder, _, _ := serve(t, quiet, `{"id":"c","choices":[{"message":{"content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":2140,"completion_tokens":2}}`, false); recorder.Header().Get("x-caveman-input-tokens") != "" {
+		t.Fatalf("non-streamed answer marked: %v", recorder.Header())
+	}
+}
+
+// The host's own answer id is kept for looking the call up there (its cost):
+// OpenRouter's gen- id under a Codex caller's translated resp_ id.
+func TestUpstreamIDIsKept(t *testing.T) {
+	_, reply := mustRequest(t, Responses, Chat, codexBody("m", "low", "", userHello), Options{Model: "g"})
+	recorder, _, err := serve(t, reply, chatStream(`{"id":"gen-123-abc","choices":[{"delta":{"content":"hi"}}]}`, `{"id":"gen-123-abc","choices":[{"delta":{},"finish_reason":"stop"}]}`), false)
+	if err != nil || reply.UpstreamID() != "gen-123-abc" || strings.Contains(recorder.Body.String(), "gen-123-abc") {
+		t.Fatalf("err %v id %q", err, reply.UpstreamID())
 	}
 }
