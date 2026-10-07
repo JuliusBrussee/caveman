@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,6 +18,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 )
 
 func openRouterTarget() *RouteTarget {
@@ -44,7 +46,7 @@ func pinOf(t *testing.T, body string) any {
 // one of its providers the session's entry is pinned there with no fallback;
 // a failure drops the pin.
 func TestOpenRouterPinsTheProviderASessionIsWarmOn(t *testing.T) {
-	c := newPoolCase(t, openRouterTarget(), "")
+	c := newPoolCaseMode(t, openRouterTarget(), "", "compress")
 	c.stub.poolJSON = orAnswer("Novita", 0) // served, nothing cached yet: not warm
 	poolSend(t, c.srv, poolBody)
 	req, body := c.stub.last("/chat/completions")
@@ -108,6 +110,7 @@ type fanoutUpstream struct {
 	arrived  []time.Time
 	answered []time.Time
 	delay    time.Duration
+	mode     string // the runtime mode; "" is compress
 }
 
 func (u *fanoutUpstream) server(t *testing.T) *Server {
@@ -128,7 +131,7 @@ func (u *fanoutUpstream) server(t *testing.T) *Server {
 	t.Cleanup(upstream.Close)
 	return New(Config{
 		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com")},
-		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: cmp.Or(u.mode, "compress")}},
 		Creds:      stubCreds{key: "sk-byok"},
 		Sink:       &captureSink{},
 		HTTPClient: &http.Client{Transport: toStub(upstream.URL)},
@@ -238,17 +241,21 @@ func TestContextTokensUseTheParentsTokensPerByte(t *testing.T) {
 // A child's cache affinity is its parent's: siblings and forked children
 // land on the machine (or OpenRouter provider) that holds the family's prefix.
 func TestChildrenShareTheirParentsAffinity(t *testing.T) {
-	c := newPoolCase(t, localTarget("api.openai.com"), "")
-	poolSend(t, c.srv, poolBody)
-	parent, _ := c.stub.last("/chat/completions")
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(poolBody))
-	req.Header.Set("x-api-key", "sk-ant-api-key")
-	req.Header.Set("x-claude-code-session-id", "sess-1")
-	req.Header.Set("x-claude-code-agent-id", "child-1")
-	c.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
-	child, _ := c.stub.last("/chat/completions")
-	if parent.Header.Get("x-session-affinity") == "" || child.Header.Get("x-session-affinity") != parent.Header.Get("x-session-affinity") {
-		t.Errorf("affinity: parent %q, child %q", parent.Header.Get("x-session-affinity"), child.Header.Get("x-session-affinity"))
+	for _, mode := range []string{"compress", "record"} {
+		c := newPoolCaseMode(t, localTarget("api.openai.com"), "", mode)
+		poolSend(t, c.srv, poolBody)
+		parent, _ := c.stub.last("/chat/completions")
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(poolBody))
+		req.Header.Set("x-api-key", "sk-ant-api-key")
+		req.Header.Set("x-claude-code-session-id", "sess-1")
+		req.Header.Set("x-claude-code-agent-id", "child-1")
+		c.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		child, _ := c.stub.last("/chat/completions")
+		shared := child.Header.Get("x-session-affinity") == parent.Header.Get("x-session-affinity")
+		// Record mode keeps the child's own, as before the cache mechanics.
+		if parent.Header.Get("x-session-affinity") == "" || child.Header.Get("x-session-affinity") == "" || shared != (mode == "compress") {
+			t.Errorf("%s: affinity parent %q, child %q", mode, parent.Header.Get("x-session-affinity"), child.Header.Get("x-session-affinity"))
+		}
 	}
 }
 
@@ -317,7 +324,7 @@ func TestFanoutKeyIncludesThePromptCacheKey(t *testing.T) {
 // A pinned provider that fails: once more on the same OpenRouter entry
 // without the pin, so the request stays on the pool model.
 func TestPinnedFailureRetriesTheEntryUnpinned(t *testing.T) {
-	c := newPoolCase(t, openRouterTarget(), "")
+	c := newPoolCaseMode(t, openRouterTarget(), "", "compress")
 	c.stub.poolJSON = orAnswer("Novita", 2800)
 	poolSend(t, c.srv, poolBody)
 	poolSend(t, c.srv, poolBody) // pinned from here
@@ -339,7 +346,7 @@ func TestPinnedFailureRetriesTheEntryUnpinned(t *testing.T) {
 // A transport error on a pinned send may come after OpenRouter read the
 // request: never sent to OpenRouter again; the pin goes and the asked model runs.
 func TestPinnedTransportErrorIsNeverResent(t *testing.T) {
-	c := newPoolCase(t, openRouterTarget(), "")
+	c := newPoolCaseMode(t, openRouterTarget(), "", "compress")
 	c.stub.poolJSON = orAnswer("Novita", 2800)
 	poolSend(t, c.srv, poolBody)
 	poolSend(t, c.srv, poolBody) // pinned from here
@@ -360,5 +367,47 @@ func TestPinnedTransportErrorIsNeverResent(t *testing.T) {
 	}
 	if pin := c.srv.routes.pinned("sess-1", "openrouter/kimi-k3"); pin != "" {
 		t.Errorf("pin kept after a transport error: %q", pin)
+	}
+}
+
+// Record mode gets none of the cache mechanics: no pin, no prompt_cache_key,
+// no family affinity (above), no fan-out wait.
+func TestRecordModeGetsNoCacheMechanics(t *testing.T) {
+	c := newPoolCase(t, openRouterTarget(), "") // record
+	c.stub.poolJSON = orAnswer("Novita", 2800)
+	for range 3 {
+		poolSend(t, c.srv, poolBody)
+	}
+	if _, body := c.stub.last("/chat/completions"); pinOf(t, body) != nil {
+		t.Errorf("record mode pinned: %s", body)
+	}
+
+	up := &fanoutUpstream{delay: 300 * time.Millisecond, mode: "record"}
+	srv := up.server(t)
+	sendChildren(t, srv, 3, func(i int) string { return fmt.Sprintf("child-%d", i) })
+	for _, at := range up.arrived {
+		if !at.Before(up.answered[0]) {
+			t.Fatalf("record mode held a sibling: arrivals %v, first answer %v", up.arrived, up.answered[0])
+		}
+	}
+}
+
+// The prompt_cache_key on an OpenAI pool login: compress mode adds the
+// session's, record mode sends none.
+func TestPoolOpenAILoginCacheKeyByMode(t *testing.T) {
+	for _, mode := range []string{"compress", "record"} {
+		header := http.Header{}
+		header.Set("authorization", "Bearer sk-openai")
+		target := &RouteTarget{PoolID: "openai/gpt-6.1-sol", Via: "local", Host: "openai", Model: "gpt-6.1-sol", Wire: translate.Responses,
+			URL: "https://api.openai.com/v1/responses", Header: header, Translate: translate.Options{Model: "gpt-6.1-sol", Route: "openai"}}
+		c := newPoolCaseMode(t, target, "", mode)
+		c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"gpt says hi\"}\n\n" +
+			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+		rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+		_, body := c.stub.last("/v1/responses")
+		keyed := strings.Contains(body, `"prompt_cache_key":"`+openai.SessionCacheKey("sess-1")+`"`)
+		if !strings.Contains(rec.Body.String(), "gpt says hi") || keyed != (mode == "compress") {
+			t.Errorf("%s: keyed %v, body %s", mode, keyed, body)
+		}
 	}
 }

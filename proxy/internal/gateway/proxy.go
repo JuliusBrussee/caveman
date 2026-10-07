@@ -462,7 +462,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
-		if answer.Outcome != "off" || answer.Reason != "" { // routing off or signed out: byte for byte
+		// Routing off or signed out stays byte for byte, and so does a session
+		// whose key a provider refused.
+		if (answer.Outcome != "off" || answer.Reason != "") && !s.routes.keyRefused(run.key) {
 			transform.Body = run.withCacheKey(meta.Provider, transform.Body)
 		}
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
@@ -525,7 +527,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		case meta.Model != modelRequested:
 			// An identity answer, so the agent's copy can name the model it asked for.
 			upstreamHeaders.Del("accept-encoding")
-		case !run.off || run.heal:
+		case !run.off || run.heal || run.keyed: // a refused key is read from the error too
 			withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
 		}
 		if run.dropBlocks {
@@ -564,7 +566,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// A fresh child on its siblings' new prefix waits for the first of them
 	// to have its first content (route_cache.go fanout).
 	release := func(bool) {}
-	if run != nil && !run.off {
+	if run != nil && !run.off && !run.record {
 		if key, ok := fanoutKey(run.parent, meta.Provider, meta.Model, grammarOf(meta.Endpoint), transform.Body); ok {
 			release = s.fanout.enter(r.Context(), key)
 			defer release(false)
@@ -649,10 +651,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if head, _ := peekError(resp); !bytes.Contains(bytes.ToLower(head), []byte("prompt_cache_key")) {
 			original = withCacheKey(body, run.key)
 			originalHash = sha256.Sum256(original)
+		} else {
+			s.routes.refuseKey(run.key) // later requests of the session go without it
 		}
 	}
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) &&
-		!(run != nil && (run.applied || run.keyed || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
+		!(run != nil && (run.applied || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {

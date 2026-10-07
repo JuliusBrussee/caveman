@@ -227,22 +227,25 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `prompt_cache_options.ttl` / `prompt_cache_retention` (24h; in_memory = 5m); Cloud's generic
   400 (`cave_router_request_invalid`, which names no field) or one naming the field is asked
   again without `cache_ttl`, then `pool` (never a field a 200 already came back for), and the field
-  whose removal got the 200 stays off for the login. Host affinity headers key on the session
-  family (the parent's for a child): hashed `x-session-id` (OpenRouter), `x-session-affinity`
-  (Fireworks), `x-grok-conv-id` (xAI); an OpenAI request the route stage is on for (a stateful
-  chain, answered off for a reason, included) that carries no `prompt_cache_key` gets the
-  session's own (hashed, added before the effort so a heal keeps it; the original-bytes retry keeps
-  it unless the 4xx names it, and a request it only keyed is never replayed). Routing off, signed
-  out and record mode stay byte for byte. Once an
-  OpenRouter pool entry reports cache reads or writes, the session pins the provider its answer
-  named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure drops the pin, and a
-  pinned non-2xx is sent once more to the same entry unpinned before the asked model runs (a
-  transport error is never resent: it may come after the request was written). Fresh sibling children of one
-  parent on the same model, tools, system prompt and `prompt_cache_key` go one first and the
-  rest wait for its first content (a JSON answer's first byte; an event stream's first event past
-  comments, pings, message_start and response.created/in_progress; 5 s at most, or their own
-  cancellation): one cache write, not N;
-  a prefix with a first byte in the last 5 min waits for nobody. `signals.context_tokens` is the
+  whose removal got the 200 stays off for the login. Record mode gets none of the cache mechanics
+  below (no `prompt_cache_key`, no OpenRouter pin, host affinity headers keyed on the session
+  itself as before, no fan-out wait); the routing answer itself (model, effort, marks,
+  `configuration_update`) still applies there, as above. Elsewhere: host affinity headers key on
+  the session family (the parent's for a child): hashed `x-session-id` (OpenRouter),
+  `x-session-affinity` (Fireworks), `x-grok-conv-id` (xAI). An OpenAI request the route stage is
+  on for (a stateful chain, answered off for a reason, included) that carries no
+  `prompt_cache_key` gets the session's own (hashed, added before the effort so a heal keeps it;
+  the original-bytes retry keeps it unless the 4xx names it, which also latches the key off for
+  the session; a request it only keyed is never replayed); routing off and signed out stay byte
+  for byte. Once an OpenRouter pool entry reports cache reads or writes, the session pins the
+  provider its answer named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure
+  drops the pin, and a pinned non-2xx is sent once more to the same entry unpinned before the
+  asked model runs (a transport error is never resent: it may come after the request was
+  written). Fresh sibling children of one parent on the same model, tools, system prompt and
+  `prompt_cache_key` go one first and the rest wait for its first content (a JSON answer's first
+  byte; an event stream's first event past comments, pings, message_start and
+  response.created/in_progress; 5 s at most, or their own cancellation): one cache write, not N;
+  a prefix with content in the last 5 min waits for nobody. `signals.context_tokens` is the
   request's bytes times the provider's own tokens per byte, the parent session's first.
   Live check: `CAVEMAN_LIVE_OPENROUTER_KEY=<key file> go test ./proxy/internal/cloudlink -run
   TestLiveOpenRouterCache -v` (throwaway home, $0.50 cap).

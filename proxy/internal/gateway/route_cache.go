@@ -18,16 +18,17 @@ import (
 )
 
 // Cache mechanics the route stage applies on its own: they keep a provider
-// cache the session already paid for and decide nothing about models.
+// cache the session already paid for and decide nothing about models. Record
+// mode gets none of them (its affinity headers stay keyed on the session
+// itself); the routing answer still applies there.
 //   - prompt_cache_key: OpenAI routes a prefix to the machine holding it by
 //     this key; a request without one gets its session's (hashed; one key a
 //     session keeps each key under OpenAI's ~15 requests a minute).
 //   - OpenRouter: x-session-id (RouteTarget.Affinity, the family's) makes it
-//     sticky; once a
-//     session's pool entry is warm on one of OpenRouter's providers it is
-//     pinned there (provider.order + allow_fallbacks false), so an idle gap or
-//     a provider error never spreads it to a cold one. A pinned request that
-//     fails drops the pin: the next one is routed afresh.
+//     sticky; once a session's pool entry is warm on one of OpenRouter's
+//     providers it is pinned there (provider.order + allow_fallbacks false),
+//     so an idle gap or a provider error never spreads it to a cold one. A
+//     pinned request that fails drops the pin: the next one is routed afresh.
 //   - fan-out: sibling children starting on one new prefix go one first; the
 //     rest wait for its first content (or fanoutWait), then read its cache write.
 //   - context tokens: the session's own bytes-to-tokens ratio, from the
@@ -65,12 +66,13 @@ func withCacheKey(body []byte, session string) []byte {
 // withCacheKey gives an OpenAI request of the session its key while the
 // route stage is on for it (a stateful chain, answered off for a reason,
 // included: a key that came and went would send follow-ups to a cold
-// machine); routing off, signed out and record mode stay byte for byte. It
-// goes in before the effort, so a marks heal (built from the unmarked body)
-// keeps it, and the original-bytes retry keeps it too.
+// machine); routing off and signed out stay byte for byte, and record mode
+// gets no cache mechanics at all. It goes in before the effort, so a marks
+// heal (built from the unmarked body) keeps it, and the original-bytes retry
+// keeps it too.
 func (run *routeRun) withCacheKey(provider string, body []byte) []byte {
 	if provider != "openai" || run.record {
-		return body // record mode never transforms
+		return body
 	}
 	keyed := withCacheKey(body, run.key)
 	run.keyed = run.keyed || len(keyed) != len(body)
@@ -94,6 +96,24 @@ func withProviderPin(body []byte, provider string) []byte {
 		return body
 	}
 	return out
+}
+
+// keyRefused reports a session whose prompt_cache_key a provider refused.
+func (rs *routeSessions) keyRefused(key string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	session := rs.get(key, false)
+	return session != nil && session.noKey
+}
+
+// refuseKey latches the session's prompt_cache_key off, so later requests do
+// not pay a refused send each.
+func (rs *routeSessions) refuseKey(key string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if session := rs.get(key, true); session != nil {
+		session.noKey = true
+	}
 }
 
 // pinned is the OpenRouter provider key's pool entry is warm on, "" none.

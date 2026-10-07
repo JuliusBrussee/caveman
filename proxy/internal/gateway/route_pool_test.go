@@ -31,6 +31,7 @@ type poolStub struct {
 	// poolFailPinned: the pool host answers poolCode only to a request pinned
 	// to one provider (provider.order with allow_fallbacks false).
 	poolFailPinned bool
+	mode           string // the runtime mode; "" is record
 	respSSE        string // the Responses host's stream
 	respCode       int
 	gwCode         int
@@ -104,9 +105,13 @@ func (p *poolStub) server(t *testing.T) *Server {
 		r.URL.Scheme, r.URL.Host = target.Scheme, target.Host
 		return http.DefaultTransport.RoundTrip(r)
 	})
+	mode := p.mode
+	if mode == "" {
+		mode = "record"
+	}
 	return New(Config{
 		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com"), openai.New("https://api.openai.com")},
-		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: mode}},
 		Creds:      stubCreds{key: "sk-byok"},
 		Sink:       p.sink,
 		HTTPClient: &http.Client{Transport: transport},
@@ -152,8 +157,14 @@ type poolCase struct {
 }
 
 func newPoolCase(t *testing.T, target *RouteTarget, effort string) poolCase {
+	return newPoolCaseMode(t, target, effort, "")
+}
+
+// newPoolCaseMode runs the pool case in mode ("" record; "compress" without
+// a compressor rewrites nothing but gets the cache mechanics).
+func newPoolCaseMode(t *testing.T, target *RouteTarget, effort, mode string) poolCase {
 	rejected := &atomic.Int32{}
-	stub := &poolStub{}
+	stub := &poolStub{mode: mode}
 	stub.cloud = &fakeCloud{answer: RouteAnswer{Outcome: "routed", Effort: effort, Target: target, Reject: func() { rejected.Add(1) }}}
 	return poolCase{stub: stub, srv: stub.server(t), rejected: rejected}
 }

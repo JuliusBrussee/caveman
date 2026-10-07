@@ -97,16 +97,17 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 	}
 	// Cache affinity and the fan-out gate (route_cache.go).
 	pinned, release, unpinned := "", func(bool) {}, payload
-	if target.Via != "cloud" && run != nil && run.key != "" {
+	// Record mode gets none of these: no pin, no key, no family affinity, no wait.
+	if target.Via != "cloud" && run != nil && run.key != "" && !run.record {
 		switch {
 		case target.Host == "openrouter":
 			pinned = s.routes.pinned(run.key, target.PoolID)
 			payload = withProviderPin(payload, pinned)
-		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages && !run.record:
+		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages:
 			payload = withCacheKey(payload, run.key)
 		}
 	}
-	if run != nil {
+	if run != nil && !run.record {
 		if key, ok := fanoutKey(run.parent, target.Host, target.Model, target.Wire, payload); ok {
 			release = s.fanout.enter(r.Context(), key)
 			defer release(false)
@@ -138,7 +139,11 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		header.Set("x-caveman-effort", effort) // the gateway applies it in the target's own shape
 	}
 	if target.Affinity != "" && run != nil && run.key != "" {
-		header.Set(target.Affinity, affinityKey(run.family()))
+		affinity := run.family()
+		if run.record {
+			affinity = run.key
+		}
+		header.Set(target.Affinity, affinityKey(affinity))
 	}
 	send := func(payload []byte) (*http.Response, error) {
 		return s.doUpstream(r.Context(), func() (*http.Request, error) {
@@ -182,7 +187,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		unpin()
 		return targetResult{errMsg: "pool_failed_before_content", upstreamID: reply.UpstreamID()}
 	}
-	if target.Host == "openrouter" && run != nil && run.key != "" {
+	if target.Host == "openrouter" && run != nil && run.key != "" && !run.record {
 		// Warm on the provider that served it: later requests stay there.
 		if provider := sniff.provider(); err == nil && provider != "" && usage.CacheReadTokens+usage.CacheWriteTokens > 0 {
 			s.routes.pin(run.key, target.PoolID, provider)

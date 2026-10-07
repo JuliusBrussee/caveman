@@ -439,6 +439,7 @@ type routeSession struct {
 	// pinPool, pinProvider: the OpenRouter provider a pool entry of this
 	// session is warm on (route_cache.go).
 	pinPool, pinProvider string
+	noKey                bool // a provider refused the session's prompt_cache_key
 	effortState
 }
 

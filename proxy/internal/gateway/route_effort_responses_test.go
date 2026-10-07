@@ -355,36 +355,61 @@ func TestRecordModeAndRoutingOffAreNeverKeyed(t *testing.T) {
 	}
 }
 
-// Routing off: a 429 on a compressed OpenAI request replays the original as
-// it always has (nothing the route stage did is in the bytes).
-func TestCompressed429WithRoutingOffReplaysAsBefore(t *testing.T) {
-	comp := &stubCompressor{out: []byte("X"), before: 100, after: 40, handle: "ccr_test"}
-	rt := &captureTransport{statuses: []int{http.StatusTooManyRequests}}
-	srv := New(Config{
-		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
-		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, Compressor: comp, HTTPClient: &http.Client{Transport: rt},
-		Cloud: &fakeCloud{answer: RouteAnswer{Outcome: "off"}},
-	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatReqBody))
-	req.Header.Set("authorization", "Bearer sk-proj-api-key")
-	req.Header.Set("session_id", "codex-1")
-	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
-	if len(rt.bodies) != 2 || string(rt.bodies[0]) == chatReqBody || string(rt.bodies[1]) != chatReqBody {
-		t.Fatalf("%d sends; first compressed %v, second original %v", len(rt.bodies), string(rt.bodies[0]) != chatReqBody, len(rt.bodies) == 2 && string(rt.bodies[1]) == chatReqBody)
+// A 429 on a compressed OpenAI request replays the original as it always
+// has, routing off (nothing the route stage did is in the bytes) or on with
+// only the session's key added (the replay carries the key too).
+func TestCompressed429ReplaysAsBefore(t *testing.T) {
+	for _, answer := range []RouteAnswer{{Outcome: "off"}, {Outcome: "kept"}} {
+		comp := &stubCompressor{out: []byte("X"), before: 100, after: 40, handle: "ccr_test"}
+		rt := &captureTransport{statuses: []int{http.StatusTooManyRequests}}
+		srv := New(Config{
+			Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
+			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, Compressor: comp, HTTPClient: &http.Client{Transport: rt},
+			Cloud: &fakeCloud{answer: answer},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatReqBody))
+		req.Header.Set("authorization", "Bearer sk-proj-api-key")
+		req.Header.Set("session_id", "codex-1")
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		original := chatReqBody
+		if answer.Outcome == "kept" {
+			original = string(withCacheKey([]byte(chatReqBody), "codex-1"))
+		}
+		if len(rt.bodies) != 2 || string(rt.bodies[0]) == original || string(rt.bodies[1]) != original {
+			t.Errorf("%s: %d sends, last %.120s", answer.Outcome, len(rt.bodies), rt.bodies[len(rt.bodies)-1])
+		}
 	}
 }
 
-// A 4xx that names prompt_cache_key replays the agent's own bytes, without it.
-func TestARefusedCacheKeyReplaysWithoutIt(t *testing.T) {
-	srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, func(body []byte) (int, string) {
+// A 4xx that names prompt_cache_key replays the agent's own bytes, without
+// it, and the session goes without it from then on. The error is asked for
+// without brotli so it can be read, on a stateful chain too.
+func TestARefusedCacheKeyReplaysWithoutItAndLatches(t *testing.T) {
+	refuse := func(body []byte) (int, string) {
 		if bytes.Contains(body, []byte(`"prompt_cache_key"`)) {
 			return http.StatusBadRequest, `{"error":{"message":"Unrecognized request argument supplied: prompt_cache_key","param":"prompt_cache_key"}}`
 		}
 		return 0, ""
-	})
+	}
+	srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, refuse)
 	in := `{"model":"gpt-6-sol","input":[` + rA + `]}`
 	if rec := postResponses(t, srv, in); rec.Code != http.StatusOK || len(log.bodies) != 2 || string(log.bodies[1]) != in {
 		t.Fatalf("status %d after %d sends", rec.Code, len(log.bodies))
+	}
+	next := `{"model":"gpt-6-sol","input":[` + rA + `,` + rB + `,` + rC + `]}`
+	if rec := postResponses(t, srv, next); rec.Code != http.StatusOK || len(log.bodies) != 3 || string(log.bodies[2]) != next {
+		t.Fatalf("after the latch: status %d after %d sends, last %s", rec.Code, len(log.bodies), log.bodies[len(log.bodies)-1])
+	}
+
+	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "off", Reason: "stateful_chain"}}, refuse)
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-sol","previous_response_id":"resp_1","input":[`+rC+`]}`))
+	req.Header.Set("authorization", "Bearer sk-proj-api-key")
+	req.Header.Set("session_id", "codex-1")
+	req.Header.Set("accept-encoding", "br, gzip")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK || len(log.bodies) != 2 || strings.Contains(log.headers[0].Get("accept-encoding"), "br") {
+		t.Fatalf("chain: status %d after %d sends, accept-encoding %q", rec.Code, len(log.bodies), log.headers[0].Get("accept-encoding"))
 	}
 }
 
