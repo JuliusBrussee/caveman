@@ -787,7 +787,9 @@ func TestThirdReviewFindings(t *testing.T) {
 	if strictSchema([]byte(deep)) || string(canonicalJSON(json.RawMessage(deep))) != deep {
 		t.Fatal("a schema past the depth cap was walked")
 	}
-	if elapsed := time.Since(start); elapsed > 5*time.Millisecond {
+	// The quadratic walk took about a second here; the 5 ms bound is
+	// BenchmarkDeepSchema's (a test under -race on a busy machine pauses more).
+	if elapsed := time.Since(start); elapsed > 250*time.Millisecond {
 		t.Fatalf("depth 3000 took %v", elapsed)
 	}
 	shallow := deepSchema(20)
