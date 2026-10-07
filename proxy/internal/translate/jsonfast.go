@@ -172,8 +172,15 @@ func (o obj) get(key string) []byte {
 	return nil
 }
 
-// is reports a member named name (its key decoded when it holds an escape).
-func (m kv) is(name string) bool { return string(unescapedKey(m.key)) == name }
+// is reports a member named name (its key decoded when it holds an escape;
+// an escape only lengthens a key, so one no longer than name is compared as
+// written).
+func (m kv) is(name string) bool {
+	if len(m.key) <= len(name) {
+		return string(m.key) == name
+	}
+	return bytes.IndexByte(m.key, '\\') >= 0 && string(unescapedKey(m.key)) == name
+}
 
 // unescapedKey is a key as written between its quotes, decoded when it holds
 // an escape ("r\u006fle" is "role").
