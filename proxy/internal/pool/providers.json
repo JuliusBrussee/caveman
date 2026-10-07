@@ -1,0 +1,156 @@
+{
+  "_doc": "Providers a person can add to the local runtime with `caveman providers add|login`. One row per host. models are catalog model names (Cloud's) with the host's own wire id; wire pins a model to one wire. Every OAuth row carries a terms note. Left out on purpose: Claude Pro/Max logins (Anthropic allows them only in its own apps), Gemini CLI / Antigravity Google logins (Google bans accounts for third-party use), GitHub Copilot (supported only through OpenCode's own login), Codex's own ~/.codex/auth.json (another app's login; Sign in with ChatGPT below is the sanctioned path).",
+  "providers": [
+    {
+      "id": "anthropic", "name": "Anthropic", "kind": "api_key", "env": ["ANTHROPIC_API_KEY"],
+      "base_url": "https://api.anthropic.com",
+      "wires": {"messages": {"path": "/v1/messages", "auth": "x-api-key"}},
+      "models": [{"model": "claude-opus-5-5"}, {"model": "claude-sonnet-5-5"}],
+      "billing": "metered"
+    },
+    {
+      "id": "openai", "name": "OpenAI", "kind": "api_key", "env": ["OPENAI_API_KEY"],
+      "base_url": "https://api.openai.com/v1",
+      "wires": {
+        "responses": {"path": "/responses", "auth": "bearer"},
+        "chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}
+      },
+      "models": [{"model": "gpt-6.1-sol"}, {"model": "gpt-6-sol"}, {"model": "gpt-6-astra"}, {"model": "gpt-6-luna"}],
+      "max_tokens_field": "max_completion_tokens", "drop_params": ["user"],
+      "billing": "metered"
+    },
+    {
+      "id": "chatgpt", "name": "ChatGPT plan (Sign in with ChatGPT)", "kind": "oauth",
+      "base_url": "https://api.openai.com/v1",
+      "wires": {"responses": {"path": "/responses", "auth": "bearer"}},
+      "models": [{"model": "gpt-6.1-sol"}, {"model": "gpt-6-sol"}, {"model": "gpt-6-astra"}, {"model": "gpt-6-luna"}],
+      "chatgpt_login": true,
+      "billing": "subscription",
+      "terms": "OpenAI's Sign in with ChatGPT for local apps (preview, published 2026-09-29, developers.openai.com/siwc): a login of this runtime's own, never Codex's ~/.codex/auth.json. Streaming Responses requests only. Experimental: not verified against the live service."
+    },
+    {
+      "id": "opencode-go", "aggregator": true, "name": "OpenCode Go", "kind": "api_key", "env": ["OPENCODE_API_KEY"],
+      "base_url": "https://opencode.ai/zen/go/v1",
+      "wires": {
+        "chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"},
+        "messages": {"path": "/messages", "auth": "x-api-key"},
+        "responses": {"path": "/responses", "auth": "bearer"}
+      },
+      "models": [
+        {"model": "deepseek-v4-flash", "wire": "chat"}, {"model": "glm-5.3", "wire": "chat"}, {"model": "kimi-k3", "wire": "chat"},
+        {"model": "qwen3.8-max", "wire": "messages"}, {"model": "minimax-m3", "wire": "messages"}, {"model": "gpt-6-luna", "wire": "responses"}
+      ],
+      "forward_headers": ["user-agent"], "affinity": "x-opencode-session", "replay": true,
+      "billing": "subscription",
+      "terms": "OpenCode Go allows its key in other coding agents with the agent's own User-Agent and a stable x-opencode-session. Grok (30-day retention) and Muse Spark (trains on prompts) are left out."
+    },
+    {
+      "id": "openrouter", "aggregator": true, "name": "OpenRouter", "kind": "api_key", "env": ["OPENROUTER_API_KEY"],
+      "base_url": "https://openrouter.ai/api/v1",
+      "wires": {
+        "messages": {"path": "/messages", "auth": "bearer"},
+        "chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openrouter"}
+      },
+      "models": [
+        {"model": "claude-opus-5-5", "id": "anthropic/claude-opus-5.5"}, {"model": "claude-sonnet-5-5", "id": "anthropic/claude-sonnet-5.5"},
+        {"model": "gpt-6.1-sol", "id": "openai/gpt-6.1-sol", "wire": "chat"}, {"model": "gpt-6-luna", "id": "openai/gpt-6-luna", "wire": "chat"},
+        {"model": "deepseek-v4-pro", "id": "deepseek/deepseek-v4-pro", "wire": "chat"}, {"model": "kimi-k3", "id": "moonshotai/kimi-k3", "wire": "chat"},
+        {"model": "glm-5.3", "id": "z-ai/glm-5.3", "wire": "chat"}
+      ],
+      "headers": {"HTTP-Referer": "https://github.com/JuliusBrussee/caveman", "X-Title": "caveman"},
+      "affinity": "x-session-id",
+      "billing": "metered"
+    },
+    {
+      "id": "fireworks", "aggregator": true, "name": "Fireworks AI", "kind": "api_key", "env": ["FIREWORKS_API_KEY"],
+      "base_url": "https://api.fireworks.ai/inference",
+      "wires": {"chat": {"path": "/v1/chat/completions", "auth": "bearer", "effort": "openai_chat"}},
+      "models": [
+        {"model": "kimi-k3", "id": "accounts/fireworks/models/kimi-k3"},
+        {"model": "deepseek-v4-pro", "id": "accounts/fireworks/models/deepseek-v4-pro"},
+        {"model": "glm-5.3", "id": "accounts/fireworks/models/glm-5p3"}
+      ],
+      "affinity": "x-session-affinity", "replay": true,
+      "billing": "metered"
+    },
+    {
+      "id": "deepseek", "name": "DeepSeek", "kind": "api_key", "env": ["DEEPSEEK_API_KEY"],
+      "base_url": "https://api.deepseek.com",
+      "wires": {
+        "messages": {"path": "/anthropic/v1/messages", "auth": "bearer"},
+        "chat": {"path": "/chat/completions", "auth": "bearer", "effort": "deepseek"}
+      },
+      "models": [{"model": "deepseek-v4-pro"}, {"model": "deepseek-v4-flash"}],
+      "replay": true,
+      "billing": "metered"
+    },
+    {
+      "id": "moonshot", "name": "Moonshot (Kimi)", "kind": "api_key", "env": ["MOONSHOT_API_KEY"],
+      "base_url": "https://api.moonshot.ai",
+      "wires": {
+        "messages": {"path": "/anthropic/v1/messages", "auth": "bearer"},
+        "chat": {"path": "/v1/chat/completions", "auth": "bearer", "effort": "openai_chat"}
+      },
+      "models": [{"model": "kimi-k3"}],
+      "drop_params": ["temperature"], "replay": true,
+      "billing": "metered"
+    },
+    {
+      "id": "zai", "name": "Z.ai (GLM, pay as you go)", "kind": "api_key", "env": ["ZAI_API_KEY", "ZHIPU_API_KEY"],
+      "base_url": "https://api.z.ai/api",
+      "wires": {
+        "messages": {"path": "/anthropic/v1/messages", "auth": "bearer"},
+        "chat": {"path": "/paas/v4/chat/completions", "auth": "bearer", "effort": "toggle"}
+      },
+      "models": [{"model": "glm-5.3"}, {"model": "glm-5.3-flash"}],
+      "replay": true,
+      "billing": "metered"
+    },
+    {
+      "id": "zai-coding-plan", "name": "Z.ai GLM Coding Plan", "kind": "api_key", "env": [],
+      "base_url": "https://api.z.ai/api",
+      "wires": {
+        "messages": {"path": "/anthropic/v1/messages", "auth": "bearer"},
+        "chat": {"path": "/coding/paas/v4/chat/completions", "auth": "bearer", "effort": "toggle"}
+      },
+      "models": [{"model": "glm-5.3"}],
+      "forward_headers": ["user-agent"], "agents": ["claude", "claude-code", "codex", "opencode"], "replay": true,
+      "billing": "subscription",
+      "terms": "The plan's quota is for the tools Z.ai lists (Claude Code, Codex and OpenCode among them): only their requests use it, with their own User-Agent."
+    },
+    {
+      "id": "gemini", "name": "Google Gemini API", "kind": "api_key", "env": ["GEMINI_API_KEY", "GOOGLE_GENERATIVE_AI_API_KEY"],
+      "base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "wires": {"chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}},
+      "models": [{"model": "gemini-3.7-flash"}, {"model": "gemini-2.5-pro"}],
+      "billing": "metered",
+      "terms": "A Gemini API key only. Google logins from Gemini CLI or Antigravity are never used: Google bans accounts for third-party use."
+    },
+    {
+      "id": "xai", "name": "xAI", "kind": "api_key", "env": ["XAI_API_KEY"],
+      "base_url": "https://api.x.ai/v1",
+      "wires": {"chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}},
+      "models": [{"model": "grok-4.6"}, {"model": "grok-4.5"}],
+      "drop_params": ["stop", "presence_penalty", "frequency_penalty"], "affinity": "x-grok-conv-id",
+      "billing": "metered"
+    },
+    {
+      "id": "groq", "name": "Groq", "kind": "api_key", "env": ["GROQ_API_KEY"],
+      "base_url": "https://api.groq.com/openai/v1",
+      "wires": {"chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}},
+      "models": [{"model": "gpt-oss-120b", "id": "openai/gpt-oss-120b"}],
+      "billing": "metered"
+    },
+    {
+      "id": "together", "aggregator": true, "name": "Together AI", "kind": "api_key", "env": ["TOGETHER_API_KEY"],
+      "base_url": "https://api.together.xyz/v1",
+      "wires": {"chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}},
+      "models": [
+        {"model": "kimi-k3", "id": "moonshotai/Kimi-K3"},
+        {"model": "deepseek-v4-pro", "id": "deepseek-ai/DeepSeek-V4-Pro"},
+        {"model": "glm-5.3", "id": "zai-org/GLM-5.3"}
+      ],
+      "billing": "metered"
+    }
+  ]
+}

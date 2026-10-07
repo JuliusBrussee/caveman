@@ -86,6 +86,8 @@ func main() {
 		runNativeWhy(logger, os.Args[2:])
 	case "native-hook":
 		runNativeHookBridge(os.Args[2:])
+	case "provider-login":
+		runProviderLogin(os.Args[2:])
 	case "serve":
 		runServe(logger)
 	default:
