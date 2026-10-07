@@ -462,16 +462,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
-		if answer.Outcome != "off" && meta.Provider == "openai" {
-			// Before the effort, so a marks heal (built from the unmarked body) keeps it.
-			if keyed := withCacheKey(transform.Body, run.key); len(keyed) != len(transform.Body) { // route_cache.go
-				transform.Body, run.keyed = keyed, true
-			}
-		}
+		transform.Body = run.withCacheKey(meta.Provider, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		transform.Body = run.withCacheKey(meta.Provider, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
 	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
 		// Every other request to Anthropic's or OpenAI's own API too (encoded,
@@ -643,15 +639,22 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// A 429 on the asked model of a request whose bytes the route stage changed
 	// (effort, marks, strip, drop_block) is the provider's rate limit, not its
 	// bytes: retrying the original (without the session's marks) cannot help.
-	// On a moved model it falls back to the asked one as before.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) &&
+	// On a moved model it falls back to the asked one as before. The original
+	// keeps the session's prompt_cache_key (route_cache.go): a request the route
+	// stage only keyed is not sent again.
+	original, originalHash := body, rawHash
+	if run != nil && run.keyed {
+		original = withCacheKey(body, run.key)
+		originalHash = sha256.Sum256(original)
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) &&
 		!(run != nil && (run.applied || run.keyed || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
+		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), original)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
 			providerHeaderError(w, r, rerr)
@@ -662,13 +665,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		s.applyUpstreamAuthFallback(adapter.Name(), credential, retryHeaders)
 		s.inflight.Add(1)
-		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(body, retryHeaders))
+		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(original, retryHeaders))
 		s.inflight.Add(-1)
 		if derr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
 			estimateWG.Wait() // join the observe estimate; passed uniformly (zeroed at Record on this failed status)
-			evidence.acceptedBody = body
-			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, rawHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+			evidence.acceptedBody = original
+			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
 			return
 		}
 		resp = retryResp
@@ -684,10 +687,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			w.Header().Del("x-caveman-routed-from")
 			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
 		}
-		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
-		evidence.acceptedBody = body
-		transformedHash = rawHash
-		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, body, meta)
+		transform = providers.TransformResult{Body: original, OptimizerIDs: []string{}}
+		evidence.acceptedBody = original
+		transformedHash = originalHash
+		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, original, meta)
 		comp = nil
 		toolSchemaHandle = ""
 		breakpointPlanned = false
@@ -703,7 +706,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Endpoint:      meta.Endpoint,
 			RuntimeMode:   effectiveRuntimeMode,
 			RetryOriginal: true,
-		}, wholeBody(body), wholeBody(body))
+		}, wholeBody(body), wholeBody(original))
 	}
 	var retrieveCalls []providers.UsageObservation
 	var retrieved bool

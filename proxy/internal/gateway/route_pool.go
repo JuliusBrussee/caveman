@@ -96,7 +96,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		payload, reply = out, translated
 	}
 	// Cache affinity and the fan-out gate (route_cache.go).
-	pinned, release := "", func(bool) {}
+	pinned, release, unpinned := "", func(bool) {}, payload
 	if target.Via != "cloud" && run != nil && run.key != "" {
 		switch {
 		case target.Host == "openrouter":
@@ -140,14 +140,28 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 	if target.Affinity != "" && run != nil && run.key != "" {
 		header.Set(target.Affinity, affinityKey(run.family()))
 	}
-	resp, err := s.doUpstream(r.Context(), func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.URL, bytes.NewReader(payload))
-		if err != nil {
-			return nil, err
+	send := func(payload []byte) (*http.Response, error) {
+		return s.doUpstream(r.Context(), func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.URL, bytes.NewReader(payload))
+			if err != nil {
+				return nil, err
+			}
+			req.Header = header.Clone()
+			return req, nil
+		})
+	}
+	resp, err := send(payload)
+	if pinned != "" && (err != nil || resp.StatusCode >= 300) {
+		// The provider the session was pinned to failed: once more on the same
+		// entry wherever OpenRouter routes it, before the asked model runs.
+		if err == nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+			_ = resp.Body.Close()
 		}
-		req.Header = header.Clone()
-		return req, nil
-	})
+		unpin()
+		pinned = ""
+		resp, err = send(unpinned)
+	}
 	if err != nil {
 		unpin()
 		return targetResult{errMsg: "pool_unreachable"}

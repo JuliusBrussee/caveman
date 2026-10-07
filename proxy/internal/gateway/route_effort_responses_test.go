@@ -248,3 +248,81 @@ func TestCacheKeySurvivesTheHealAndA429IsNotDoubled(t *testing.T) {
 		t.Fatalf("429: status %d after %d attempts", rec.Code, len(log.bodies))
 	}
 }
+
+// The session's prompt_cache_key never costs a second send: a 4xx on a
+// request the route stage only keyed is not replayed, and a replay of a
+// request it also changed keeps the key.
+func TestCacheKeyNeverForcesAReplay(t *testing.T) {
+	contextFull := `{"error":{"message":"Your input exceeds the context window of this model.","code":"context_length_exceeded"}}`
+	srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, func([]byte) (int, string) {
+		return http.StatusBadRequest, contextFull
+	})
+	if rec := postResponses(t, srv, `{"model":"gpt-6-sol","input":[`+rA+`]}`); rec.Code != http.StatusBadRequest || len(log.bodies) != 1 ||
+		!bytes.Contains(log.bodies[0], []byte(`"prompt_cache_key"`)) {
+		t.Fatalf("keyed-only 400: status %d after %d sends", rec.Code, len(log.bodies))
+	}
+	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low"}}, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"effort":"low"`)) {
+			return http.StatusBadRequest, contextFull
+		}
+		return 0, ""
+	})
+	postResponses(t, srv, `{"model":"gpt-6-sol","input":[`+rA+`]}`)
+	if len(log.bodies) != 2 || string(log.bodies[1]) != `{"model":"gpt-6-sol","input":[`+rA+`],"prompt_cache_key":"`+openai.SessionCacheKey("codex-1")+`"}` {
+		t.Fatalf("replay of a changed request: %d sends, last %s", len(log.bodies), log.bodies[len(log.bodies)-1])
+	}
+}
+
+// A previous_response_id chain (answered off) keeps the session's key, so its
+// follow-ups go where the first request's cache is.
+func TestStatefulChainKeepsTheCacheKey(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}
+	srv, log := responsesServer(t, cloud, nil)
+	postResponses(t, srv, `{"model":"gpt-6-sol","input":[`+rA+`]}`)
+	cloud.answer = RouteAnswer{Outcome: "off", Reason: "stateful_chain"}
+	postResponses(t, srv, `{"model":"gpt-6-sol","previous_response_id":"resp_1","input":[`+rC+`]}`)
+	key := []byte(`"prompt_cache_key":"` + openai.SessionCacheKey("codex-1") + `"`)
+	if !bytes.Contains(log.bodies[0], key) || !bytes.Contains(log.bodies[1], key) {
+		t.Fatalf("first %s\nsecond %s", log.bodies[0], log.bodies[1])
+	}
+}
+
+// No configuration_update where OpenAI forbids one (automatic truncation or
+// compaction, multi-agent mode): Cloud's effort goes top-level instead.
+func TestNoUpdateWhereOpenAIForbidsIt(t *testing.T) {
+	for _, extra := range []string{`"truncation":"auto",`, `"context_management":[{"type":"compaction","compact_threshold":200000}],`, `"multi_agent":{"enabled":true},`} {
+		srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
+		postResponses(t, srv, `{"model":"gpt-6-sol",`+extra+`"prompt_cache_key":"k","reasoning":{"effort":"high"},"input":[`+rA+`,`+rB+`,`+rC+`]}`)
+		if sent, _ := log.last(); bytes.Contains(sent, []byte("configuration_update")) || !bytes.Contains(sent, []byte(`"reasoning":{"effort":"low"}`)) {
+			t.Errorf("%s: sent %s", extra, sent)
+		}
+	}
+	for _, extra := range []string{`"truncation":"disabled",`, `"context_management":null,`, `"multi_agent":false,`} {
+		srv, log := responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
+		postResponses(t, srv, `{"model":"gpt-6-sol",`+extra+`"prompt_cache_key":"k","reasoning":{"effort":"high"},"input":[`+rA+`,`+rB+`,`+rC+`]}`)
+		if sent, _ := log.last(); !bytes.Contains(sent, []byte("configuration_update")) {
+			t.Errorf("%s: no update: %s", extra, sent)
+		}
+	}
+}
+
+// A refusal saying "configuration updates" heals and latches like the item
+// name does: one extra send, never one per request.
+func TestRefusalWordingVariantsHealAndLatch(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}
+	srv, log := responsesServer(t, cloud, func(body []byte) (int, string) {
+		if bytes.Contains(body, []byte(`"configuration_update"`)) {
+			return http.StatusBadRequest, `{"error":{"message":"Configuration updates cannot be combined with this request.","param":"input"}}`
+		}
+		return 0, ""
+	})
+	sends := []int{}
+	for _, items := range [][]string{{rA, rB, rC}, {rA, rB, rC, rD, rTR}, {rA, rB, rC, rD, rTR, rE, rF}} {
+		before := len(log.bodies)
+		postResponses(t, srv, thread("high", items...))
+		sends = append(sends, len(log.bodies)-before)
+	}
+	if sends[0] != 2 || sends[1] != 1 || sends[2] != 1 || !cloud.asks[len(cloud.asks)-1].PerMessageOff {
+		t.Fatalf("sends per request %v, latched %v", sends, cloud.asks[len(cloud.asks)-1].PerMessageOff)
+	}
+}

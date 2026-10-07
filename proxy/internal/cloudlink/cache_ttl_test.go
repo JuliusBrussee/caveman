@@ -156,3 +156,27 @@ func TestAcceptedFieldsAreNeverDropped(t *testing.T) {
 		t.Fatalf("asked %d times, want once each", len(fake.bodies))
 	}
 }
+
+// A 400 that names a field a 200 already came back for drops nothing either.
+func TestNamedRefusalNeverDropsAnAcceptedField(t *testing.T) {
+	var bad atomic.Bool
+	fake := &poolCloud{answer: func(map[string]any) (int, string) {
+		if bad.Load() {
+			return 400, `{"error":{"code":"invalid_request","message":"pool entry 3 is invalid"}}`
+		}
+		return 200, `{"model":"claude-sonnet-5-5"}`
+	}}
+	cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer cloud.Close()
+	home := signedIn(t, cloud.URL)
+	addLogin(t, home, "openai", "sk-openai")
+	link := newLink(home)
+	link.Ask(t.Context(), ttlAsk())()
+	bad.Store(true)
+	next := ttlAsk()
+	next.SessionID = "s2"
+	link.Ask(t.Context(), next)()
+	if len(fake.bodies) != 2 {
+		t.Fatalf("asked %d times, want once each", len(fake.bodies))
+	}
+}

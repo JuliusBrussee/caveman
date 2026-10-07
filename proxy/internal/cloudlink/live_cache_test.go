@@ -25,7 +25,7 @@ import (
 // throwaway home, only when CAVEMAN_LIVE_OPENROUTER_KEY names a key file.
 // Spend is read from OpenRouter's own usage.cost and capped at $0.50.
 //
-//	CAVEMAN_LIVE_OPENROUTER_KEY=~/.config/caveman-research/openrouter.key \
+//	CAVEMAN_LIVE_OPENROUTER_KEY=/path/to/openrouter.key \
 //	  go test ./proxy/internal/cloudlink -run TestLiveOpenRouterCache -v
 //
 // It shows (1) a session's turns 2+ read the cache, with x-session-id and,

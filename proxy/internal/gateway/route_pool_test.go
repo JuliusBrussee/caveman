@@ -28,12 +28,15 @@ type poolStub struct {
 	poolCode int    // status the pool host answers
 	poolSSE  string // a streamed chat answer, when set
 	poolJSON string // a whole chat answer, when set
-	respSSE  string // the Responses host's stream
-	respCode int
-	gwCode   int
-	gwSSE    string // the gateway's stream, when set
-	cloud    *fakeCloud
-	sink     *captureSink
+	// poolFailPinned: the pool host answers poolCode only to a request pinned
+	// to one provider (provider.order with allow_fallbacks false).
+	poolFailPinned bool
+	respSSE        string // the Responses host's stream
+	respCode       int
+	gwCode         int
+	gwSSE          string // the gateway's stream, when set
+	cloud          *fakeCloud
+	sink           *captureSink
 }
 
 func (p *poolStub) server(t *testing.T) *Server {
@@ -47,7 +50,7 @@ func (p *poolStub) server(t *testing.T) *Server {
 		p.mu.Unlock()
 		switch r.URL.Path {
 		case "/chat/completions":
-			if p.poolCode != 0 {
+			if p.poolCode != 0 && (!p.poolFailPinned || strings.Contains(string(raw), `"allow_fallbacks":false`)) {
 				w.WriteHeader(p.poolCode)
 				_, _ = io.WriteString(w, `{"error":{"message":"overloaded"}}`)
 				return

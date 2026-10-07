@@ -294,3 +294,42 @@ func TestFanoutReleasesAtTheFirstContentEvent(t *testing.T) {
 		}
 	}
 }
+
+// Siblings with different prompt_cache_keys may land on different OpenAI
+// machines: they never wait on each other.
+func TestFanoutKeyIncludesThePromptCacheKey(t *testing.T) {
+	body := func(key string) []byte {
+		return []byte(`{"model":"gpt-6-sol","instructions":"You are a worker.","tools":[{"type":"function","name":"shell"}],"prompt_cache_key":"` + key + `","input":[{"role":"user","content":"x"}]}`)
+	}
+	a, okA := fanoutKey("parent", "openai", "gpt-6-sol", translate.Responses, body("thread-a"))
+	b, okB := fanoutKey("parent", "openai", "gpt-6-sol", translate.Responses, body("thread-b"))
+	same, _ := fanoutKey("parent", "openai", "gpt-6-sol", translate.Responses, body("thread-a"))
+	if !okA || !okB || a == b || a != same {
+		t.Fatalf("gated %v/%v, different keys share a gate %v", okA, okB, a == b)
+	}
+	if _, ok := fanoutKey("parent", "openai", "gpt-6-sol", translate.Responses, []byte(`{"prompt_cache_key":"k","input":[]}`)); ok {
+		t.Error("a key alone is no shared prefix")
+	}
+}
+
+// A pinned provider that fails: once more on the same OpenRouter entry
+// without the pin, so the request stays on the pool model.
+func TestPinnedFailureRetriesTheEntryUnpinned(t *testing.T) {
+	c := newPoolCase(t, openRouterTarget(), "")
+	c.stub.poolJSON = orAnswer("Novita", 2800)
+	poolSend(t, c.srv, poolBody)
+	poolSend(t, c.srv, poolBody) // pinned from here
+	c.stub.poolCode, c.stub.poolFailPinned = 503, true
+	before := len(c.stub.bodies["/chat/completions"])
+	rec := poolSend(t, c.srv, poolBody)
+	if !strings.Contains(rec.Body.String(), "hi") || strings.Contains(rec.Body.String(), "harness says hi") {
+		t.Fatalf("answer: %s", rec.Body.String())
+	}
+	sent := c.stub.bodies["/chat/completions"][before:]
+	if len(sent) != 2 || pinOf(t, sent[0]) == nil || pinOf(t, sent[1]) != nil {
+		t.Fatalf("sends after the pinned failure: %v", sent)
+	}
+	if req, _ := c.stub.last("/v1/messages"); req != nil {
+		t.Error("the asked model ran too")
+	}
+}

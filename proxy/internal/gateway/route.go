@@ -278,6 +278,27 @@ func (w effortWire) modelTurn(body []byte, item jsonsplice.Span) bool {
 		strings.HasSuffix(kind, "_call") || strings.HasSuffix(kind, "_call_output"))
 }
 
+// noUpdates reports a Responses body OpenAI takes no configuration_update in:
+// automatic truncation or compaction (context_management), or multi-agent
+// mode ("Do not combine configuration updates with automatic compaction or
+// automatic truncation"; they are supported "in standard, single-agent
+// mode", developers.openai.com/api/docs/guides/reasoning, read 2026-10-06).
+func (w effortWire) noUpdates(body []byte) bool {
+	root, ok := objectRoot(body)
+	if !w.responses || !ok {
+		return false
+	}
+	if truncation, _ := jsonsplice.StringField(body, root, "truncation"); truncation == "auto" {
+		return true
+	}
+	for _, name := range []string{"context_management", "multi_agent"} {
+		if span, set := jsonsplice.Field(body, root, name); set && string(body[span.Start:span.End]) != "null" && string(body[span.Start:span.End]) != "false" {
+			return true
+		}
+	}
+	return false
+}
+
 // mark is one per-message effort mark, byte-identical every time. Efforts
 // reaching here are lower-case letters only (the link checks).
 func (w effortWire) mark(effort string) []byte {
@@ -641,7 +662,8 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	if mode == "" && answer.Effort != "" {
 		mode = "top"
 	}
-	if _, _, _, ok := run.wire.spans(body); !ok && run.wire.responses && mode == "message" {
+	noMarks := run.wire.noUpdates(body)
+	if _, _, _, ok := run.wire.spans(body); (!ok || noMarks) && run.wire.responses && mode == "message" {
 		mode = "top" // a Responses input string is one user turn: no item to put a mark before
 	}
 	top := run.wire.top
@@ -697,9 +719,9 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 
 	body, run.stripped = work.applyStrip(body)
 	switch {
-	case refusals[model]:
-		// This model refused marks: Cloud's effort goes top-level, as the heal
-		// that found out sent it.
+	case refusals[model] || noMarks:
+		// This model refused marks (or the request may carry none): Cloud's
+		// effort goes top-level, as the heal that found out sent it.
 		if answer.Effort != "" {
 			body, run.applied = setString(body, answer.Effort, top...)
 			run.effort = answer.Effort
@@ -1237,16 +1259,16 @@ func blockBinding(body []byte) bool {
 // On a marked request a 400 naming output_config.effort, a message's
 // output_config, per-turn effort or the beta counts as the marks' fault (a
 // provider that rejects the field outright answers "messages.N.output_config:
-// Extra inputs are not permitted"); on Responses one naming
-// configuration_update ("The 'configuration_update' item type is not supported
-// with pro or tournament models.", openrouter.ai GPT-6 migration guide, read
-// 2026-10-06).
+// Extra inputs are not permitted"); on Responses one naming a configuration
+// update in any spelling ("The 'configuration_update' item type is not
+// supported with pro or tournament models.", openrouter.ai GPT-6 migration
+// guide, read 2026-10-06; "configuration updates" in other refusals).
 var (
 	bindingRE     = regexp.MustCompile("(?i)bound to a different conversation|invalid `signature` in `thinking` block")
 	prefixRE      = regexp.MustCompile(`(?i)bound to a different conversation`)
 	bindingPathRE = regexp.MustCompile(`messages\.(\d+)\.content\.\d+:`)
 	refusalRE     = regexp.MustCompile(`(?i)supports per-turn effort|effort cannot change`)
-	markErrRE     = regexp.MustCompile(`(?i)output_config\.effort|messages\.\d+\.output_config|per-turn|mid-conversation|configuration_update`)
+	markErrRE     = regexp.MustCompile(`(?i)output_config\.effort|messages\.\d+\.output_config|per-turn|mid-conversation|configuration[ _]updates?`)
 )
 
 // healKind is the retry a provider 400 earned.

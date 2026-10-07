@@ -62,6 +62,20 @@ func withCacheKey(body []byte, session string) []byte {
 	return out
 }
 
+// withCacheKey gives an OpenAI request of the session its key, whatever the
+// route answer (off, a stateful chain, signed out): it only steers OpenAI's
+// cache routing, and a key that came and went would send follow-ups to a cold
+// machine. It goes in before the effort, so a marks heal (built from the
+// unmarked body) keeps it, and the original-bytes retry keeps it too.
+func (run *routeRun) withCacheKey(provider string, body []byte) []byte {
+	if provider != "openai" {
+		return body
+	}
+	keyed := withCacheKey(body, run.key)
+	run.keyed = run.keyed || len(keyed) != len(body)
+	return keyed
+}
+
 // withProviderPin pins an OpenRouter request to provider (the name its
 // answers carry, which provider.order takes as is), unless the body names
 // providers of its own.
@@ -166,9 +180,9 @@ func (p *providerSniff) provider() string {
 // one goes, the others wait until its answer has content (the provider writes
 // a prefix's cache entry before it answers), fanoutWait at most or until
 // their own request is cancelled, then read that one write instead of each
-// writing it again (cache.md rule 16: N parallel requests on one new prefix
-// write N times). A prefix with content in the last fanoutWarm is warm:
-// nobody waits on it.
+// writing it again (a cache entry exists only once its first answer has
+// begun, so N parallel requests on one new prefix write it N times). A
+// prefix with content in the last fanoutWarm is warm: nobody waits on it.
 type fanout struct {
 	mu      sync.Mutex
 	leaders map[[32]byte]chan struct{}
@@ -237,7 +251,8 @@ func (f *fanout) enter(ctx context.Context, key [32]byte) (release func(ok bool)
 // fanoutKey keys a fresh child's shared prefix: its parent session, the
 // upstream and model, and the request's tools and system prompt (Messages
 // system, Responses instructions, chat's leading system message), which
-// siblings of one agent type share. ok is false for any other request: not a
+// siblings of one agent type share, and its prompt_cache_key (OpenAI routes
+// on it: siblings with different keys may not read each other's write). ok is false for any other request: not a
 // child, not its first request (a forked child resends its parent's warm
 // history), or nothing to share.
 func fanoutKey(parent, upstream, model, grammar string, body []byte) (key [32]byte, ok bool) {
@@ -252,11 +267,11 @@ func fanoutKey(parent, upstream, model, grammar string, body []byte) (key [32]by
 	hash := sha256.New()
 	hash.Write([]byte(parent + "\x00" + upstream + "\x00" + model + "\x00"))
 	shared := false
-	for _, name := range []string{"tools", "system", "instructions"} {
+	for _, name := range []string{"tools", "system", "instructions", "prompt_cache_key"} {
 		if span, found := jsonsplice.Field(body, root, name); found {
 			hash.Write([]byte(name))
 			hash.Write(body[span.Start:span.End])
-			shared = true
+			shared = shared || name != "prompt_cache_key"
 		}
 	}
 	if grammar == translate.Chat {

@@ -1090,22 +1090,18 @@ func carriedFields(body routeAsk) []string {
 	return carried
 }
 
-// refusedField is the additive field a 400 (lower-cased) is about: one it
-// names that the ask still carries, else, for Cloud's generic refusal, the
-// newest one it carries that Cloud has not accepted; "" when none.
+// refusedField is the additive field a 400 (lower-cased) is about, never one
+// a 200 already came back for: one it names that the ask still carries, else,
+// for Cloud's generic refusal, the newest one it carries; "" when none.
 func refusedField(refusal string, body routeAsk, accepted map[string]bool) string {
-	carried := carriedFields(body)
+	carried := slices.DeleteFunc(carriedFields(body), func(field string) bool { return accepted[field] })
 	for _, field := range carried {
 		if strings.Contains(refusal, field) {
 			return field
 		}
 	}
-	if strings.Contains(refusal, "cave_router_request_invalid") {
-		for _, field := range carried {
-			if !accepted[field] {
-				return field
-			}
-		}
+	if len(carried) > 0 && strings.Contains(refusal, "cave_router_request_invalid") {
+		return carried[0]
 	}
 	return ""
 }
