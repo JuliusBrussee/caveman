@@ -163,6 +163,26 @@ for (const [extra, valid] of [
   const body = { ...routeAsk({ text: "fix the login bug" }), ...JSON.parse(JSON.stringify(extra)) };
   if (validateRouteAsk(body) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(extra).slice(0, 200)} should be ${valid ? "valid" : "invalid"}`);
 }
+// The pool of what the person has set up (additive, hub route-ask-v2).
+const pool = [
+  { id: "harness/claude-opus-5-5", model: "claude-opus-5-5", host: "anthropic", via: "local" },
+  { id: "openrouter/kimi-k3", model: "kimi-k3", host: "openrouter", via: "local" },
+];
+for (const [value, valid] of [
+  [pool, true],
+  [Array.from({ length: 64 }, (_, i) => ({ id: `openai/m${i}`, model: `m${i}`, host: "openai", via: "local" })), true],
+  [Array.from({ length: 65 }, (_, i) => ({ id: `openai/m${i}`, model: `m${i}`, host: "openai", via: "local" })), false],
+  [[], false],
+  [[{ ...pool[1], via: "cloud" }], false],
+  [[{ ...pool[1], via: undefined }], false],
+  [[{ ...pool[1], key: "sk-secret" }], false],
+  [[{ ...pool[1], host: "Open Router" }], false],
+  [[{ ...pool[1], id: "/leading-slash" }], false],
+  [[{ ...pool[1], model: "m".repeat(129) }], false],
+]) {
+  const body = { ...routeAsk({ text: "fix the login bug" }), request, pool: JSON.parse(JSON.stringify(value)) };
+  if (validateRouteAsk(body) !== valid) throw new Error(`route-ask-v1 pool: ${JSON.stringify(value).slice(0, 200)} should be ${valid ? "valid" : "invalid"}`);
+}
 // A compaction or side request carries no ask.
 if (!validateRouteAsk({ ...routeAsk(), request })) throw new Error("route-ask-v1: a body without the ask must be valid");
 
