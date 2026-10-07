@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,6 +63,7 @@ func affinityKey(session string) string {
 // targetResult is what one pool send did.
 type targetResult struct {
 	served bool // bytes reached the agent: the request is done, success or a cut stream
+	stream bool // the agent's answer streamed
 	usage  providers.UsageObservation
 	bytes  int64
 	errMsg string // a cut stream once served; why it fell back otherwise
@@ -79,7 +81,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 	} else {
 		opts := target.Translate
 		opts.Shown, opts.Effort = asked, effort
-		out, translated, err := translate.Request(grammar, target.Wire, body, opts)
+		out, translated, err := translateRequest(grammar, target.Wire, body, opts)
 		if err != nil {
 			return targetResult{errMsg: "pool_translate_failed"}
 		}
@@ -124,7 +126,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 	if reply != nil {
 		counter := &countingWriter{w: w}
 		usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
-		out := targetResult{served: true, bytes: counter.n, usage: providers.UsageObservation{
+		out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, usage: providers.UsageObservation{
 			InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,
 			CachedInputTokens: usage.CacheReadTokens, CacheCreationInputTokens: usage.CacheWriteTokens, CacheStatus: "unknown",
 		}}
@@ -141,7 +143,19 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, adapter pro
 	scanner := adapter.NewUsageScanner(resp.Header)
 	src := io.Reader(newShownModel(io.TeeReader(resp.Body, scanner), target.Model, asked))
 	counter, copyErr := s.streamResponse(w, r, src, stream, "")
-	return targetResult{served: true, bytes: counter.n, usage: scanner.Usage(), errMsg: copyErr}
+	return targetResult{served: true, stream: stream, bytes: counter.n, usage: scanner.Usage(), errMsg: copyErr}
+}
+
+// translateRequest is translate.Request with a panic in the ported parsers
+// turned into a refusal: nothing has reached the agent yet, so the request
+// falls back to the asked model instead of losing its connection.
+func translateRequest(from, to string, body []byte, opts translate.Options) (out []byte, reply *translate.Reply, err error) {
+	defer func() {
+		if recover() != nil {
+			out, reply, err = nil, nil, errors.New("translator panic")
+		}
+	}()
+	return translate.Request(from, to, body, opts)
 }
 
 // countedResponse counts what a translator writes to the agent.

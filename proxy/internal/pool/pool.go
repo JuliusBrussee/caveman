@@ -368,11 +368,23 @@ func (s *Store) Target(entry Entry) (gateway.RouteTarget, error) {
 }
 
 func writeAtomic(path string, data []byte, mode os.FileMode) error {
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, data, mode); err != nil {
+	tmp, err := os.CreateTemp(filepath.Dir(path), filepath.Base(path)+".*.tmp")
+	if err != nil {
 		return err
 	}
-	return os.Rename(tmp, path)
+	defer os.Remove(tmp.Name())
+	if err := tmp.Chmod(mode); err != nil {
+		tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(tmp.Name(), path)
 }
 
 func macKeychainGet(account string) (string, error) {
@@ -388,8 +400,8 @@ func macKeychainGet(account string) (string, error) {
 // macKeychainSet goes through `security -i` so the secret travels on stdin,
 // never argv (which any local process can read from the process table).
 func macKeychainSet(account, secret string) error {
-	if runtime.GOOS != "darwin" {
-		return errors.New("no keychain")
+	if runtime.GOOS != "darwin" || strings.ContainsFunc(account+secret, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return errors.New("no keychain") // `security -i` reads one line: no control characters
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()

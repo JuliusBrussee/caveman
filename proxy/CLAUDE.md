@@ -215,9 +215,12 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   Cloud gateway (`cloud.json` `gatewayUrl`, else `baseURL`) with `x-caveman-route: <pool_id>` on
   the link's project key, and that request DOES pass through Caveman Cloud. Any failure before
   the first byte (translation refused, connect error, any non-2xx) falls back to the asked model
-  on the harness's own credential and marks the ask rejected. Requests to the harness's own
-  Anthropic/OpenAI path drop reasoning a pool host wrote (`translate.AnthropicNative`/
-  `OpenAINative`), byte-identical when there is none. Not translated yet: Messages to Responses,
+  on the harness's own credential and marks the ask rejected; a translator panic counts as such a
+  failure, and a stream cut after the first byte aborts HTTP framing. A pool turn is not `last`
+  (Cloud's state carries the move) and books no dollars off Anthropic/OpenAI list prices. Later
+  requests of a session a pool host served drop, on the harness's own Anthropic/OpenAI path, the
+  reasoning that host wrote (`translate.AnthropicNative`/`OpenAINative`; translated Responses
+  reasoning always carries the envelope, never a bare id); other sessions go byte for byte. Not translated yet: Messages to Responses,
   chat to Messages or Responses (those hosts stay out of that caller's pool). Terms: no Claude
   Pro/Max, Google or Copilot login is ever added; every OAuth row in `providers.json` carries a
   terms note.

@@ -230,18 +230,39 @@ func TestPoolCloudTargetSendsTheCallersGrammarToTheGateway(t *testing.T) {
 }
 
 func TestHarnessPathDropsReasoningAPoolHostWrote(t *testing.T) {
-	c := newPoolCase(t, nil, "")
+	c := newPoolCase(t, localTarget("api.openai.com"), "")
+	if rec := poolSend(t, c.srv, poolBody); !strings.Contains(rec.Body.String(), "pool says hi") {
+		t.Fatalf("pool turn: %s", rec.Body.String())
+	}
 	c.stub.cloud.answer = RouteAnswer{Outcome: "kept"}
 	body := `{"model":"claude-opus-5-5","max_tokens":50,"messages":[{"role":"user","content":"a"},{"role":"assistant","content":[{"type":"thinking","thinking":"t","signature":"caveman:v1:openai:gpt-6.1-sol"},{"type":"text","text":"b"}]},{"role":"user","content":"c"}]}`
-	rec := poolSend(t, c.srv, body)
-	if rec.Code != 200 {
+	if rec := poolSend(t, c.srv, body); rec.Code != 200 {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
 	if _, sent := c.stub.last("/v1/messages"); strings.Contains(sent, "caveman:v1") || !strings.Contains(sent, `"text":"b"`) {
 		t.Fatalf("harness body = %s", sent)
 	}
-	clean := poolBody
-	if out := nativeHistory("anthropic", "/v1/messages", []byte(clean)); string(out) != clean {
+	// A session no pool host served goes byte for byte.
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("x-claude-code-session-id", "another-session")
+	c.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if _, sent := c.stub.last("/v1/messages"); sent != body {
+		t.Fatalf("an unpooled session's body changed: %s", sent)
+	}
+	if out := nativeHistory("anthropic", "/v1/messages", []byte(poolBody)); string(out) != poolBody {
 		t.Fatalf("a clean body changed: %s", out)
 	}
+}
+
+func TestPoolCutStreamNeverEndsAsACleanEOF(t *testing.T) {
+	c := newPoolCase(t, localTarget("api.openai.com"), "")
+	c.stub.poolSSE = "data: {\"id\":\"c1\",\"model\":\"gpt-6.1-sol\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"half\"}}]}\n\n"
+	defer func() {
+		if recovered := recover(); recovered != http.ErrAbortHandler {
+			t.Fatalf("recovered %v, want http.ErrAbortHandler", recovered)
+		}
+	}()
+	poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+	t.Fatal("a cut stream returned normally")
 }

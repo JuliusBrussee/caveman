@@ -423,11 +423,24 @@ func TestResponsesToChatReasoningReplay(t *testing.T) {
 	if other := rawRequest(t, Responses, Chat, codexBody("m", "medium", "", input), Options{Model: "glm-5", Route: "zai", Replay: true}); strings.Contains(other, "step one") {
 		t.Fatalf("another route got the reasoning: %s", other)
 	}
-	// Without Replay, the reasoning is shown but carries nothing.
+	// Without Replay, the reasoning is shown but carries an empty envelope:
+	// never a bare id OpenAI would look up (store:false) on the harness's path.
 	_, plain := mustRequest(t, Responses, Chat, codexBody("m", "medium", "", userHello), Options{Model: "m"})
 	recorder, _, _ = serve(t, plain, chatStream(`{"choices":[{"delta":{"reasoning":"hm"}}]}`, `{"choices":[{"delta":{"content":"ok"},"finish_reason":"stop"}]}`), false)
-	if item := itemsOfType(codexAccept(t, recorder.Body.String()), "reasoning"); len(item) != 1 || item[0]["encrypted_content"] != nil {
+	item := itemsOfType(codexAccept(t, recorder.Body.String()), "reasoning")
+	encrypted, _ := item[0]["encrypted_content"].(string)
+	if len(item) != 1 || !strings.HasPrefix(encrypted, string(envelopeMarker)) {
 		t.Fatalf("reasoning = %v", item)
+	}
+	if _, empty := decodeThinking(&encrypted, anthropicRoute); !empty {
+		t.Fatal("the empty envelope is not read as the runtime's own")
+	}
+	// Back on the harness's own OpenAI path, that item goes.
+	next, _ := json.Marshal(map[string]any{"model": "gpt-6-sol", "store": false, "input": []any{
+		map[string]any{"type": "message", "role": "user", "content": "hello"}, item[0],
+		map[string]any{"type": "message", "role": "user", "content": "more"}}})
+	if out := OpenAINative(next); strings.Contains(string(out), "encrypted_content") || !strings.Contains(string(out), "more") {
+		t.Fatalf("harness body = %s", out)
 	}
 }
 

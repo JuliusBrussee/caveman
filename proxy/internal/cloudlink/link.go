@@ -879,17 +879,20 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	}
 	if response.StatusCode == http.StatusBadRequest && len(entries) > 0 {
 		// An older Cloud refuses the unknown pool field: ask again without it,
-		// and keep leaving it out for this login once that is answered.
-		_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, answerMax))
+		// and, when its error named pool, keep leaving it out for this login.
+		refusal, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
 		response.Body.Close()
 		body.Pool, entries = nil, nil
 		if response, failed, ok = post(body); !ok {
 			return failed
 		}
-		if response.StatusCode == http.StatusOK {
+		if response.StatusCode == http.StatusOK && strings.Contains(strings.ToLower(string(refusal)), "pool") {
 			l.mu.Lock()
 			l.noPool = true
 			l.mu.Unlock()
+			if l.logger != nil {
+				l.logger.Warn("Cloud refused the routing pool; asking with the harness's models only until the next login")
+			}
 		}
 	}
 	defer response.Body.Close()
@@ -980,7 +983,7 @@ func (l *Link) poolAnswer(cfg settings, bearer, grammar string, models []string,
 	}
 	switch via {
 	case "cloud":
-		if !poolIDRE.MatchString(id) || len(model) > 128 || cfg.gateway == "" {
+		if !poolIDRE.MatchString(id) || model == "" || len(model) > 128 || cfg.gateway == "" {
 			return nil, "", "answer_outside_pool"
 		}
 		key := cfg.key // the project gateway key, else the session token

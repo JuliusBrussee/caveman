@@ -401,7 +401,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// Route: the answer moves the compressed request to another model of the
 	// same provider and sets its effort, or sends it to a pool entry on another
 	// login or the Cloud gateway. Anything else keeps the asked model.
-	if run != nil {
+	if run != nil && (s.routes.wasPooled(run.key) || run.parent != "" && s.routes.wasPooled(run.parent)) {
 		// Reasoning a pool host produced earlier in this conversation goes no
 		// further than that host; a clean body goes byte for byte.
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
@@ -422,16 +422,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				evidence.acceptedBody = sent
 				routed := meta
 				routed.Provider, routed.Model = target.Host, target.Model
-				if run != nil && !run.auxiliary && run.key != "" && result.errMsg == "" {
-					s.routes.served(run.key, RouteLast{
-						Model: target.Model, Effort: answer.Effort, InputTokens: result.usage.InputTokens,
-						CacheReadTokens: result.usage.CachedInputTokens, CacheWriteTokens: result.usage.CacheCreationInputTokens, Compacted: run.compacted,
-					}, time.Now(), !run.perRequest)
+				if target.Host != "anthropic" && target.Host != "openai" {
+					// A plan, Caveman Cloud or a host without list prices here: honest zero dollars.
+					evidence.statsPricingUnsupportedReason = "custom_provider_origin"
+				}
+				if run != nil && run.key != "" {
+					// last stays the harness's own previous request (contracts: a
+					// model outside models is skipped); Cloud's state carries the move.
+					s.routes.markPooled(run.key)
 				}
 				estimateWG.Wait()
 				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, false, compressionEligible)
-				if result.errMsg != "" && target.Via == "cloud" {
-					panic(http.ErrAbortHandler) // a cut relay never ends as a clean EOF
+				if result.errMsg != "" && result.stream {
+					panic(http.ErrAbortHandler) // a cut stream never ends as a clean EOF
 				}
 				return
 			}

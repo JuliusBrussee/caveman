@@ -302,6 +302,9 @@ type routeSession struct {
 	// moved: a request of the session was served by another model than the
 	// asked one, so its history carries thinking that model wrote.
 	moved bool
+	// pooled: a pool host (another login, or Caveman Cloud) served a request
+	// of the session, so its history may carry reasoning only that host reads.
+	pooled bool
 	// version counts the writes to effortState: a request writes its copy
 	// back only when nothing landed in between.
 	version int
@@ -422,6 +425,23 @@ func (rs *routeSessions) served(key string, last RouteLast, at time.Time, moved 
 		session.last, session.lastAt = &last, at
 		session.moved = session.moved || moved
 	}
+}
+
+// markPooled records that a pool host served one of key's requests.
+func (rs *routeSessions) markPooled(key string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if session := rs.get(key, true); session != nil {
+		session.pooled, session.moved = true, true
+	}
+}
+
+// wasPooled reports a session a pool host served before.
+func (rs *routeSessions) wasPooled(key string) bool {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	session := rs.get(key, false)
+	return session != nil && session.pooled
 }
 
 // latch records that model refused per-message effort in key's session, for

@@ -20,6 +20,7 @@ package translate
 import (
 	"bytes"
 	"crypto/rand"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"io"
@@ -210,10 +211,15 @@ func (s *responsesStream) endReasoning(open *streamItem, encrypted *string) {
 		"item_id": open.id, "output_index": open.index, "summary_index": 0,
 		"part": map[string]any{"type": "summary_text", "text": text},
 	})
-	item := map[string]any{"type": "reasoning", "summary": summary, "encrypted_content": nil}
-	if encrypted != nil {
-		item["encrypted_content"] = *encrypted
+	if encrypted == nil {
+		// An empty envelope rather than null: Codex sends store:false, so
+		// OpenAI cannot look a bare reasoning id up and would refuse the
+		// item on a later turn back on the harness's own path. OpenAINative
+		// drops envelopes, empty ones included.
+		empty := base64.StdEncoding.EncodeToString(mustJSON(reasoningEnvelope{Caveman: reasoningEnvelopeVersion, Blocks: []json.RawMessage{}}))
+		encrypted = &empty
 	}
+	item := map[string]any{"type": "reasoning", "summary": summary, "encrypted_content": *encrypted}
 	s.done(open, item)
 }
 
