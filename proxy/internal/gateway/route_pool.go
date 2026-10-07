@@ -95,6 +95,28 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		}
 		payload, reply = out, translated
 	}
+	// Cache affinity and the fan-out gate (route_cache.go).
+	pinned, release := "", func(bool) {}
+	if target.Via != "cloud" && run != nil && run.key != "" {
+		switch {
+		case target.Host == "openrouter":
+			pinned = s.routes.pinned(run.key, target.PoolID)
+			payload = withProviderPin(payload, pinned)
+		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages:
+			payload = withCacheKey(payload, run.key)
+		}
+	}
+	if run != nil {
+		if key, ok := fanoutKey(run.parent, target.Host, target.Model, target.Wire, payload); ok {
+			release = s.fanout.enter(r.Context(), key)
+			defer release(false)
+		}
+	}
+	unpin := func() {
+		if pinned != "" {
+			s.routes.pin(run.key, target.PoolID, "") // a failure re-routes afresh, never silently spreads
+		}
+	}
 	header := target.Header.Clone()
 	header.Set("content-type", "application/json")
 	if target.Wire == translate.Messages {
@@ -127,19 +149,32 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		return req, nil
 	})
 	if err != nil {
+		unpin()
 		return targetResult{errMsg: "pool_unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
+		unpin()
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return targetResult{errMsg: fmt.Sprintf("pool_%d", resp.StatusCode)}
 	}
+	sniff := &providerSniff{ReadCloser: resp.Body, stream: strings.Contains(resp.Header.Get("content-type"), "event-stream")}
+	resp.Body = releaseOnRead{ReadCloser: sniff, release: release, ok: true}
 	counter := &countingWriter{w: w}
 	usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
 	if errors.Is(err, translate.ErrNotServed) {
 		// A 2xx that failed or ended before any content: nothing reached the
 		// agent, so the asked model still runs.
+		unpin()
 		return targetResult{errMsg: "pool_failed_before_content", upstreamID: reply.UpstreamID()}
+	}
+	if target.Host == "openrouter" && run != nil && run.key != "" {
+		// Warm on the provider that served it: later requests stay there.
+		if provider := sniff.provider(); err == nil && provider != "" && usage.CacheReadTokens+usage.CacheWriteTokens > 0 {
+			s.routes.pin(run.key, target.PoolID, provider)
+		} else if err != nil {
+			unpin()
+		}
 	}
 	out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, upstreamID: reply.UpstreamID(), usage: providers.UsageObservation{
 		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,

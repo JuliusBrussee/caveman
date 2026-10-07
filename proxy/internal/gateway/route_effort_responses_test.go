@@ -139,13 +139,14 @@ func TestResponsesFreshThread(t *testing.T) {
 	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
 	none := `{"model":"gpt-6-sol","input":[` + rA + `]}`
 	postResponses(t, srv, none)
-	if sent, _ := log.last(); string(sent) != `{"model":"gpt-6-sol","input":[`+update("low")+`,`+rA+`]}` {
+	// No prompt_cache_key of the agent's: the session's (hashed) goes in.
+	if sent, _ := log.last(); string(sent) != `{"model":"gpt-6-sol","input":[`+update("low")+`,`+rA+`],"prompt_cache_key":"`+openai.SessionCacheKey("codex-1")+`"}` {
 		t.Fatalf("fresh without an effort: %s", sent)
 	}
 
 	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
 	postResponses(t, srv, `{"model":"gpt-6-sol","input":"go"}`)
-	if sent, _ := log.last(); string(sent) != `{"model":"gpt-6-sol","input":"go","reasoning":{"effort":"low"}}` {
+	if sent, _ := log.last(); string(sent) != `{"model":"gpt-6-sol","input":"go","reasoning":{"effort":"low"},"prompt_cache_key":"`+openai.SessionCacheKey("codex-1")+`"}` {
 		t.Fatalf("input string: %s", sent)
 	}
 }

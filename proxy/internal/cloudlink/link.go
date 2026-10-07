@@ -880,15 +880,20 @@ type signals struct {
 }
 
 // signalsFor counts what the ask carries. Tool errors are counted over the
-// whole request; context tokens are estimated from its size.
+// whole request; context tokens are the gateway's count in the session's (a
+// child's parent's) provider tokens, else estimated from its size.
 func signalsFor(ask gateway.RouteAsk) signals {
 	agent := ask.Agent
 	if !slugRE.MatchString(agent) {
 		agent = "unlabeled-agent"
 	}
+	tokens := ask.ContextTokens
+	if tokens <= 0 {
+		tokens = ask.InputBytes / 4
+	}
 	return signals{
 		Agent:         agent,
-		ContextTokens: min(ask.InputBytes/4, 1_000_000_000),
+		ContextTokens: min(tokens, 1_000_000_000),
 		ToolsDeclared: min(ask.ToolsCount, 1_000_000_000),
 		ToolErrors:    len(toolErrorRE.FindAllIndex(ask.Body, -1)),
 		Images:        imageRE.Match(ask.Body),

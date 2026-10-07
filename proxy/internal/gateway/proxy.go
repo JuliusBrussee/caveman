@@ -251,6 +251,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
 				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
 				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
+				ContextTokens: int(float64(len(body)) * s.routes.tokensPerByte(run.key, run.parent)),
 			})
 		}
 	}
@@ -462,6 +463,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
+		if !run.off && meta.Provider == "openai" {
+			transform.Body = withCacheKey(transform.Body, run.key) // route_cache.go
+		}
 		evidence.route = answer
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
@@ -557,6 +561,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		Optimizers:  strings.Join(transform.OptimizerIDs, ","),
 	}, wholeBody(body), wholeBody(transform.Body))
 
+	// A fresh child on its siblings' new prefix waits for the first of them
+	// to have its first byte (route_cache.go fanout).
+	release := func(bool) {}
+	if run != nil && !run.off {
+		if key, ok := fanoutKey(run.parent, meta.Provider, meta.Model, grammarOf(meta.Endpoint), transform.Body); ok {
+			release = s.fanout.enter(r.Context(), key)
+			defer release(false)
+		}
+	}
 	resp, err := s.doUpstream(r.Context(), buildUpstream(transform.Body, upstreamHeaders))
 	s.inflight.Add(-1)
 	if err != nil {
@@ -722,6 +735,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The response protocol is authoritative: Vertex and compressed requests may
 	// stream without a readable JSON stream flag. Never buffer their SSE/events.
+	resp.Body = releaseOnRead{ReadCloser: resp.Body, release: release, ok: resp.StatusCode < 300}
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
@@ -846,7 +860,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
 			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
 			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
-		}, time.Now(), meta.Model != modelRequested && !run.perRequest)
+		}, time.Now(), meta.Model != modelRequested && !run.perRequest, len(body))
 	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {

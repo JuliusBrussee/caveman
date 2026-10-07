@@ -1,0 +1,234 @@
+package gateway
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
+	"github.com/JuliusBrussee/caveman/proxy/providers"
+	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+)
+
+func openRouterTarget() *RouteTarget {
+	header := http.Header{}
+	header.Set("authorization", "Bearer sk-or")
+	return &RouteTarget{PoolID: "openrouter/kimi-k3", Via: "local", Host: "openrouter", Model: "kimi-k3", Wire: translate.Chat,
+		URL: "https://openrouter.ai/chat/completions", Header: header, Affinity: "x-session-id",
+		Translate: translate.Options{Model: "moonshotai/kimi-k3", Dialect: "openrouter", Route: "openrouter/kimi-k3"}}
+}
+
+func orAnswer(provider string, cached int) string {
+	return fmt.Sprintf(`{"id":"gen-1","object":"chat.completion","model":"moonshotai/kimi-k3","provider":%q,"choices":[{"index":0,"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3000,"completion_tokens":3,"prompt_tokens_details":{"cached_tokens":%d}}}`, provider, cached)
+}
+
+func pinOf(t *testing.T, body string) any {
+	t.Helper()
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatalf("pool body %s: %v", body, err)
+	}
+	return sent["provider"]
+}
+
+// Sticky on OpenRouter: x-session-id from the session (hashed); once warm on
+// one of its providers the session's entry is pinned there with no fallback;
+// a failure drops the pin.
+func TestOpenRouterPinsTheProviderASessionIsWarmOn(t *testing.T) {
+	c := newPoolCase(t, openRouterTarget(), "")
+	c.stub.poolJSON = orAnswer("Novita", 0) // served, nothing cached yet: not warm
+	poolSend(t, c.srv, poolBody)
+	req, body := c.stub.last("/chat/completions")
+	if pinOf(t, body) != nil || req.Header.Get("x-session-id") == "" || strings.Contains(req.Header.Get("x-session-id"), "sess-1") {
+		t.Fatalf("first request: body %s, x-session-id %q", body, req.Header.Get("x-session-id"))
+	}
+	c.stub.poolJSON = orAnswer("Novita", 2800) // a cache read on Novita: warm
+	poolSend(t, c.srv, poolBody)
+	if _, body := c.stub.last("/chat/completions"); pinOf(t, body) != nil {
+		t.Fatalf("second request pinned before it was warm: %s", body)
+	}
+	poolSend(t, c.srv, poolBody)
+	_, body = c.stub.last("/chat/completions")
+	if pin, _ := json.Marshal(pinOf(t, body)); string(pin) != `{"allow_fallbacks":false,"order":["Novita"]}` {
+		t.Fatalf("warm session not pinned: %s", body)
+	}
+	// The pinned provider fails: the asked model runs, and the pin goes.
+	c.stub.poolCode = 503
+	if rec := poolSend(t, c.srv, poolBody); !strings.Contains(rec.Body.String(), "harness says hi") {
+		t.Fatalf("fallback: %s", rec.Body.String())
+	}
+	c.stub.poolCode = 0
+	poolSend(t, c.srv, poolBody)
+	if _, body := c.stub.last("/chat/completions"); pinOf(t, body) != nil {
+		t.Fatalf("pin kept after a failure: %s", body)
+	}
+	// A stream names its provider in its first event.
+	c.stub.poolJSON = ""
+	c.stub.poolSSE = "data: {\"id\":\"gen-2\",\"provider\":\"Fireworks\",\"model\":\"moonshotai/kimi-k3\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"hi\"},\"finish_reason\":\"stop\"}]}\n\n" +
+		"data: {\"id\":\"gen-2\",\"provider\":\"Fireworks\",\"choices\":[],\"usage\":{\"prompt_tokens\":3000,\"completion_tokens\":1,\"prompt_tokens_details\":{\"cached_tokens\":2900}}}\n\ndata: [DONE]\n\n"
+	poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
+	poolSend(t, c.srv, poolBody)
+	if _, body := c.stub.last("/chat/completions"); !strings.Contains(body, `"order":["Fireworks"]`) {
+		t.Fatalf("stream provider not pinned: %s", body)
+	}
+}
+
+func TestProviderSniffReadsOnlyTheTopLevelOfAWholeAnswer(t *testing.T) {
+	// A tool input naming "provider" comes before the answer's own field.
+	whole := `{"content":[{"type":"tool_use","input":{"provider":"aws"}}],"usage":{},"provider":"Novita"}`
+	sniff := &providerSniff{ReadCloser: io.NopCloser(strings.NewReader(whole))}
+	_, _ = io.ReadAll(sniff)
+	if got := sniff.provider(); got != "Novita" {
+		t.Errorf("provider = %q", got)
+	}
+}
+
+func TestWithCacheKeyNeverReplacesTheAgentsOwn(t *testing.T) {
+	if got := string(withCacheKey([]byte(`{"prompt_cache_key":"mine","input":[]}`), "s")); got != `{"prompt_cache_key":"mine","input":[]}` {
+		t.Errorf("replaced: %s", got)
+	}
+	if got := string(withCacheKey([]byte(`{"input":[]}`), "s")); !strings.HasPrefix(got, `{"input":[],"prompt_cache_key":"`) || strings.Contains(got, `"s"`) {
+		t.Errorf("added: %s", got)
+	}
+}
+
+// fanoutUpstream answers each request after delay, recording when it arrived
+// and when its first byte went out.
+type fanoutUpstream struct {
+	mu       sync.Mutex
+	arrived  []time.Time
+	answered []time.Time
+	delay    time.Duration
+}
+
+func (u *fanoutUpstream) server(t *testing.T) *Server {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		u.mu.Lock()
+		u.arrived = append(u.arrived, time.Now())
+		delay := u.delay
+		u.mu.Unlock()
+		time.Sleep(delay)
+		u.mu.Lock()
+		u.answered = append(u.answered, time.Now())
+		u.mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","model":"claude-sonnet-5-5","content":[],"usage":{"input_tokens":10,"output_tokens":1}}`)
+	}))
+	t.Cleanup(upstream.Close)
+	return New(Config{
+		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com")},
+		Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds:      stubCreds{key: "sk-byok"},
+		Sink:       &captureSink{},
+		HTTPClient: &http.Client{Transport: toStub(upstream.URL)},
+		Cloud:      &fakeCloud{answer: RouteAnswer{Outcome: "kept"}},
+	})
+}
+
+const childBody = `{"model":"claude-sonnet-5-5","max_tokens":5,"system":[{"type":"text","text":"You are an explore agent.","cache_control":{"type":"ephemeral"}}],"tools":[{"name":"Read"}],"messages":[{"role":"user","content":"look at %d"}]}`
+
+func sendChildren(t *testing.T, srv *Server, n int, agent func(i int) string) {
+	t.Helper()
+	var wg sync.WaitGroup
+	for i := range n {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(fmt.Sprintf(childBody, i)))
+			req.Header.Set("x-api-key", "sk-ant-api-key")
+			req.Header.Set("x-claude-code-session-id", "parent-1")
+			req.Header.Set("x-claude-code-agent-id", agent(i))
+			srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+		}()
+	}
+	wg.Wait()
+}
+
+// Four siblings on one new prefix: one goes, three wait for its first byte.
+// A sibling after that finds the prefix warm and waits for nobody.
+func TestFanoutSendsOneSiblingFirst(t *testing.T) {
+	up := &fanoutUpstream{delay: 300 * time.Millisecond}
+	srv := up.server(t)
+	sendChildren(t, srv, 4, func(i int) string { return fmt.Sprintf("child-%d", i) })
+	if len(up.arrived) != 4 {
+		t.Fatalf("upstream saw %d requests", len(up.arrived))
+	}
+	first := up.answered[0]
+	for _, at := range up.arrived[1:] {
+		if at.Before(first) {
+			t.Fatalf("a sibling reached the upstream before the first one answered: arrivals %v, first answer %v", up.arrived, first)
+		}
+	}
+	start := time.Now()
+	up.mu.Lock()
+	up.delay = 0
+	up.mu.Unlock()
+	sendChildren(t, srv, 1, func(int) string { return "child-late" })
+	if waited := time.Since(start); waited > fanoutWait/2 {
+		t.Errorf("a sibling on a warm prefix waited %v", waited)
+	}
+}
+
+// The wait is bounded: a leader that never answers releases nobody, and the
+// siblings go after fanoutWait; a cancelled sibling stops waiting at once.
+func TestFanoutWaitIsBounded(t *testing.T) {
+	defer func(wait time.Duration) { fanoutWait = wait }(fanoutWait)
+	fanoutWait = 100 * time.Millisecond
+	var f fanout
+	key := [32]byte{1}
+	release := f.enter(context.Background(), key)
+	start := time.Now()
+	f.enter(context.Background(), key)(true)
+	if waited := time.Since(start); waited < fanoutWait || waited > 10*fanoutWait {
+		t.Errorf("follower waited %v", waited)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	start = time.Now()
+	f.enter(ctx, key)
+	if waited := time.Since(start); waited > fanoutWait/2 {
+		t.Errorf("a cancelled follower waited %v", waited)
+	}
+	release(false) // a failed leader leaves the prefix cold
+	release(true)  // and releasing twice changes nothing
+	if _, warm := f.warm[key]; warm {
+		t.Error("a failed leader marked the prefix warm")
+	}
+	// A forked child (history with an assistant turn) and a main session never wait.
+	if _, ok := fanoutKey("", "anthropic", "m", translate.Messages, []byte(fmt.Sprintf(childBody, 1))); ok {
+		t.Error("a main-session request was gated")
+	}
+	forked := `{"system":"s","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b"},{"role":"user","content":"c"}]}`
+	if _, ok := fanoutKey("parent", "anthropic", "m", translate.Messages, []byte(forked)); ok {
+		t.Error("a forked child was gated")
+	}
+}
+
+// Context tokens: the provider's own count per byte, from the parent session
+// for a child.
+func TestContextTokensUseTheParentsTokensPerByte(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}
+	srv, _ := effortServer(t, cloud, func([]byte) (int, string) {
+		return 200, `{"id":"m","type":"message","model":"claude-opus-5-5","content":[],"usage":{"input_tokens":40,"output_tokens":2}}`
+	})
+	parent := convo("high", uA, aB, uC)
+	post(t, srv, parent, nil)
+	if got := cloud.asks[0].ContextTokens; got != 0 {
+		t.Fatalf("first ask: context tokens %d, want none (no count yet)", got)
+	}
+	child := convo("high", uA, aB, uC, aE, uF)
+	post(t, srv, child, map[string]string{"x-claude-code-agent-id": "a1"})
+	want := int(float64(len(child)) * 40 / float64(len(parent)))
+	if got := cloud.asks[1].ContextTokens; got != want {
+		t.Errorf("child: context tokens %d, want %d", got, want)
+	}
+}

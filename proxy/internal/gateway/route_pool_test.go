@@ -27,6 +27,7 @@ type poolStub struct {
 	bodies   map[string][]string
 	poolCode int    // status the pool host answers
 	poolSSE  string // a streamed chat answer, when set
+	poolJSON string // a whole chat answer, when set
 	respSSE  string // the Responses host's stream
 	respCode int
 	gwCode   int
@@ -57,6 +58,10 @@ func (p *poolStub) server(t *testing.T) *Server {
 				return
 			}
 			w.Header().Set("content-type", "application/json")
+			if p.poolJSON != "" {
+				_, _ = io.WriteString(w, p.poolJSON)
+				return
+			}
 			_, _ = io.WriteString(w, `{"id":"c1","object":"chat.completion","model":"gpt-6.1-sol","choices":[{"index":0,"message":{"role":"assistant","content":"pool says hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":11,"completion_tokens":3}}`)
 		case "/responses", "/v1/responses":
 			if p.respCode != 0 {

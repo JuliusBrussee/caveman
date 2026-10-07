@@ -51,7 +51,11 @@ type RouteAsk struct {
 	ParentSessionID string
 	ToolsCount      int
 	InputBytes      int
-	Body            []byte
+	// ContextTokens is InputBytes in the provider's tokens, by the bytes per
+	// token its last count gave for the parent session (a forked child
+	// resends the parent's history), else this one; 0 when neither has one.
+	ContextTokens int
+	Body          []byte
 	// Labels are the raw values of the routeLabelNames headers the request carries.
 	Labels map[string]string
 	// PerRequest is a request the agent labels compaction or auxiliary: it is
@@ -386,6 +390,12 @@ type routeSession struct {
 	// version counts the writes to effortState: a request writes its copy
 	// back only when nothing landed in between.
 	version int
+	// lastBytes is the size of the agent's request behind last: with its
+	// input tokens, the session model's tokens per byte (route_cache.go).
+	lastBytes int
+	// pinPool, pinProvider: the OpenRouter provider a pool entry of this
+	// session is warm on (route_cache.go).
+	pinPool, pinProvider string
 	effortState
 }
 
@@ -496,11 +506,11 @@ func (rs *routeSessions) facts(key string, now time.Time) (*RouteLast, bool) {
 	return &last, len(session.refused) > 0
 }
 
-func (rs *routeSessions) served(key string, last RouteLast, at time.Time, moved bool) {
+func (rs *routeSessions) served(key string, last RouteLast, at time.Time, moved bool, bytes int) {
 	rs.mu.Lock()
 	defer rs.mu.Unlock()
 	if session := rs.get(key, true); session != nil {
-		session.last, session.lastAt = &last, at
+		session.last, session.lastAt, session.lastBytes = &last, at, bytes
 		session.moved = session.moved || moved
 	}
 }
