@@ -389,28 +389,24 @@ func fixToolIDs(fields map[string]json.RawMessage) bool {
 	if !bytes.Contains(messages, []byte(`tool_`)) {
 		return false
 	}
-	var out []byte
-	changed := false
-	eachItem(messages, func(raw []byte, message obj) {
-		replacement := raw
-		if message != nil && bytes.Contains(raw, []byte(`tool_`)) {
-			var blocks []byte
-			touched := false
-			eachItem(message.get("content"), func(raw []byte, block obj) {
-				field := map[string]string{"tool_use": "id", "tool_result": "tool_use_id"}[block.str("type")]
-				if id := block.get(field); field != "" && isStr(id) && !anthropicCallID.Match(inner(id)) {
-					raw, touched = objectWith(block, field, appendString(nil, safeCallID(jstr(id)))), true
-				}
-				blocks = append(openElem(blocks), raw...)
-			})
-			if touched {
-				replacement, changed = objectWith(message, "content", append(blocks, ']')), true
-			}
+	edited, changed := editArray(messages, func(raw []byte, message obj) ([]byte, bool) {
+		if message == nil || !bytes.Contains(raw, []byte(`tool_`)) {
+			return nil, false
 		}
-		out = append(openElem(out), replacement...)
+		content, touched := editArray(message.get("content"), func(_ []byte, block obj) ([]byte, bool) {
+			field := map[string]string{"tool_use": "id", "tool_result": "tool_use_id"}[block.str("type")]
+			if id := block.get(field); field != "" && isStr(id) && !anthropicCallID.Match(inner(id)) {
+				return objectWith(block, field, appendString(nil, safeCallID(jstr(id)))), false
+			}
+			return nil, false
+		})
+		if !touched {
+			return nil, false
+		}
+		return objectWith(message, "content", content), false
 	})
 	if changed {
-		fields["messages"] = append(out, ']')
+		fields["messages"] = edited
 	}
 	return changed
 }

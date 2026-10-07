@@ -502,37 +502,34 @@ func stripChatEnvelopes(fields map[string]json.RawMessage) bool {
 	if !bytes.Contains(messages, envelopeMarker) {
 		return false
 	}
-	var out []byte
-	changed := false
-	eachItem(messages, func(raw []byte, message obj) {
-		if message != nil && chatEnvelopes(message) != nil {
-			var kept []byte
-			eachItem(message.get("reasoning_details"), func(entry []byte, detail obj) {
-				if !bytes.HasPrefix(inner(detail.get("data")), envelopeMarker) {
-					kept = append(openElem(kept), entry...)
-				}
-			})
-			var edited []byte
-			edited = append(edited, '{')
-			for _, member := range message {
-				switch string(member.key) {
-				case "reasoning_content", "reasoning":
-					continue
-				case "reasoning_details":
-					if kept == nil {
-						continue
-					}
-					member.val = append(kept, ']')
-				}
-				edited = append(append(append(appendComma(edited), '"'), member.key...), '"', ':')
-				edited = append(edited, member.val...)
-			}
-			raw, changed = append(edited, '}'), true
+	edited, changed := editArray(messages, func(_ []byte, message obj) ([]byte, bool) {
+		if message == nil || chatEnvelopes(message) == nil {
+			return nil, false
 		}
-		out = append(openElem(out), raw...)
+		var kept []byte
+		eachItem(message.get("reasoning_details"), func(entry []byte, detail obj) {
+			if !bytes.HasPrefix(inner(detail.get("data")), envelopeMarker) {
+				kept = append(openElem(kept), entry...)
+			}
+		})
+		out := []byte{'{'}
+		for _, member := range message {
+			switch string(member.key) {
+			case "reasoning_content", "reasoning":
+				continue
+			case "reasoning_details":
+				if kept == nil {
+					continue
+				}
+				member.val = append(kept, ']')
+			}
+			out = append(append(append(appendComma(out), '"'), member.key...), '"', ':')
+			out = append(out, member.val...)
+		}
+		return append(out, '}'), false
 	})
 	if changed {
-		fields["messages"] = append(out, ']')
+		fields["messages"] = edited
 	}
 	return changed
 }

@@ -578,29 +578,20 @@ func envelopeBlob(encrypted []byte, route string) []byte {
 // the encrypted_content to send (nil keeps the item as it came when it is
 // unchanged) or false to drop the item. Every other item keeps its bytes.
 func editReasoning(input []byte, keep func(encrypted []byte) ([]byte, bool)) ([]byte, bool) {
-	var out []byte
-	changed := false
-	eachItem(input, func(raw []byte, item obj) {
-		if item != nil && item.str("type") == "reasoning" {
-			encrypted := item.get("encrypted_content")
-			sent, kept := keep(encrypted)
-			switch {
-			case !kept:
-				changed = true
-				return
-			case sent != nil && string(sent) != string(encrypted):
-				raw, changed = objectWith(item, "encrypted_content", sent), true
-			}
+	return editArray(input, func(_ []byte, item obj) ([]byte, bool) {
+		if item == nil || item.str("type") != "reasoning" {
+			return nil, false
 		}
-		out = append(openElem(out), raw...)
-	})
-	if !changed {
+		encrypted := item.get("encrypted_content")
+		sent, kept := keep(encrypted)
+		switch {
+		case !kept:
+			return nil, true
+		case sent != nil && string(sent) != string(encrypted):
+			return objectWith(item, "encrypted_content", sent), false
+		}
 		return nil, false
-	}
-	if out == nil {
-		return []byte(`[]`), true
-	}
-	return append(out, ']'), true
+	})
 }
 
 // dropReasoning removes from body's input every reasoning item carrying the

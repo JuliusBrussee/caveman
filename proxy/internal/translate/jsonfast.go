@@ -473,3 +473,34 @@ func tok(raw []byte) []byte {
 func slicesContains(values []string, value string) bool { return slices.Contains(values, value) }
 
 func effortRank(level string) int { return slices.Index(effortOrder, level) }
+
+// editArray returns arr with the elements edit changes: a replacement, or
+// drop. It copies nothing and returns arr itself when edit changes none.
+func editArray(arr []byte, edit func(raw []byte, o obj) (replacement []byte, drop bool)) ([]byte, bool) {
+	var raws [][]byte
+	var changes map[int][]byte // index -> replacement, nil to drop
+	eachItem(arr, func(raw []byte, o obj) {
+		if replacement, drop := edit(raw, o); drop || replacement != nil {
+			if changes == nil {
+				changes = map[int][]byte{}
+			}
+			changes[len(raws)] = replacement
+		}
+		raws = append(raws, raw)
+	})
+	if changes == nil {
+		return arr, false
+	}
+	out := make([]byte, 0, len(arr)+64)
+	out = append(out, '[')
+	for at, raw := range raws {
+		if replacement, changed := changes[at]; changed {
+			if replacement == nil {
+				continue
+			}
+			raw = replacement
+		}
+		out = append(appendComma(out), raw...)
+	}
+	return append(out, ']'), true
+}
