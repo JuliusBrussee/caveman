@@ -180,6 +180,16 @@ test("unlisted providers stay direct with an actionable mount notice", async () 
   assert.match(h.notices.at(-1), /no compat mount named "unlisted-relay".*add compat\.unlisted-relay\.base_url/);
 });
 
+test("a provider whose baseUrl is a sentinel is not offered a compat mount", async () => {
+  const bridge = { provider: "claude-bridge", id: "m", api: "anthropic-messages", baseUrl: "claude-bridge" };
+  const h = harness([bridge]);
+  await h.router.openGate(GATEWAY, h.ctx, COMPAT, NATIVE);
+  assert.equal(h.router.routing(), false);
+  assert.deepEqual(h.ctx.model, bridge);
+  assert.match(h.notices.at(-1), /"claude-bridge" is not an HTTP URL/);
+  assert.doesNotMatch(h.notices.at(-1), /compat\.claude-bridge\.base_url|no compat mount named/);
+});
+
 const CUSTOM_HEADERS = { "X-API-Tenant": "private-fixture-tenant", "CF-AIG-Authorization": "private-fixture-auth" };
 
 test("undeclared model headers keep Pi direct with a names-only notice", async () => {
