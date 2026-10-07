@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"bytes"
 	"encoding/json"
 	"strings"
 )
@@ -141,6 +142,43 @@ func claudeID(model string) string {
 	return strings.ReplaceAll(id[at:], ".", "-")
 }
 
+// thinkingOff is thinking off as model id takes it at effort: Sonnet 5.5
+// only {type: between_tools} alone, at effort high or below; `disabled` where
+// thinkingDisableAccepted allows it (raw when raw is that shape); nothing
+// where neither is accepted.
+func thinkingOff(raw json.RawMessage, id, effort string) (json.RawMessage, bool) {
+	upToHigh := effort != "xhigh" && effort != "max"
+	if sameModel(id, "claude-sonnet-5-5") {
+		if !upToHigh {
+			return nil, false
+		}
+		return json.RawMessage(`{"type":"between_tools"}`), true
+	}
+	for family, atAnyEffort := range thinkingDisableAccepted {
+		if sameModel(id, family) && (atAnyEffort || upToHigh) {
+			if bytes.Contains(raw, []byte(`"between_tools"`)) {
+				return json.RawMessage(`{"type":"disabled"}`), true
+			}
+			return raw, true
+		}
+	}
+	return nil, false
+}
+
+// FitEffort maps an effort chosen for another model onto the levels model
+// takes on grammar's own API (the asked model when a pool target fails):
+// the Claude table for Messages, OpenAI's levels for Responses and chat.
+// "" when nothing fits (a Claude model without effort levels, or "none" on one).
+func FitEffort(grammar, model, effort string) string {
+	if grammar != Messages {
+		return clampEffort(effort, responsesEfforts)
+	}
+	if _, _, levels, _ := claudeThinking(model); len(levels) > 0 {
+		return clampEffort(effort, levels)
+	}
+	return ""
+}
+
 // sameModel: id is model, or a dated snapshot of it ("claude-sonnet-5-20260101").
 func sameModel(id, model string) bool {
 	return id == model || strings.HasPrefix(id, model+"-20")
@@ -200,25 +238,14 @@ func nativeThinking(raw, maxTokens json.RawMessage, model, effort string) (json.
 		reshaped["type"] = mustJSON("adaptive")
 		return mustJSON(reshaped), true
 	case kind == "disabled" && !manual:
-		id := claudeID(model)
-		if sameModel(id, "claude-sonnet-5-5") {
-			// Sonnet 5.5 refuses `disabled`; thinking off there is
-			// {type: between_tools} alone, at effort high or below.
-			if effort == "xhigh" || effort == "max" {
-				return nil, false
-			}
-			return json.RawMessage(`{"type":"between_tools"}`), true
+		return thinkingOff(raw, claudeID(model), effort)
+	case kind == "between_tools":
+		// A caller's own Sonnet 5.5 thinking-off: `disabled` where the model
+		// takes that instead, nothing where it takes neither.
+		if manual {
+			return nil, false
 		}
-		atAnyEffort, accepted := false, false
-		for family, any := range thinkingDisableAccepted {
-			if sameModel(id, family) {
-				atAnyEffort, accepted = any, true
-			}
-		}
-		if accepted && (atAnyEffort || (effort != "xhigh" && effort != "max")) {
-			return raw, true
-		}
-		return nil, false
+		return thinkingOff(json.RawMessage(`{"type":"between_tools"}`), claudeID(model), effort)
 	case kind == "adaptive" && !adaptive:
 		var limit int
 		if json.Unmarshal(maxTokens, &limit) != nil || limit/2 < 1024 {

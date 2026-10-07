@@ -530,6 +530,14 @@ func TestMessagesEffortFitsTheModel(t *testing.T) {
 		{"claude-sonnet-5-5", `{"type":"disabled"}`, "max", ``, `{"effort":"max"}`},
 		{"claude-sonnet-5", `{"type":"disabled"}`, "max", `{"type":"disabled"}`, `{"effort":"max"}`},
 		{"deepseek-v4-flash", `{"type":"adaptive"}`, "high", `{"type":"adaptive"}`, `{"effort":"high"}`},
+		// A caller's own between_tools: Sonnet 5.5 at high or below only; disabled where that is the off switch.
+		{"claude-sonnet-5-5", `{"type":"between_tools"}`, "high", `{"type":"between_tools"}`, `{"effort":"high"}`},
+		{"claude-sonnet-5-5", `{"type":"between_tools"}`, "xhigh", ``, `{"effort":"xhigh"}`},
+		{"claude-sonnet-5", `{"type":"between_tools"}`, "max", `{"type":"disabled"}`, `{"effort":"max"}`},
+		{"claude-opus-5", `{"type":"between_tools"}`, "medium", `{"type":"disabled"}`, `{"effort":"medium"}`},
+		{"claude-opus-5", `{"type":"between_tools"}`, "max", ``, `{"effort":"max"}`},
+		{"claude-opus-5-5", `{"type":"between_tools"}`, "low", ``, `{"effort":"low"}`},
+		{"claude-sonnet-4-5", `{"type":"between_tools"}`, "high", ``, ``},
 	} {
 		body := `{"model":"auto","max_tokens":10000,"thinking":` + tc.thinking + `,"output_config":{"effort":"low"},"reasoning_effort":"low","messages":[{"role":"user","content":"hi"}]}`
 		sent, _ := mustRequest(t, Messages, Messages, body, Options{Model: tc.model, Effort: tc.effort, Route: "anthropic"})

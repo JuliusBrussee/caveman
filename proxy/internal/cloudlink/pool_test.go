@@ -11,6 +11,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
 )
 
 // addLogin writes a provider login the way `caveman providers add` does, on
@@ -214,5 +216,38 @@ func TestOtherBadRequestsAreNeverRetried(t *testing.T) {
 	newLink(home).Ask(t.Context(), messagesAsk("claude-opus-5-5"))()
 	if len(fake.bodies) != 1 {
 		t.Fatalf("asked %d times, want once", len(fake.bodies))
+	}
+}
+
+// The answered effort was chosen for the target: a failed target's cached
+// fallback fits it to the asked model's levels (minimal is low on Claude,
+// max is xhigh on OpenAI, none is no effort on Claude).
+func TestRejectFitsTheEffortToTheAskedModel(t *testing.T) {
+	responses := gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: "gpt-6-sol", SessionID: "s1",
+		Body: []byte(`{"model":"gpt-6-sol","input":[{"role":"user","content":"fix the bug please"}]}`)}
+	for _, tc := range []struct {
+		ask            gateway.RouteAsk
+		answered, want string
+	}{
+		{messagesAsk("claude-opus-5-5"), "minimal", "low"},
+		{messagesAsk("claude-opus-5-5"), "none", ""},
+		{responses, "max", "xhigh"},
+	} {
+		fake := &poolCloud{answer: func(map[string]any) (int, string) {
+			return 200, `{"pool_id":"fireworks/kimi-k3","via":"local","model":"kimi-k3","effort":"` + tc.answered + `","decision_id":"d1"}`
+		}}
+		cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
+		home := signedIn(t, cloud.URL)
+		addLogin(t, home, "fireworks", "fw-key")
+		link := newLink(home)
+		first := link.Ask(t.Context(), tc.ask)()
+		if first.Target == nil || first.Effort != tc.answered {
+			t.Fatalf("%s: answer = %+v", tc.answered, first)
+		}
+		first.Reject()
+		if again := link.Ask(t.Context(), tc.ask)(); again.Target != nil || again.Effort != tc.want {
+			t.Errorf("%s on %s: replayed effort %q, want %q", tc.answered, tc.ask.Model, again.Effort, tc.want)
+		}
+		cloud.Close()
 	}
 }

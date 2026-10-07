@@ -45,6 +45,7 @@ import (
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
 	"github.com/JuliusBrussee/caveman/proxy/internal/pool"
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
 
@@ -480,8 +481,10 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 		rejected := gateway.RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
 		if answer.Target != nil {
 			// A pool target that failed: the rest of this ask runs the asked
-			// model, still at the answered effort (the same fallback every turn).
-			rejected.Effort, rejected.EffortMode, rejected.DefaultEffort = answer.Effort, answer.EffortMode, answer.DefaultEffort
+			// model, still at the answered effort fitted to that model's levels
+			// (the same fallback every turn).
+			rejected.Effort = translate.FitEffort(request.Endpoint, ask.Model, answer.Effort)
+			rejected.EffortMode, rejected.DefaultEffort = answer.EffortMode, answer.DefaultEffort
 		}
 		answer.Reject = func() {
 			// The provider refused the routed model or effort: the rest of this
