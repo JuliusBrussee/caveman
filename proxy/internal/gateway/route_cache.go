@@ -90,8 +90,11 @@ func withProviderPin(body []byte, provider string) []byte {
 	if _, set := jsonsplice.Field(body, root, "provider"); set {
 		return body
 	}
-	order, _ := json.Marshal([]string{provider})
-	out, err := jsonsplice.AppendObjectFields(body, root, jsonsplice.FieldInsertion{Name: "provider", Value: []byte(`{"order":` + string(order) + `,"allow_fallbacks":false}`)})
+	pin, _ := json.Marshal(struct {
+		Order          []string `json:"order"`
+		AllowFallbacks bool     `json:"allow_fallbacks"`
+	}{Order: []string{provider}})
+	out, err := jsonsplice.AppendObjectFields(body, root, jsonsplice.FieldInsertion{Name: "provider", Value: pin})
 	if err != nil {
 		return body
 	}
