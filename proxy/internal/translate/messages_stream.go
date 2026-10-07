@@ -60,15 +60,19 @@ func (s sseWriter) flush() {
 // when nothing arrived for pingInterval, plus one at gateHold however busy the
 // upstream is with lines that carry no content (comments, pings), so the gate
 // opens on time. The clocks run in the caller's goroutine (one goroutine per
-// stream, not two). The second result reports how the body ended once the
-// range is over: nil for a clean EOF, the read error otherwise. The third
-// stops the reader when the caller returns before the end; the reader still
-// waits on its upstream read until the body is closed.
-func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func()) {
+// stream, not two). The second result reports how the body ended: nil for a
+// clean EOF (or none yet), the read error otherwise. The third stops the
+// reader when the caller returns before the end; the reader still waits on
+// its upstream read until the body is closed. The fourth, called from the
+// range body, ends the range after d at the latest: the answer is over and
+// only its usage may still come, so an upstream that keeps the connection
+// open holds nothing.
+func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(d time.Duration)) {
 	// Buffered: a burst of lines crosses to the caller without a handoff per
 	// line.
 	raw := make(chan []byte, 64)
 	done := make(chan struct{})
+	var mu sync.Mutex
 	var cut error
 	go func() {
 		defer close(raw)
@@ -84,12 +88,15 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func()) {
 			}
 			if err != nil {
 				if !errors.Is(err, io.EOF) {
+					mu.Lock()
 					cut = err
+					mu.Unlock()
 				}
 				return
 			}
 		}
 	}()
+	var deadline <-chan time.Time // armed by the fourth result
 	lines := func(yield func([]byte) bool) {
 		timer, hold := time.NewTimer(pingInterval), time.NewTimer(gateHold)
 		defer timer.Stop()
@@ -109,6 +116,8 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func()) {
 				if !yield(nil) {
 					return
 				}
+			case <-deadline:
+				return
 			case <-done:
 				return
 			}
@@ -116,7 +125,28 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func()) {
 		}
 	}
 	var once sync.Once
-	return lines, func() error { return cut }, func() { once.Do(func() { close(done) }) }
+	ended := func() error {
+		mu.Lock()
+		defer mu.Unlock()
+		return cut
+	}
+	stop := func() { once.Do(func() { close(done) }) }
+	endBy := func(d time.Duration) {
+		if deadline == nil {
+			deadline = time.After(d)
+		}
+	}
+	return lines, ended, stop, endBy
+}
+
+// usageGrace is how long a stream whose answer is over (a chat finish_reason)
+// still waits for the usage chunk and [DONE] that follow it.
+var usageGrace = 100 * time.Millisecond
+
+// sseDone reports chat's last line, `data: [DONE]`.
+func sseDone(line []byte) bool {
+	data, _ := sseData(line)
+	return string(data) == "[DONE]"
 }
 
 // sseData is the payload of one `data:` line, false for any other line.
@@ -180,7 +210,7 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 		out: newSSEWriter(w), model: model, signature: signature, estimateFrom: estimateFrom,
 		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: responsesItemID("msg"),
 	}
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, endBy := sseLines(upstream)
 	defer stop()
 	for line := range lines {
 		if line == nil { // silence
@@ -188,8 +218,11 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 			stream.out.event("ping", map[string]any{"type": "ping"})
 			continue
 		}
-		if stream.consume(line); stream.errored {
+		if stream.consume(line); stream.errored || stream.finished && sseDone(line) {
 			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
+		if stream.finished {
+			endBy(usageGrace) // only the usage chunk and [DONE] may follow
 		}
 	}
 	if stream.errored {

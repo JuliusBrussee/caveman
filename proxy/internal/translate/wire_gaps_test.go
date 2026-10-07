@@ -892,3 +892,71 @@ func TestThirdReviewFindings(t *testing.T) {
 		t.Fatal("two routes share a signature")
 	}
 }
+
+// An answer ends when the upstream's terminal event arrives, not when the
+// upstream closes the connection: with the upstream lingering 30 s after it,
+// every streamed direction (the relay included) sends its final event at
+// once, with the usage. A chat upstream that never sends [DONE] holds the
+// answer for usageGrace at most.
+func TestTerminalEventEndsTheStream(t *testing.T) {
+	callers := map[string]string{
+		Chat:      `{"model":"x","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`,
+		Messages:  `{"model":"m","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}`,
+		Responses: `{"model":"m","stream":true,"input":"hi"}`,
+	}
+	targets := map[string]Options{
+		Messages:  {Model: "claude-opus-5-5", Route: "anthropic"},
+		Responses: {Model: "gpt-6-sol", Route: "openai"},
+		Chat:      {Model: "deepseek-v4-flash", Route: "deepseek"},
+	}
+	chatFrames := []string{`{"id":"c","choices":[{"delta":{"content":"hi"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`,
+		`{"id":"c","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":50}}`}
+	answers := map[string]string{
+		Messages: anthropicText("hi"),
+		Responses: upstreamResponses(`{"type":"response.created","response":{"id":"r"}}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
+			`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"hi"}`,
+			`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`,
+			`{"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":10,"output_tokens":50,"total_tokens":60}}}`),
+		Chat: chatStream(chatFrames...),
+	}
+	final := map[string]string{Messages: "message_stop", Chat: "data: [DONE]", Responses: "response.completed"}
+	run := func(from, to, answer string, within time.Duration) {
+		t.Helper()
+		_, reply, err := Request(from, to, []byte(callers[from]), targets[to])
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstream, feed := io.Pipe()
+		defer feed.Close()
+		go func() { _, _ = io.WriteString(feed, answer) }() // then lingers until the test ends
+		recorder := httptest.NewRecorder()
+		type result struct {
+			usage Usage
+			err   error
+		}
+		done := make(chan result, 1)
+		start := time.Now()
+		go func() {
+			usage, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: upstream})
+			done <- result{usage, err}
+		}()
+		select {
+		case got := <-done:
+			elapsed := time.Since(start)
+			if got.err != nil || elapsed > within || !strings.Contains(recorder.Body.String(), final[from]) || got.usage.OutputTokens != 50 {
+				t.Errorf("%s>%s: err %v after %v, usage %+v\n%s", from, to, got.err, elapsed, got.usage, recorder.Body.String())
+			}
+		case <-time.After(30 * time.Second):
+			t.Fatalf("%s>%s: the answer waited for the upstream to close", from, to)
+		}
+	}
+	for from := range callers {
+		for to := range targets {
+			run(from, to, answers[to], 50*time.Millisecond)
+			if to == Chat {
+				run(from, to, sse(chatFrames...), usageGrace+50*time.Millisecond) // no [DONE]
+			}
+		}
+	}
+}

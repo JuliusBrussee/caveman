@@ -547,10 +547,11 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	var usage Usage
 	terminal := false       // the upstream ended the answer itself
 	upstreamFailed := false // with a failure of its own
-	lines, cut, stop := sseLines(body)
+	lines, cut, stop, endBy := sseLines(body)
 	defer stop()
 	boundary := true  // the upstream's last line ended an event
 	openData := false // a data line came since the last blank line
+	done := false     // chat's [DONE] went out
 	var tail []byte   // the last line, when it ended without a newline
 	for line := range lines {
 		if line == nil {
@@ -585,6 +586,10 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			// relayed, and no second failure is added.
 			upstreamFailed = upstreamFailed || failed
 			terminal = terminal || failed || relayTerminal(r.from, data)
+			done = done || r.from == Chat && string(data) == "[DONE]"
+			if terminal {
+				endBy(usageGrace) // only usage and chat's [DONE] may follow
+			}
 			commit = !failed && relayContent(r.from, data)
 			if edited := r.tagReasoning(withModel(data, shown)); !bytes.Equal(edited, data) {
 				line = append(append([]byte("data: "), edited...), '\n')
@@ -609,6 +614,20 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		_, _ = w.Write(line)
 		if commit {
 			commitOn(w)
+		}
+		out.flush()
+		if terminal && boundary && (r.from != Chat || done || upstreamFailed) {
+			break // the answer is over: an upstream that lingers holds nothing
+		}
+	}
+	if terminal && tail == nil {
+		// Ended at the answer's end without the upstream closing the
+		// stream: the last event is ended, and chat's [DONE] sent.
+		if openData {
+			_, _ = w.Write([]byte("\n"))
+		}
+		if r.from == Chat && !done && !upstreamFailed {
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
 		}
 		out.flush()
 	}

@@ -223,7 +223,7 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 		out: out, model: opts.shown(), signature: opts.responsesSignature(""), estimateFrom: opts.estimateFrom,
 		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: responsesItemID("msg"),
 	}}
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, _ := sseLines(upstream)
 	defer stop()
 	for line := range lines {
 		if line == nil {
@@ -233,7 +233,7 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 			}
 			continue
 		}
-		if t.consume(line); t.m.errored {
+		if t.consume(line); t.m.errored || t.finished {
 			break // the answer is over: an upstream that lingers holds neither it nor the fallback
 		}
 	}

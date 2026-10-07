@@ -302,7 +302,7 @@ func chatUsageOf(input, cacheRead, cacheWrite, output, reasoning int) chatUsage 
 // reasoning_content and, signed, as a reasoning_details envelope (unsigned
 // thinking is shown but never carried).
 func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, _ := sseLines(upstream)
 	defer stop()
 	type block struct {
 		kind      string
@@ -407,7 +407,7 @@ func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
 		case "error":
 			e.fail(anthropicErrorStatus(event.Error.Type), cmpOrString(event.Error.Type, "api_error"), event.Error.Message)
 		}
-		if e.failed {
+		if e.failed || stopped {
 			break // the answer is over: an upstream that lingers holds neither it nor the fallback
 		}
 	}
@@ -430,7 +430,7 @@ func streamAnthropicToChat(e *chatEmitter, upstream io.Reader) error {
 // reasoning_details envelope tagged with the route, so only that route gets
 // it back.
 func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) error {
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, _ := sseLines(upstream)
 	defer stop()
 	calls := map[string]*chatCallOut{} // item id -> call
 	texted := map[string]bool{}        // message item id -> its text streamed
@@ -438,9 +438,6 @@ func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) err
 	for line := range lines {
 		if line == nil {
 			e.keepalive()
-			continue
-		}
-		if finished {
 			continue
 		}
 		data, ok := sseData(line)
@@ -522,7 +519,7 @@ func streamResponsesToChat(e *chatEmitter, upstream io.Reader, route string) err
 			}
 			e.fail(status, kind, cmpOrString(message, "upstream response failed"))
 		}
-		if e.failed {
+		if e.failed || finished {
 			break // the answer is over: an upstream that lingers holds neither it nor the fallback
 		}
 	}

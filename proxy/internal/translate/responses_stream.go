@@ -487,7 +487,7 @@ type anthropicStreamBlock struct {
 // declared.
 func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge) {
 	out.start()
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, _ := sseLines(upstream)
 	defer stop()
 	blocks := map[int]*anthropicStreamBlock{}
 	var usage anthropicUsage
@@ -598,8 +598,8 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 		case "error":
 			out.fail(responsesFailureFor(anthropicErrorStatus(event.Error.Type), mustJSON(map[string]any{"error": event.Error}), ""))
 		}
-		if out.finished {
-			break // failed: an upstream that lingers holds neither the answer nor the fallback
+		if out.finished || stopped {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
 		}
 	}
 	if out.finished {
@@ -653,7 +653,7 @@ func (c *chatStreamCall) open(out *responsesStream, bridge toolBridge) {
 // index opens a call whose complete arguments are sent when the stream ends.
 func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge, replay string) {
 	out.start()
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, endBy := sseLines(upstream)
 	defer stop()
 	var reasoning, text *streamItem
 	// calls is keyed by the order calls opened in: an upstream that sends
@@ -689,7 +689,7 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 		}
 		if bytes.Equal(data, []byte("[DONE]")) {
 			finished = true
-			continue
+			break // the answer is over: an upstream that lingers holds nothing
 		}
 		var chunk chatStreamChunk
 		if json.Unmarshal(data, &chunk) != nil {
@@ -762,6 +762,7 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 			if choice.FinishReason != "" {
 				finished = true
 				out.incomplete = incompleteReason(choice.FinishReason)
+				endBy(usageGrace) // only the usage chunk and [DONE] may follow
 			}
 		}
 	}
