@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -214,3 +215,107 @@ func TestRegistryOAuthRowsCarryTerms(t *testing.T) {
 type offline struct{}
 
 func (offline) RoundTrip(*http.Request) (*http.Response, error) { return nil, os.ErrDeadlineExceeded }
+
+// A refresh that lands after the login was removed, or after a new sign-in,
+// saves nothing.
+func TestRefreshNeverResurrectsARemovedOrNewerLogin(t *testing.T) {
+	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, `{"access_token":"late-access","refresh_token":"late-refresh","expires_in":3600,"scope":"chatgpt.tokens.use.direct"}`)
+	}))
+	defer issuer.Close()
+	for name, meanwhile := range map[string]func(dir string){
+		"removed": func(dir string) {
+			_ = os.WriteFile(filepath.Join(dir, indexFile), []byte(`{"version":1,"logins":[]}`), 0o600)
+		},
+		"signed in again": func(dir string) {
+			_ = os.WriteFile(filepath.Join(dir, secretDir, "chatgpt"), []byte(`{"access_token":"new","refresh_token":"new-refresh","expires_at":"2099-01-01T00:00:00Z"}`), 0o600)
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			dir := home(t, map[string]string{"chatgpt": chatgptRecord(time.Now().Add(time.Minute), false)})
+			store := NewStore(dir)
+			store.setKeychain = func(string, string) error { return os.ErrPermission }
+			var token chatgptToken
+			raw, _ := os.ReadFile(filepath.Join(dir, secretDir, "chatgpt"))
+			_ = json.Unmarshal(raw, &token)
+			token.Issuer = issuer.URL
+			meanwhile(dir)
+			store.refreshChatGPT(token)
+			index, _ := os.ReadFile(filepath.Join(dir, indexFile))
+			secret, _ := os.ReadFile(filepath.Join(dir, secretDir, "chatgpt"))
+			if strings.Contains(string(secret), "late-access") || name == "removed" && strings.Contains(string(index), "chatgpt") {
+				t.Fatalf("index %s secret %s", index, secret)
+			}
+		})
+	}
+}
+
+func TestSwitchingStoresLeavesOneSecret(t *testing.T) {
+	if runtime.GOOS != "darwin" {
+		t.Skip("the keychain store exists on macOS only")
+	}
+	t.Setenv("CAVE_NO_KEYCHAIN", "")
+	store := NewStore(t.TempDir())
+	deleted := ""
+	store.deleteKeychain = func(account string) error { deleted = account; return nil }
+	store.setKeychain = func(string, string) error { return nil }
+	if err := store.Save("openai", "api_key", "sk-1"); err != nil || store.Logins()[0].Store != "keychain" {
+		t.Fatalf("keychain save: %v %+v", err, store.Logins())
+	}
+	store.setKeychain = func(string, string) error { return os.ErrPermission }
+	if err := store.Save("openai", "api_key", "sk-2"); err != nil || store.Logins()[0].Store != "file" || deleted != "openai" {
+		t.Fatalf("file save: %v %+v deleted=%q", err, store.Logins(), deleted)
+	}
+	store.setKeychain = func(string, string) error { return nil }
+	if err := store.Save("openai", "api_key", "sk-3"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(store.home, secretDir, "openai")); !os.IsNotExist(err) {
+		t.Fatal("the file secret outlived the move to the keychain")
+	}
+}
+
+func TestIndexLockIsSharedAndStaleLocksBreak(t *testing.T) {
+	dir := t.TempDir()
+	unlock, err := lockIndex(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		release, err := lockIndex(dir)
+		if err == nil {
+			release()
+		}
+		done <- err
+	}()
+	select {
+	case <-done:
+		t.Fatal("a second writer got the lock while it was held")
+	case <-time.After(100 * time.Millisecond):
+	}
+	unlock()
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	lock := filepath.Join(dir, indexFile+".lock")
+	_ = os.WriteFile(lock, nil, 0o600)
+	_ = os.Chtimes(lock, time.Now().Add(-time.Minute), time.Now().Add(-time.Minute))
+	release, err := lockIndex(dir)
+	if err != nil {
+		t.Fatalf("a stale lock was not broken: %v", err)
+	}
+	release()
+}
+
+func TestCloudOffIsReadFromTheIndex(t *testing.T) {
+	dir := t.TempDir()
+	store := NewStore(dir)
+	if store.CloudOff() {
+		t.Fatal("cloud is on by default")
+	}
+	_ = os.WriteFile(filepath.Join(dir, indexFile), []byte(`{"version":1,"cloud":false,"logins":[]}`), 0o600)
+	if !store.CloudOff() {
+		t.Fatal("cloud off not read")
+	}
+}

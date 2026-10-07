@@ -199,6 +199,7 @@ func (s *Store) oauthAccess(id, raw string) (string, error) {
 // refreshChatGPT trades the refresh token for a new record. A refused refresh
 // marks the record needs_login; any other failure keeps it for the next try.
 func (s *Store) refreshChatGPT(token chatgptToken) {
+	started := token.RefreshToken
 	defer func() {
 		s.mu.Lock()
 		delete(s.refreshing, chatgptLogin)
@@ -226,7 +227,12 @@ func (s *Store) refreshChatGPT(token chatgptToken) {
 		token = fresh
 	}
 	raw, _ := json.Marshal(token)
-	_ = s.Save(chatgptLogin, "oauth", string(raw))
+	_ = s.saveIf(chatgptLogin, "oauth", string(raw), func(current string) bool {
+		// Only over the record this refresh started from: a login removed or
+		// signed in again meanwhile wins.
+		var stored chatgptToken
+		return json.Unmarshal([]byte(current), &stored) == nil && stored.RefreshToken == started
+	})
 }
 
 type chatgptTokenAnswer struct {

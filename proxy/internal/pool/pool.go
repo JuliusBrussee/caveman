@@ -124,21 +124,23 @@ const (
 type Store struct {
 	home string
 	// keychain and setKeychain reach the macOS keychain; tests replace them.
-	keychain    func(account string) (string, error)
-	setKeychain func(account, secret string) error
-	now         func() time.Time
-	client      *http.Client // token refreshes
+	keychain       func(account string) (string, error)
+	setKeychain    func(account, secret string) error
+	deleteKeychain func(account string) error
+	now            func() time.Time
+	client         *http.Client // token refreshes
 
 	mu         sync.Mutex
 	stamp      string
 	logins     []Login
 	secrets    map[string]string
 	refreshing map[string]bool
+	cloudOff   bool
 }
 
 // NewStore reads the logins under home ($CAVEMAN_HOME).
 func NewStore(home string) *Store {
-	return &Store{home: home, keychain: macKeychainGet, setKeychain: macKeychainSet, now: time.Now,
+	return &Store{home: home, keychain: macKeychainGet, setKeychain: macKeychainSet, deleteKeychain: macKeychainDelete, now: time.Now,
 		client: &http.Client{Timeout: 30 * time.Second, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}}
 }
 
@@ -154,14 +156,16 @@ func (s *Store) Logins() []Login {
 	if stamp == s.stamp && s.secrets != nil {
 		return s.logins
 	}
-	s.stamp, s.logins, s.secrets = stamp, nil, map[string]string{}
+	s.stamp, s.logins, s.secrets, s.cloudOff = stamp, nil, map[string]string{}, false
 	raw, err := os.ReadFile(path)
 	var doc struct {
 		Logins []Login `json:"logins"`
+		Cloud  *bool   `json:"cloud"`
 	}
 	if err != nil || json.Unmarshal(raw, &doc) != nil {
 		return nil
 	}
+	s.cloudOff = doc.Cloud != nil && !*doc.Cloud
 	for _, login := range doc.Logins {
 		if provider, ok := Find(login.ID); ok && provider.Kind == login.Kind && !slices.ContainsFunc(s.logins, func(l Login) bool { return l.ID == login.ID }) {
 			s.logins = append(s.logins, login)
@@ -188,18 +192,9 @@ func (s *Store) Secret(id string) (string, error) {
 	if cached {
 		return secret, nil
 	}
-	var err error
-	switch login.Store {
-	case "keychain":
-		secret, err = s.keychain(id)
-	default:
-		var raw []byte
-		raw, err = os.ReadFile(filepath.Join(s.home, secretDir, id))
-		secret = string(raw)
-	}
-	secret = strings.TrimSpace(secret)
-	if err != nil || secret == "" {
-		return "", errors.New("login secret unreadable")
+	secret, err := s.readSecret(*login)
+	if err != nil {
+		return "", err
 	}
 	s.mu.Lock()
 	if s.secrets != nil {
@@ -209,21 +204,44 @@ func (s *Store) Secret(id string) (string, error) {
 	return secret, nil
 }
 
+// readSecret reads a login's secret from its store, uncached.
+func (s *Store) readSecret(login Login) (string, error) {
+	var secret string
+	var err error
+	switch login.Store {
+	case "keychain":
+		secret, err = s.keychain(login.ID)
+	default:
+		var raw []byte
+		raw, err = os.ReadFile(filepath.Join(s.home, secretDir, login.ID))
+		secret = string(raw)
+	}
+	secret = strings.TrimSpace(secret)
+	if err != nil || secret == "" {
+		return "", errors.New("login secret unreadable")
+	}
+	return secret, nil
+}
+
 // Save stores a login's secret and lists it in the index (the keychain on
 // macOS unless CAVE_NO_KEYCHAIN is set, else a 0600 file).
 func (s *Store) Save(id, kind, secret string) error {
-	store := "file"
-	if runtime.GOOS == "darwin" && os.Getenv("CAVE_NO_KEYCHAIN") == "" && s.setKeychain(id, secret) == nil {
-		store = "keychain"
-	} else {
-		dir := filepath.Join(s.home, secretDir)
-		if err := os.MkdirAll(dir, 0o700); err != nil {
-			return err
-		}
-		if err := writeAtomic(filepath.Join(dir, id), []byte(secret), 0o600); err != nil {
-			return err
-		}
+	return s.saveIf(id, kind, secret, nil)
+}
+
+// saveIf is Save under the index lock. When keep is set, the save happens
+// only while the login is still listed and keep accepts its current secret
+// (a background refresh must not resurrect a removed login or overwrite a
+// newer sign-in).
+func (s *Store) saveIf(id, kind, secret string, keep func(current string) bool) error {
+	if err := os.MkdirAll(s.home, 0o700); err != nil {
+		return err
 	}
+	unlock, err := lockIndex(s.home)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	path := filepath.Join(s.home, indexFile)
 	var doc map[string]any
 	if raw, err := os.ReadFile(path); err == nil {
@@ -233,22 +251,47 @@ func (s *Store) Save(id, kind, secret string) error {
 		doc = map[string]any{"version": 1}
 	}
 	logins, _ := doc["logins"].([]any)
+	var previous map[string]any
 	kept := []any{}
-	added := s.now().UTC().Format(time.RFC3339)
 	for _, item := range logins {
 		if entry, ok := item.(map[string]any); ok && entry["id"] == id {
-			if at, ok := entry["added_at"].(string); ok && at != "" {
-				added = at
-			}
+			previous = entry
 			continue
 		}
 		kept = append(kept, item)
 	}
+	if keep != nil {
+		if previous == nil {
+			return errors.New("login removed")
+		}
+		store, _ := previous["store"].(string)
+		current, err := s.readSecret(Login{ID: id, Store: store})
+		if err != nil || !keep(current) {
+			return errors.New("login changed")
+		}
+	}
+	store := "file"
+	if runtime.GOOS == "darwin" && os.Getenv("CAVE_NO_KEYCHAIN") == "" && s.setKeychain(id, secret) == nil {
+		store = "keychain"
+		_ = os.Remove(filepath.Join(s.home, secretDir, id)) // a secret never lives in both stores
+	} else {
+		dir := filepath.Join(s.home, secretDir)
+		if err := os.MkdirAll(dir, 0o700); err != nil {
+			return err
+		}
+		if err := writeAtomic(filepath.Join(dir, id), []byte(secret), 0o600); err != nil {
+			return err
+		}
+		if previous != nil && previous["store"] == "keychain" && s.deleteKeychain != nil {
+			_ = s.deleteKeychain(id)
+		}
+	}
+	added := s.now().UTC().Format(time.RFC3339)
+	if at, ok := previous["added_at"].(string); ok && at != "" {
+		added = at
+	}
 	doc["logins"] = append(kept, map[string]any{"id": id, "kind": kind, "store": store, "added_at": added})
 	raw, _ := json.MarshalIndent(doc, "", "  ")
-	if err := os.MkdirAll(s.home, 0o700); err != nil {
-		return err
-	}
 	if err := writeAtomic(path, append(raw, '\n'), 0o600); err != nil {
 		return err
 	}
@@ -256,6 +299,41 @@ func (s *Store) Save(id, kind, secret string) error {
 	s.stamp = "" // re-read on next use
 	s.mu.Unlock()
 	return nil
+}
+
+// CloudOff reports `caveman providers cloud off`: an answer sending a
+// request through Caveman Cloud runs the asked model instead.
+func (s *Store) CloudOff() bool {
+	s.Logins()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.cloudOff
+}
+
+// lockIndex takes $CAVEMAN_HOME/provider-logins.json.lock, the lock the CLI
+// takes too, for one read-modify-write of the index. A lock older than 10 s
+// is a crashed writer's and is broken.
+func lockIndex(home string) (func(), error) {
+	path := filepath.Join(home, indexFile+".lock")
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			file.Close()
+			return func() { _ = os.Remove(path) }, nil
+		}
+		if !errors.Is(err, os.ErrExist) {
+			return nil, err
+		}
+		if info, statErr := os.Stat(path); statErr == nil && time.Since(info.ModTime()) > 10*time.Second {
+			_ = os.Remove(path)
+			continue
+		}
+		if time.Now().After(deadline) {
+			return nil, errors.New("provider-logins.json is locked")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
 }
 
 // Entry is one pool entry: a catalog model on one login (contracts
@@ -395,6 +473,15 @@ func macKeychainGet(account string) (string, error) {
 	defer cancel()
 	out, err := exec.CommandContext(ctx, "security", "find-generic-password", "-s", keychainService, "-a", account, "-w").Output()
 	return string(out), err
+}
+
+func macKeychainDelete(account string) error {
+	if runtime.GOOS != "darwin" || os.Getenv("CAVE_NO_KEYCHAIN") != "" {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return exec.CommandContext(ctx, "security", "delete-generic-password", "-s", keychainService, "-a", account).Run()
 }
 
 // macKeychainSet goes through `security -i` so the secret travels on stdin,
