@@ -22,16 +22,14 @@ const (
 	Responses = "responses" // OpenAI Responses
 )
 
-// Supported: a caller body in grammar from can run on an upstream wire to.
-// True for (m,m) (c,c) (r,r) (m,c) (m,r) (r,m) (r,c); false otherwise (c->m
-// and c->r are not built).
+// Supported: a caller body in grammar from can run on an upstream wire to:
+// every pair of the three grammars.
 func Supported(from, to string) bool {
-	switch from + ">" + to {
-	case Messages + ">" + Messages, Chat + ">" + Chat, Responses + ">" + Responses,
-		Messages + ">" + Chat, Messages + ">" + Responses, Responses + ">" + Messages, Responses + ">" + Chat:
-		return true
-	}
-	return false
+	return isGrammar(from) && isGrammar(to)
+}
+
+func isGrammar(grammar string) bool {
+	return grammar == Messages || grammar == Chat || grammar == Responses
 }
 
 // Options fit a request to one upstream.
@@ -75,7 +73,7 @@ func (o Options) route() string {
 // chatSignature signs the thinking a chat route's reasoning becomes for a
 // Messages caller: "caveman:" (so Anthropic never sees it), naming the route
 // and model so only that pair gets it back as reasoning_content.
-func (o Options) chatSignature() string { return signaturePrefix + "v1:" + o.Route + ":" + o.Model }
+func (o Options) chatSignature() string { return signaturePrefix + "v1:" + routeTag(o.Route) + o.Model }
 
 // replay is the signature whose thinking a chat route takes back as
 // reasoning_content, "" for a route that replays none.
@@ -100,6 +98,7 @@ type Reply struct {
 	upstreamStream bool // the upstream was asked for one
 	tools          toolBridge
 	upstreamID     string // the host's own id for the answer (UpstreamID)
+	includeUsage   bool   // a streamed chat caller asked for the usage chunk
 }
 
 // UpstreamID is the host's own id for the answer it gave (OpenRouter's gen-…,
@@ -141,7 +140,7 @@ func (h *headBuffer) firstID() string {
 func (r *Reply) Stream() bool { return r.stream }
 
 // namespaces: the answer comes from a Messages host other than Anthropic's
-// own API, so its thinking signatures are rewritten to "caveman:<route>:…".
+// own API, so its thinking signatures are rewritten to "caveman:<n>:<route>:…".
 func (r *Reply) namespaces() bool { return r.to == Messages && r.opts.route() != anthropicRoute }
 
 // Request renders the caller's body (grammar from) for upstream wire to.
@@ -154,38 +153,43 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 	if !Supported(from, to) {
 		return nil, nil, fmt.Errorf("translate: a %s caller cannot run on a %s upstream", from, to)
 	}
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
+	fields, err := topFields(body)
+	if err != nil {
 		return nil, nil, fmt.Errorf("translate: %s body: %w", from, err)
 	}
-	reply := &Reply{from: from, to: to, opts: opts, stream: probe.Stream, upstreamStream: probe.Stream}
-	if from == Messages && to != Messages && probe.Stream {
+	stream := string(fields["stream"]) == "true"
+	reply := &Reply{from: from, to: to, opts: opts, stream: stream, upstreamStream: stream}
+	if from == Messages && to != Messages && stream {
 		reply.opts.estimateFrom = body // counted when message_start goes, not before the send
 	}
-	var fields map[string]json.RawMessage
-	var err error
+	if options, ok := parseObj(fields["stream_options"]); ok && from == Chat {
+		reply.includeUsage = string(options.get("include_usage")) == "true"
+	}
 	switch {
 	case from == Messages && to == Messages:
-		fields, err = messagesBody(body, opts)
+		messagesBody(fields, opts)
 	case from == Messages && to == Chat:
-		fields, err = messagesChatBody(body, opts)
+		fields, err = messagesChatBody(fields, opts)
 	case from == Messages && to == Responses:
-		fields, err = messagesResponsesBody(body, opts)
+		fields, err = messagesResponsesBody(fields, opts)
+		reply.upstreamStream = true
+	case from == Chat && to == Chat:
+		stripChatEnvelopes(fields)
+		fitChat(fields, opts, stream, chatCallerEffort(fields, opts))
+	case from == Chat && to == Messages:
+		fields, err = chatMessagesBody(fields, opts)
 		reply.upstreamStream = true
 	case from == Chat:
-		if err = json.Unmarshal(body, &fields); err == nil {
-			fitChat(fields, opts, probe.Stream, chatCallerEffort(fields, opts))
-		}
+		fields, err = chatResponsesBody(fields, opts)
+		reply.upstreamStream = true
 	case to == Messages:
-		fields, reply.tools, err = responsesMessagesBody(body, opts)
+		fields, reply.tools, err = responsesMessagesBody(fields, opts)
 		reply.upstreamStream = true
 	case to == Chat:
-		fields, reply.tools, err = responsesChatBody(body, opts)
+		fields, reply.tools, err = responsesChatBody(fields, opts)
 		reply.upstreamStream = true
 	default:
-		if fields, err = responsesNativeBody(body, opts.Model, opts.Effort, opts.Route); err == nil && opts.ChatGPTLogin {
+		if err = responsesNativeBody(fields, opts.Model, opts.Effort, opts.Route); err == nil && opts.ChatGPTLogin {
 			chatgptLoginBody(fields)
 			reply.upstreamStream = true
 		}
@@ -194,68 +198,37 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 	if err != nil {
 		return nil, nil, err
 	}
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return nil, nil, err
+	if from != to {
+		// A body built anew carries no text a provider refuses; one in its
+		// own grammar goes as the caller wrote it.
+		return validText(rawObject(fields)), reply, nil
 	}
-	if from == Messages && to == Messages && opts.route() == anthropicRoute {
-		out = anthropicToolIDs(out) // another host's tool ids (OpenRouter's Kimi "functions.Bash:0") would fail Claude
-	}
-	return out, reply, nil
+	return rawObject(fields), reply, nil
 }
 
-// messagesBody is the caller's Messages body for a Messages host: the
-// upstream's model id, the thinking this host may see, the effort, and the
-// route's parameter rules.
-func messagesBody(raw []byte, opts Options) (map[string]json.RawMessage, error) {
-	fields, err := routeBody(raw, opts.Model, opts.route())
-	if err != nil {
-		return nil, err
-	}
+// messagesBody fits the caller's Messages body to a Messages host: the
+// upstream's model id, the thinking this host may see, the effort, the
+// route's parameter rules, and (on Anthropic's own API) tool ids Anthropic
+// accepts (OpenRouter's Kimi "functions.Bash:0" would fail Claude).
+func messagesBody(fields map[string]json.RawMessage, opts Options) {
+	fields["model"] = mustJSON(opts.Model)
+	stripForeignThinking(fields, opts.route())
 	if opts.Effort != "" && opts.Dialect != dialectNone {
 		applyNativeEffort(fields, opts.Model, opts.Effort)
 	} else if raw, set := fields["thinking"]; set {
 		// No effort to apply: the caller's own thinking still has to be one
 		// this host's model takes (at the caller's own effort).
-		var output struct {
-			Effort string `json:"effort"`
-		}
-		_ = json.Unmarshal(fields["output_config"], &output)
-		if thinking, keep := nativeThinking(raw, fields["max_tokens"], opts.Model, output.Effort); keep {
+		output, _ := parseObj(fields["output_config"])
+		if thinking, keep := nativeThinking(raw, fields["max_tokens"], opts.Model, output.str("effort")); keep {
 			fields["thinking"] = thinking
 		} else {
 			delete(fields, "thinking")
 		}
 	}
 	fitRoute(fields, opts, false)
-	return fields, nil
-}
-
-// messagesChatBody is a Messages body translated for a chat upstream. The
-// translation drops output_config, so the caller's own effort (else its
-// thinking, at the middle effort) is set anew in the upstream's dialect.
-func messagesChatBody(raw []byte, opts Options) (map[string]json.RawMessage, error) {
-	var request anthropicRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, err
+	if opts.route() == anthropicRoute {
+		fixToolIDs(fields)
 	}
-	translated, err := anthropicToChat(request, opts.Model, opts.replay())
-	if err != nil {
-		return nil, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(mustJSON(translated), &fields); err != nil {
-		return nil, err
-	}
-	effort := opts.Effort
-	if effort == "" && request.OutputConfig != nil {
-		effort = request.OutputConfig.Effort
-	}
-	if _, thinking := fields["reasoning"]; effort == "" && thinking && opts.dialect() != dialectOpenRouter {
-		effort = "medium" // chatReasoning wrote OpenRouter's field; only OpenRouter takes it as is
-	}
-	fitChat(fields, opts, request.Stream, effort)
-	return fields, nil
 }
 
 // chatCallerEffort is the effort a chat caller's body goes with: Options'
@@ -331,64 +304,6 @@ func dropParams(fields map[string]json.RawMessage, opts Options) {
 	for _, name := range opts.DropParams {
 		delete(fields, name)
 	}
-}
-
-// responsesMessagesBody is a Responses body translated for a Messages host:
-// the effort becomes thinking fitted to the model (adaptive, or a manual
-// budget where adaptive is not accepted) plus output_config.effort where the
-// model takes one.
-func responsesMessagesBody(raw []byte, opts Options) (map[string]json.RawMessage, toolBridge, error) {
-	var request responsesRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, nil, err
-	}
-	effort := opts.Effort
-	if effort == "" {
-		effort = request.effort()
-	}
-	_, _, levels, _ := claudeThinking(opts.Model)
-	effort = clampEffort(effort, levels)
-	maxTokens := request.MaxOutputTokens
-	if maxTokens <= 0 {
-		maxTokens = cmpOr(opts.MaxOutputTokens, anthropicDefaultMaxTokens)
-	}
-	var thinking json.RawMessage
-	if effort != "" && effort != "none" {
-		if fitted, keep := nativeThinking(json.RawMessage(`{"type":"adaptive"}`), mustJSON(maxTokens), opts.Model, effort); keep {
-			thinking = fitted
-		}
-	}
-	fields, tools, err := responsesToAnthropic(request, opts.Model, maxTokens, thinking, opts.route())
-	if err != nil {
-		return nil, nil, err
-	}
-	if effort != "" && effort != "none" && len(levels) > 0 {
-		fields["output_config"] = mustJSON(map[string]string{"effort": effort})
-	}
-	fitRoute(fields, opts, false)
-	return fields, tools, nil
-}
-
-// responsesChatBody is a Responses body translated for a chat upstream.
-func responsesChatBody(raw []byte, opts Options) (map[string]json.RawMessage, toolBridge, error) {
-	var request responsesRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, nil, err
-	}
-	translated, tools, err := responsesToChat(request, opts.Model, opts.replay())
-	if err != nil {
-		return nil, nil, err
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(mustJSON(translated), &fields); err != nil {
-		return nil, nil, err
-	}
-	effort := opts.Effort
-	if effort == "" {
-		effort = request.effort()
-	}
-	fitChat(fields, opts, true, clampEffort(effort, nil))
-	return fields, tools, nil
 }
 
 func cmpOr(value, fallback int) int {
@@ -597,6 +512,15 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 		answer, usage := chatToAnthropic(raw, shown, r.opts.chatSignature())
 		writeJSON(w, answer)
 		return usage.usage(), nil
+	case r.from == Chat && r.to != Chat:
+		out := newChatEmitter(w, r.stream, r.includeUsage, shown)
+		var err error
+		if r.to == Messages {
+			err = streamAnthropicToChat(out, body)
+		} else {
+			err = streamResponsesToChat(out, body, r.opts.route())
+		}
+		return out.usage.usage(), err
 	case r.from == Responses && r.to != Responses:
 		out := finishTranslated(w, r.stream, shown, func(out *responsesStream) {
 			if r.to == Messages {
@@ -605,8 +529,11 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 				streamChatToResponses(out, body, r.tools, r.opts.replay())
 			}
 		})
-		if out.failure != nil && *out.failure == streamCut {
+		switch {
+		case out.failure != nil && *out.failure == streamCut:
 			return out.usage.usage(), errStreamTruncated
+		case out.failure != nil:
+			return out.usage.usage(), ErrUpstreamFailed // before content Serve makes it ErrNotServed
 		}
 		return out.usage.usage(), nil
 	case !r.upstreamStream:
@@ -635,10 +562,12 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	var usage Usage
 	terminal := false       // the upstream ended the answer itself
 	upstreamFailed := false // with a failure of its own
-	lines, cut, stop := sseLines(body)
+	lines, cut, stop, endBy := sseLines(body)
 	defer stop()
-	boundary := true // the upstream's last line ended an event
-	var lastLine []byte
+	boundary := true  // the upstream's last line ended an event
+	openData := false // a data line came since the last blank line
+	done := false     // chat's [DONE] went out
+	var tail []byte   // the last line, when it ended without a newline
 	for line := range lines {
 		if line == nil {
 			heartbeat(w) // committing mid-event is safe: the rest follows
@@ -653,10 +582,18 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			}
 			continue
 		}
-		boundary, lastLine = len(bytes.TrimRight(line, "\r\n")) == 0, line
+		if !bytes.HasSuffix(line, []byte("\n")) {
+			tail = line // only the last line can end without one: held until the end is known
+			continue
+		}
+		boundary = len(bytes.TrimRight(line, "\r\n")) == 0
+		if boundary {
+			openData = false
+		}
 		commit := false
 		if data, ok := sseData(line); ok {
-			failed := bytes.Contains(data, []byte(`"type":"error"`)) || bytes.Contains(data, []byte(`"error":{`)) || bytes.Contains(data, []byte(`"response.failed"`))
+			openData = true
+			failed := relayFailed(data)
 			if failed && !gated(w) {
 				return usage, ErrNotServed // an error before any content: nothing reached the caller
 			}
@@ -664,6 +601,10 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			// relayed, and no second failure is added.
 			upstreamFailed = upstreamFailed || failed
 			terminal = terminal || failed || relayTerminal(r.from, data)
+			done = done || r.from == Chat && string(data) == "[DONE]"
+			if terminal {
+				endBy(usageGrace) // only usage and chat's [DONE] may follow
+			}
 			commit = !failed && relayContent(r.from, data)
 			if edited := r.tagReasoning(withModel(data, shown)); !bytes.Equal(edited, data) {
 				line = append(append([]byte("data: "), edited...), '\n')
@@ -690,8 +631,37 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			commitOn(w)
 		}
 		out.flush()
+		if terminal && boundary && (r.from != Chat || done || upstreamFailed) {
+			break // the answer is over: an upstream that lingers holds nothing
+		}
 	}
 	err := cut()
+	if terminal && (tail == nil || err != nil) {
+		// Ended at the answer's end without the upstream closing the
+		// stream: the last event is ended, and chat's [DONE] sent. A reset
+		// after the end changes nothing; a line it cut short is dropped.
+		tail = nil
+		if openData {
+			_, _ = w.Write([]byte("\n"))
+		}
+		if r.from == Chat && !done && !upstreamFailed {
+			_, _ = w.Write([]byte("data: [DONE]\n\n"))
+		}
+		out.flush()
+		err = nil
+	}
+	if err == nil && tail != nil {
+		// A clean end without a final newline: the line goes when it ends the
+		// answer (or the answer was already over); otherwise the stream is
+		// short of its end and the line is dropped like a cut one.
+		if data, ok := sseData(tail); ok {
+			terminal = terminal || relayTerminal(r.from, data)
+		}
+		if terminal {
+			_, _ = w.Write(tail)
+			out.flush()
+		}
+	}
 	if err == nil && !terminal {
 		if !gated(w) {
 			return usage, ErrNotServed
@@ -705,9 +675,13 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		return usage, nil
 	}
 	message := "upstream stream ended early: " + err.Error()
-	if !boundary {
-		// The cut came inside an event: end it so the error is an event of its own.
-		_, _ = w.Write([]byte(endEvent(lastLine)))
+	if openData {
+		// The cut came after a data line of an unfinished event: end the event
+		// (its data is whole) so the error is an event of its own. A line cut
+		// short was held back and is not sent: a decoder would dispatch the
+		// fragment. After an event line alone, the error's own event line
+		// replaces the name.
+		_, _ = w.Write([]byte("\n"))
 	}
 	switch r.from {
 	case Messages:
@@ -719,15 +693,6 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		newResponsesStream(w, shown, true).fail(streamCut)
 	}
 	return usage, fmt.Errorf("%w: %w", errStreamTruncated, err)
-}
-
-// endEvent is what ends an SSE event whose last line was line: a blank line,
-// after the line's own newline when the cut came mid-line.
-func endEvent(line []byte) string {
-	if bytes.HasSuffix(line, []byte("\n")) {
-		return "\n"
-	}
-	return "\n\n"
 }
 
 // gated reports content already sent through w's gate (true for a plain writer).
@@ -744,12 +709,19 @@ var ErrUpstreamFailed = errors.New("upstream failed mid-answer")
 // event or a ping, and for chat not a chunk that only opens the message (a
 // role with empty content).
 func relayContent(grammar string, data []byte) bool {
-	for _, held := range []string{`"message_start"`, `"response.created"`, `"response.in_progress"`, `"type":"ping"`} {
-		if bytes.Contains(data, []byte(held)) {
-			return false
+	if grammar != Chat {
+		for _, held := range []string{`"message_start"`, `"response.created"`, `"response.in_progress"`, `"ping"`} {
+			if bytes.Contains(data, []byte(held)) {
+				switch string(eventType(data)) { // by the event's own type, not text that reads like one
+				case "message_start", "response.created", "response.in_progress", "ping":
+					return false
+				}
+				break
+			}
 		}
+		return true
 	}
-	if grammar != Chat || bytes.Equal(data, []byte("[DONE]")) {
+	if bytes.Equal(data, []byte("[DONE]")) {
 		return true
 	}
 	var chunk chatStreamChunk
@@ -780,11 +752,49 @@ func Relay(grammar string, body []byte, shown string) *Reply {
 func relayTerminal(grammar string, data []byte) bool {
 	switch grammar {
 	case Messages:
-		return bytes.Contains(data, []byte(`"message_stop"`))
+		return bytes.Contains(data, []byte(`"message_stop"`)) && string(eventType(data)) == "message_stop"
 	case Chat:
-		return bytes.Equal(data, []byte("[DONE]")) || bytes.Contains(data, []byte(`"finish_reason":"`))
+		return bytes.Equal(data, []byte("[DONE]")) || finishReason(data)
 	}
-	return bytes.Contains(data, []byte(`"response.completed"`)) || bytes.Contains(data, []byte(`"response.incomplete"`))
+	if !bytes.Contains(data, []byte(`"response.completed"`)) && !bytes.Contains(data, []byte(`"response.incomplete"`)) {
+		return false
+	}
+	kind := eventType(data)
+	return string(kind) == "response.completed" || string(kind) == "response.incomplete"
+}
+
+// eventType is a stream event's own top-level "type", as written (the
+// substring tests before it are only a filter: a delta's text can read like
+// any event).
+func eventType(data []byte) []byte { return inner(topMember(data, "type")) }
+
+// relayFailed reports the upstream's own failure event: by its type, or a
+// chat chunk's top-level error object, never text that merely reads like one.
+func relayFailed(data []byte) bool {
+	if !bytes.Contains(data, []byte(`error`)) && !bytes.Contains(data, []byte(`"response.failed"`)) {
+		return false
+	}
+	kind, failure := eventType(data), topMember(data, "error")
+	return string(kind) == "error" || string(kind) == "response.failed" || len(failure) > 0 && failure[0] == '{'
+}
+
+// finishReason reports a chat chunk carrying a non-empty string
+// finish_reason. A raw `"finish_reason"` followed by a colon is a key (inside
+// a JSON string every quote is escaped), at whatever depth: a chat chunk has
+// it only on its choices.
+func finishReason(data []byte) bool {
+	for rest := data; ; {
+		at := bytes.Index(rest, []byte(`"finish_reason"`))
+		if at < 0 {
+			return false
+		}
+		rest = rest[at+len(`"finish_reason"`):]
+		if i := skipSpace(rest, 0); i < len(rest) && rest[i] == ':' {
+			if i = skipSpace(rest, i+1); i+1 < len(rest) && rest[i] == '"' && rest[i+1] != '"' {
+				return true
+			}
+		}
+	}
 }
 
 // assembleResponses answers a non-streaming Responses caller from a streamed
@@ -951,8 +961,8 @@ func withModel(data []byte, shown string) []byte {
 // --- thinking signatures from Messages hosts other than Anthropic -----------
 
 // namespaceStream relays a Messages stream with every thinking signature
-// (redacted_thinking: its data) rewritten to "caveman:<route>:<signature>".
-// A thinking block the host left unsigned gets "caveman:<route>:" so it still
+// (redacted_thinking: its data) rewritten to "caveman:<n>:<route>:<signature>".
+// A thinking block the host left unsigned gets "caveman:<n>:<route>:" so it still
 // never reaches another host. Events are rewritten whole; every other event
 // passes byte for byte. A read error reaches the reader as it came.
 func namespaceStream(upstream io.Reader, route string) io.ReadCloser {
@@ -1006,7 +1016,7 @@ func namespaceEvent(event []byte, route string, thinking map[int]bool) []byte {
 	var index int
 	_ = json.Unmarshal(fields["type"], &kind)
 	_ = json.Unmarshal(fields["index"], &index)
-	prefix := signaturePrefix + route + ":"
+	prefix := signaturePrefix + routeTag(route)
 	switch kind {
 	case "content_block_start":
 		var block map[string]json.RawMessage
@@ -1068,7 +1078,7 @@ func namespaceAnswer(answer []byte, route string) []byte {
 	if json.Unmarshal(answer, &body) != nil || json.Unmarshal(body["content"], &blocks) != nil {
 		return answer
 	}
-	prefix, changed := signaturePrefix+route+":", false
+	prefix, changed := signaturePrefix+routeTag(route), false
 	for _, block := range blocks {
 		var kind, value string
 		_ = json.Unmarshal(block["type"], &kind)
@@ -1094,8 +1104,30 @@ func namespaceAnswer(answer []byte, route string) []byte {
 
 // --- native bodies ----------------------------------------------------------
 
-// unsignedThinking finds a thinking signature or redacted data left empty.
-var unsignedThinking = regexp.MustCompile(`"(?:signature|data)"\s*:\s*""`)
+// unsignedThinking reports a thinking signature or redacted data left empty
+// ("signature":"" or "data":"", any spacing): a scan for "" and a look back,
+// as fast as bytes.Index.
+func unsignedThinking(body []byte) bool {
+	for i := 0; ; {
+		at := bytes.Index(body[i:], []byte(`""`))
+		if at < 0 {
+			return false
+		}
+		at += i
+		j := at - 1
+		for j >= 0 && isSpace(body[j]) {
+			j--
+		}
+		if j >= 0 && body[j] == ':' {
+			for j--; j >= 0 && isSpace(body[j]); j-- {
+			}
+			if key := body[:j+1]; bytes.HasSuffix(key, []byte(`"signature"`)) || bytes.HasSuffix(key, []byte(`"data"`)) {
+				return true
+			}
+		}
+		i = at + 2
+	}
+}
 
 // AnthropicNative returns a Messages body bound for Anthropic's own API with
 // every thinking block Anthropic did not mint removed (signed "caveman:…", or
@@ -1107,18 +1139,14 @@ var unsignedThinking = regexp.MustCompile(`"(?:signature|data)"\s*:\s*""`)
 // ponytail: a thinking block with no signature field at all skips the fast
 // path's notice; Anthropic's grammar always sends the field.
 func AnthropicNative(body []byte) []byte {
-	if !bytes.Contains(body, []byte(signaturePrefix)) && !unsignedThinking.Match(body) && !bytes.Contains(body, []byte(`"enabled"`)) {
+	if !bytes.Contains(body, []byte(signaturePrefix)) && !unsignedThinking(body) && !bytes.Contains(body, []byte(`"enabled"`)) {
 		return body
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil || !stripForeignThinking(fields, anthropicRoute) {
+	fields, err := topFields(body)
+	if err != nil || !stripForeignThinking(fields, anthropicRoute) {
 		return body
 	}
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return body
-	}
-	return out
+	return rawObject(fields)
 }
 
 // OpenAINative returns a Responses body bound for OpenAI with the reasoning
@@ -1129,13 +1157,9 @@ func OpenAINative(body []byte) []byte {
 	if !bytes.Contains(body, envelopeMarker) {
 		return body
 	}
-	var fields map[string]json.RawMessage
-	if json.Unmarshal(body, &fields) != nil || !dropReasoning(fields, func(*string) bool { return false }) {
+	fields, err := topFields(body)
+	if err != nil || !dropReasoning(fields) {
 		return body
 	}
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return body
-	}
-	return out
+	return rawObject(fields)
 }

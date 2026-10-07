@@ -188,6 +188,8 @@ func nativeHistory(provider, endpoint string, body []byte) []byte {
 		return translate.AnthropicNative(body)
 	case provider == "openai" && strings.HasSuffix(endpoint, "/responses"):
 		return translate.OpenAINative(body)
+	case strings.HasSuffix(endpoint, "/chat/completions"):
+		return translate.ChatNative(body) // no chat API takes another host's reasoning
 	}
 	return body
 }

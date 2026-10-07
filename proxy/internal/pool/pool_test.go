@@ -76,11 +76,23 @@ func TestEntriesFollowWhatThePersonSetUpAndWhatTheRuntimeCanTranslate(t *testing
 	if !strings.Contains(got, "chatgpt/gpt-6.1-sol@responses") || !strings.Contains(got, "openai/gpt-6-sol@responses") || strings.Contains(got, "zai-coding-plan") {
 		t.Fatalf("responses pool = %s", got)
 	}
-	// A chat caller reaches chat wires only, so no OpenAI entry at all; skip
-	// drops the harness's own entries; limit bounds it.
-	got = strings.Join(ids(store.Entries("chat", "opencode", 1, func(host, model string) bool { return host == "deepseek" && model == "deepseek-v4-pro" })), " ")
-	if got != "deepseek/deepseek-v4-flash@chat" {
-		t.Fatalf("chat pool = %s", got)
+	// A chat caller (OpenCode, Aider) reaches OpenAI and the ChatGPT login on
+	// Responses and DeepSeek on its own chat wire; skip drops the harness's
+	// own entries; limit bounds it.
+	got = strings.Join(ids(store.Entries("chat", "opencode", 64, func(host, model string) bool { return host == "deepseek" && model == "deepseek-v4-pro" })), " ")
+	want = "openai/gpt-6.1-sol@responses openai/gpt-6-sol@responses openai/gpt-6-astra@responses openai/gpt-6-luna@responses " +
+		"chatgpt/gpt-6.1-sol@responses chatgpt/gpt-6-sol@responses chatgpt/gpt-6-astra@responses chatgpt/gpt-6-luna@responses " +
+		"deepseek/deepseek-v4-flash@chat zai-coding-plan/glm-5.3@chat"
+	if got != want {
+		t.Fatalf("chat pool =\n%s\nwant\n%s", got, want)
+	}
+	if got = strings.Join(ids(store.Entries("chat", "opencode", 1, nil)), " "); got != "openai/gpt-6.1-sol@responses" {
+		t.Fatalf("chat pool at limit 1 = %s", got)
+	}
+	// and Claude on Anthropic's Messages wire.
+	claude := NewStore(home(t, map[string]string{"anthropic": "sk-ant"}))
+	if got = strings.Join(ids(claude.Entries("chat", "opencode", 64, nil)), " "); got != "anthropic/claude-opus-5-5@messages anthropic/claude-sonnet-5-5@messages" {
+		t.Fatalf("chat pool with an Anthropic key = %s", got)
 	}
 	for _, grammar := range []string{"messages", "responses", "chat"} {
 		for _, entry := range store.Entries(grammar, "claude", 64, nil) {

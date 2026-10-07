@@ -21,12 +21,12 @@ func TestSupported(t *testing.T) {
 	}{
 		{Messages, Messages, true}, {Chat, Chat, true}, {Responses, Responses, true},
 		{Messages, Chat, true}, {Responses, Messages, true}, {Responses, Chat, true}, {Messages, Responses, true},
-		{Chat, Messages, false}, {Chat, Responses, false}, {"x", Chat, false},
+		{Chat, Messages, true}, {Chat, Responses, true}, {"x", Chat, false}, {Chat, "x", false},
 	} {
 		if got := Supported(tc.from, tc.to); got != tc.want {
 			t.Errorf("Supported(%s, %s) = %v", tc.from, tc.to, got)
 		}
-		if _, _, err := Request(tc.from, tc.to, []byte(`{"model":"m","messages":[],"input":"hi"}`), Options{Model: "m"}); (err == nil) != tc.want {
+		if _, _, err := Request(tc.from, tc.to, []byte(`{"model":"m","messages":[{"role":"user","content":"hi"}],"input":"hi"}`), Options{Model: "m"}); (err == nil) != tc.want {
 			t.Errorf("Request(%s, %s) err = %v", tc.from, tc.to, err)
 		}
 	}
@@ -138,7 +138,12 @@ func TestMessagesToChatEffortDialects(t *testing.T) {
 		{"caller output_config", `"output_config":{"effort":"xhigh"},`, "", "", map[string]any{"reasoning_effort": `"xhigh"`, "output_config": ""}},
 		{"caller adaptive thinking", `"thinking":{"type":"adaptive"},`, "", "", map[string]any{"reasoning_effort": `"medium"`, "reasoning": ""}},
 		{"caller budget on openrouter", `"thinking":{"type":"enabled","budget_tokens":2048},`, "", "openrouter", map[string]any{"reasoning": `{"max_tokens":2048}`}},
-		{"caller thinking off", `"thinking":{"type":"disabled"},`, "", "", map[string]any{"reasoning_effort": "", "reasoning": ""}},
+		// Thinking off is effort "none" wherever the dialect can say it: on
+		// OpenAI's chat dialect only for a model the catalog lists (another may
+		// refuse reasoning_effort outright).
+		{"caller thinking off, unknown model", `"thinking":{"type":"disabled"},`, "", "", map[string]any{"reasoning_effort": "", "reasoning": ""}},
+		{"caller thinking off on openrouter", `"thinking":{"type":"disabled"},`, "", "openrouter", map[string]any{"reasoning": `{"effort":"none"}`}},
+		{"caller thinking off on a toggle", `"thinking":{"type":"disabled"},`, "", "toggle", map[string]any{"thinking": `{"type":"disabled"}`}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			sent, _ := mustRequest(t, Messages, Chat, body(tc.extra), Options{Model: "m", Effort: tc.effort, Dialect: tc.dialect})
@@ -153,14 +158,17 @@ func TestMessagesToChatEffortDialects(t *testing.T) {
 			}
 		})
 	}
+	if sent, _ := mustRequest(t, Messages, Chat, body(`"thinking":{"type":"disabled"},`), Options{Model: "gpt-6-sol"}); sent["reasoning_effort"] != "none" {
+		t.Fatalf("thinking off on a catalog model: %v", sent)
+	}
 }
 
 // A chat route's own reasoning goes back to that route and model as
 // reasoning_content; nobody else's does.
 func TestMessagesToChatReplaysOnlyTheRoutesOwnReasoning(t *testing.T) {
-	own := signaturePrefix + "v1:deepseek:deepseek-v4-flash"
+	own := signaturePrefix + "v1:8:deepseek:deepseek-v4-flash"
 	body := `{"model":"auto","messages":[{"role":"user","content":"go"},
-	  {"role":"assistant","content":[{"type":"thinking","thinking":"step one","signature":"` + own + `"},{"type":"thinking","thinking":"other","signature":"caveman:v1:kimi:k2"},{"type":"tool_use","id":"call_1","name":"Bash","input":{}}]},
+	  {"role":"assistant","content":[{"type":"thinking","thinking":"step one","signature":"` + own + `"},{"type":"thinking","thinking":"other","signature":"caveman:v1:4:kimi:k2"},{"type":"tool_use","id":"call_1","name":"Bash","input":{}}]},
 	  {"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"a b"}]}]}`
 	for _, tc := range []struct {
 		opts Options
@@ -207,7 +215,7 @@ func TestChatAnswerToMessages(t *testing.T) {
 		t.Fatalf("usage = %+v", usage)
 	}
 	answer := decode(t, recorder.Body.String())
-	if answer["id"] != "msg_cmpl-9" || answer["type"] != "message" || answer["role"] != "assistant" || answer["model"] != "openai/gpt-5.6" ||
+	if !opaqueID(answer["id"], "msg_", "cmpl-9") || answer["type"] != "message" || answer["role"] != "assistant" || answer["model"] != "openai/gpt-5.6" ||
 		answer["stop_reason"] != "tool_use" || answer["stop_sequence"] != nil {
 		t.Fatalf("envelope = %v", answer)
 	}
@@ -216,7 +224,7 @@ func TestChatAnswerToMessages(t *testing.T) {
 	}
 	content := answer["content"].([]any)
 	thinking := content[0].(map[string]any)
-	if len(content) != 5 || thinking["type"] != "thinking" || thinking["signature"] != "caveman:v1:openai:gpt-5.6-upstream" || content[1].(map[string]any)["text"] != "on it" {
+	if len(content) != 5 || thinking["type"] != "thinking" || thinking["signature"] != "caveman:v1:6:openai:gpt-5.6-upstream" || content[1].(map[string]any)["text"] != "on it" {
 		t.Fatalf("content = %v", content)
 	}
 	calls := content[2:]
@@ -266,10 +274,10 @@ func TestChatStreamToMessages(t *testing.T) {
 	if got := eventNames(events); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
-	if message := events[0].data["message"].(map[string]any); message["model"] != "auto" || message["id"] != "msg_cmpl-s" {
+	if message := events[0].data["message"].(map[string]any); message["model"] != "auto" || !opaqueID(message["id"], "msg_", "cmpl-s") {
 		t.Fatalf("message_start = %v", message)
 	}
-	if signature := events[4].data["delta"].(map[string]any); signature["type"] != "signature_delta" || signature["signature"] != "caveman:v1:deepseek:deepseek-v4-flash" {
+	if signature := events[4].data["delta"].(map[string]any); signature["type"] != "signature_delta" || signature["signature"] != "caveman:v1:8:deepseek:deepseek-v4-flash" {
 		t.Fatalf("thinking signature = %v", signature)
 	}
 	tool := events[10].data["content_block"].(map[string]any)
@@ -298,7 +306,7 @@ func TestChatStreamStopReasonsErrorsAndCuts(t *testing.T) {
 		{"length", chatStream(`{"choices":[{"delta":{"content":"a"},"finish_reason":"length"}]}`), false, "message_stop", "max_tokens", false},
 		{"stop", chatStream(`{"choices":[{"delta":{"content":"a"},"finish_reason":"stop"}]}`), false, "message_stop", "end_turn", false},
 		{"done only", chatStream(`{"choices":[{"delta":{"content":"a"}}]}`), false, "message_stop", "end_turn", false},
-		{"error chunk", sse(`{"choices":[{"delta":{"content":"a"}}]}`, `{"error":{"type":"overloaded_error","message":"busy"}}`), false, "error", "", false},
+		{"error chunk", sse(`{"choices":[{"delta":{"content":"a"}}]}`, `{"error":{"type":"overloaded_error","message":"busy"}}`), false, "error", "", true},
 		{"clean EOF without finish", sse(`{"choices":[{"delta":{"content":"a"}}]}`), false, "error", "", true},
 		{"broken body", sse(`{"choices":[{"delta":{"content":"a"}}]}`), true, "error", "", true},
 	} {
@@ -381,11 +389,11 @@ func TestMessagesHostStreamIsNamespaced(t *testing.T) {
 	if err != nil || usage != (Usage{InputTokens: 100, OutputTokens: 5, CacheReadTokens: 90}) {
 		t.Fatalf("err %v usage %+v", err, usage)
 	}
-	if !strings.Contains(answer, `"signature":"caveman:deepseek:DSSIG"`) || strings.Contains(answer, `"signature":"DSSIG"`) ||
-		!strings.Contains(answer, `"data":"caveman:deepseek:OPAQUE"`) {
+	if !strings.Contains(answer, `"signature":"caveman:8:deepseek:DSSIG"`) || strings.Contains(answer, `"signature":"DSSIG"`) ||
+		!strings.Contains(answer, `"data":"caveman:8:deepseek:OPAQUE"`) {
 		t.Fatalf("the host's signatures must come back namespaced:\n%s", answer)
 	}
-	if !strings.Contains(answer, `{"delta":{"signature":"caveman:deepseek:","type":"signature_delta"},"index":1,"type":"content_block_delta"}`) {
+	if !strings.Contains(answer, `{"delta":{"signature":"caveman:8:deepseek:","type":"signature_delta"},"index":1,"type":"content_block_delta"}`) {
 		t.Fatalf("an unsigned thinking block must still be marked as the host's:\n%s", answer)
 	}
 	if !strings.Contains(answer, `"model":"auto"`) || strings.Contains(answer, `"model":"deepseek-v4-flash"`) || !strings.Contains(answer, `"model":"keep me"`) {
@@ -428,7 +436,7 @@ func TestMessagesNamespaceRoundTrip(t *testing.T) {
 	recorder, usage, _ := serve(t, reply, `{"id":"m2","type":"message","role":"assistant","model":"deepseek-v4-flash","content":[{"type":"thinking","thinking":"ds plan","signature":"DSSIG"},{"type":"tool_use","id":"call_9","name":"Bash","input":{"command":"ls"}}],"stop_reason":"tool_use","usage":{"input_tokens":5,"output_tokens":5,"cache_creation_input_tokens":7}}`, false)
 	answer := decode(t, recorder.Body.String())
 	dsTurn := encode(answer["content"])
-	if answer["model"] != "deepseek/deepseek-v4-flash" || !strings.Contains(dsTurn, `"signature":"caveman:deepseek:DSSIG"`) {
+	if answer["model"] != "deepseek/deepseek-v4-flash" || !strings.Contains(dsTurn, `"signature":"caveman:8:deepseek:DSSIG"`) {
 		t.Fatalf("answer = %s", recorder.Body.String())
 	}
 	if usage != (Usage{InputTokens: 12, OutputTokens: 5, CacheWriteTokens: 7}) {
@@ -463,7 +471,7 @@ func TestMessagesNamespaceRoundTrip(t *testing.T) {
 // own signed blocks byte for byte; manual thinking goes for the one request
 // whose final tool turn lost its thinking.
 func TestTranslatedThinkingIsStrippedBeforeAnthropic(t *testing.T) {
-	gptTurn, _ := chatToAnthropic([]byte(`{"id":"x","choices":[{"finish_reason":"tool_calls","message":{"reasoning":"think","tool_calls":[{"id":"call_1","type":"function","function":{"name":"Bash","arguments":"{}"}}]}}]}`), "gpt", "caveman:v1:openai:gpt")
+	gptTurn, _ := chatToAnthropic([]byte(`{"id":"x","choices":[{"finish_reason":"tool_calls","message":{"reasoning":"think","tool_calls":[{"id":"call_1","type":"function","function":{"name":"Bash","arguments":"{}"}}]}}]}`), "gpt", "caveman:v1:6:openai:gpt")
 	content := encode(decode(t, string(gptTurn))["content"])
 	raw := `{"model":"auto","thinking":{"type":"enabled","budget_tokens":2048},"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],"messages":[` +
 		`{"role":"user","content":"fix it"},` +
@@ -488,7 +496,7 @@ func TestTranslatedThinkingIsStrippedBeforeAnthropic(t *testing.T) {
 		}
 	}
 	// Adaptive thinking relaxes the rule: it (and its display) stays.
-	adaptive := `{"model":"auto","thinking":{"type":"adaptive","display":"summarized"},"messages":[{"role":"user","content":"x"},{"role":"assistant","content":[{"type":"thinking","thinking":"gpt","signature":"caveman:v1:openai:gpt"},{"type":"tool_use","id":"call_1","name":"Bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}]}`
+	adaptive := `{"model":"auto","thinking":{"type":"adaptive","display":"summarized"},"messages":[{"role":"user","content":"x"},{"role":"assistant","content":[{"type":"thinking","thinking":"gpt","signature":"caveman:v1:6:openai:gpt"},{"type":"tool_use","id":"call_1","name":"Bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"call_1","content":"ok"}]}]}`
 	if out := string(AnthropicNative([]byte(adaptive))); !strings.Contains(out, `"thinking":{"type":"adaptive","display":"summarized"}`) || strings.Contains(out, "caveman:") {
 		t.Fatalf("adaptive thinking must survive, foreign blocks must not: %s", out)
 	}

@@ -14,8 +14,16 @@ package translate
 //     A stream that closes before either is an error Codex retries, so a cut
 //     upstream becomes response.failed with a retryable code, never a
 //     completed answer.
-//   - response.incomplete is only accepted with reason "interrupted", so it is
-//     never emitted; a max-tokens stop completes with what arrived.
+//   - response.incomplete ends the turn only with reason "interrupted"; with
+//     "content_filter" Codex raises its content-filter error (a guidance note,
+//     retries, then the error shown), with any other reason a stream error it
+//     retries (codex-rs codex-api/src/sse/responses.rs process_responses_event,
+//     https://github.com/openai/codex/blob/18e28fe1b96db7e1d6b13584bec37c41f71b8b0e/codex-rs/codex-api/src/sse/responses.rs#L418-L464).
+//     So a refusal ends in response.incomplete {reason: content_filter}, as
+//     OpenAI's own content filter does, and a max-tokens stop completes with
+//     what arrived: as max_output_tokens Codex would resend the same request
+//     up to five times. A non-streamed answer carries status incomplete and
+//     the reason for both.
 
 import (
 	"bytes"
@@ -86,6 +94,9 @@ type responsesStream struct {
 	usage    *responsesUsage
 	failure  *responsesFailure
 	finished bool
+	// incomplete is why the answer stopped short: max_output_tokens or
+	// content_filter ("" for a whole one).
+	incomplete string
 }
 
 type streamItem struct {
@@ -140,6 +151,9 @@ func (s *responsesStream) response(status string) map[string]any {
 	}
 	if s.failure != nil {
 		response["error"] = map[string]any{"code": s.failure.Code, "message": s.failure.Message}
+	}
+	if status == "incomplete" {
+		response["incomplete_details"] = map[string]any{"reason": s.incomplete}
 	}
 	return response
 }
@@ -265,6 +279,10 @@ func (s *responsesStream) complete() {
 		return
 	}
 	s.finished = true
+	if s.incomplete == "content_filter" {
+		s.emit("response.incomplete", map[string]any{"response": s.response("incomplete")})
+		return
+	}
 	s.emit("response.completed", map[string]any{"response": s.response("completed")})
 }
 
@@ -280,8 +298,11 @@ func (s *responsesStream) fail(failure responsesFailure) {
 // (an OpenAI error body instead when the answer failed).
 func (s *responsesStream) answer() []byte {
 	status := "completed"
-	if s.failure != nil {
+	switch {
+	case s.failure != nil:
 		status = "failed"
+	case s.incomplete != "":
+		status = "incomplete"
 	}
 	return mustJSON(s.response(status))
 }
@@ -466,7 +487,7 @@ type anthropicStreamBlock struct {
 // declared.
 func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge) {
 	out.start()
-	lines, cut, stop := sseLines(upstream)
+	lines, _, stop, _ := sseLines(upstream)
 	defer stop()
 	blocks := map[int]*anthropicStreamBlock{}
 	var usage anthropicUsage
@@ -475,9 +496,6 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 		if line == nil {
 			out.keepalive()
 			continue
-		}
-		if out.finished {
-			continue // drain
 		}
 		data, ok := sseData(line)
 		if !ok {
@@ -560,6 +578,7 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 				out.endTool(block.item, arguments)
 			}
 		case "message_delta":
+			out.incomplete = incompleteReason(event.Delta.StopReason)
 			if event.Usage != nil {
 				// message_delta counts are cumulative; a field it leaves out
 				// keeps message_start's value.
@@ -579,16 +598,31 @@ func streamAnthropicToResponses(out *responsesStream, upstream io.Reader, bridge
 		case "error":
 			out.fail(responsesFailureFor(anthropicErrorStatus(event.Error.Type), mustJSON(map[string]any{"error": event.Error}), ""))
 		}
+		if out.finished || stopped {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
 	}
 	if out.finished {
 		return
 	}
-	if cut() != nil || !stopped {
+	if !stopped { // past message_stop a reset changes nothing
 		out.fail(streamCut)
 		return
 	}
 	out.usage = responsesUsageFromAnthropic(usage)
 	out.complete()
+}
+
+// incompleteReason is the Responses incomplete reason a Messages stop reason
+// or chat finish reason stands for ("" for a whole answer).
+func incompleteReason(stop string) string {
+	switch stop {
+	case "max_tokens", "length", "model_context_window_exceeded":
+		return "max_output_tokens"
+	case "refusal", "content_filter":
+		return "content_filter"
+	}
+	return ""
 }
 
 // --- OpenAI chat SSE -> Responses -------------------------------------------
@@ -619,7 +653,7 @@ func (c *chatStreamCall) open(out *responsesStream, bridge toolBridge) {
 // index opens a call whose complete arguments are sent when the stream ends.
 func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge, replay string) {
 	out.start()
-	lines, cut, stop := sseLines(upstream)
+	lines, _, stop, endBy := sseLines(upstream)
 	defer stop()
 	var reasoning, text *streamItem
 	// calls is keyed by the order calls opened in: an upstream that sends
@@ -649,16 +683,13 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 			out.keepalive()
 			continue
 		}
-		if out.finished {
-			continue
-		}
 		data, ok := sseData(line)
 		if !ok {
 			continue
 		}
 		if bytes.Equal(data, []byte("[DONE]")) {
 			finished = true
-			continue
+			break // the answer is over: an upstream that lingers holds nothing
 		}
 		var chunk chatStreamChunk
 		if json.Unmarshal(data, &chunk) != nil {
@@ -677,7 +708,7 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 				}
 			}
 			out.fail(responsesFailureFor(status, data, ""))
-			continue
+			break // an upstream that lingers holds neither the answer nor the fallback
 		}
 		if chunk.Usage != nil {
 			usage := &responsesUsage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens, TotalTokens: chunk.Usage.TotalTokens}
@@ -730,13 +761,15 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 			}
 			if choice.FinishReason != "" {
 				finished = true
+				out.incomplete = incompleteReason(choice.FinishReason)
+				endBy(usageGrace) // only the usage chunk and [DONE] may follow
 			}
 		}
 	}
 	if out.finished {
 		return
 	}
-	if cut() != nil || !finished {
+	if !finished { // past the finish a reset changes nothing
 		// Only the failure: no output_item.done for a half-finished call, so
 		// Codex never runs a tool on cut-off arguments.
 		out.fail(streamCut)

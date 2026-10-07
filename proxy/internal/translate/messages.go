@@ -5,86 +5,16 @@ package translate
 // served: the caller keeps its own grammar, the upstream gets the one it
 // speaks.
 //
-// What is DROPPED on the way out, because no OpenAI-compatible upstream has a
-// field for it: context_management, safeguards, output_config, cache_control
-// and the anthropic-beta semantics. They are Anthropic-server features, not
-// prompt content, so dropping them changes serving, not the answer. Document
-// and other non-text, non-image content blocks are dropped too.
+// The request side is messages_in.go; this file holds the answer side
+// (chat -> Messages), the shared usage shapes and the thinking hygiene of
+// Messages bodies.
 
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
-	"fmt"
+	"strconv"
 	"strings"
 )
-
-type anthropicRequest struct {
-	Model         string               `json:"model"`
-	System        json.RawMessage      `json:"system"`
-	Messages      []anthropicMessage   `json:"messages"`
-	Tools         []anthropicTool      `json:"tools"`
-	ToolChoice    *anthropicToolChoice `json:"tool_choice"`
-	MaxTokens     int                  `json:"max_tokens"`
-	Temperature   *float64             `json:"temperature"`
-	TopP          *float64             `json:"top_p"`
-	StopSequences []string             `json:"stop_sequences"`
-	Stream        bool                 `json:"stream"`
-	Thinking      *anthropicThinking   `json:"thinking"`
-	OutputConfig  *struct {
-		Effort string `json:"effort"`
-	} `json:"output_config"`
-	Metadata *struct {
-		UserID string `json:"user_id"`
-	} `json:"metadata"`
-}
-
-type anthropicThinking struct {
-	Type         string `json:"type"` // enabled | adaptive | disabled
-	BudgetTokens int    `json:"budget_tokens"`
-}
-
-type anthropicMessage struct {
-	Role    string          `json:"role"`
-	Content json.RawMessage `json:"content"`
-}
-
-// anthropicBlock is the union of every content block shape read here. Fields
-// not on the block's own type stay zero.
-type anthropicBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-	// image
-	Source *struct {
-		Type      string `json:"type"` // base64 | url
-		MediaType string `json:"media_type"`
-		Data      string `json:"data"`
-		URL       string `json:"url"`
-	} `json:"source"`
-	// tool_use
-	ID    string          `json:"id"`
-	Name  string          `json:"name"`
-	Input json.RawMessage `json:"input"`
-	// tool_result
-	ToolUseID string          `json:"tool_use_id"`
-	Content   json.RawMessage `json:"content"`
-	IsError   bool            `json:"is_error"`
-	// thinking
-	Thinking  string `json:"thinking"`
-	Signature string `json:"signature"`
-}
-
-type anthropicTool struct {
-	Type        string          `json:"type"`
-	Name        string          `json:"name"`
-	Description string          `json:"description"`
-	InputSchema json.RawMessage `json:"input_schema"`
-}
-
-type anthropicToolChoice struct {
-	Type string `json:"type"` // auto | any | tool | none
-	Name string `json:"name"`
-}
 
 type anthropicUsage struct {
 	InputTokens              int `json:"input_tokens"`
@@ -161,226 +91,6 @@ func (u chatUsage) usage() Usage {
 	return Usage{InputTokens: u.PromptTokens, OutputTokens: u.CompletionTokens, CacheReadTokens: u.cachedTokens(), CacheWriteTokens: u.cacheWriteTokens()}
 }
 
-// anthropicTextOf joins the text of a string-or-blocks content value.
-func anthropicTextOf(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var direct string
-	if json.Unmarshal(raw, &direct) == nil {
-		return direct
-	}
-	var blocks []anthropicBlock
-	if json.Unmarshal(raw, &blocks) != nil {
-		return ""
-	}
-	parts := make([]string, 0, len(blocks))
-	for _, block := range blocks {
-		if block.Type == "text" && block.Text != "" {
-			parts = append(parts, block.Text)
-		}
-	}
-	return strings.Join(parts, "\n")
-}
-
-func anthropicBlocksOf(raw json.RawMessage) []anthropicBlock {
-	var direct string
-	if json.Unmarshal(raw, &direct) == nil {
-		if direct == "" {
-			return nil
-		}
-		return []anthropicBlock{{Type: "text", Text: direct}}
-	}
-	var blocks []anthropicBlock
-	_ = json.Unmarshal(raw, &blocks)
-	return blocks
-}
-
-// anthropicToChat renders one Anthropic request as an OpenAI chat body for
-// `model`, sending the thinking blocks signed `replay` back as
-// reasoning_content ("" sends none). Server tools are an error.
-func anthropicToChat(request anthropicRequest, model, replay string) (map[string]any, error) {
-	size := 1 // a capacity hint (the system message), bounded so the sum cannot overflow
-	if len(request.Messages) < 1<<30 {
-		size = len(request.Messages) + 1
-	}
-	messages := make([]openAIMessage, 0, size)
-	if system := anthropicTextOf(request.System); system != "" {
-		messages = append(messages, openAIMessage{Role: "system", Content: system})
-	}
-	for _, message := range request.Messages {
-		translated, err := anthropicMessageToChat(message, replay)
-		if err != nil {
-			return nil, err
-		}
-		messages = append(messages, translated...)
-	}
-	out := map[string]any{"model": model, "messages": messages}
-	if request.MaxTokens > 0 {
-		out["max_tokens"] = request.MaxTokens
-	}
-	if request.Temperature != nil {
-		out["temperature"] = *request.Temperature
-	}
-	if request.TopP != nil {
-		out["top_p"] = *request.TopP
-	}
-	if len(request.StopSequences) > 0 {
-		out["stop"] = request.StopSequences
-	}
-	if request.Stream {
-		out["stream"] = true
-	}
-	if request.Metadata != nil && request.Metadata.UserID != "" {
-		out["user"] = request.Metadata.UserID
-	}
-	if reasoning := chatReasoning(request.Thinking); reasoning != nil {
-		out["reasoning"] = reasoning
-	}
-	tools, err := chatTools(request.Tools)
-	if err != nil {
-		return nil, err
-	}
-	if len(tools) > 0 {
-		out["tools"] = tools
-	}
-	if choice := chatToolChoice(request.ToolChoice); choice != nil {
-		out["tool_choice"] = choice
-	}
-	return out, nil
-}
-
-// chatReasoning maps Anthropic's thinking onto OpenRouter's reasoning
-// parameter. An explicit budget is a budget; "adaptive" has no number, so it
-// becomes the middle effort rather than a made-up token count. fitChat
-// rewrites it for every other dialect.
-func chatReasoning(thinking *anthropicThinking) map[string]any {
-	if thinking == nil {
-		return nil
-	}
-	switch thinking.Type {
-	case "enabled":
-		if thinking.BudgetTokens > 0 {
-			return map[string]any{"max_tokens": thinking.BudgetTokens}
-		}
-		return map[string]any{"effort": "medium"}
-	case "adaptive":
-		return map[string]any{"effort": "medium"}
-	}
-	return nil
-}
-
-// chatTools rejects Anthropic's server-side tools: they are executed by
-// Anthropic's own API, so there is nothing to forward to another provider.
-func chatTools(tools []anthropicTool) ([]map[string]any, error) {
-	out := make([]map[string]any, 0, len(tools))
-	for _, tool := range tools {
-		if len(tool.InputSchema) == 0 {
-			return nil, fmt.Errorf("tool %q is an Anthropic server tool (type %q) and is only supported on a native Anthropic model", tool.Name, tool.Type)
-		}
-		function := map[string]any{"name": tool.Name, "parameters": tool.InputSchema}
-		if tool.Description != "" {
-			function["description"] = tool.Description
-		}
-		out = append(out, map[string]any{"type": "function", "function": function})
-	}
-	return out, nil
-}
-
-func chatToolChoice(choice *anthropicToolChoice) any {
-	if choice == nil {
-		return nil
-	}
-	switch choice.Type {
-	case "auto":
-		return "auto"
-	case "any":
-		return "required"
-	case "none":
-		return "none"
-	case "tool":
-		return map[string]any{"type": "function", "function": map[string]any{"name": choice.Name}}
-	}
-	return nil
-}
-
-// anthropicMessageToChat is one Anthropic message as one or more chat
-// messages: a turn carrying tool results becomes one `tool` message each.
-func anthropicMessageToChat(message anthropicMessage, replay string) ([]openAIMessage, error) {
-	var parts []any
-	var text, reasoning []string
-	var calls []openAIToolCall
-	out := []openAIMessage{}
-	for _, block := range anthropicBlocksOf(message.Content) {
-		switch block.Type {
-		case "text":
-			text = append(text, block.Text)
-			parts = append(parts, map[string]any{"type": "text", "text": block.Text})
-		case "image":
-			url, err := imageURL(block)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, map[string]any{"type": "image_url", "image_url": map[string]any{"url": url}})
-		case "tool_use":
-			call := openAIToolCall{ID: block.ID, Type: "function"}
-			call.Function.Name = block.Name
-			call.Function.Arguments = string(block.Input)
-			if call.Function.Arguments == "" {
-				call.Function.Arguments = "{}"
-			}
-			calls = append(calls, call)
-		case "tool_result":
-			content := anthropicTextOf(block.Content)
-			if content == "" {
-				content = strings.TrimSpace(string(block.Content))
-			}
-			if block.IsError {
-				content = "Error: " + content
-			}
-			out = append(out, openAIMessage{Role: "tool", ToolCallID: block.ToolUseID, Content: content})
-		case "thinking":
-			// Provider-private reasoning: replayed only to the route and model
-			// that produced it (its signature says which), never to another.
-			if replay != "" && block.Signature == replay && message.Role == "assistant" {
-				reasoning = append(reasoning, block.Thinking)
-			}
-		}
-	}
-	if len(parts) > 0 || len(calls) > 0 || len(reasoning) > 0 {
-		translated := openAIMessage{Role: message.Role, ToolCalls: calls, ReasoningContent: strings.Join(reasoning, "\n")}
-		if hasImage(parts) {
-			translated.Content = parts
-		} else if joined := strings.Join(text, "\n"); joined != "" {
-			translated.Content = joined
-		}
-		out = append(out, translated)
-	}
-	return out, nil
-}
-
-func hasImage(parts []any) bool {
-	for _, part := range parts {
-		if typed, ok := part.(map[string]any); ok && typed["type"] == "image_url" {
-			return true
-		}
-	}
-	return false
-}
-
-func imageURL(block anthropicBlock) (string, error) {
-	if block.Source == nil {
-		return "", errors.New("image block has no source")
-	}
-	if block.Source.Type == "url" || block.Source.URL != "" {
-		return block.Source.URL, nil
-	}
-	if block.Source.Data == "" {
-		return "", errors.New("image block has no data")
-	}
-	return "data:" + block.Source.MediaType + ";base64," + block.Source.Data, nil
-}
-
 // --- answers --------------------------------------------------------------
 
 type chatAnswer struct {
@@ -403,6 +113,7 @@ type chatAnswer struct {
 func chatToAnthropic(body []byte, model, signature string) ([]byte, chatUsage) {
 	var parsed chatAnswer
 	_ = json.Unmarshal(body, &parsed)
+	id := responsesItemID("msg") // the host's own id stays out of the agent's answer (Reply.UpstreamID keeps it)
 	blocks := []any{}
 	stop := "end_turn"
 	if len(parsed.Choices) > 0 {
@@ -415,14 +126,14 @@ func chatToAnthropic(body []byte, model, signature string) ([]byte, chatUsage) {
 		}
 		for i, call := range choice.Message.ToolCalls {
 			blocks = append(blocks, map[string]any{
-				"type": "tool_use", "id": wireCallID(call.ID, parsed.ID, i), "name": call.Function.Name,
+				"type": "tool_use", "id": wireCallID(call.ID, id, i), "name": call.Function.Name,
 				"input": toolInput(call.Function.Arguments),
 			})
 		}
 		stop = anthropicStopReason(choice.FinishReason)
 	}
 	return mustJSON(map[string]any{
-		"id": "msg_" + parsed.ID, "type": "message", "role": "assistant",
+		"id": id, "type": "message", "role": "assistant",
 		"model": model, "content": blocks,
 		"stop_reason": stop, "stop_sequence": nil,
 		"usage": anthropicUsageFromChat(parsed.Usage),
@@ -479,19 +190,10 @@ const anthropicRoute = "anthropic"
 // signaturePrefix marks every thinking signature Anthropic did not mint.
 const signaturePrefix = "caveman:"
 
-// routeBody is the caller's Messages body for the Messages host `route`:
-// `model` rewritten and the thinking that host may see (stripForeignThinking).
-func routeBody(raw []byte, model, route string) (map[string]json.RawMessage, error) {
-	var body map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &body); err != nil {
-		return nil, err
-	}
-	body["model"] = mustJSON(model)
-	if bytes.Contains(raw, []byte(`thinking"`)) {
-		stripForeignThinking(body, route)
-	}
-	return body, nil
-}
+// routeTag is "<length>:<route>:", the route a signature names, length
+// first so no route's tag starts another's (an id may hold ':', as "x" and
+// "x:free" do).
+func routeTag(route string) string { return strconv.Itoa(len(route)) + ":" + route + ":" }
 
 // stripForeignThinking makes a conversation that visited another provider
 // sendable to the Messages host `route` again. Anthropic rejects a thinking
@@ -500,7 +202,7 @@ func routeBody(raw []byte, model, route string) (map[string]json.RawMessage, err
 //
 // A Messages host other than Anthropic signs its thinking with its own
 // signature; the runtime hands it to the harness as
-// "caveman:<route>:<signature>" (redacted_thinking: its data), so it is
+// "caveman:<n>:<route>:<signature>" (redacted_thinking: its data), so it is
 // restored for that same route and stripped for every other. Only Anthropic
 // keeps an unprefixed signature (Anthropic minted it); unsigned thinking is
 // stripped everywhere. A message left empty keeps a placeholder so the turn
@@ -510,99 +212,168 @@ func routeBody(raw []byte, model, route string) (map[string]json.RawMessage, err
 // thinking block leads it any more, manual `thinking` is dropped for this one
 // request, because Anthropic requires a final assistant tool turn to start
 // with thinking in manual mode. LiteLLM does the same (litellm/utils.py
-// last_assistant_with_tool_calls_has_no_thinking_blocks). Anthropic's own
-// messages are left byte for byte. It reports whether the body changed.
+// last_assistant_with_tool_calls_has_no_thinking_blocks). Every message it
+// does not change keeps its bytes. It reports whether the body changed.
 func stripForeignThinking(body map[string]json.RawMessage, route string) bool {
-	var messages []map[string]json.RawMessage
-	if json.Unmarshal(body["messages"], &messages) != nil {
+	messages := body["messages"]
+	if !bytes.Contains(messages, []byte("thinking")) && !manualThinking(body["thinking"]) {
 		return false
 	}
-	changed, lastAssistant, foreignLast := false, -1, false
-	for index, message := range messages {
-		var role string
-		_ = json.Unmarshal(message["role"], &role)
-		var blocks []map[string]json.RawMessage
-		if json.Unmarshal(message["content"], &blocks) != nil {
-			continue
-		}
-		if role == "assistant" {
-			lastAssistant, foreignLast = index, false
-		}
-		kept := make([]map[string]json.RawMessage, 0, len(blocks))
-		restored := false
-		for _, block := range blocks {
-			var kind, signature string
-			_ = json.Unmarshal(block["type"], &kind)
-			field := "signature"
-			if kind == "redacted_thinking" {
-				field = "data"
-			}
-			_ = json.Unmarshal(block[field], &signature)
-			if kind != "thinking" && kind != "redacted_thinking" {
-				kept = append(kept, block)
-				continue
-			}
-			own, ours := strings.CutPrefix(signature, signaturePrefix+route+":")
-			anthropicMinted := signature != "" && !strings.HasPrefix(signature, signaturePrefix)
-			switch {
-			case ours && own != "":
-				block[field], restored = mustJSON(own), true
-			case anthropicMinted && route == anthropicRoute:
-			case ours && kind == "thinking" && route != anthropicRoute:
-				// The host gave no signature: it is replayed unsigned, as it came.
-				block[field], restored = mustJSON(""), true
-			default:
-				foreignLast = foreignLast || role == "assistant"
-				continue
-			}
-			kept = append(kept, block)
-		}
-		if len(kept) == len(blocks) && !restored {
-			continue
-		}
-		if len(kept) == 0 {
-			kept = append(kept, map[string]json.RawMessage{"type": mustJSON("text"), "text": mustJSON("(reasoning omitted)")})
-		}
-		message["content"] = mustJSON(kept)
-		changed = true
+	type edit struct {
+		raw, replacement []byte
 	}
-	if lastAssistant >= 0 && manualThinking(body["thinking"]) && foreignToolTurn(messages[lastAssistant], foreignLast) {
+	var edits []edit
+	changed, foreignLast := false, false
+	var lastAssistant obj
+	ok := eachItem(messages, func(raw []byte, message obj) {
+		edits = append(edits, edit{raw: raw})
+		if message == nil {
+			return
+		}
+		assistant := message.str("role") == "assistant"
+		if assistant {
+			lastAssistant, foreignLast = append(obj(nil), message...), false
+		}
+		if !bytes.Contains(raw, []byte("thinking")) {
+			return
+		}
+		content, stripped, restored := stripBlocks(message.get("content"), route)
+		foreignLast = foreignLast || assistant && stripped
+		if content == nil {
+			return
+		}
+		if assistant {
+			lastAssistant = setMember(message, "content", content)
+		}
+		edits[len(edits)-1].replacement = objectWith(message, "content", content)
+		changed = changed || stripped || restored
+	})
+	if !ok {
+		return false
+	}
+	if lastAssistant != nil && manualThinking(body["thinking"]) && foreignToolTurn(lastAssistant, foreignLast) {
 		delete(body, "thinking")
 		changed = true
 	}
-	if changed {
-		body["messages"] = mustJSON(messages)
+	if !changed {
+		return false
 	}
-	return changed
+	out := make([]byte, 0, capHint(len(messages), 64))
+	out = append(out, '[')
+	for _, e := range edits {
+		out = appendComma(out)
+		if e.replacement != nil {
+			out = append(out, e.replacement...)
+		} else {
+			out = append(out, e.raw...)
+		}
+	}
+	body["messages"] = append(out, ']')
+	return true
+}
+
+// stripBlocks applies stripForeignThinking's rule to one message's blocks: the
+// new content (nil when nothing changed), whether a block went, whether a
+// signature was restored.
+func stripBlocks(content []byte, route string) (out []byte, stripped, restored bool) {
+	var kept []byte
+	count := 0
+	whole := eachItem(content, func(raw []byte, block obj) {
+		kind := block.str("type")
+		if kind != "thinking" && kind != "redacted_thinking" {
+			kept = append(openElem(kept), raw...)
+			count++
+			return
+		}
+		field := "signature"
+		if kind == "redacted_thinking" {
+			field = "data"
+		}
+		signature := block.str(field)
+		own, ours := strings.CutPrefix(signature, signaturePrefix+routeTag(route))
+		anthropicMinted := signature != "" && !strings.HasPrefix(signature, signaturePrefix)
+		switch {
+		case ours && own != "":
+			kept = append(openElem(kept), objectWith(block, field, appendString(nil, own))...)
+			restored = true
+		case anthropicMinted && route == anthropicRoute:
+			kept = append(openElem(kept), raw...)
+		case ours && kind == "thinking" && route != anthropicRoute:
+			// The host gave no signature: it is replayed unsigned, as it came.
+			kept = append(openElem(kept), objectWith(block, field, []byte(`""`))...)
+			restored = true
+		default:
+			stripped = true
+			return
+		}
+		count++
+	})
+	if !whole || !stripped && !restored {
+		return nil, false, false
+	}
+	if count == 0 {
+		return []byte(`[{"type":"text","text":"(reasoning omitted)"}]`), stripped, restored
+	}
+	return append(kept, ']'), stripped, restored
+}
+
+// objectWith renders o with member key's value replaced by value (appended
+// when o has none); every other member keeps its bytes.
+func objectWith(o obj, key string, value []byte) []byte {
+	out := make([]byte, 0, 64)
+	out = append(out, '{')
+	found := false
+	for _, member := range o {
+		out = append(appendComma(out), '"')
+		out = append(append(out, member.key...), '"', ':')
+		if member.is(key) {
+			out, found = append(out, value...), true
+		} else {
+			out = append(out, member.val...)
+		}
+	}
+	if !found {
+		out = append(appendKey(out, key), value...)
+	}
+	return append(out, '}')
+}
+
+// setMember is o with member key's value replaced.
+func setMember(o obj, key string, value []byte) obj {
+	out := make(obj, 0, len(o))
+	for _, member := range o {
+		if member.is(key) {
+			member.val = value
+		}
+		out = append(out, member)
+	}
+	return out
 }
 
 // manualThinking: only extended (manual, `enabled`) thinking requires the
 // final assistant tool turn to start with a thinking block; adaptive relaxes
 // that (Anthropic's extended-thinking docs), so it is left alone.
 func manualThinking(raw json.RawMessage) bool {
-	var thinking anthropicThinking
-	return json.Unmarshal(raw, &thinking) == nil && thinking.Type == "enabled"
+	thinking, ok := parseObj(raw)
+	return ok && thinking.str("type") == "enabled"
 }
 
 // foreignToolTurn: the assistant turn calls a tool, has no thinking block
 // left, and came from another provider (a stripped block, or a tool id
 // Anthropic never mints; Anthropic's are toolu_… and srvtoolu_…).
-func foreignToolTurn(message map[string]json.RawMessage, stripped bool) bool {
-	var blocks []anthropicBlock
-	if json.Unmarshal(message["content"], &blocks) != nil {
-		return false
-	}
-	calls, foreign := false, stripped
-	for _, block := range blocks {
-		switch block.Type {
+func foreignToolTurn(message obj, stripped bool) bool {
+	calls, foreign, thinking := false, stripped, false
+	eachBlock(message.get("content"), func(kind string, block obj) {
+		switch kind {
 		case "thinking", "redacted_thinking":
-			return false
+			thinking = true
 		case "tool_use":
+			id := block.str("id")
 			calls = true
-			foreign = foreign || !(strings.HasPrefix(block.ID, "toolu_") || strings.HasPrefix(block.ID, "srvtoolu_"))
+			foreign = foreign || !(strings.HasPrefix(id, "toolu_") || strings.HasPrefix(id, "srvtoolu_"))
 		}
-	}
-	return calls && foreign
+	})
+	return calls && foreign && !thinking
 }
 
 // anthropicToolIDs rewrites the tool_use and tool_result ids of a Messages
@@ -611,46 +382,39 @@ func foreignToolTurn(message map[string]json.RawMessage, stripped bool) bool {
 // deterministic, so a call and its result still pair. A body whose ids all
 // pass is returned as it came.
 func anthropicToolIDs(body []byte) []byte {
-	suspect := false
-	for _, match := range toolIDField.FindAllSubmatch(body, -1) {
-		if suspect = !anthropicCallID.Match(match[1]); suspect {
-			break
-		}
-	}
-	var fields map[string]json.RawMessage
-	var messages []map[string]json.RawMessage
-	if !suspect || json.Unmarshal(body, &fields) != nil || json.Unmarshal(fields["messages"], &messages) != nil {
+	fields, err := topFields(body)
+	if err != nil || !fixToolIDs(fields) {
 		return body
 	}
-	changed := false
-	for _, message := range messages {
-		var blocks []map[string]json.RawMessage
-		if json.Unmarshal(message["content"], &blocks) != nil {
-			continue
+	return rawObject(fields)
+}
+
+// fixToolIDs is anthropicToolIDs on a body's members; it reports a change.
+func fixToolIDs(fields map[string]json.RawMessage) bool {
+	messages := fields["messages"]
+	if !bytes.Contains(messages, []byte(`tool_`)) {
+		return false
+	}
+	edited, changed := editArray(messages, func(raw []byte, message obj) ([]byte, bool) {
+		if message == nil || !bytes.Contains(raw, []byte(`tool_`)) {
+			return nil, false
 		}
-		touched := false
-		for _, block := range blocks {
-			var kind, id string
-			_ = json.Unmarshal(block["type"], &kind)
-			field := map[string]string{"tool_use": "id", "tool_result": "tool_use_id"}[kind]
-			if field == "" || json.Unmarshal(block[field], &id) != nil || anthropicCallID.MatchString(id) {
-				continue
+		content, touched := editArray(message.get("content"), func(_ []byte, block obj) ([]byte, bool) {
+			field := map[string]string{"tool_use": "id", "tool_result": "tool_use_id"}[block.str("type")]
+			if id := block.get(field); field != "" && isStr(id) && !anthropicCallID.Match(inner(id)) {
+				return objectWith(block, field, appendString(nil, safeCallID(jstr(id)))), false
 			}
-			block[field], touched = mustJSON(safeCallID(id)), true
+			return nil, false
+		})
+		if !touched {
+			return nil, false
 		}
-		if touched {
-			message["content"], changed = mustJSON(blocks), true
-		}
+		return objectWith(message, "content", content), false
+	})
+	if changed {
+		fields["messages"] = edited
 	}
-	if !changed {
-		return body
-	}
-	fields["messages"] = mustJSON(messages)
-	out, err := json.Marshal(fields)
-	if err != nil {
-		return body
-	}
-	return out
+	return changed
 }
 
 func mustJSON(value any) []byte {

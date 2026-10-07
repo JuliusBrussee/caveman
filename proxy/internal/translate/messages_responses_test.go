@@ -18,9 +18,9 @@ func TestMessagesToResponsesRequest(t *testing.T) {
       "messages":[
         {"role":"user","content":[{"type":"text","text":"look at this"},{"type":"image","source":{"type":"base64","media_type":"image/png","data":"AAAA"}}]},
         {"role":"assistant","content":[
-          {"type":"thinking","thinking":"mine","signature":"caveman:r1:chatgpt:ENC-1"},
+          {"type":"thinking","thinking":"mine","signature":"caveman:r1:7:chatgpt:ENC-1"},
           {"type":"thinking","thinking":"anthropic's","signature":"sig-anthropic"},
-          {"type":"thinking","thinking":"other route","signature":"caveman:r1:openai:ENC-2"},
+          {"type":"thinking","thinking":"other route","signature":"caveman:r1:6:openai:ENC-2"},
           {"type":"text","text":"Reading."},
           {"type":"tool_use","id":"toolu_01","name":"Read","input":{"path":"a.go"}}]},
         {"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":[{"type":"text","text":"package a"}]},{"type":"text","text":"and?"}]},
@@ -68,7 +68,9 @@ func TestMessagesToResponsesEffortAndChoices(t *testing.T) {
 	}{
 		{"options win", `,"output_config":{"effort":"low"}`, Options{Model: "g", Effort: "high"}, `{"effort":"high","summary":"auto"}`},
 		{"adaptive thinking", `,"thinking":{"type":"adaptive"}`, Options{Model: "g"}, `{"effort":"medium","summary":"auto"}`},
-		{"none", ``, Options{Model: "g", Effort: "none"}, `{"effort":"none"}`},
+		{"none", ``, Options{Model: "gpt-6-sol", Effort: "none"}, `{"effort":"none"}`},
+		{"thinking off on a model that reasons", `,"thinking":{"type":"disabled"}`, Options{Model: "gpt-6-sol"}, `{"effort":"none"}`},
+		{"thinking off on a model that does not reason", `,"thinking":{"type":"disabled"}`, Options{Model: "gpt-4.1"}, ``},
 		{"nothing set", ``, Options{Model: "g"}, ``},
 	} {
 		got, _ := mustRequest(t, Messages, Responses, base(tc.extra), tc.opts)
@@ -132,10 +134,10 @@ func TestResponsesStreamToMessages(t *testing.T) {
 	if got := eventNames(events); got != want {
 		t.Fatalf("events = %s\nwant     %s", got, want)
 	}
-	if message := events[0].data["message"].(map[string]any); message["model"] != "claude-opus-5-5" || message["id"] != "msg_resp_1" {
+	if message := events[0].data["message"].(map[string]any); message["model"] != "claude-opus-5-5" || !opaqueID(message["id"], "msg_", "resp_1") {
 		t.Fatalf("message_start = %v", message)
 	}
-	if delta := events[4].data["delta"].(map[string]any); delta["type"] != "signature_delta" || delta["signature"] != "caveman:r1:chatgpt:ENC-XYZ" {
+	if delta := events[4].data["delta"].(map[string]any); delta["type"] != "signature_delta" || delta["signature"] != "caveman:r1:7:chatgpt:ENC-XYZ" {
 		t.Fatalf("thinking signature = %v", delta)
 	}
 	if text := events[7].data["delta"].(map[string]any)["text"].(string) + events[8].data["delta"].(map[string]any)["text"].(string); text != "hello world" {
@@ -169,7 +171,7 @@ func TestResponsesStreamToMessagesStopsErrorsAndCuts(t *testing.T) {
 			`{"type":"response.output_item.added","item":{"type":"function_call","id":"fc","call_id":"c1","name":"Bash"}}`,
 			`{"type":"response.output_item.done","item":{"type":"function_call","id":"fc","call_id":"c1","name":"Bash","arguments":"{\"cmd\":\"ls\"}"}}`,
 			`{"type":"response.completed","response":{"id":"r"}}`), false, "message_stop", "tool_use", false},
-		{"failed", upstreamResponses(text, `{"type":"response.failed","response":{"id":"r","error":{"code":"rate_limit_exceeded","message":"slow down"}}}`), false, "error", "", false},
+		{"failed", upstreamResponses(text, `{"type":"response.failed","response":{"id":"r","error":{"code":"rate_limit_exceeded","message":"slow down"}}}`), false, "error", "", true},
 		{"clean EOF without completed", upstreamResponses(text), false, "error", "", true},
 		{"broken body", upstreamResponses(text), true, "error", "", true},
 	} {
@@ -207,7 +209,11 @@ func TestResponsesAnswerAssembledForANonStreamingCaller(t *testing.T) {
 		t.Fatalf("err %v headers %v", err, recorder.Header())
 	}
 	answer := decode(t, recorder.Body.String())
-	want := `{"content":[{"signature":"caveman:r1:chatgpt:ENC-XYZ","thinking":"thinking hard","type":"thinking"},{"text":"hello world","type":"text"},{"id":"call_abc","input":{"path":"x"},"name":"Read","type":"tool_use"}],"id":"msg_resp_1","model":"claude-opus-5-5","role":"assistant","stop_reason":"tool_use","stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":600,"input_tokens":400,"output_tokens":80}}`
+	if !opaqueID(answer["id"], "msg_", "resp_1") {
+		t.Fatalf("answer id %v", answer["id"])
+	}
+	answer["id"] = "msg_x"
+	want := `{"content":[{"signature":"caveman:r1:7:chatgpt:ENC-XYZ","thinking":"thinking hard","type":"thinking"},{"text":"hello world","type":"text"},{"id":"call_abc","input":{"path":"x"},"name":"Read","type":"tool_use"}],"id":"msg_x","model":"claude-opus-5-5","role":"assistant","stop_reason":"tool_use","stop_sequence":null,"type":"message","usage":{"cache_creation_input_tokens":0,"cache_read_input_tokens":600,"input_tokens":400,"output_tokens":80}}`
 	if encode(answer) != want {
 		t.Fatalf("answer =\n%s\nwant\n%s", encode(answer), want)
 	}

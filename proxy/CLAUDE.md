@@ -234,8 +234,15 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   prices. Every request to Anthropic's/OpenAI's own API (not pass-through) drops reasoning another host
   wrote (`translate.AnthropicNative`/`OpenAINative`, byte for byte when there is none; a Responses
   host's encrypted reasoning is route-tagged so only that host gets it back; per-message effort
-  marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages callers reach it
-  through Messages→Responses, chat callers get no OpenAI entry. Chat callers reach chat hosts only. Terms: no Claude Pro/Max, Google or Copilot login is ever added; every OAuth row
+  marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages and chat callers reach it
+  through Messages→Responses and chat→Responses, and chat callers (OpenCode, Aider) reach Claude through
+  chat→Messages; a chat caller gets another host's reasoning as `reasoning_content` plus a
+  `reasoning_details` envelope that goes back only to that host, and every chat API (on the harness path
+  too, whatever the origin and with routing off, `translate.ChatNative`) gets both removed. Documents, structured output,
+  `disable_parallel_tool_use`/`parallel_tool_calls` and refusals cross every direction; a part the target
+  cannot take (a document by URL on chat, an OpenAI file id on Claude, audio) refuses the translation, so
+  the pool falls back. A refusal reaches Codex as `response.incomplete` `content_filter` (its own
+  content-filter path); a max-tokens stop stays `response.completed` (Codex retries any other incomplete). Terms: no Claude Pro/Max, Google or Copilot login is ever added; every OAuth row
   in `providers.json` carries a terms note.
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
 

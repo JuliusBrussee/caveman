@@ -1,6 +1,7 @@
 package translate
 
 import (
+	"encoding/json"
 	"errors"
 	"io"
 	"net/http"
@@ -239,6 +240,14 @@ func TestGateHoldIsBoundedUnderSteadyHeldLines(t *testing.T) {
 		{"messages relay", sse(`{"type":"ping"}`), sse(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`), func() *Reply {
 			return Relay(Messages, []byte(`{"stream":true}`), "m")
 		}},
+		{"chat from messages", sse(`{"type":"ping"}`), sse(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`), func() *Reply {
+			_, r := mustRequest(t, Chat, Messages, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "claude-opus-5-5"})
+			return r
+		}},
+		{"chat from responses", ": keepalive\n\n", upstreamResponses(`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"busy"}}}`), func() *Reply {
+			_, r := mustRequest(t, Chat, Responses, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "gpt-6-sol"})
+			return r
+		}},
 	} {
 		gateHold = time.Hour
 		recorder := httptest.NewRecorder()
@@ -333,19 +342,85 @@ func TestFitEffort(t *testing.T) {
 	}
 }
 
-// A relayed stream cut inside an event ends that event first, so the error
-// is an event of its own.
-func TestRelayCutInsideAnEventKeepsFraming(t *testing.T) {
-	head := sse(`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`,
-		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`)
-	for name, tail := range map[string]string{
-		"after a whole line": "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}\n",
-		"mid-line":           "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}",
+// A relayed stream cut anywhere inside an event reaches the agent's SDK as
+// an API error, never as a parse error on a fragment: after an event line,
+// mid data line, after a whole data line, mid event line. The decoders mimic
+// @anthropic-ai/sdk core/streaming.js and openai-node's Stream (which Codex's
+// eventsource parser matches: a blank line dispatches, data is JSON).
+func TestRelayCutInsideAnEventSurfacesAnAPIError(t *testing.T) {
+	type shape struct{ name, tail string }
+	for _, tc := range []struct {
+		grammar, head string
+		shapes        []shape
+	}{
+		{Messages, sse(`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`,
+			`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`), []shape{
+			{"after the event line", "event: content_block_delta\n"},
+			{"mid data line", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"del"},
+			{"mid data line, JSON whole", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}"},
+			{"after a whole data line", "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"a\"}}\n"},
+			{"mid event line", "event: content_block_del"},
+		}},
+		{Responses, sse(`{"type":"response.created","response":{"id":"resp_1"}}`,
+			`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`), []shape{
+			{"after the event line", "event: response.output_text.delta\n"},
+			{"mid data line", "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"del"},
+			{"after a whole data line", "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"a\"}\n"},
+			{"mid event line", "event: response.output_te"},
+		}},
+		{Chat, sse(`{"id":"c","choices":[{"delta":{"content":"a"}}]}`), []shape{
+			{"mid data line", "data: {\"id\":\"c\",\"choi"},
+			{"after a whole data line", "data: {\"id\":\"c\",\"choices\":[{\"delta\":{\"content\":\"b\"}}]}\n"},
+		}},
 	} {
-		recorder, _, err := serve(t, Relay(Messages, []byte(`{"stream":true}`), "m"), head+tail, true)
-		out := recorder.Body.String()
-		if err == nil || !strings.Contains(out, "\n\nevent: error\n") || framingBroken(out) != "" {
-			t.Fatalf("%s: err %v, the error is not an event of its own: %s\n%s", name, err, framingBroken(out), out)
+		for _, shape := range tc.shapes {
+			recorder, _, err := serve(t, Relay(tc.grammar, []byte(`{"stream":true}`), "m"), tc.head+shape.tail, true)
+			if got := sdkDecode(tc.grammar, recorder.Body.String()); err == nil || !strings.HasPrefix(got, "APIError") {
+				t.Errorf("%s %s: err %v, the SDK sees %s\n%s", tc.grammar, shape.name, err, got, recorder.Body.String())
+			}
 		}
 	}
+	// A clean end without a final newline is still a whole answer.
+	recorder, _, err := serve(t, Relay(Messages, []byte(`{"stream":true}`), "m"), strings.TrimSuffix(anthropicText("hi"), "\n\n"), false)
+	if err != nil || !strings.HasSuffix(recorder.Body.String(), `{"type":"message_stop"}`) {
+		t.Fatalf("clean end without a newline: err %v\n%s", err, recorder.Body.String())
+	}
+}
+
+// sdkDecode runs a stream through an SSE decoder the way the agents' SDKs do:
+// a blank line dispatches when an event name or data is set, an event's data
+// is JSON-parsed, and an error event (Anthropic), an `error` member or
+// response.failed (OpenAI) is an API error.
+func sdkDecode(grammar, out string) string {
+	var event string
+	var data []string
+	for _, line := range strings.Split(out, "\n") {
+		line = strings.TrimSuffix(line, "\r")
+		if line != "" {
+			if v, ok := strings.CutPrefix(line, "event:"); ok {
+				event = strings.TrimSpace(v)
+			} else if v, ok := strings.CutPrefix(line, "data:"); ok {
+				data = append(data, strings.TrimPrefix(v, " "))
+			}
+			continue
+		}
+		if event == "" && len(data) == 0 {
+			continue
+		}
+		payload := strings.Join(data, "\n")
+		var parsed map[string]any
+		parseErr := json.Unmarshal([]byte(payload), &parsed)
+		switch {
+		case grammar == Messages && event == "error":
+			return "APIError " + payload
+		case grammar == Messages && event != "ping" && parseErr != nil:
+			return "SyntaxError on " + event + ": " + payload
+		case grammar != Messages && payload != "[DONE]" && parseErr != nil:
+			return "SyntaxError: " + payload
+		case grammar != Messages && (parsed["error"] != nil || parsed["type"] == "response.failed"):
+			return "APIError " + payload
+		}
+		event, data = "", nil
+	}
+	return "no error surfaced"
 }

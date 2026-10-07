@@ -7,14 +7,11 @@ package translate
 // non-streaming caller gets the message assembled from that stream.
 //
 // Reasoning: the upstream's summary becomes a thinking block whose signature
-// carries the item's encrypted_content ("caveman:r1:<route>:<blob>"), so the
+// carries the item's encrypted_content ("caveman:r1:<n>:<route>:<blob>"), so the
 // next turn to the same route replays it as a reasoning item and every other
 // host, Anthropic included, gets it stripped (AnthropicNative).
 //
-// DROPPED on the way out, as on the chat path: cache_control,
-// context_management, output_config (its effort becomes reasoning.effort),
-// stop_sequences, temperature and top_p (reasoning models refuse them), and
-// document blocks. Server tools are an error.
+// The request side is messagesResponsesBody (messages_in.go).
 
 import (
 	"bytes"
@@ -31,139 +28,7 @@ var responsesEfforts = []string{"none", "minimal", "low", "medium", "high", "xhi
 // responsesSignature is the thinking signature that carries a Responses
 // reasoning item's encrypted_content back to the route that wrote it.
 func (o Options) responsesSignature(encrypted string) string {
-	return signaturePrefix + "r1:" + o.route() + ":" + encrypted
-}
-
-// messagesResponsesBody is a Messages body translated for a Responses host.
-func messagesResponsesBody(raw []byte, opts Options) (map[string]json.RawMessage, error) {
-	var request anthropicRequest
-	if err := json.Unmarshal(raw, &request); err != nil {
-		return nil, err
-	}
-	input := []any{}
-	for _, message := range request.Messages {
-		items, err := anthropicMessageToResponses(message, opts)
-		if err != nil {
-			return nil, err
-		}
-		input = append(input, items...)
-	}
-	out := map[string]any{"model": opts.Model, "input": input, "store": false, "stream": true}
-	if system := anthropicTextOf(request.System); system != "" {
-		out["instructions"] = system
-	}
-	if request.MaxTokens > 0 {
-		out["max_output_tokens"] = request.MaxTokens
-	}
-	effort := opts.Effort
-	if effort == "" && request.OutputConfig != nil {
-		effort = request.OutputConfig.Effort
-	}
-	if effort == "" && request.Thinking != nil && (request.Thinking.Type == "enabled" || request.Thinking.Type == "adaptive") {
-		effort = "medium"
-	}
-	if effort = clampEffort(effort, openAIEfforts(opts.Model)); effort != "" {
-		reasoning := map[string]any{"effort": effort}
-		if effort != "none" {
-			reasoning["summary"] = "auto"
-			out["include"] = []string{"reasoning.encrypted_content"}
-		}
-		out["reasoning"] = reasoning
-	}
-	tools := make([]map[string]any, 0, len(request.Tools))
-	for _, tool := range request.Tools {
-		if len(tool.InputSchema) == 0 {
-			return nil, fmt.Errorf("tool %q is an Anthropic server tool (type %q) and is only supported on a native Anthropic model", tool.Name, tool.Type)
-		}
-		function := map[string]any{"type": "function", "name": tool.Name, "parameters": tool.InputSchema, "strict": false}
-		if tool.Description != "" {
-			function["description"] = tool.Description
-		}
-		tools = append(tools, function)
-	}
-	if len(tools) > 0 {
-		out["tools"] = tools
-	}
-	if choice := request.ToolChoice; choice != nil {
-		switch choice.Type {
-		case "auto", "none":
-			out["tool_choice"] = choice.Type
-		case "any":
-			out["tool_choice"] = "required"
-		case "tool":
-			out["tool_choice"] = map[string]any{"type": "function", "name": choice.Name}
-		}
-	}
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(mustJSON(out), &fields); err != nil {
-		return nil, err
-	}
-	if opts.ChatGPTLogin {
-		chatgptLoginBody(fields)
-	}
-	dropParams(fields, opts)
-	return fields, nil
-}
-
-// anthropicMessageToResponses is one Anthropic message as Responses input
-// items: tool results become function_call_output items (first, as Anthropic
-// orders them), tool_use blocks function_call items, the route's own thinking
-// a reasoning item, and text and images one message.
-func anthropicMessageToResponses(message anthropicMessage, opts Options) ([]any, error) {
-	assistant := message.Role == "assistant"
-	var items, parts []any
-	flush := func() {
-		if len(parts) > 0 {
-			items = append(items, map[string]any{"type": "message", "role": message.Role, "content": parts})
-			parts = nil
-		}
-	}
-	own := opts.responsesSignature("")
-	for _, block := range anthropicBlocksOf(message.Content) {
-		switch block.Type {
-		case "text":
-			kind := "input_text"
-			if assistant {
-				kind = "output_text"
-			}
-			parts = append(parts, map[string]any{"type": kind, "text": block.Text})
-		case "image":
-			url, err := imageURL(block)
-			if err != nil {
-				return nil, err
-			}
-			parts = append(parts, map[string]any{"type": "input_image", "image_url": url})
-		case "tool_use":
-			flush()
-			arguments := string(block.Input)
-			if arguments == "" {
-				arguments = "{}"
-			}
-			items = append(items, map[string]any{"type": "function_call", "call_id": safeCallID(block.ID), "name": block.Name, "arguments": arguments})
-		case "tool_result":
-			flush()
-			output := anthropicTextOf(block.Content)
-			if output == "" {
-				output = strings.TrimSpace(string(block.Content))
-			}
-			if block.IsError {
-				output = "Error: " + output
-			}
-			items = append(items, map[string]any{"type": "function_call_output", "call_id": safeCallID(block.ToolUseID), "output": output})
-		case "thinking":
-			// The route's own reasoning goes back to it; nothing else does.
-			if encrypted, ok := strings.CutPrefix(block.Signature, own); ok && assistant && encrypted != "" {
-				flush()
-				summary := []any{}
-				if block.Thinking != "" {
-					summary = append(summary, map[string]any{"type": "summary_text", "text": block.Thinking})
-				}
-				items = append(items, map[string]any{"type": "reasoning", "summary": summary, "encrypted_content": encrypted})
-			}
-		}
-	}
-	flush()
-	return items, nil
+	return signaturePrefix + "r1:" + routeTag(o.route()) + encrypted
 }
 
 // responsesEvent is the union of the Responses stream events read here.
@@ -213,6 +78,7 @@ type responsesToMessages struct {
 	output   []responsesOutputItem
 	usage    chatUsage
 	stop     string
+	refused  bool // the answer carried a refusal: its text went as text, the stop is refusal
 }
 
 func (t *responsesToMessages) consume(line []byte) {
@@ -223,9 +89,6 @@ func (t *responsesToMessages) consume(line []byte) {
 	var event responsesEvent
 	if json.Unmarshal(data, &event) != nil {
 		return
-	}
-	if event.Response != nil && event.Response.ID != "" && t.m.id == "msg_stream" {
-		t.m.id = "msg_" + event.Response.ID
 	}
 	switch event.Type {
 	case "response.created", "response.in_progress":
@@ -240,10 +103,11 @@ func (t *responsesToMessages) consume(line []byte) {
 			}{Name: item.Name}, Index: len(t.args)})
 			t.args[item.ID] = false
 		}
-	case "response.output_text.delta":
+	case "response.output_text.delta", "response.refusal.delta":
 		t.m.start()
 		t.m.openBlock("text", map[string]any{"type": "text", "text": ""})
 		t.m.delta(map[string]any{"type": "text_delta", "text": event.Delta})
+		t.refused = t.refused || event.Type == "response.refusal.delta"
 	case "response.reasoning_summary_text.delta":
 		t.m.start()
 		t.m.signature = t.opts.responsesSignature("")
@@ -282,6 +146,15 @@ func (t *responsesToMessages) consume(line []byte) {
 			}
 			t.m.closeBlock()
 		case "message":
+			for _, part := range item.Content {
+				if part.Type == "refusal" && !t.refused && part.Refusal != "" {
+					// A refusal that came whole, without deltas.
+					t.m.start()
+					t.m.openBlock("text", map[string]any{"type": "text", "text": ""})
+					t.m.delta(map[string]any{"type": "text_delta", "text": part.Refusal})
+					t.refused = true
+				}
+			}
 			if t.m.open == "text" {
 				t.m.closeBlock()
 			}
@@ -301,6 +174,9 @@ func (t *responsesToMessages) consume(line []byte) {
 					t.stop = "refusal"
 				}
 			}
+			if t.refused || outputRefuses(event.Response.Output) {
+				t.stop = "refusal"
+			}
 			if usage := event.Response.Usage; usage != nil {
 				t.usage = chatUsage{PromptTokens: usage.InputTokens, CompletionTokens: usage.OutputTokens, PromptTokensDetails: &promptTokensDetails{
 					CachedTokens: usage.InputTokensDetails.CachedTokens, CacheWriteTokens: usage.InputTokensDetails.CacheWriteTokens,
@@ -309,6 +185,9 @@ func (t *responsesToMessages) consume(line []byte) {
 			if len(t.output) == 0 && len(event.Response.Output) > 0 {
 				_ = json.Unmarshal(event.Response.Output, &t.output)
 			}
+		}
+		if t.refused {
+			t.stop = "refusal"
 		}
 		t.m.stop, t.m.usage, t.m.finished = t.stop, t.usage, true
 	case "response.failed", "error":
@@ -342,9 +221,9 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 	}
 	t := &responsesToMessages{opts: opts, args: map[string]bool{}, m: &messageStream{
 		out: out, model: opts.shown(), signature: opts.responsesSignature(""), estimateFrom: opts.estimateFrom,
-		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: "msg_stream",
+		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: responsesItemID("msg"),
 	}}
-	lines, cut, stop := sseLines(upstream)
+	lines, cut, stop, _ := sseLines(upstream)
 	defer stop()
 	for line := range lines {
 		if line == nil {
@@ -354,19 +233,22 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 			}
 			continue
 		}
-		t.consume(line)
+		if t.consume(line); t.m.errored || t.finished {
+			break // the answer is over: an upstream that lingers holds neither it nor the fallback
+		}
 	}
 	usage := anthropicUsageFromChat(t.usage).usage()
 	var truncated error
-	switch err := cut(); {
-	case err != nil:
+	if t.m.errored {
+		truncated = ErrUpstreamFailed // before content Serve makes it ErrNotServed
+	} else if t.finished {
+		t.m.finish() // past response.completed a reset changes nothing
+	} else if err := cut(); err != nil {
 		t.m.fail("api_error", "upstream stream ended early: "+err.Error())
 		truncated = fmt.Errorf("%w: %w", errStreamTruncated, err)
-	case !t.finished && !t.m.errored:
+	} else {
 		t.m.fail("api_error", "upstream stream ended without response.completed")
 		truncated = fmt.Errorf("%w: no response.completed", errStreamTruncated)
-	default:
-		t.m.finish()
 	}
 	if stream {
 		return usage, truncated
@@ -403,8 +285,14 @@ func (t *responsesToMessages) assembled() []byte {
 			}
 		case "message":
 			for _, part := range item.Content {
-				if part.Type == "output_text" && part.Text != "" {
-					blocks = append(blocks, map[string]any{"type": "text", "text": part.Text})
+				text := part.Text
+				if part.Type == "refusal" {
+					text = part.Refusal
+				} else if part.Type != "output_text" {
+					continue
+				}
+				if text != "" {
+					blocks = append(blocks, map[string]any{"type": "text", "text": text})
 				}
 			}
 		case "function_call":
@@ -426,3 +314,8 @@ type discardWriter struct {
 func (d discardWriter) Header() http.Header         { return d.header }
 func (d discardWriter) Write(p []byte) (int, error) { return d.w.Write(p) }
 func (d discardWriter) WriteHeader(int)             {}
+
+// outputRefuses reports a response output holding a refusal part.
+func outputRefuses(output json.RawMessage) bool {
+	return bytes.Contains(output, []byte(`"refusal"`)) && bytes.Contains(output, []byte(`"type":"refusal"`))
+}

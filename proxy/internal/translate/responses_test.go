@@ -193,7 +193,7 @@ func TestResponsesMessagesHostNamespace(t *testing.T) {
 	recorder, _, _ := serve(t, reply, stream, false)
 	item := itemsOfType(codexAccept(t, recorder.Body.String()), "reasoning")[0]
 	raw, _ := base64.StdEncoding.DecodeString(item["encrypted_content"].(string))
-	if !strings.Contains(string(raw), `"signature":"caveman:kimi:KSIG"`) {
+	if !strings.Contains(string(raw), `"signature":"caveman:4:kimi:KSIG"`) {
 		t.Fatalf("envelope = %s", raw)
 	}
 	input := encode([]any{map[string]any{"type": "message", "role": "user", "content": "go"}, item, map[string]any{"type": "message", "role": "user", "content": "more"}})
