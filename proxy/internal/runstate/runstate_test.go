@@ -213,6 +213,30 @@ func TestProcessProbes(t *testing.T) {
 	}
 }
 
+// A proxy built on Termux carries GOOS=android and must still resolve its own
+// executable identity through /proc; when this probe errors, validate() refuses
+// the listener and `caveman wrap` reports the proxy it just started as a
+// foreign process. The parameter keeps both branches reachable from one host.
+func TestProcessExecutableIdentityCoversAndroidAndFailsClosedElsewhere(t *testing.T) {
+	if runtime.GOOS == "linux" || runtime.GOOS == "android" {
+		var first string
+		for _, goos := range []string{"linux", "android"} {
+			exe, err := processExecutableFor(goos, os.Getpid())
+			if err != nil || strings.TrimSpace(exe) == "" {
+				t.Fatalf("processExecutableFor(%q) = %q, %v", goos, exe, err)
+			}
+			if first == "" {
+				first = exe
+			} else if exe != first {
+				t.Fatalf("android and linux identity disagree: %q vs %q", exe, first)
+			}
+		}
+	}
+	if _, err := processExecutableFor("plan9", os.Getpid()); err == nil {
+		t.Fatal("an unsupported platform must fail closed instead of certifying the listener")
+	}
+}
+
 func TestInstanceProbeRequiresExactLiveTokenWithoutSendingIt(t *testing.T) {
 	const token = "private-run-state-generation-token"
 	for _, tt := range []struct {
