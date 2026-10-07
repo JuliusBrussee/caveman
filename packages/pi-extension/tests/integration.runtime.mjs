@@ -138,17 +138,13 @@ function runPi(env, args) {
   });
 }
 
-// Drives the BUILT extension directly (no pi CLI needed): the tool_result
-// handler used to shrink every tool including caveman_retrieve's own output.
-// The proxy files that output as an ObjectCommandResult and masks anything past
-// ~448 bytes, so the recovered original came back to the model as a fresh ccr://
-// mask and recovery looped instead of terminating — and registering the tool
-// disables the proxy's server-side retrieve loop, so nothing else strips it.
-test("fresh tool-output handles recover exactly; caveman_retrieve output is never shrunk", async () => {
+// A session-scoped harness over the BUILT extension (no pi CLI needed).
+// `activeTools` models the set Pi declares to the model for this session; the
+// other two shapes model a host that cannot answer the question at all.
+async function shrinkHarness({ activeTools = ["read_file", "caveman_retrieve"], omitGetActiveTools = false, activeToolsThrows = false } = {}) {
   const fx = fixture(0, { runState: false });
   const hook = join(fx.root, "publish.mjs");
   const store = join(fx.root, "originals.json");
-  const original = "exact original bytes\r\nline two éø bytes\0\n";
   writeFileSync(hook, `
 import { createHash } from "node:crypto";
 import { writeFileSync } from "node:fs";
@@ -173,29 +169,91 @@ process.stdin.on("end", () => {
   Object.assign(process.env, vars);
   const handlers = new Map();
   let retrieveTool;
+  const pi = { registerTool: (tool) => { retrieveTool = tool; }, on: (name, fn) => handlers.set(name, fn) };
+  if (activeToolsThrows) pi.getActiveTools = () => { throw new Error("host cannot answer"); };
+  else if (!omitGetActiveTools) pi.getActiveTools = () => activeTools;
+  const { default: factory } = await import(pathToFileURL(extension).href);
+  factory(pi);
+  // Hosts deliver tool results only inside a started session.
+  await handlers.get("session_start")?.({}, { hasUI: false, ui: { notify() {} }, sessionManager: { getSessionId: () => "test" } });
+  return {
+    fx,
+    store,
+    handlers,
+    get retrieveTool() { return retrieveTool; },
+    async cleanup() {
+      await handlers.get("session_shutdown")?.();
+      for (const [key, value] of Object.entries(prior)) {
+        if (value === undefined) delete process.env[key]; else process.env[key] = value;
+      }
+      fx.cleanup();
+    },
+  };
+}
+
+// The tool_result handler used to shrink every tool including caveman_retrieve's
+// own output. The proxy files that output as an ObjectCommandResult and masks
+// anything past ~448 bytes, so the recovered original came back to the model as a
+// fresh ccr:// mask and recovery looped instead of terminating — and registering
+// the tool disables the proxy's server-side retrieve loop, so nothing else strips it.
+test("fresh tool-output handles recover exactly; caveman_retrieve output is never shrunk", async () => {
+  const original = "exact original bytes\r\nline two éø bytes\0\n";
+  const h = await shrinkHarness();
   try {
-    const { default: factory } = await import(pathToFileURL(extension).href);
-    factory({ registerTool: (tool) => { retrieveTool = tool; }, on: (name, fn) => handlers.set(name, fn) });
-    // Hosts deliver tool results only inside a started session.
-    await handlers.get("session_start")?.({}, { hasUI: false, ui: { notify() {} }, sessionManager: { getSessionId: () => "test" } });
     const image = { type: "image", data: "cGl4ZWxz", mimeType: "image/png" };
     const content = [{ type: "text", text: original.slice(0, 8) }, image, { type: "text", text: original.slice(8) }];
-    const shrunk = await handlers.get("tool_result")({ toolName: "read_file", input: {}, isError: false, content });
-    const handle = Object.keys(JSON.parse(readFileSync(store, "utf8")))[0];
+    const shrunk = await h.handlers.get("tool_result")({ toolName: "read_file", input: {}, isError: false, content });
+    const handle = Object.keys(JSON.parse(readFileSync(h.store, "utf8")))[0];
     assert.deepEqual(shrunk?.content, [{ type: "text", text: `SHRUNK full: ccr://${handle}` }, image]);
     assert.equal(shrunk.content[1], image, "nontext content must survive unchanged");
 
-    const recovered = await retrieveTool.execute("recover", { recovery_handle: `ccr://${handle}` }, undefined);
+    const recovered = await h.retrieveTool.execute("recover", { recovery_handle: `ccr://${handle}` }, undefined);
     assert.deepEqual(recovered.content, [{ type: "text", text: original }], "verification must not consume model recovery");
-    assert.equal(await handlers.get("tool_result")({ toolName: "caveman_retrieve", input: {}, isError: false, content: recovered.content }), undefined);
+    assert.equal(await h.handlers.get("tool_result")({ toolName: "caveman_retrieve", input: {}, isError: false, content: recovered.content }), undefined);
   } finally {
-    await handlers.get("session_shutdown")?.();
-    for (const [key, value] of Object.entries(prior)) {
-      if (value === undefined) delete process.env[key]; else process.env[key] = value;
-    }
-    fx.cleanup();
+    await h.cleanup();
   }
 });
+
+// #1211: a shrink hands the model a ccr:// handle plus an instruction to call
+// caveman_retrieve. A session whose active tool set omits that tool — `pi --tools
+// read,bash`, or a subagent with its own `tools:` list — cannot follow that
+// instruction, so the shrink destroys the output instead of compressing it. The
+// reporter's documentation-review subagent saw every read/bash result as an
+// unrecoverable placeholder.
+test("#1211: a session whose active tools omit caveman_retrieve is never shrunk", async () => {
+  const h = await shrinkHarness({ activeTools: ["read", "bash"] });
+  try {
+    const content = [{ type: "text", text: "x".repeat(4096) }];
+    assert.equal(
+      await h.handlers.get("tool_result")({ toolName: "bash", input: {}, isError: false, content }),
+      undefined,
+      "a session that cannot call caveman_retrieve must keep its original tool output",
+    );
+    // The gate runs before PostToolUse, so no handle is published either.
+    assert.equal(existsSync(h.store), false, "no recovery handle may be published for an unrecoverable session");
+  } finally {
+    await h.cleanup();
+  }
+});
+
+// Fail CLOSED when the host cannot answer: skipping the shrink costs this turn's
+// compression, while shrinking without recovery loses the output for good.
+for (const [label, options] of [
+  ["a host that does not implement getActiveTools", { omitGetActiveTools: true }],
+  ["a host whose getActiveTools throws", { activeToolsThrows: true }],
+]) {
+  test(`#1211: ${label} is treated as unrecoverable`, async () => {
+    const h = await shrinkHarness(options);
+    try {
+      const content = [{ type: "text", text: "y".repeat(4096) }];
+      assert.equal(await h.handlers.get("tool_result")({ toolName: "bash", input: {}, isError: false, content }), undefined);
+      assert.equal(existsSync(h.store), false, "an unanswerable active-tool set must not publish a handle");
+    } finally {
+      await h.cleanup();
+    }
+  });
+}
 
 test("open gate: first request routes through /w/pi with Core in the system prompt", { skip: !havePi && "pi devDependency missing" }, async () => {
   const { server, requests, port } = await startStub();

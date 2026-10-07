@@ -260,8 +260,38 @@ export default function (pi: ExtensionAPI) {
   // ObjectCommandResult and masks anything past ~448 bytes), so recovery loops
   // instead of terminating — and registering this tool disabled the proxy's
   // server-side retrieve loop, so nothing else would strip it.
+  // A shrink hands the model a ccr:// handle plus an instruction to call
+  // caveman_retrieve, so it is only ever compression when this session can
+  // actually make that call. `pi --tools read,bash` and a subagent with its own
+  // `tools:` list both replace the active set, dropping caveman_retrieve out of
+  // it — and the model then sees a placeholder it has no tool to redeem, which
+  // loses the original output rather than compressing it (issue #1211).
+  //
+  // This is the same rule the proxy enforces for every other host in
+  // mcpRecoveryAvailable ("compression must never outrun recovery"); this
+  // extension is the one path that shrinks in-process, so the proxy's body
+  // inspection never sees these results and it has to check for itself. The
+  // session_start gate above is not enough: it proves the MACHINE published MCP
+  // recovery, not that THIS session declares the tool to the model.
+  //
+  // Checked per result, not cached: setActiveTools() can change the set mid-
+  // session. caveman_retrieve registers with the default `direct` exposure,
+  // which Pi declares to the model and makes callable only WHILE ACTIVE, so
+  // active-set membership is exactly callability for this tool (a codemode or
+  // deferred tool would stay callable while inactive; this one is neither).
+  //
+  // A host that cannot answer fails CLOSED. Skipping a shrink costs this turn's
+  // compression; shrinking without recovery destroys the user's tool output.
+  const recoveryCallable = (): boolean => {
+    try {
+      return typeof pi.getActiveTools === "function" && pi.getActiveTools().includes(RECOVERY_TOOL);
+    } catch {
+      return false;
+    }
+  };
+
   pi.on("tool_result", GUARD_tool_result((event: Parameters<typeof shrinkToolResult>[2]) =>
-    event.toolName === RECOVERY_TOOL ? undefined : shrinkToolResult(bridge, sessionId, event, recovery)));
+    event.toolName === RECOVERY_TOOL || !recoveryCallable() ? undefined : shrinkToolResult(bridge, sessionId, event, recovery)));
 
   pi.on("session_before_compact", GUARD_session_before_compact(() => { void bridge.call("PreCompact", { session_id: sessionId }); }));
 

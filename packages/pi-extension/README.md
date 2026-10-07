@@ -30,7 +30,11 @@ One extension, four jobs:
   shortening a tool result, the extension checks that its advertised handle
   resolves to the original bytes without consuming the model's later recovery.
   Missing, mismatched, or unverifiable handles leave the original output intact.
-  Older companions without verification support keep tool results unchanged.
+  Older companions without verification support keep tool results unchanged. A
+  session that cannot call `caveman_retrieve` leaves results unchanged as well —
+  `pi --tools …` without it, or a subagent with its own `tools:` list, replaces
+  the active tool set, and a handle the model cannot redeem would lose the
+  output instead of compressing it.
 - **Native lifecycle** — bridges Pi session/turn/tool events into the Caveman
   native runtime (Core injection, per-turn context, tool-output shrinking).
 - **Honest fallback** — routing activates only after the recovery gate holds
