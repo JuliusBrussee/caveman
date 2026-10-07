@@ -232,3 +232,20 @@ func TestContextTokensUseTheParentsTokensPerByte(t *testing.T) {
 		t.Errorf("child: context tokens %d, want %d", got, want)
 	}
 }
+
+// A child's cache affinity is its parent's: siblings and forked children
+// land on the machine (or OpenRouter provider) that holds the family's prefix.
+func TestChildrenShareTheirParentsAffinity(t *testing.T) {
+	c := newPoolCase(t, localTarget("api.openai.com"), "")
+	poolSend(t, c.srv, poolBody)
+	parent, _ := c.stub.last("/chat/completions")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(poolBody))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	req.Header.Set("x-claude-code-agent-id", "child-1")
+	c.srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	child, _ := c.stub.last("/chat/completions")
+	if parent.Header.Get("x-session-affinity") == "" || child.Header.Get("x-session-affinity") != parent.Header.Get("x-session-affinity") {
+		t.Errorf("affinity: parent %q, child %q", parent.Header.Get("x-session-affinity"), child.Header.Get("x-session-affinity"))
+	}
+}

@@ -464,7 +464,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		if !run.off && meta.Provider == "openai" {
-			transform.Body = withCacheKey(transform.Body, run.key) // route_cache.go
+			transform.Body = withCacheKey(transform.Body, run.family()) // route_cache.go
 		}
 		evidence.route = answer
 	} else if run != nil {

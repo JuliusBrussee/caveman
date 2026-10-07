@@ -103,7 +103,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 			pinned = s.routes.pinned(run.key, target.PoolID)
 			payload = withProviderPin(payload, pinned)
 		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages:
-			payload = withCacheKey(payload, run.key)
+			payload = withCacheKey(payload, run.family())
 		}
 	}
 	if run != nil {
@@ -138,7 +138,7 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		header.Set("x-caveman-effort", effort) // the gateway applies it in the target's own shape
 	}
 	if target.Affinity != "" && run != nil && run.key != "" {
-		header.Set(target.Affinity, affinityKey(run.key))
+		header.Set(target.Affinity, affinityKey(run.family()))
 	}
 	resp, err := s.doUpstream(r.Context(), func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.URL, bytes.NewReader(payload))

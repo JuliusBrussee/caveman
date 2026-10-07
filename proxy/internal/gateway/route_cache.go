@@ -17,8 +17,9 @@ import (
 // Cache mechanics the route stage applies on its own: they keep a provider
 // cache the session already paid for and decide nothing about models.
 //   - prompt_cache_key: OpenAI routes a prefix to the machine holding it by
-//     this key; a request without one gets the session's (hashed).
-//   - OpenRouter: x-session-id (RouteTarget.Affinity) makes it sticky; once a
+//     this key; a request without one gets its session family's (hashed).
+//   - OpenRouter: x-session-id (RouteTarget.Affinity, the family's) makes it
+//     sticky; once a
 //     session's pool entry is warm on one of OpenRouter's providers it is
 //     pinned there (provider.order + allow_fallbacks false), so an idle gap or
 //     a provider error never spreads it to a cold one. A pinned request that
@@ -27,6 +28,17 @@ import (
 //     rest wait for its first byte (or fanoutWait), then read its cache write.
 //   - context tokens: the session's own bytes-to-tokens ratio, from the
 //     provider's count, a child taking its parent's.
+
+// family is the session a request's cache affinity keys on: its parent's
+// for a child (siblings share their tools and system prompt, a forked child
+// its parent's whole history, so all of them belong on one provider machine),
+// else its own.
+func (run *routeRun) family() string {
+	if run.parent != "" {
+		return run.parent
+	}
+	return run.key
+}
 
 // withCacheKey sets prompt_cache_key to the session's key when the body has
 // none (the harness's own is never replaced).
