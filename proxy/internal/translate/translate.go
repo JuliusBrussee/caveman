@@ -622,8 +622,9 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	upstreamFailed := false // with a failure of its own
 	lines, cut, stop := sseLines(body)
 	defer stop()
-	boundary := true // the upstream's last line ended an event
-	var lastLine []byte
+	boundary := true  // the upstream's last line ended an event
+	openData := false // a data line came since the last blank line
+	var tail []byte   // the last line, when it ended without a newline
 	for line := range lines {
 		if line == nil {
 			heartbeat(w) // committing mid-event is safe: the rest follows
@@ -638,9 +639,17 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			}
 			continue
 		}
-		boundary, lastLine = len(bytes.TrimRight(line, "\r\n")) == 0, line
+		if !bytes.HasSuffix(line, []byte("\n")) {
+			tail = line // only the last line can end without one: held until the end is known
+			continue
+		}
+		boundary = len(bytes.TrimRight(line, "\r\n")) == 0
+		if boundary {
+			openData = false
+		}
 		commit := false
 		if data, ok := sseData(line); ok {
+			openData = true
 			failed := bytes.Contains(data, []byte(`"type":"error"`)) || bytes.Contains(data, []byte(`"error":{`)) || bytes.Contains(data, []byte(`"response.failed"`))
 			if failed && !gated(w) {
 				return usage, ErrNotServed // an error before any content: nothing reached the caller
@@ -677,6 +686,14 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		out.flush()
 	}
 	err := cut()
+	if err == nil && tail != nil {
+		// A clean end without a final newline: the line is whole.
+		if data, ok := sseData(tail); ok {
+			terminal = terminal || relayTerminal(r.from, data)
+		}
+		_, _ = w.Write(tail)
+		out.flush()
+	}
 	if err == nil && !terminal {
 		if !gated(w) {
 			return usage, ErrNotServed
@@ -690,9 +707,13 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		return usage, nil
 	}
 	message := "upstream stream ended early: " + err.Error()
-	if !boundary {
-		// The cut came inside an event: end it so the error is an event of its own.
-		_, _ = w.Write([]byte(endEvent(lastLine)))
+	if openData {
+		// The cut came after a data line of an unfinished event: end the event
+		// (its data is whole) so the error is an event of its own. A line cut
+		// short was held back and is not sent: a decoder would dispatch the
+		// fragment. After an event line alone, the error's own event line
+		// replaces the name.
+		_, _ = w.Write([]byte("\n"))
 	}
 	switch r.from {
 	case Messages:
@@ -704,15 +725,6 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		newResponsesStream(w, shown, true).fail(streamCut)
 	}
 	return usage, fmt.Errorf("%w: %w", errStreamTruncated, err)
-}
-
-// endEvent is what ends an SSE event whose last line was line: a blank line,
-// after the line's own newline when the cut came mid-line.
-func endEvent(line []byte) string {
-	if bytes.HasSuffix(line, []byte("\n")) {
-		return "\n"
-	}
-	return "\n\n"
 }
 
 // gated reports content already sent through w's gate (true for a plain writer).
