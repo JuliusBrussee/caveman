@@ -2,8 +2,12 @@ package translate
 
 import (
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 // A stream cut mid tool call never closes that call: only the error goes out.
@@ -92,5 +96,107 @@ func TestResponsesContentFilterIsARefusal(t *testing.T) {
 	recorder, _, _ := serve(t, reply, upstreamResponses(`{"type":"response.output_text.delta","delta":"a"}`, `{"type":"response.incomplete","response":{"id":"r","incomplete_details":{"reason":"content_filter"}}}`), false)
 	if !strings.Contains(recorder.Body.String(), `"stop_reason":"refusal"`) {
 		t.Fatalf("body = %s", recorder.Body.String())
+	}
+}
+
+// A silent upstream stays behind the gate for gateHold only: after it the
+// next silence tick commits the headers and pings, and a failure after that
+// reaches the caller instead of falling back.
+func TestGateCommitsOnSilenceAfterTheHold(t *testing.T) {
+	defer func(ping, hold time.Duration) { pingInterval, gateHold = ping, hold }(pingInterval, gateHold)
+	pingInterval = 5 * time.Millisecond
+	slow := func(first, rest string) *http.Response {
+		reader, writer := io.Pipe()
+		go func() {
+			_, _ = io.WriteString(writer, first)
+			time.Sleep(60 * time.Millisecond)
+			_, _ = io.WriteString(writer, rest)
+			_ = writer.Close()
+		}()
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(reader)}
+	}
+	roleOnly := sse(`{"id":"c","choices":[{"delta":{"role":"assistant","content":""}}]}`)
+	failure := sse(`{"error":{"type":"overloaded_error","message":"busy"}}`)
+	for _, tc := range []struct {
+		name  string
+		reply func() *Reply
+		first string
+		want  string
+	}{
+		{"messages from chat", func() *Reply {
+			_, r := mustRequest(t, Messages, Chat, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "g"})
+			return r
+		}, roleOnly, "event: ping\n"},
+		{"responses relay", func() *Reply {
+			return Relay(Responses, []byte(`{"stream":true}`), "m")
+		}, upstreamResponses(`{"type":"response.created","response":{"id":"r"}}`), ": keepalive\n\n"},
+	} {
+		gateHold = time.Hour
+		recorder := httptest.NewRecorder()
+		if _, err := tc.reply().Serve(recorder, slow(tc.first, failure)); !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+			t.Fatalf("%s within the hold: err %v body %q", tc.name, err, recorder.Body.String())
+		}
+		gateHold = time.Millisecond
+		recorder = httptest.NewRecorder()
+		_, err := tc.reply().Serve(recorder, slow(tc.first, failure))
+		if errors.Is(err, ErrNotServed) || !strings.Contains(recorder.Body.String(), tc.want) || !strings.Contains(recorder.Body.String(), "busy") {
+			t.Fatalf("%s after the hold: err %v body %q", tc.name, err, recorder.Body.String())
+		}
+	}
+}
+
+// A chat chunk that only opens the message is not content: a failure after
+// it still falls back.
+func TestChatRoleChunkIsNotContent(t *testing.T) {
+	stream := sse(`{"id":"c","choices":[{"delta":{"role":"assistant","content":""}}]}`, `{"error":{"type":"overloaded_error","message":"busy"}}`)
+	_, chat := mustRequest(t, Chat, Chat, `{"model":"m","stream":true,"messages":[]}`, Options{Model: "g"})
+	for name, reply := range map[string]*Reply{"chat to chat": chat, "relay": Relay(Chat, []byte(`{"stream":true}`), "m")} {
+		recorder, _, err := serve(t, reply, stream, false)
+		if !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+			t.Errorf("%s: err %v body %q", name, err, recorder.Body.String())
+		}
+	}
+}
+
+// A relayed response.failed after content ends the answer: the caller gets
+// it once, with nothing appended.
+func TestRelayedFailureIsTerminal(t *testing.T) {
+	stream := upstreamResponses(`{"type":"response.created","response":{"id":"r"}}`, `{"type":"response.output_text.delta","delta":"a"}`,
+		`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"no"}}}`)
+	recorder, _, err := serve(t, Relay(Responses, []byte(`{"stream":true}`), "m"), stream, false)
+	if !errors.Is(err, errUpstreamFailed) || strings.Count(recorder.Body.String(), "response.failed") != 1 || strings.Contains(recorder.Body.String(), "ended early") {
+		t.Fatalf("err %v body %s", err, recorder.Body.String())
+	}
+}
+
+// The answered effort goes out in the upstream's own shape on every
+// translator direction, clamped to what that shape takes; a caller that
+// turned thinking off does not change the clamping.
+func TestAnsweredEffortOnEveryDirection(t *testing.T) {
+	messages := `{"model":"m","max_tokens":4000,"messages":[{"role":"user","content":"hi"}]}`
+	messagesOff := `{"model":"m","max_tokens":4000,"thinking":{"type":"disabled"},"messages":[{"role":"user","content":"hi"}]}`
+	chat := `{"model":"m","messages":[{"role":"user","content":"hi"}]}`
+	for _, tc := range []struct {
+		name, from, to, body, effort, model string
+		field, want                         string
+	}{
+		{"messages to chat", Messages, Chat, messages, "low", "g", "reasoning_effort", `"low"`},
+		{"messages to chat, thinking off", Messages, Chat, messagesOff, "low", "g", "reasoning_effort", `"low"`},
+		{"messages to responses", Messages, Responses, messages, "max", "g", "reasoning", `{"effort":"xhigh","summary":"auto"}`},
+		{"messages to responses, thinking off", Messages, Responses, messagesOff, "max", "g", "reasoning", `{"effort":"xhigh","summary":"auto"}`},
+		{"messages to messages", Messages, Messages, messages, "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
+		{"messages to messages, thinking off", Messages, Messages, messagesOff, "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
+		{"responses to messages", Responses, Messages, codexBody("m", "high", "", userHello), "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
+		{"responses to chat", Responses, Chat, codexBody("m", "high", "", userHello), "low", "g", "reasoning_effort", `"low"`},
+		{"responses to responses", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6-sol", "reasoning", `{"effort":"xhigh","summary":"auto"}`},
+		{"chat to chat", Chat, Chat, chat, "low", "g", "reasoning_effort", `"low"`},
+		{"messages to chat at max", Messages, Chat, messages, "max", "g", "reasoning_effort", `"xhigh"`},
+		{"chat to chat at max", Chat, Chat, chat, "max", "g", "reasoning_effort", `"xhigh"`},
+		{"responses to chat at max", Responses, Chat, codexBody("m", "high", "", userHello), "max", "g", "reasoning_effort", `"xhigh"`},
+	} {
+		sent, _ := mustRequest(t, tc.from, tc.to, tc.body, Options{Model: tc.model, Effort: tc.effort, Route: "fireworks"})
+		if got := encode(sent[tc.field]); got != tc.want {
+			t.Errorf("%s: %s = %s, want %s (body %s)", tc.name, tc.field, got, tc.want, encode(sent))
+		}
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
@@ -398,7 +399,7 @@ func chatgptLoginBody(body map[string]json.RawMessage) {
 // fails, or ends, before that returns ErrNotServed with w untouched, so the
 // caller can still run the request elsewhere.
 func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, error) {
-	g := &gate{w: w, header: http.Header{}}
+	g := &gate{w: w, header: http.Header{}, started: time.Now()}
 	usage, err := r.serve(g, upstream)
 	if !g.open {
 		return usage, ErrNotServed
@@ -412,11 +413,25 @@ var ErrNotServed = errors.New("translate: upstream failed before any content")
 
 // gate holds an answer back until it carries content (commit).
 type gate struct {
-	w      http.ResponseWriter
-	header http.Header
-	status int
-	buf    bytes.Buffer
-	open   bool
+	w       http.ResponseWriter
+	header  http.Header
+	status  int
+	buf     bytes.Buffer
+	open    bool
+	started time.Time
+}
+
+// gateHold is how long a silent upstream keeps the answer behind the gate.
+// After it, the next silence tick commits the headers and pings start: the
+// agent's client must not time out waiting for headers (Node's undici gives
+// up at 300 s), and that liveness costs the fallback.
+var gateHold = 10 * time.Second
+
+// heartbeat is called on each silence tick, before a ping or keepalive.
+func heartbeat(w io.Writer) {
+	if g, ok := w.(*gate); ok && !g.open && time.Since(g.started) >= gateHold {
+		g.commit()
+	}
 }
 
 func (g *gate) Header() http.Header {
@@ -540,11 +555,15 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	out := newSSEWriter(w)
 	var messages anthropicUsage
 	var usage Usage
-	terminal := false // the upstream ended the answer itself
+	terminal := false       // the upstream ended the answer itself
+	upstreamFailed := false // with a failure of its own
 	lines, cut := sseLines(body)
 	for line := range lines {
 		if line == nil {
-			if r.from == Responses { // only Codex's parser takes a comment for a keepalive here
+			heartbeat(w)
+			if r.from == Messages {
+				out.event("ping", map[string]any{"type": "ping"})
+			} else { // an SSE comment: Codex's parser takes it for a keepalive, chat clients skip it
 				_, _ = w.Write([]byte(": keepalive\n\n"))
 				out.flush()
 			}
@@ -556,9 +575,11 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			if failed && !gated(w) {
 				return usage, ErrNotServed // an error before any content: nothing reached the caller
 			}
-			terminal = terminal || relayTerminal(r.from, data)
-			commit = !failed && !bytes.Contains(data, []byte(`"message_start"`)) && !bytes.Contains(data, []byte(`"response.created"`)) &&
-				!bytes.Contains(data, []byte(`"response.in_progress"`)) && !bytes.Contains(data, []byte(`"type":"ping"`))
+			// The upstream's own failure after content ends the stream: it is
+			// relayed, and no second failure is added.
+			upstreamFailed = upstreamFailed || failed
+			terminal = terminal || failed || relayTerminal(r.from, data)
+			commit = !failed && relayContent(r.from, data)
 			if edited := r.tagReasoning(withModel(data, shown)); !bytes.Equal(edited, data) {
 				line = append(append([]byte("data: "), edited...), '\n')
 			}
@@ -592,6 +613,9 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		}
 		err = errors.New("no terminal event")
 	}
+	if err == nil && upstreamFailed {
+		return usage, errUpstreamFailed
+	}
 	if err == nil {
 		return usage, nil
 	}
@@ -612,6 +636,46 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 func gated(w http.ResponseWriter) bool {
 	g, ok := w.(*gate)
 	return !ok || g.open
+}
+
+// errUpstreamFailed: the upstream sent a failure of its own after content;
+// the caller got it as sent.
+var errUpstreamFailed = errors.New("upstream failed mid-answer")
+
+// relayContent reports a relayed event that carries content: not a start
+// event or a ping, and for chat not a chunk that only opens the message (a
+// role with empty content).
+func relayContent(grammar string, data []byte) bool {
+	for _, held := range []string{`"message_start"`, `"response.created"`, `"response.in_progress"`, `"type":"ping"`} {
+		if bytes.Contains(data, []byte(held)) {
+			return false
+		}
+	}
+	if grammar != Chat || bytes.Equal(data, []byte("[DONE]")) {
+		return true
+	}
+	var chunk chatStreamChunk
+	if json.Unmarshal(data, &chunk) != nil {
+		return false
+	}
+	for _, choice := range chunk.Choices {
+		delta := choice.Delta
+		if delta.Content != "" || delta.Reasoning != "" || delta.ReasoningContent != "" || len(delta.ToolCalls) > 0 || choice.FinishReason != "" {
+			return true
+		}
+	}
+	return false
+}
+
+// Relay is the Reply for an upstream that speaks the caller's grammar and was
+// sent the caller's own bytes (the Caveman Cloud gateway): its answer goes
+// through the same gate and naming as any other, shown as the model.
+func Relay(grammar string, body []byte, shown string) *Reply {
+	var probe struct {
+		Stream bool `json:"stream"`
+	}
+	_ = json.Unmarshal(body, &probe)
+	return &Reply{from: grammar, to: grammar, opts: Options{Shown: shown}, stream: probe.Stream, upstreamStream: probe.Stream}
 }
 
 // relayTerminal reports the event that ends an answer in grammar.

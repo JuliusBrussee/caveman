@@ -118,6 +118,7 @@ func (s *responsesStream) emit(kind string, fields map[string]any) {
 
 func (s *responsesStream) keepalive() {
 	if s.out != nil {
+		heartbeat(s.out.w)
 		_, _ = s.out.w.Write([]byte(": keepalive\n\n"))
 		s.out.flush()
 	}

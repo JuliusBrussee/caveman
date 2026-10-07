@@ -35,8 +35,8 @@ func applyChatEffort(body map[string]json.RawMessage, effort, dialect string) {
 	off := effort == "none"
 	switch dialect {
 	case dialectNone:
-	case dialectOpenRouter:
-		body["reasoning"] = mustJSON(map[string]string{"effort": effort})
+	case dialectOpenRouter: // OpenAI's effort levels, no "max"
+		body["reasoning"] = mustJSON(map[string]string{"effort": clampEffort(effort, responsesEfforts)})
 	case dialectDeepSeek:
 		if off {
 			body["thinking"] = mustJSON(map[string]string{"type": "disabled"})
@@ -62,8 +62,8 @@ func applyChatEffort(body map[string]json.RawMessage, effort, dialect string) {
 			// DashScope accepts 1..32768.
 			body["thinking_budget"] = mustJSON(min(max(int(share*float64(limit)), 1024), 32768))
 		}
-	default:
-		body["reasoning_effort"] = mustJSON(effort)
+	default: // OpenAI's chat reasoning_effort levels, no "max"
+		body["reasoning_effort"] = mustJSON(clampEffort(effort, responsesEfforts))
 	}
 }
 
@@ -141,6 +141,11 @@ func claudeID(model string) string {
 	return strings.ReplaceAll(id[at:], ".", "-")
 }
 
+// sameModel: id is model, or a dated snapshot of it ("claude-sonnet-5-20260101").
+func sameModel(id, model string) bool {
+	return id == model || strings.HasPrefix(id, model+"-20")
+}
+
 func hasPrefix(value string, prefixes ...string) bool {
 	for _, prefix := range prefixes {
 		if strings.HasPrefix(value, prefix) {
@@ -152,8 +157,10 @@ func hasPrefix(value string, prefixes ...string) bool {
 
 // thinkingDisableAccepted: adaptive-only models whose thinking can be turned
 // off, mapped to whether that holds at xhigh/max (Opus 5 rejects it there).
-// Every other adaptive-only model gets `disabled` dropped: thinking stays on,
-// never a 400.
+// Matched as that exact model (or its dated snapshot), never as a family:
+// Opus 5.5 refuses `disabled` at every effort and Sonnet 5.5 takes only
+// between_tools. Every other adaptive-only model gets `disabled` dropped:
+// thinking stays on, never a 400.
 var thinkingDisableAccepted = map[string]bool{"claude-sonnet-5": true, "claude-opus-5": false}
 
 // nativeThinking keeps the caller's Anthropic `thinking` where the model
@@ -193,10 +200,18 @@ func nativeThinking(raw, maxTokens json.RawMessage, model, effort string) (json.
 		reshaped["type"] = mustJSON("adaptive")
 		return mustJSON(reshaped), true
 	case kind == "disabled" && !manual:
-		// A family name covers its versions: claude-sonnet-5 is claude-sonnet-5-5 too.
+		id := claudeID(model)
+		if sameModel(id, "claude-sonnet-5-5") {
+			// Sonnet 5.5 refuses `disabled`; thinking off there is
+			// {type: between_tools} alone, at effort high or below.
+			if effort == "xhigh" || effort == "max" {
+				return nil, false
+			}
+			return json.RawMessage(`{"type":"between_tools"}`), true
+		}
 		atAnyEffort, accepted := false, false
 		for family, any := range thinkingDisableAccepted {
-			if hasPrefix(claudeID(model), family) {
+			if sameModel(id, family) {
 				atAnyEffort, accepted = any, true
 			}
 		}

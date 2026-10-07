@@ -347,6 +347,7 @@ func streamResponsesToAnthropic(w http.ResponseWriter, upstream io.Reader, strea
 	for line := range lines {
 		if line == nil {
 			if stream {
+				heartbeat(t.m.out.w)
 				t.m.out.event("ping", map[string]any{"type": "ping"})
 			}
 			continue

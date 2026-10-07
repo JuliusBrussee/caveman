@@ -521,9 +521,13 @@ func TestMessagesEffortFitsTheModel(t *testing.T) {
 		{"claude-opus-5-5", `{"type":"adaptive"}`, "minimal", `{"type":"adaptive"}`, `{"effort":"low"}`},
 		{"claude-sonnet-4-5", `{"type":"adaptive"}`, "high", `{"budget_tokens":5000,"type":"enabled"}`, ``},
 		{"anthropic/claude-sonnet-4.6", `{"type":"enabled","budget_tokens":4000}`, "high", `{"type":"enabled","budget_tokens":4000}`, `{"effort":"high"}`},
-		{"claude-opus-5-5", `{"type":"disabled"}`, "high", `{"type":"disabled"}`, `{"effort":"high"}`}, // the claude-opus-5 family below xhigh
+		{"claude-opus-5-5", `{"type":"disabled"}`, "high", ``, `{"effort":"high"}`}, // Opus 5.5 refuses disabled at every effort
 		{"claude-opus-5-5", `{"type":"disabled"}`, "max", ``, `{"effort":"max"}`},
-		{"claude-sonnet-5-5", `{"type":"disabled"}`, "max", `{"type":"disabled"}`, `{"effort":"max"}`},
+		{"claude-opus-5", `{"type":"disabled"}`, "high", `{"type":"disabled"}`, `{"effort":"high"}`}, // Opus 5 takes it at high or below
+		{"claude-opus-5", `{"type":"disabled"}`, "xhigh", ``, `{"effort":"xhigh"}`},
+		{"claude-opus-5-20260301", `{"type":"disabled"}`, "low", `{"type":"disabled"}`, `{"effort":"low"}`}, // a dated snapshot is the same model
+		{"claude-sonnet-5-5", `{"type":"disabled","display":"summarized"}`, "high", `{"type":"between_tools"}`, `{"effort":"high"}`},
+		{"claude-sonnet-5-5", `{"type":"disabled"}`, "max", ``, `{"effort":"max"}`},
 		{"claude-sonnet-5", `{"type":"disabled"}`, "max", `{"type":"disabled"}`, `{"effort":"max"}`},
 		{"deepseek-v4-flash", `{"type":"adaptive"}`, "high", `{"type":"adaptive"}`, `{"effort":"high"}`},
 	} {

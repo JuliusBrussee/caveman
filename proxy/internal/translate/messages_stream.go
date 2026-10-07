@@ -157,6 +157,7 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 	lines, cut := sseLines(upstream)
 	for line := range lines {
 		if line == nil { // silence
+			heartbeat(stream.out.w)
 			stream.out.event("ping", map[string]any{"type": "ping"})
 			continue
 		}
