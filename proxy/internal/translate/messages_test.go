@@ -138,8 +138,10 @@ func TestMessagesToChatEffortDialects(t *testing.T) {
 		{"caller output_config", `"output_config":{"effort":"xhigh"},`, "", "", map[string]any{"reasoning_effort": `"xhigh"`, "output_config": ""}},
 		{"caller adaptive thinking", `"thinking":{"type":"adaptive"},`, "", "", map[string]any{"reasoning_effort": `"medium"`, "reasoning": ""}},
 		{"caller budget on openrouter", `"thinking":{"type":"enabled","budget_tokens":2048},`, "", "openrouter", map[string]any{"reasoning": `{"max_tokens":2048}`}},
-		// Thinking off is effort "none" wherever the dialect can say it.
-		{"caller thinking off", `"thinking":{"type":"disabled"},`, "", "", map[string]any{"reasoning_effort": `"none"`, "reasoning": ""}},
+		// Thinking off is effort "none" wherever the dialect can say it: on
+		// OpenAI's chat dialect only for a model the catalog lists (another may
+		// refuse reasoning_effort outright).
+		{"caller thinking off, unknown model", `"thinking":{"type":"disabled"},`, "", "", map[string]any{"reasoning_effort": "", "reasoning": ""}},
 		{"caller thinking off on openrouter", `"thinking":{"type":"disabled"},`, "", "openrouter", map[string]any{"reasoning": `{"effort":"none"}`}},
 		{"caller thinking off on a toggle", `"thinking":{"type":"disabled"},`, "", "toggle", map[string]any{"thinking": `{"type":"disabled"}`}},
 	} {
@@ -155,6 +157,9 @@ func TestMessagesToChatEffortDialects(t *testing.T) {
 				}
 			}
 		})
+	}
+	if sent, _ := mustRequest(t, Messages, Chat, body(`"thinking":{"type":"disabled"},`), Options{Model: "gpt-6-sol"}); sent["reasoning_effort"] != "none" {
+		t.Fatalf("thinking off on a catalog model: %v", sent)
 	}
 }
 

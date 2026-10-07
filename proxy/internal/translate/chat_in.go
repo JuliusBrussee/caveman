@@ -20,6 +20,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 )
 
 // chatTop is the chat body fields both translations read.
@@ -67,8 +69,8 @@ func chatEnvelopes(message obj) [][]byte {
 	}
 	var out [][]byte
 	eachItem(details, func(_ []byte, entry obj) {
-		if data := entry.get("data"); entry.str("type") == "reasoning.encrypted" && bytes.HasPrefix(inner(data), envelopeMarker) {
-			out = append(out, data)
+		if data := entry.get("data"); bytes.HasPrefix(inner(data), envelopeMarker) {
+			out = append(out, data) // whatever type a client relabelled it
 		}
 	})
 	return out
@@ -84,6 +86,7 @@ func chatMessagesBody(top map[string]json.RawMessage, opts Options) (map[string]
 	c := readChatTop(top, opts)
 	own := hasCacheControl(top["messages"])
 	b := newMsgBuilder(len(top["messages"]))
+	b.strict = true // a chat client may not send reasoning back: no thinking left is no thinking
 	route := opts.route()
 	var system []byte
 	leading := true
@@ -93,19 +96,33 @@ func chatMessagesBody(top map[string]json.RawMessage, opts Options) (map[string]
 			return
 		}
 		role, content := message.str("role"), message.get("content")
+		cache := message.get("cache_control") // a message-level breakpoint goes on its last block
 		if leading && (role == "system" || role == "developer") {
+			last, ownCache := -1, false
 			eachChatPart(content, func(kind string, part obj) {
 				if text := part.get("text"); kind == "text" && isStr(text) && len(text) > 2 {
-					system = append(append(openElem(system), `{"type":"text","text":`...), text...)
-					if cache := part.get("cache_control"); cache != nil {
-						system = append(append(system, `,"cache_control":`...), cache...)
+					system = openElem(system)
+					last = len(system)
+					system = append(append(system, `{"type":"text","text":`...), text...)
+					partCache := part.get("cache_control")
+					if ownCache = partCache != nil; ownCache {
+						system = append(append(system, `,"cache_control":`...), partCache...)
 					}
 					system = append(system, '}')
 				}
 			})
+			if cache != nil && last >= 0 && !ownCache {
+				system = append(append(append(system[:len(system)-1], `,"cache_control":`...), cache...), '}')
+			}
 			return
 		}
 		leading = false
+		blocks := b.blockCount()
+		defer func() {
+			if cache != nil && err == nil {
+				b.cacheLast(blocks, cache)
+			}
+		}()
 		switch role {
 		case "assistant":
 			for _, envelope := range chatEnvelopes(message) {
@@ -360,16 +377,21 @@ func chatResponsesBody(top map[string]json.RawMessage, opts Options) (map[string
 	if !isNull(c.maxTokens) && string(c.maxTokens) != "0" {
 		out["max_output_tokens"] = c.maxTokens
 	}
-	reasoning := `{"summary":"auto"}`
-	if effort := fitOpenAIEffort(c.effort, openAIEfforts(opts.Model)); effort == "none" {
-		reasoning = `{"effort":"none"}`
-	} else {
+	// A model the catalog lists with effort levels reasons, so its reasoning
+	// comes back (encrypted) to be replayed even when the caller named no
+	// effort; any other model gets reasoning fields only when one was asked.
+	_, reasons := catalog.EffortLevels("openai", opts.Model)
+	switch effort := fitOpenAIEffort(c.effort, openAIEfforts(opts.Model)); {
+	case effort == "none":
+		out["reasoning"] = json.RawMessage(`{"effort":"none"}`)
+	case effort != "" || reasons:
+		reasoning := []byte(`{"summary":"auto"}`)
 		if effort != "" {
-			reasoning = string(appendString([]byte(`{"effort":`), effort)) + `,"summary":"auto"}`
+			reasoning = append(appendString([]byte(`{"effort":`), effort), `,"summary":"auto"}`...)
 		}
+		out["reasoning"] = reasoning
 		out["include"] = json.RawMessage(`["reasoning.encrypted_content"]`)
 	}
-	out["reasoning"] = json.RawMessage(reasoning)
 	tools, err := responsesToolsFromChat(top["tools"])
 	if err != nil {
 		return nil, err

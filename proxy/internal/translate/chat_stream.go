@@ -91,9 +91,11 @@ func flushWriter(w io.Writer) {
 
 // keepalive proves a silent upstream alive: an SSE comment, which chat
 // clients skip.
+// A non-streaming caller gets nothing until the whole answer: the gate stays
+// shut, so a failure still falls back.
 func (e *chatEmitter) keepalive() {
-	heartbeat(e.w)
 	if e.stream {
+		heartbeat(e.w)
 		_, _ = e.w.Write([]byte(": keepalive\n\n"))
 		flushWriter(e.w)
 	}

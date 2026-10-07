@@ -30,6 +30,33 @@ type msgBuilder struct {
 	arena    []byte
 	messages []builtMessage
 	dropped  map[int]bool // message index -> thinking another host signed was left out of it
+	// strict: a last assistant tool turn without thinking always drops manual
+	// thinking (a chat client may not have sent the thinking back at all).
+	strict bool
+}
+
+// blockCount is how many blocks were pushed so far.
+func (b *msgBuilder) blockCount() int {
+	count := 0
+	for _, message := range b.messages {
+		count += len(message.blocks)
+	}
+	return count
+}
+
+// cacheLast puts a caller's cache_control on the last block pushed, when one
+// was pushed since there were before blocks and it carries none yet.
+func (b *msgBuilder) cacheLast(before int, cache []byte) {
+	if b.blockCount() <= before {
+		return
+	}
+	message := &b.messages[len(b.messages)-1]
+	block := &message.blocks[len(message.blocks)-1]
+	if block.end != len(b.arena) || bytes.Contains(b.arena[block.start:block.end], []byte(`"cache_control"`)) {
+		return
+	}
+	b.arena = append(append(append(b.arena[:block.end-1], `,"cache_control":`...), cache...), '}')
+	block.end = len(b.arena)
 }
 
 // arenas recycles the builders' scratch space: assemble copies the messages
@@ -214,7 +241,7 @@ func (b *msgBuilder) lastAssistantForeign() bool {
 		if message.role != "assistant" {
 			continue
 		}
-		calls, foreign := false, b.dropped[index]
+		calls, foreign := false, b.dropped[index] || b.strict
 		for _, block := range message.blocks {
 			switch block.kind {
 			case "thinking", "redacted_thinking":
@@ -288,6 +315,9 @@ func messagesFinish(body map[string]json.RawMessage, b *msgBuilder, opts Options
 			thinking = fitted
 		}
 	}
+	if forcesTool(body["tool_choice"]) {
+		thinking = nil // Anthropic takes thinking only with tool_choice auto or none
+	}
 	if thinking != nil && !(manualThinking(thinking) && b.lastAssistantForeign()) {
 		body["thinking"] = thinking
 	} else if thinking == nil {
@@ -314,6 +344,13 @@ func messagesFinish(body map[string]json.RawMessage, b *msgBuilder, opts Options
 		body["output_config"] = append(output, '}')
 	}
 	fitRoute(body, opts, false)
+}
+
+// forcesTool reports a Messages tool_choice that forces a call (any, tool).
+func forcesTool(choice []byte) bool {
+	parsed, _ := parseObj(choice)
+	kind := parsed.str("type")
+	return kind == "any" || kind == "tool"
 }
 
 // messagesSchemaFormat is output_config.format for a JSON schema.

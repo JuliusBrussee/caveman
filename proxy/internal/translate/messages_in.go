@@ -16,6 +16,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+
+	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 )
 
 // messagesTop is the Messages body fields both translations read.
@@ -216,8 +218,18 @@ func messagesChatBody(top map[string]json.RawMessage, opts Options) (map[string]
 		out["response_format"] = appendChatSchemaFormat(nil, []byte(`"output"`), format.get("schema"), []byte(`true`), nil)
 	}
 	effort := m.effortFor(opts)
-	if effort == "medium" && m.effort == "" && opts.Effort == "" && opts.dialect() == dialectOpenRouter {
+	switch {
+	case effort == "medium" && m.effort == "" && opts.Effort == "" && opts.dialect() == dialectOpenRouter:
 		effort = "" // chatReasoning wrote OpenRouter's field; it takes it as is
+	case effort == "none" && opts.Effort == "" && m.effort == "" && opts.dialect() == dialectOpenAIChat:
+		// Thinking off where the dialect has no off switch of its own: "none"
+		// only for a model the catalog lists with levels (the lowest where it
+		// has no "none"); another model may refuse reasoning_effort at all.
+		levels, known := catalog.EffortLevels("openai", opts.Model)
+		effort = ""
+		if known {
+			effort = fitOpenAIEffort("none", levels)
+		}
 	}
 	fitChat(out, opts, m.stream, effort)
 	return out, nil

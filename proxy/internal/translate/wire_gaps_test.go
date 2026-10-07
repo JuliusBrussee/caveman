@@ -3,8 +3,12 @@ package translate
 import (
 	"encoding/base64"
 	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 const pdfData = "JVBERi0xLjQKJSVFT0YK"
@@ -595,5 +599,67 @@ func TestResponsesToolImagesFollowTheToolMessages(t *testing.T) {
 	last := got["messages"].([]any)[len(roles)-1].(map[string]any)
 	if strings.Join(roles, ",") != "system,user,assistant,tool,tool,user" || encode(last["content"]) != `[{"image_url":{"url":"data:image/png;base64,QQ=="},"type":"image_url"}]` {
 		t.Fatalf("messages = %s", encode(got["messages"]))
+	}
+}
+
+// Review findings, each pinned.
+func TestChatCallerReviewFindings(t *testing.T) {
+	// A non-streaming chat caller: a slow upstream that fails after the gate
+	// hold still writes nothing, so the pool falls back.
+	defer func(ping, hold time.Duration) { pingInterval, gateHold = ping, hold }(pingInterval, gateHold)
+	pingInterval, gateHold = 10*time.Millisecond, 10*time.Millisecond
+	_, reply := mustRequest(t, Chat, Messages, `{"model":"x","stream":false,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "claude-opus-5-5"})
+	reader, writer := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(writer, sse(`{"type":"message_start","message":{"usage":{"input_tokens":1}}}`))
+		time.Sleep(80 * time.Millisecond)
+		_, _ = io.WriteString(writer, sse(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`))
+		_ = writer.Close()
+	}()
+	recorder := httptest.NewRecorder()
+	if _, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: reader}); err != ErrNotServed || recorder.Body.Len() != 0 {
+		t.Fatalf("non-streamed slow failure: err %v body %q", err, recorder.Body.String())
+	}
+	pingInterval, gateHold = 15*time.Second, 10*time.Second
+
+	// Anthropic takes thinking only with tool_choice auto or none.
+	forced := `{"model":"x","reasoning_effort":"high","tool_choice":"required","tools":[{"type":"function","function":{"name":"a","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"hi"}]}`
+	if got, _ := mustRequest(t, Chat, Messages, forced, Options{Model: "claude-opus-5-5"}); got["thinking"] != nil || encode(got["tool_choice"]) != `{"type":"any"}` {
+		t.Fatalf("c>m forced tool = %s", encode(got))
+	}
+	codexForced := strings.Replace(codexBody("m", "high", `[{"type":"function","name":"a","parameters":{"type":"object"}}]`, userHello), `"tool_choice":"auto"`, `"tool_choice":"required"`, 1)
+	if got, _ := mustRequest(t, Responses, Messages, codexForced, Options{Model: "claude-opus-5-5"}); got["thinking"] != nil {
+		t.Fatalf("r>m forced tool = %s", encode(got))
+	}
+
+	// An envelope a client relabelled still never reaches a chat host.
+	envelope := envelopeOf(`[{"type":"thinking","thinking":"secret","signature":"EqA"}]`, "", "")
+	relabelled := `{"model":"x","messages":[{"role":"user","content":"a"},{"role":"assistant","content":"b","reasoning_content":"secret","reasoning_details":[{"type":"reasoning.text","data":"` + envelope + `"}]},{"role":"user","content":"c"}]}`
+	if out := rawRequest(t, Chat, Chat, relabelled, Options{Model: "deepseek-v4-pro", Route: "deepseek", Dialect: "deepseek"}); strings.Contains(out, envelope) || strings.Contains(out, "secret") {
+		t.Fatalf("relabelled envelope reached a chat host: %s", out)
+	}
+
+	// Reasoning fields go to a Responses model that reasons, or when asked.
+	plain := `{"model":"x","messages":[{"role":"user","content":"a"}]}`
+	if got, _ := mustRequest(t, Chat, Responses, plain, Options{Model: "gpt-4.1"}); got["reasoning"] != nil || got["include"] != nil {
+		t.Fatalf("non-reasoning model got reasoning fields: %s", encode(got))
+	}
+	if got, _ := mustRequest(t, Chat, Responses, plain, Options{Model: "gpt-6-sol"}); encode(got["include"]) != `["reasoning.encrypted_content"]` {
+		t.Fatalf("reasoning model lost its reasoning include: %s", encode(got))
+	}
+
+	// A message-level cache_control lands on that message's last block.
+	cached := `{"model":"x","messages":[{"role":"system","content":"s","cache_control":{"type":"ephemeral"}},{"role":"user","content":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}]}`
+	got, _ := mustRequest(t, Chat, Messages, cached, Options{Model: "claude-opus-5-5"})
+	if encode(got["system"]) != `[{"cache_control":{"type":"ephemeral"},"text":"s","type":"text"}]` ||
+		encode(got["messages"]) != `[{"content":[{"cache_control":{"ttl":"1h","type":"ephemeral"},"text":"a","type":"text"}],"role":"user"}]` {
+		t.Fatalf("message-level cache_control = %s", encode(got))
+	}
+
+	// Manual thinking with a tool turn the client sent back without its
+	// thinking: thinking goes for this request (Anthropic would refuse it).
+	manual := `{"model":"x","reasoning_effort":"high","max_tokens":8000,"tools":[{"type":"function","function":{"name":"f","parameters":{"type":"object"}}}],"messages":[{"role":"user","content":"a"},{"role":"assistant","content":null,"tool_calls":[{"id":"toolu_01","type":"function","function":{"name":"f","arguments":"{}"}}]},{"role":"tool","tool_call_id":"toolu_01","content":"r"}]}`
+	if got, _ := mustRequest(t, Chat, Messages, manual, Options{Model: "claude-haiku-4-5"}); got["thinking"] != nil {
+		t.Fatalf("manual thinking kept on a bare tool turn: %s", encode(got))
 	}
 }
