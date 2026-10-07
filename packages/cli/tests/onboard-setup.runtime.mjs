@@ -44,7 +44,7 @@ test("setup --yes signed in says what routing sends", { skip }, async () => {
   try {
     const out = await runCli(["setup", "--yes"], { ...fx.env, CAVE_TOKEN: "test-token" });
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /^routing is on · sends your latest ask \(with what your agent attaches to it\), the one before it, the end of the agent's last reply and request facts \(tools, effort, agent headers, token counts\) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing · caveman off routing to stop$/m);
+    assert.match(out.stdout, /^routing is on · sends your latest ask \(with what your agent attaches to it\), the one before it, the end of the agent's last reply and request facts \(tools, effort, agent headers, token counts\) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing; requests go to your providers on your keys, only ones routed to a Caveman Cloud model pass through it · caveman off routing to stop$/m);
     assert.doesNotMatch(out.stdout, /starts after you sign in/);
     assert.equal(modules(fx).routing, true);
   } finally {
