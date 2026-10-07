@@ -54,7 +54,9 @@ func (s sseWriter) flush() {
 }
 
 // sseLines reads upstream lines on a goroutine so the caller can emit a ping
-// on silence: a nil line means "nothing arrived for pingInterval". The
+// on silence: a nil line means "nothing arrived for pingInterval", and one
+// more comes at gateHold however busy the upstream is with lines that carry
+// no content (comments, pings), so the gate opens on time. The
 // returned func reports how the body ended once the channel is closed: nil
 // for a clean EOF, the read error otherwise.
 // ponytail: one goroutine pair per stream, ended by the upstream body closing.
@@ -78,10 +80,12 @@ func sseLines(upstream io.Reader) (<-chan []byte, func() error) {
 		}
 	}()
 	out := make(chan []byte)
+	ping := pingInterval
+	timer, hold := time.NewTimer(ping), time.NewTimer(gateHold)
 	go func() {
 		defer close(out)
-		timer := time.NewTimer(pingInterval)
 		defer timer.Stop()
+		defer hold.Stop()
 		for {
 			select {
 			case line, ok := <-raw:
@@ -89,10 +93,13 @@ func sseLines(upstream io.Reader) (<-chan []byte, func() error) {
 					return
 				}
 				out <- line
+			case <-hold.C:
+				out <- nil
+				continue // the ping clock runs on
 			case <-timer.C:
 				out <- nil
 			}
-			timer.Reset(pingInterval)
+			timer.Reset(ping)
 		}
 	}()
 	return out, func() error { return cut }

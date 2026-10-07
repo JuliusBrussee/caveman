@@ -164,7 +164,7 @@ func TestRelayedFailureIsTerminal(t *testing.T) {
 	stream := upstreamResponses(`{"type":"response.created","response":{"id":"r"}}`, `{"type":"response.output_text.delta","delta":"a"}`,
 		`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"no"}}}`)
 	recorder, _, err := serve(t, Relay(Responses, []byte(`{"stream":true}`), "m"), stream, false)
-	if !errors.Is(err, errUpstreamFailed) || strings.Count(recorder.Body.String(), "response.failed") != 1 || strings.Contains(recorder.Body.String(), "ended early") {
+	if !errors.Is(err, ErrUpstreamFailed) || strings.Count(recorder.Body.String(), "response.failed") != 1 || strings.Contains(recorder.Body.String(), "ended early") {
 		t.Fatalf("err %v body %s", err, recorder.Body.String())
 	}
 }
@@ -197,6 +197,57 @@ func TestAnsweredEffortOnEveryDirection(t *testing.T) {
 		sent, _ := mustRequest(t, tc.from, tc.to, tc.body, Options{Model: tc.model, Effort: tc.effort, Route: "fireworks"})
 		if got := encode(sent[tc.field]); got != tc.want {
 			t.Errorf("%s: %s = %s, want %s (body %s)", tc.name, tc.field, got, tc.want, encode(sent))
+		}
+	}
+}
+
+// Lines without content arriving steadily (OpenRouter's processing comments,
+// Anthropic pings) do not keep the headers back past gateHold.
+func TestGateHoldIsBoundedUnderSteadyHeldLines(t *testing.T) {
+	defer func(ping, hold time.Duration) { pingInterval, gateHold = ping, hold }(pingInterval, gateHold)
+	pingInterval = time.Hour
+	busy := func(comment, failure string) *http.Response {
+		reader, writer := io.Pipe()
+		go func() {
+			for range 30 {
+				_, _ = io.WriteString(writer, comment)
+				time.Sleep(2 * time.Millisecond)
+			}
+			_, _ = io.WriteString(writer, failure)
+			_ = writer.Close()
+		}()
+		return &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(reader)}
+	}
+	chatFailure := sse(`{"error":{"type":"overloaded_error","message":"busy"}}`)
+	for _, tc := range []struct {
+		name, comment, failure string
+		reply                  func() *Reply
+	}{
+		{"messages from chat", ": OPENROUTER PROCESSING\n\n", chatFailure, func() *Reply {
+			_, r := mustRequest(t, Messages, Chat, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "g"})
+			return r
+		}},
+		{"messages from responses", ": keepalive\n\n", upstreamResponses(`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"busy"}}}`), func() *Reply {
+			_, r := mustRequest(t, Messages, Responses, `{"model":"m","stream":true,"messages":[{"role":"user","content":"hi"}]}`, Options{Model: "g", Route: "chatgpt"})
+			return r
+		}},
+		{"responses from chat", ": OPENROUTER PROCESSING\n\n", chatFailure, func() *Reply {
+			_, r := mustRequest(t, Responses, Chat, codexBody("m", "low", "", userHello), Options{Model: "g"})
+			return r
+		}},
+		{"messages relay", sse(`{"type":"ping"}`), sse(`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`), func() *Reply {
+			return Relay(Messages, []byte(`{"stream":true}`), "m")
+		}},
+	} {
+		gateHold = time.Hour
+		recorder := httptest.NewRecorder()
+		if _, err := tc.reply().Serve(recorder, busy(tc.comment, tc.failure)); !errors.Is(err, ErrNotServed) || recorder.Body.Len() != 0 {
+			t.Errorf("%s within the hold: err %v body %q", tc.name, err, recorder.Body.String())
+		}
+		gateHold = 10 * time.Millisecond
+		recorder = httptest.NewRecorder()
+		if _, err := tc.reply().Serve(recorder, busy(tc.comment, tc.failure)); errors.Is(err, ErrNotServed) || !strings.Contains(recorder.Body.String(), "busy") {
+			t.Errorf("%s after the hold: err %v body %q", tc.name, err, recorder.Body.String())
 		}
 	}
 }

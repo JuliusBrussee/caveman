@@ -614,7 +614,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		err = errors.New("no terminal event")
 	}
 	if err == nil && upstreamFailed {
-		return usage, errUpstreamFailed
+		return usage, ErrUpstreamFailed
 	}
 	if err == nil {
 		return usage, nil
@@ -638,9 +638,9 @@ func gated(w http.ResponseWriter) bool {
 	return !ok || g.open
 }
 
-// errUpstreamFailed: the upstream sent a failure of its own after content;
-// the caller got it as sent.
-var errUpstreamFailed = errors.New("upstream failed mid-answer")
+// ErrUpstreamFailed: the upstream sent a failure of its own after content;
+// the caller got it as sent, as the stream's last event.
+var ErrUpstreamFailed = errors.New("upstream failed mid-answer")
 
 // relayContent reports a relayed event that carries content: not a start
 // event or a ping, and for chat not a chunk that only opens the message (a
