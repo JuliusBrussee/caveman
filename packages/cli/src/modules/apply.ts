@@ -12,7 +12,7 @@ import { existsSync } from "node:fs";
 import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { portableInvocation } from "../portable-command.js";
-import { cloudAnswer, cloudProduct, routeState, routingPause, type MeAnswer } from "./cloud.js";
+import { cloudAnswer, cloudProduct, ROUTING_ON_LINE, routeState, routingPause, type MeAnswer } from "./cloud.js";
 import { findModule, MODULES, type ModuleDef, type ModuleId } from "./registry.js";
 import { moduleFix } from "./status.js";
 
@@ -583,8 +583,12 @@ export async function moduleSwitchCommand(on: boolean, argv: string[]): Promise<
 }
 
 // `on routing` signs in when it needs to, in a terminal only; login then says
-// what routing does now and what data leaves the machine.
+// what routing does now and what data leaves the machine. Already signed in,
+// it says what routing sends here.
 async function signInFor(named: ModuleId[]): Promise<void> {
   const h = moduleHost();
-  if (named.some((id) => findModule(id)?.needsSignIn) && !h.signedIn() && h.interactive()) await h.signIn();
+  if (!named.some((id) => findModule(id)?.needsSignIn)) return;
+  if (h.signedIn()) {
+    if (named.includes("routing")) console.log(ROUTING_ON_LINE);
+  } else if (h.interactive()) await h.signIn();
 }

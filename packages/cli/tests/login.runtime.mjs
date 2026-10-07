@@ -287,7 +287,7 @@ test("login alone never changes where agent traffic goes", async () => {
   const stored = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   writeFileSync(join(caveDir, "cloud.json"), JSON.stringify({ ...stored, modules: { routing: true } }));
   const optedOut = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], { ...env, DO_NOT_TRACK: "1" });
-  assert.match(optedOut.stderr, /^routing is on · the right model each turn · caveman off routing to stop$/m);
+  assert.match(optedOut.stderr, /^routing is on · sends your latest ask \(with what your agent attaches to it\), the one before it, the end of the agent's last reply and request facts \(tools, effort, agent headers, token counts\) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing · caveman off routing to stop$/m);
   assert.match(optedOut.stderr, /^runtime data: nothing sent \(telemetry is off\)/m);
 
   const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));

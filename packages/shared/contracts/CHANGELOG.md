@@ -1,5 +1,26 @@
 # Changelog
 
+## 2.1.0 — 2026-10-06
+
+- `route-ask-v1` (additive): optional, strict `request` (`endpoint`, `labels`
+  of eleven allowlisted headers, each value at most 256 bytes or 16 KiB for
+  `x-codex-turn-metadata` and never cut, `tool_names`, `effort` and
+  `thinking` from fixed value sets, `per_message_off`), `last` (the session's previous request: `model`,
+  `effort` from the same set, `age_s`, `input_tokens`, `cache_read_tokens`,
+  `cache_write_tokens`, `compacted`), and opaque `state` / `parent_state`
+  (at most 4096 bytes). The runtime now asks for every routable request:
+  `ask` goes only on a turn's first ask and is left out for compaction and
+  side requests, which are answered per request. The description names the
+  answer's new fields: `effort`, `effort_mode` (`message` | `top` | `""`),
+  `default_effort` (optional, the asked model's catalog default effort) and
+  `state`; `model` may cost more than the asked one.
+- `route-ask-v1` (additive): optional, strict `ask`
+  object next to `signals` — `text` (required, non-blank, at most 131072 bytes),
+  `prev_text` and `reply_tail` (at most 16384 bytes each) and `turn`
+  (0..1000000). Every field keeps its end. The description now says the ask
+  carries raw conversation text.
+- Schema `$id`s name `contracts-v2.1.0`.
+
 ## 2.0.0 — 2026-09-24
 
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of

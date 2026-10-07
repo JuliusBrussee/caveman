@@ -5,14 +5,19 @@
 // in or out, or switching the routing module, takes effect without a restart.
 //
 // It never touches compression or any other local stage, and every failure
-// fails open: a Cloud error, timeout, 401 or allowance answer keeps the model
-// the agent asked for. No prompt text leaves the machine: the ask carries the
-// caller's models and counts (contracts route-ask-v1), and events carry counts
-// and labels only.
+// fails open: a Cloud error, timeout, 401 or allowance answer keeps the asked
+// model and runs at the request's own effort (the gateway keeps a session's
+// per-message marks and puts the agent's effort back with one). The ask carries the caller's models, counts, what the
+// request declares (labels, tool names, effort), what the session's previous
+// request ran, and the conversation's text Cloud picks the model and effort
+// from: the latest human turn, the one before it and the end of the agent's
+// last reply (contracts route-ask-v1). Events carry counts and labels only,
+// never prompt text.
 package cloudlink
 
 import (
 	"bytes"
+	"container/list"
 	"context"
 	"crypto/sha256"
 	"encoding/base64"
@@ -22,6 +27,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"maps"
 	"net"
 	"net/http"
 	"net/url"
@@ -31,6 +37,7 @@ import (
 	"regexp"
 	"runtime"
 	"slices"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +53,8 @@ const (
 	pauseRecheck = 15 * time.Minute // how often a limit pause asks /me whether it still holds
 	refusedPause = 10 * time.Minute // after a 401/403: a stale or revoked login
 	decisionsMax = 1024
+	statesMax    = 1024
+	stateMax     = 4096 // bytes of Cloud's opaque state kept and sent back
 	answerMax    = 1 << 20
 )
 
@@ -68,12 +77,16 @@ type Link struct {
 	// keychain reads the CLI's macOS keychain entry; tests replace it.
 	keychain func() string
 
-	mu         sync.Mutex
-	stamp      string
-	loaded     bool
-	stale      bool // a background keychain read found a new secret
-	cfg        settings
-	decisions  map[string]*decision
+	mu        sync.Mutex
+	stamp     string
+	loaded    bool
+	stale     bool // a background keychain read found a new secret
+	cfg       settings
+	decisions map[string]*decision
+	// states is Cloud's opaque state per session key, least recently used
+	// first out, memory only, for as long as one login.
+	states     map[string]*list.Element
+	stateOrder *list.List
 	pauseUntil time.Time
 	paused     gateway.RouteAnswer // what an ask answers while paused
 	recheckAt  time.Time           // the last /me check of a limit pause
@@ -156,7 +169,7 @@ func (l *Link) settings() settings {
 		if (cfg.access != "" || cfg.key != "") && (cfg.access != previous.access || cfg.key != previous.key) {
 			// A new login starts fresh: no pause and no decision from the old one.
 			// Signing out needs no reset: nothing is asked while signed out.
-			l.pauseUntil, l.decisions = time.Time{}, nil
+			l.pauseUntil, l.decisions, l.states = time.Time{}, nil, nil
 			l.forgetLocked()
 		}
 	}
@@ -393,16 +406,30 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if bearer == "" {
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "login_expired"}
 	}
-	if statefulChain(ask.Body) {
+	root, ok := jsonsplice.Root(ask.Body)
+	if ok && statefulChain(ask.Body, root) {
 		// A Responses chain's follow-ups carry no human text to key a decision
 		// on, so routing it would switch model halfway through a turn.
 		return gateway.RouteAnswer{Outcome: "off", Reason: "stateful_chain"}
 	}
-	query := gateway.LatestHumanText(ask.Provider, ask.Endpoint, ask.Body)
-	if query == "" {
+	request := requestFor(ask, root)
+	if ask.PerRequest {
+		// A compaction or side request is answered on its own, without the ask.
+		l.mu.Lock()
+		paused, answer := l.now().Before(l.pauseUntil), l.paused
+		l.mu.Unlock()
+		if paused {
+			l.recheckPause(cfg)
+			return answer
+		}
+		return l.ask(cfg, bearer, ask, request, nil, models, deadline)
+	}
+	text := askTextFor(ask.Endpoint, ask.Body, root)
+	if text.Text == "" {
 		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
 	}
-	key := sha256.Sum256([]byte(ask.SessionID + "\x00" + ask.Provider + "\x00" + ask.Model + "\x00" + query))
+	// The turn tells a repeated short ask ("yes") apart; it holds within a tool loop.
+	key := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", ask.SessionID, ask.Provider, ask.Model, text.Turn, text.Text)))
 	// Every tool-loop turn of one ask reuses its answer, failures included, so
 	// a turn never switches model halfway; a pause only stops new asks.
 	l.mu.Lock()
@@ -424,16 +451,16 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	if !seen {
 		func() {
 			defer close(d.done) // waiters on this ask never hang, even on a panic
-			d.answer = l.ask(cfg, bearer, ask, models, deadline)
+			d.answer = l.ask(cfg, bearer, ask, request, &text, models, deadline)
 		}()
 	}
 	<-d.done
 	answer := d.answer
-	if answer.Model != "" {
+	if answer.Model != "" || answer.Effort != "" {
 		k := string(key[:])
 		answer.Reject = func() {
-			// The provider refused the routed model: the rest of this ask keeps
-			// the asked one instead of failing over on every turn.
+			// The provider refused the routed model or effort: the rest of this
+			// ask keeps what the agent asked for instead of failing over every turn.
 			done := make(chan struct{})
 			close(done)
 			l.mu.Lock()
@@ -446,11 +473,7 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	return answer
 }
 
-func statefulChain(body []byte) bool {
-	root, ok := jsonsplice.Root(body)
-	if !ok {
-		return false
-	}
+func statefulChain(body []byte, root jsonsplice.Span) bool {
 	span, ok := jsonsplice.Field(body, root, "previous_response_id")
 	return ok && string(body[span.Start:span.End]) != "null"
 }
@@ -469,11 +492,281 @@ var (
 )
 
 // routeAsk is POST /v1/route's body (contracts route-ask-v1): the caller's
-// models and counts computed on this machine. It has no text field: no prompt
-// text leaves the machine.
+// models, counts computed on this machine, what the request declares, what the
+// session's previous request ran, Cloud's state, and the conversation's text
+// (left out for a compaction or side request).
 type routeAsk struct {
-	Models  []string `json:"models"`
-	Signals signals  `json:"signals"`
+	Models      []string           `json:"models"`
+	Signals     signals            `json:"signals"`
+	Ask         *askText           `json:"ask,omitempty"`
+	Request     routeRequest       `json:"request"`
+	Last        *gateway.RouteLast `json:"last,omitempty"`
+	State       string             `json:"state,omitempty"`
+	ParentState string             `json:"parent_state,omitempty"`
+}
+
+// routeRequest is what the request itself declares, as sent.
+type routeRequest struct {
+	Endpoint      string            `json:"endpoint"`
+	Labels        map[string]string `json:"labels,omitempty"`
+	ToolNames     []string          `json:"tool_names,omitempty"`
+	Effort        string            `json:"effort"`
+	Thinking      string            `json:"thinking"`
+	PerMessageOff bool              `json:"per_message_off"`
+}
+
+// requestFor reads routeRequest from the body: the declared tool names (at
+// most 128; a name over 64 bytes is left out), the top-level
+// effort and Anthropic's thinking.type when they are values the contract knows
+// (else ""), and on a Claude Code child the agent type of the spawn call it was
+// forked from (x-caveman-agent). A label over its bound is left out, never cut.
+func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
+	out := routeRequest{Endpoint: "messages", PerMessageOff: ask.PerMessageOff}
+	labels := maps.Clone(ask.Labels)
+	label := func(name, value string) {
+		if _, set := labels[name]; !set && value != "" && len(value) <= gateway.RouteLabelMax(name) {
+			if labels == nil {
+				labels = map[string]string{}
+			}
+			labels[name] = value
+		}
+	}
+	body := ask.Body
+	var effort string
+	switch {
+	case strings.HasSuffix(ask.Endpoint, "/responses"):
+		out.Endpoint = "responses"
+		reasoning, _ := jsonsplice.Field(body, root, "reasoning")
+		effort, _ = jsonsplice.StringField(body, reasoning, "effort")
+	case strings.HasSuffix(ask.Endpoint, "/chat/completions"):
+		out.Endpoint = "chat"
+		effort, _ = jsonsplice.StringField(body, root, "reasoning_effort")
+	default:
+		config, _ := jsonsplice.Field(body, root, "output_config")
+		effort, _ = jsonsplice.StringField(body, config, "effort")
+		thinking, _ := jsonsplice.Field(body, root, "thinking")
+		if kind, _ := jsonsplice.StringField(body, thinking, "type"); slices.Contains([]string{"adaptive", "enabled", "disabled", "between_tools"}, kind) {
+			out.Thinking = kind
+		}
+		if labels["x-claude-code-agent-id"] != "" {
+			label("x-caveman-agent", spawnedAgentType(body, root))
+		}
+	}
+	if slices.Contains(contractEfforts, effort) {
+		out.Effort = effort
+	}
+	out.Labels = labels
+	list, _ := jsonsplice.Field(body, root, "tools")
+	tools, _ := jsonsplice.Elements(body, list)
+	for _, tool := range tools {
+		if len(out.ToolNames) == 128 {
+			break
+		}
+		name, _ := jsonsplice.StringField(body, tool, "name")
+		if name == "" {
+			function, _ := jsonsplice.Field(body, tool, "function")
+			name, _ = jsonsplice.StringField(body, function, "name")
+		}
+		if name != "" && len(name) <= 64 { // decoded JSON: valid UTF-8 already
+			out.ToolNames = append(out.ToolNames, name)
+		}
+	}
+	return out
+}
+
+// The effort values route-ask-v1 knows; anything else goes as "".
+var contractEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// spawnedAgentType is the subagent_type of the spawn call a forked child came
+// from: a forked child resends its parent's history up to the newest assistant
+// message, then its own prompt. The one tool_use there whose input.prompt the
+// child's prompt carries names it; none or several leave it "". Only that
+// message's first 32 tool_use inputs and the text after it (at most
+// askTextMax bytes) are read.
+func spawnedAgentType(body []byte, root jsonsplice.Span) string {
+	list, _ := jsonsplice.Field(body, root, "messages")
+	items, _ := jsonsplice.Elements(body, list)
+	var prompt []string
+	for i := len(items) - 1; i >= 0; i-- {
+		if role, _ := jsonsplice.StringField(body, items[i], "role"); role != "assistant" {
+			if text, ok, _ := messageText(body, items[i], "text"); ok {
+				prompt = append(prompt, text)
+			}
+			continue
+		}
+		child := strings.Join(prompt, "\n")
+		if len(child) > askTextMax {
+			return ""
+		}
+		content, _ := jsonsplice.Field(body, items[i], "content")
+		blocks, _ := jsonsplice.Elements(body, content)
+		found, uses := "", 0
+		for _, block := range blocks {
+			if kind, _ := jsonsplice.StringField(body, block, "type"); kind != "tool_use" {
+				continue
+			}
+			if uses++; uses > 32 {
+				return ""
+			}
+			input, _ := jsonsplice.Field(body, block, "input")
+			agentType, _ := jsonsplice.StringField(body, input, "subagent_type")
+			spawned, _ := jsonsplice.StringField(body, input, "prompt")
+			if agentType == "" || strings.TrimSpace(spawned) == "" || !strings.Contains(child, spawned) {
+				continue
+			}
+			if found != "" {
+				return "" // two spawns match: no unique one
+			}
+			found = agentType
+		}
+		return found
+	}
+	return ""
+}
+
+// The contract's bounds, in bytes.
+const (
+	askBodyMax = 256 << 10
+	askTextMax = 128 << 10
+	askSideMax = 16 << 10
+	askTurnMax = 1_000_000
+)
+
+// askText is the conversation the ask carries, raw: Cloud reads it as is.
+// Text is the latest human turn, PrevText the human turn before it, ReplyTail
+// the end of the newest assistant text before the latest turn, and Turn the
+// number of human turns before the latest one.
+type askText struct {
+	Text      string `json:"text"`
+	PrevText  string `json:"prev_text,omitempty"`
+	ReplyTail string `json:"reply_tail,omitempty"`
+	Turn      int    `json:"turn,omitempty"`
+}
+
+// askTextFor reads askText out of an Anthropic Messages, OpenAI chat or OpenAI
+// Responses body in one walk over its message spans; only text blocks are
+// decoded. Turns are input groups, the items between two model outputs. A
+// group with a tool result belongs to the tool loop, text riding along
+// (injected reminders, an interrupt note) included, so a loop keeps its
+// decision. Any other group with a user message is one human turn, read from
+// its last user message only: an agent's opening context messages come before
+// the ask, and a last message without text (an image) leaves the turn empty.
+// Each field keeps its end within its bound, cut on a rune boundary: agents
+// put their context first and the person's words last.
+func askTextFor(endpoint string, body []byte, root jsonsplice.Span) askText {
+	field := "messages"
+	if strings.HasSuffix(endpoint, "/responses") {
+		field = "input"
+	}
+	list, _ := jsonsplice.Field(body, root, field)
+	if text, ok := jsonsplice.String(body, list); ok { // a Responses input string is one human turn
+		if strings.TrimSpace(text) == "" {
+			return askText{}
+		}
+		return askText{Text: tail(text, askTextMax)}
+	}
+	items, _ := jsonsplice.Elements(body, list)
+	var out askText
+	humans, replied := 0, false
+	text, read, tooled := "", false, false // the current group's last user message: its text, whether read; a tool result
+	flush := func() {
+		if read && !tooled {
+			switch humans {
+			case 0:
+				out.Text = tail(text, askTextMax)
+			case 1:
+				out.PrevText = tail(text, askSideMax)
+			}
+			humans++
+		}
+		text, read, tooled = "", false, false
+	}
+	for i := len(items) - 1; i >= 0; i-- {
+		role, _ := jsonsplice.StringField(body, items[i], "role")
+		kind, _ := jsonsplice.StringField(body, items[i], "type")
+		switch {
+		case role == "user":
+			if read { // an earlier user message of the group: only a tool result matters
+				_, _, tool := messageText(body, items[i])
+				tooled = tooled || tool
+				continue
+			}
+			got, ok, tool := messageText(body, items[i], "text", "input_text")
+			read, tooled = true, tooled || tool
+			if ok {
+				text = got
+			}
+		case role == "tool" || role == "function" || strings.HasSuffix(kind, "_output") || kind == "mcp_approval_response":
+			tooled = true
+		case role == "system" || role == "developer":
+		default: // a model output: an assistant message, a tool call, reasoning
+			flush()
+			if role == "assistant" && humans > 0 && !replied {
+				if got, ok, _ := messageText(body, items[i], "text", "output_text"); ok {
+					out.ReplyTail, replied = tail(got, askSideMax), true
+				}
+			}
+		}
+	}
+	flush()
+	out.Turn = min(max(humans-1, 0), askTurnMax)
+	return out
+}
+
+// messageText joins a message's text blocks with "\n"; a string content is one
+// block. ok is false when no block has any non-space text; tool reports a
+// tool-result block.
+func messageText(body []byte, message jsonsplice.Span, types ...string) (text string, ok, tool bool) {
+	content, _ := jsonsplice.Field(body, message, "content")
+	if text, isString := jsonsplice.String(body, content); isString {
+		return text, strings.TrimSpace(text) != "", false
+	}
+	blocks, _ := jsonsplice.Elements(body, content)
+	var texts []string
+	for _, block := range blocks {
+		kind, _ := jsonsplice.StringField(body, block, "type")
+		tool = tool || strings.HasSuffix(kind, "tool_result")
+		if !slices.Contains(types, kind) {
+			continue
+		}
+		if text, isString := jsonsplice.StringField(body, block, "text"); isString {
+			texts = append(texts, text)
+			ok = ok || strings.TrimSpace(text) != ""
+		}
+	}
+	return strings.Join(texts, "\n"), ok, tool
+}
+
+// askBody is the ask's JSON within askBodyMax. Escaping can grow text past it
+// (a control byte encodes as six), so then text keeps its longest end that
+// fits. Nil when the text left is blank (Cloud refuses a blank text) or the
+// rest alone does not fit, which only escaping-heavy labels can do.
+func askBody(ask routeAsk) []byte {
+	raw := encodeAsk(ask)
+	if len(raw) > askBodyMax && ask.Ask != nil {
+		text, trimmed := ask.Ask.Text, *ask.Ask
+		ask.Ask = &trimmed
+		n := sort.Search(len(text)+1, func(n int) bool {
+			trimmed.Text = tail(text, n)
+			return len(encodeAsk(ask)) > askBodyMax
+		}) - 1
+		trimmed.Text = tail(text, max(n, 0))
+		raw = encodeAsk(ask)
+	}
+	if ask.Ask != nil && strings.TrimSpace(ask.Ask.Text) == "" || len(raw) > askBodyMax {
+		return nil
+	}
+	return raw
+}
+
+// encodeAsk is JSON without HTML escaping: an agent's <tags> and && stay one
+// byte each instead of six.
+func encodeAsk(ask routeAsk) []byte {
+	var buf bytes.Buffer
+	encoder := json.NewEncoder(&buf)
+	encoder.SetEscapeHTML(false)
+	_ = encoder.Encode(ask)
+	return bytes.TrimSuffix(buf.Bytes(), []byte("\n"))
 }
 
 type signals struct {
@@ -500,8 +793,26 @@ func signalsFor(ask gateway.RouteAsk) signals {
 	}
 }
 
-func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []string, deadline time.Time) gateway.RouteAnswer {
-	raw, _ := json.Marshal(routeAsk{Models: models, Signals: signalsFor(ask)})
+func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared routeRequest, text *askText, models []string, deadline time.Time) gateway.RouteAnswer {
+	var last *gateway.RouteLast
+	if ask.Last != nil {
+		bounded := *ask.Last
+		bounded.Model = truncate(bounded.Model, 128)
+		if !slices.Contains(contractEfforts, bounded.Effort) {
+			bounded.Effort = ""
+		}
+		for _, count := range []*int{&bounded.AgeS, &bounded.InputTokens, &bounded.CacheReadTokens, &bounded.CacheWriteTokens} {
+			*count = min(max(*count, 0), 1_000_000_000)
+		}
+		last = &bounded
+	}
+	raw := askBody(routeAsk{
+		Models: models, Signals: signalsFor(ask), Ask: text, Request: declared, Last: last,
+		State: l.state(ask.SessionID), ParentState: l.state(ask.ParentSessionID),
+	})
+	if raw == nil {
+		return gateway.RouteAnswer{Outcome: "kept", Reason: "no_human_text"}
+	}
 	ctx, cancel := context.WithDeadline(context.Background(), deadline)
 	defer cancel()
 	request, err := http.NewRequestWithContext(ctx, http.MethodPost, cfg.gateway+"/v1/route", bytes.NewReader(raw))
@@ -522,10 +833,15 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []s
 	body, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
 	var answer struct {
 		Model      string `json:"model"`
-		Reason     string `json:"reason"`
-		DecisionID string `json:"decision_id"`
-		Notice     string `json:"notice"`
-		Error      struct {
+		Effort     string `json:"effort"`
+		EffortMode string `json:"effort_mode"`
+		// DefaultEffort is the asked model's catalog default effort, "" unknown.
+		DefaultEffort string `json:"default_effort"`
+		State         string `json:"state"`
+		Reason        string `json:"reason"`
+		DecisionID    string `json:"decision_id"`
+		Notice        string `json:"notice"`
+		Error         struct {
 			Code string `json:"code"`
 		} `json:"error"`
 	}
@@ -559,10 +875,57 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, models []s
 		return gateway.RouteAnswer{Outcome: "degraded", Reason: "answer_outside_pool"}
 	}
 	l.forget()
-	if answer.Model == ask.Model {
-		return gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
+	l.keepState(ask.SessionID, answer.State)
+	out := gateway.RouteAnswer{Outcome: "kept", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
+	// An effort the runtime cannot splice in safely is left out, never guessed at.
+	if slices.Contains(contractEfforts, answer.Effort) && slices.Contains([]string{"", "message", "top"}, answer.EffortMode) {
+		out.Effort, out.EffortMode = answer.Effort, answer.EffortMode
 	}
-	return gateway.RouteAnswer{Model: answer.Model, Outcome: "routed", Reason: truncate(answer.Reason, 64), DecisionID: answer.DecisionID}
+	if slices.Contains(contractEfforts, answer.DefaultEffort) {
+		out.DefaultEffort = answer.DefaultEffort
+	}
+	if answer.Model != ask.Model {
+		out.Model, out.Outcome = answer.Model, "routed"
+	}
+	return out
+}
+
+// state is Cloud's opaque state for a session key, "" when none.
+func (l *Link) state(key string) string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if element, ok := l.states[key]; ok {
+		l.stateOrder.MoveToFront(element)
+		return element.Value.([2]string)[1]
+	}
+	return ""
+}
+
+// keepState stores the state Cloud answered for a session key. An empty one
+// keeps the one there (a compaction or side answer need not carry it); one over
+// stateMax bytes drops it.
+func (l *Link) keepState(key, state string) {
+	if key == "" || state == "" {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if element, ok := l.states[key]; ok {
+		l.stateOrder.Remove(element)
+		delete(l.states, key)
+	}
+	if len(state) > stateMax {
+		return
+	}
+	if l.states == nil {
+		l.states, l.stateOrder = map[string]*list.Element{}, list.New()
+	}
+	if l.stateOrder.Len() >= statesMax {
+		oldest := l.stateOrder.Back()
+		l.stateOrder.Remove(oldest)
+		delete(l.states, oldest.Value.([2]string)[0])
+	}
+	l.states[key] = l.stateOrder.PushFront([2]string{key, state})
 }
 
 // remember writes a pause the person can act on (a refused key, a used-up
@@ -657,4 +1020,16 @@ func truncate(text string, n int) string {
 		n--
 	}
 	return text[:n]
+}
+
+// tail keeps the last n bytes of text, cut on a rune boundary.
+func tail(text string, n int) string {
+	if len(text) <= n {
+		return text
+	}
+	start := len(text) - max(n, 0)
+	for start < len(text) && !utf8.RuneStart(text[start]) {
+		start++
+	}
+	return text[start:]
 }

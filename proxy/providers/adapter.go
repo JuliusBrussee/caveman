@@ -829,6 +829,14 @@ func normalizedContentEncoding(value string) string {
 	return value
 }
 
+// DecodeBody decodes a bounded side-copy of a provider body by its
+// Content-Encoding (identity, gzip, deflate, zstd), both sides capped at
+// limit; ok is false when it cannot. The bytes the client gets are not touched.
+func DecodeBody(raw []byte, contentEncoding string, limit int) ([]byte, bool) {
+	decoded, reason := decodeAccountingBody(raw, contentEncoding, limit)
+	return decoded, reason == ""
+}
+
 // decodeAccountingBody decodes only the scanner's bounded side-copy. The raw
 // provider bytes continue to the client unchanged. Both compressed and decoded
 // representations are capped, preventing response compression from becoming an

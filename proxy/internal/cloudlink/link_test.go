@@ -16,11 +16,14 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
 
-const secretPrompt = "PROMPT-TEXT-THAT-MUST-STAY-LOCAL"
+// promptText goes out in the route ask and never in an event.
+const promptText = "PROMPT-TEXT-ONLY-THE-ROUTE-ASK-CARRIES"
 
 // cloudHome writes the CLI state a signed-in user with routing on leaves.
 func cloudHome(t *testing.T, cloud string, routing bool, credentials string) string {
@@ -49,11 +52,11 @@ func newLink(home string) *Link {
 }
 
 func messagesAsk(model string) gateway.RouteAsk {
-	body := fmt.Sprintf(`{"model":%q,"tools":[{"name":"bash"}],"messages":[{"role":"user","content":%q},{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"boom"},{"type":"image","source":{}}]}]}`, model, secretPrompt)
+	body := fmt.Sprintf(`{"model":%q,"tools":[{"name":"bash"}],"messages":[{"role":"user","content":%q},{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"bash","input":{}}]},{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","is_error":true,"content":"boom"},{"type":"image","source":{}}]}]}`, model, promptText)
 	return gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: model, Agent: "claude", SessionID: "s1", ToolsCount: 1, InputBytes: len(body), Body: []byte(body)}
 }
 
-func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
+func TestAskSendsModelsSignalsAndText(t *testing.T) {
 	var got []byte
 	var auth string
 	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -68,19 +71,17 @@ func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
 	if answer.Model != "claude-sonnet-5-5" || answer.Outcome != "routed" || answer.DecisionID == "" {
 		t.Fatalf("answer = %+v", answer)
 	}
-	if strings.Contains(string(got), secretPrompt) || strings.Contains(string(got), "fix") {
-		t.Fatalf("the ask carried prompt text: %s", got)
-	}
 	var body map[string]any
 	if err := json.Unmarshal(got, &body); err != nil {
 		t.Fatal(err)
 	}
-	if _, hasText := body["text"]; hasText {
-		t.Fatalf("the ask has a text field: %s", got)
-	}
+	// A first turn: the tool-result message after it is no human turn, and the
+	// empty optional fields are left out (no labels, no last, no state yet).
 	want := map[string]any{
 		"models":  []any{"claude-opus-5-5", "claude-sonnet-5-5"},
 		"signals": map[string]any{"agent": "claude", "context_tokens": float64(ask.InputBytes / 4), "tools_declared": float64(1), "tool_errors": float64(1), "images": true},
+		"ask":     map[string]any{"text": promptText},
+		"request": map[string]any{"endpoint": "messages", "tool_names": []any{"bash"}, "effort": "", "thinking": "", "per_message_off": false},
 	}
 	if fmt.Sprint(body) != fmt.Sprint(want) {
 		t.Fatalf("ask body = %v\nwant %v", body, want)
@@ -93,6 +94,331 @@ func TestAskSendsOnlyModelsAndSignals(t *testing.T) {
 	stale.Ask(t.Context(), ask)()
 	if auth != "Bearer cave_project_key" {
 		t.Errorf("authorization = %q, want the project key once the session token lapsed", auth)
+	}
+}
+
+func TestAskTextFromEachShape(t *testing.T) {
+	cases := []struct {
+		name, endpoint, body string
+		want                 askText
+	}{
+		{
+			name:     "claude code messages",
+			endpoint: "/v1/messages",
+			body: `{"model":"claude-opus-5-5","system":[{"type":"text","text":"You are Claude Code"}],"messages":[
+				{"role":"user","content":[{"type":"text","text":"<system-reminder>ctx</system-reminder>"},{"type":"text","text":"fix the login bug"}]},
+				{"role":"assistant","content":[{"type":"thinking","thinking":"hmm","signature":"s"},{"type":"text","text":"Looking."},{"type":"tool_use","id":"t1","name":"Read","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"package a"}]},
+				{"role":"assistant","content":[{"type":"text","text":"Fixed: the check used < not <=."}]},
+				{"role":"user","content":[{"type":"text","text":"<system-reminder>note</system-reminder>"},{"type":"text","text":"now add a test"}]},
+				{"role":"assistant","content":[{"type":"tool_use","id":"t2","name":"Bash","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t2","content":"ok"}]}]}`,
+			want: askText{
+				Text:      "<system-reminder>note</system-reminder>\nnow add a test",
+				PrevText:  "<system-reminder>ctx</system-reminder>\nfix the login bug",
+				ReplyTail: "Fixed: the check used < not <=.",
+				Turn:      1,
+			},
+		},
+		{
+			name:     "openai chat",
+			endpoint: "/v1/chat/completions",
+			body: `{"model":"gpt-6-sol","messages":[
+				{"role":"system","content":"be brief"},
+				{"role":"user","content":"first"},
+				{"role":"assistant","content":"answer one"},
+				{"role":"user","content":[{"type":"text","text":"second"},{"type":"image_url","image_url":{"url":"data:"}},{"type":"text","text":"more"}]},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"c1","content":"result"}]}`,
+			want: askText{Text: "second\nmore", PrevText: "first", ReplyTail: "answer one", Turn: 1},
+		},
+		{
+			name:     "openai responses",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"role":"developer","content":"rules"},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"first"}]},
+				{"type":"reasoning","summary":[]},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"answer one"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"second"},{"type":"input_text","text":"more"}]},
+				{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+				{"type":"function_call_output","call_id":"c1","output":"ok"}]}`,
+			want: askText{Text: "second\nmore", PrevText: "first", ReplyTail: "answer one", Turn: 1},
+		},
+		{
+			name:     "responses input string",
+			endpoint: "/v1/responses",
+			body:     `{"model":"gpt-6-sol","input":"just this"}`,
+			want:     askText{Text: "just this"},
+		},
+		{
+			// An interrupt note rides with the interrupted call's tool result,
+			// so it belongs to the tool loop: the latest human turn stays B.
+			// Blank messages count as no human turn either.
+			name:     "interrupted tool call",
+			endpoint: "/v1/messages",
+			body: `{"messages":[
+				{"role":"user","content":"A"},
+				{"role":"assistant","content":[{"type":"text","text":"R"}]},
+				{"role":"user","content":[{"type":"text","text":"  "}]},
+				{"role":"user","content":"B"},
+				{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"},{"type":"text","text":"[Request interrupted by user for tool use]"}]}]}`,
+			want: askText{Text: "B", PrevText: "A", ReplyTail: "R", Turn: 1},
+		},
+		{
+			// Accepted: a redirect typed after an interrupt rides with the tool
+			// result, so it is not sent; the next human turn decides again.
+			name:     "interrupt then type",
+			endpoint: "/v1/messages",
+			body: `{"messages":[
+				{"role":"user","content":"fix the bug"},
+				{"role":"assistant","content":[{"type":"tool_use","id":"t","name":"Bash","input":{}}]},
+				{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"rejected"},{"type":"text","text":"[Request interrupted by user for tool use]"},{"type":"text","text":"do it in Go instead"}]}]}`,
+			want: askText{Text: "fix the bug"},
+		},
+		{
+			// codex-rs's opening order (no captured Codex body in this repo):
+			// permissions, AGENTS.md, environment, then the prompt. One group,
+			// one human turn: the prompt.
+			name:     "codex opening input",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>workspace-write</permissions instructions>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo\n\n<INSTRUCTIONS>\nrun make test\n</INSTRUCTIONS>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the flaky test"}]}]}`,
+			want: askText{Text: "fix the flaky test"},
+		},
+		{
+			// Only the group's last user message counts: an image-only prompt
+			// leaves the ask empty rather than sending the environment block.
+			name:     "codex image-only prompt",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>workspace-write</permissions instructions>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_image","image_url":"data:"}]}]}`,
+		},
+		{
+			name:     "image-only earlier turn",
+			endpoint: "/v1/messages",
+			body: `{"messages":[
+				{"role":"user","content":[{"type":"image","source":{}}]},
+				{"role":"assistant","content":"A cat."},
+				{"role":"user","content":"crop it"}]}`,
+			want: askText{Text: "crop it", ReplyTail: "A cat.", Turn: 1},
+		},
+		{
+			name:     "codex second turn",
+			endpoint: "/v1/responses",
+			body: `{"model":"gpt-6-sol","input":[
+				{"type":"message","role":"developer","content":[{"type":"input_text","text":"<permissions instructions>workspace-write</permissions instructions>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"# AGENTS.md instructions for /repo"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>\n  <cwd>/repo</cwd>\n</environment_context>"}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"fix the flaky test"}]},
+				{"type":"reasoning","summary":[]},
+				{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+				{"type":"function_call_output","call_id":"c1","output":"ok"},
+				{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Fixed: the test raced the clock."}]},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"now run the suite"}]}]}`,
+			want: askText{Text: "now run the suite", PrevText: "fix the flaky test", ReplyTail: "Fixed: the test raced the clock.", Turn: 1},
+		},
+		{
+			name:     "legacy chat function result",
+			endpoint: "/v1/chat/completions",
+			body: `{"messages":[
+				{"role":"user","content":"ask"},
+				{"role":"assistant","content":null,"function_call":{"name":"f","arguments":"{}"}},
+				{"role":"function","name":"f","content":"result"},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "responses mcp approval response",
+			endpoint: "/v1/responses",
+			body: `{"input":[
+				{"role":"user","content":"ask"},
+				{"type":"mcp_approval_request","id":"a1","name":"t","arguments":"{}","server_label":"s"},
+				{"type":"mcp_approval_response","approval_request_id":"a1","approve":true},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "responses tool search output",
+			endpoint: "/v1/responses",
+			body: `{"input":[
+				{"role":"user","content":"ask"},
+				{"type":"tool_search_call","id":"s1"},
+				{"type":"tool_search_output","call_id":"s1"},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "responses user message next to a tool output",
+			endpoint: "/v1/responses",
+			body: `{"input":[
+				{"role":"user","content":"ask"},
+				{"type":"function_call","call_id":"c1","name":"shell","arguments":"{}"},
+				{"type":"function_call_output","call_id":"c1","output":"ok"},
+				{"type":"message","role":"user","content":[{"type":"input_text","text":"<environment_context>x</environment_context>"}]}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "chat user message after tool results",
+			endpoint: "/v1/chat/completions",
+			body: `{"messages":[
+				{"role":"user","content":"ask"},
+				{"role":"assistant","content":null,"tool_calls":[{"id":"c1","type":"function","function":{"name":"f","arguments":"{}"}}]},
+				{"role":"tool","tool_call_id":"c1","content":"result"},
+				{"role":"user","content":"reminder"}]}`,
+			want: askText{Text: "ask"},
+		},
+		{
+			name:     "tool results only",
+			endpoint: "/v1/messages",
+			body:     `{"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"t","content":"x"}]}]}`,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root, ok := jsonsplice.Root([]byte(tc.body))
+			if !ok {
+				t.Fatal("bad fixture")
+			}
+			if got := askTextFor(tc.endpoint, []byte(tc.body), root); got != tc.want {
+				t.Errorf("got  %+v\nwant %+v", got, tc.want)
+			}
+		})
+	}
+}
+
+// Claude Code puts its system-reminders next to tool results: that message is
+// part of the tool loop, so the loop keeps the ask's text and its decision.
+func TestToolLoopKeepsTheAsk(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	ask := func(messages string) gateway.RouteAsk {
+		body := `{"model":"claude-opus-5-5","messages":[{"role":"user","content":[{"type":"text","text":"<system-reminder>ctx</system-reminder>"},{"type":"text","text":"fix the login bug"}]}` + messages + `]}`
+		return gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: "claude-opus-5-5", Agent: "claude", SessionID: "s1", Body: []byte(body)}
+	}
+	first := ask("")
+	loop := ask(`,{"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{}}]},
+		{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"package a"},{"type":"text","text":"<system-reminder>The file changed.</system-reminder>"}]}`)
+	root, _ := jsonsplice.Root(loop.Body)
+	if got := askTextFor(loop.Endpoint, loop.Body, root); got.Text != "<system-reminder>ctx</system-reminder>\nfix the login bug" || got.Turn != 0 {
+		t.Fatalf("ask text in the loop = %+v", got)
+	}
+	for _, request := range []gateway.RouteAsk{first, loop} {
+		if answer := link.Ask(t.Context(), request)(); answer.Model != "claude-sonnet-5-5" {
+			t.Fatalf("answer = %+v", answer)
+		}
+	}
+	if hits.Load() != 1 {
+		t.Errorf("cloud asked %d times for one ask and its tool loop, want once", hits.Load())
+	}
+}
+
+// Each field keeps its end within its bound, cut on a rune boundary: Claude
+// Code puts its reminders first and the person's words last.
+func TestAskTextKeepsTheEnds(t *testing.T) {
+	long := "a" + strings.Repeat("é", 100_000) // a cut at an even offset lands mid-rune
+	body, _ := json.Marshal(map[string]any{"messages": []map[string]any{
+		{"role": "user", "content": long + "PRV"},
+		{"role": "assistant", "content": long + "END"},
+		{"role": "user", "content": long + "ASK"},
+	}})
+	root, _ := jsonsplice.Root(body)
+	got := askTextFor("/v1/messages", body, root)
+	for name, cut := range map[string]struct {
+		text, of string
+		max      int
+	}{"text": {got.Text, long + "ASK", askTextMax}, "prev_text": {got.PrevText, long + "PRV", askSideMax}, "reply_tail": {got.ReplyTail, long + "END", askSideMax}} {
+		if !strings.HasSuffix(cut.of, cut.text) || !utf8.ValidString(cut.text) || len(cut.text) > cut.max || len(cut.text) < cut.max-3 {
+			t.Errorf("%s: %d bytes, valid %v, kept the end %v", name, len(cut.text), utf8.ValidString(cut.text), strings.HasSuffix(cut.of, cut.text))
+		}
+	}
+	// A 21 KiB reminder before the first ask: prev_text still ends with it.
+	reminder := "<system-reminder>" + strings.Repeat("memory line\n", 1800) + "</system-reminder>"
+	body, _ = json.Marshal(map[string]any{"messages": []map[string]any{
+		{"role": "user", "content": []map[string]any{{"type": "text", "text": reminder}, {"type": "text", "text": "FIRST-ASK"}}},
+		{"role": "assistant", "content": "done"},
+		{"role": "user", "content": "now?"},
+	}})
+	root, _ = jsonsplice.Root(body)
+	if got := askTextFor("/v1/messages", body, root); !strings.HasSuffix(got.PrevText, "\nFIRST-ASK") || len(got.PrevText) > askSideMax {
+		t.Errorf("prev_text ends %q (%d bytes)", got.PrevText[max(len(got.PrevText)-20, 0):], len(got.PrevText))
+	}
+}
+
+// Escaping can make the JSON six times the text; the body still fits 256 KiB
+// and text keeps the longest end that fits. A text whose kept end is blank is
+// not sent: Cloud refuses it.
+func TestAskBodyFitsTheContract(t *testing.T) {
+	side := strings.Repeat("\x02", askSideMax) // "\u0002" in JSON
+	text := strings.Repeat("\x01", askTextMax)
+	raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: &askText{Text: text, PrevText: side, ReplyTail: side, Turn: 3}})
+	var got routeAsk
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if len(raw) > askBodyMax || len(raw) <= askBodyMax-6 {
+		t.Errorf("body is %d bytes, want the most that fits %d", len(raw), askBodyMax)
+	}
+	if got.Ask.Text == "" || !strings.HasSuffix(text, got.Ask.Text) || got.Ask.PrevText != side || got.Ask.ReplyTail != side || got.Ask.Turn != 3 {
+		t.Errorf("ask = text %d bytes, prev %d, reply %d, turn %d", len(got.Ask.Text), len(got.Ask.PrevText), len(got.Ask.ReplyTail), got.Ask.Turn)
+	}
+	blank := "ask" + strings.Repeat("\n", askTextMax-3)
+	if raw := askBody(routeAsk{Models: pools["anthropic"], Signals: signals{Agent: "claude"}, Ask: &askText{Text: blank, PrevText: side, ReplyTail: side}}); raw != nil {
+		t.Errorf("a blank kept end was sent: %d bytes", len(raw))
+	}
+	// An ordinary ask goes whole, its <tags> and && unescaped.
+	small := routeAsk{Models: pools["openai"], Signals: signals{Agent: "codex"}, Ask: &askText{Text: "<system-reminder>a && b</system-reminder>"}}
+	if raw := string(askBody(small)); !strings.Contains(raw, `"ask":{"text":"<system-reminder>a && b</system-reminder>"},`) {
+		t.Errorf("askBody = %s", raw)
+	}
+}
+
+// A latest turn without text keeps the model and asks nothing.
+func TestImageOnlyAskKeepsTheModel(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hits.Add(1) }))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	body := `{"model":"gpt-6-sol","input":[{"role":"user","content":"<environment_context>x</environment_context>"},{"role":"user","content":[{"type":"input_image","image_url":"data:"}]}]}`
+	answer := link.Ask(t.Context(), gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: "gpt-6-sol", SessionID: "s1", Body: []byte(body)})()
+	if answer.Model != "" || answer.Outcome != "kept" || answer.Reason != "no_human_text" || hits.Load() != 0 {
+		t.Fatalf("answer = %+v, cloud hits %d", answer, hits.Load())
+	}
+	if got := tail("abc", -1); got != "" {
+		t.Errorf("tail with a negative bound = %q", got)
+	}
+}
+
+// A repeated short ask in a later turn is a new ask, not the old decision.
+func TestRepeatedAskGetsItsOwnDecision(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		hits.Add(1)
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	for _, messages := range []string{
+		`{"role":"user","content":"yes"}`,
+		`{"role":"user","content":"yes"},{"role":"assistant","content":"Shall I also add a test?"},{"role":"user","content":"yes"}`,
+	} {
+		body := `{"model":"claude-opus-5-5","messages":[` + messages + `]}`
+		link.Ask(t.Context(), gateway.RouteAsk{Provider: "anthropic", Endpoint: "/v1/messages", Model: "claude-opus-5-5", SessionID: "s1", Body: []byte(body)})()
+	}
+	if hits.Load() != 2 {
+		t.Errorf("cloud asked %d times for two asks, want twice", hits.Load())
 	}
 }
 
@@ -204,7 +530,7 @@ func TestEventsFollowTheDataLevel(t *testing.T) {
 			}
 			raw, _ := io.ReadAll(r.Body)
 			_ = json.Unmarshal(raw, &body)
-			if body.SchemaVersion != 1 || strings.Contains(string(raw), secretPrompt) {
+			if body.SchemaVersion != 1 || strings.Contains(string(raw), promptText) {
 				t.Errorf("bad batch: %s", raw)
 			}
 			mu.Lock()

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/route-ask-v1.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.1.0/packages/shared/contracts/schemas/route-ask-v1.schema.json",
   "title": "Caveman route ask v1",
-  "description": "The body a signed-in local runtime posts to Cloud's POST /v1/route: the caller's models and counts computed on the machine. No prompt text, file contents or headers. The tenant comes from the bearer token, never from the body. Cloud answers with one of the models, or the runtime keeps the asked one.",
+  "description": "The body a signed-in local runtime posts to Cloud's POST /v1/route, at most 256 KiB: the caller's models, counts computed on the machine, what the request declares (request), what the session's previous request ran (last), Cloud's opaque state for the session (state, parent_state), and, on a turn's first ask, the ask Cloud picks from (the latest human turn, the one before it and the end of the agent's last reply). Those turns go raw, including whatever the agent writes into them, such as CLAUDE.md or memory reminders, @-mentioned file contents, shell output, compaction summaries, or Codex AGENTS.md and environment blocks; structured tool calls, tool results and the system prompt are not sent. The tenant comes from the bearer token, never from the body. Cloud answers with model (one of models; cheaper or pricier than the asked one), effort (the effort to run at; \"\" leaves the request's), effort_mode (\"message\": an Anthropic per-message effort mark, which keeps the cached prefix; \"top\": the top-level field; \"\"), default_effort (optional: the asked model's catalog default effort, \"\" when unknown; the runtime keeps it per session, a forked child taking its parent's) and state (opaque, at most 4096 bytes, sent back on the session's next ask; an answer without state, such as one for a compaction or side request, a pause or a fallback, keeps the session's current one). The runtime applies the answer and starts per-message marks only for effort_mode \"message\"; a \"top\" answer on a session with marks goes in as one more mark, never wiping them. On a failure it keeps the asked model. Without an effort (a failure, or effort \"\") a session without marks gets the request as the agent sent it, top-level effort included (one cache restart where Cloud's was); one with marks keeps them (its history does not change) and runs at the request's own top-level effort, marked when it differs from the one in force, or, when the request sets none, at the kept default_effort the same way, and only when no default is known goes as the agent sent it, without the marks.",
   "type": "object",
   "additionalProperties": false,
   "required": ["models", "signals"],
@@ -26,9 +26,70 @@
         "tool_errors": { "$ref": "#/$defs/count", "description": "Tool results in the request marked as errors." },
         "images": { "type": "boolean", "description": "The request carries image input." }
       }
-    }
+    },
+    "ask": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["text"],
+      "description": "The conversation, raw as the agent sent it. Turns are input groups: the items between two model outputs (an assistant message, a tool call, reasoning). A group that carries a tool result (an Anthropic tool_result block, an OpenAI chat tool or function message, a Responses *_output item or mcp_approval_response) belongs to the tool loop and is no human turn, with any text riding along: injected reminders, an interrupt note, or a redirect typed after an interrupt, which is therefore not sent (the next human turn is). Any other group with a user message is one human turn, read from its last user message only, whose text blocks are joined with \"\\n\"; when that message has no text (an image), no ask is sent. Byte bounds are UTF-8; every field keeps its end, cut on a rune boundary. Optional fields are left out when empty. Sent on a turn's first ask (its tool loop reuses the answer); left out for a compaction or side request, which the agent labels (x-claude-code-compaction, or x-claude-code-request-class compaction or auxiliary) and Cloud answers per request.",
+      "properties": {
+        "text": { "type": "string", "minLength": 1, "maxLength": 131072, "pattern": "\\S", "description": "The latest human turn. At most 131072 bytes, keeping the end." },
+        "prev_text": { "type": "string", "maxLength": 16384, "description": "The human turn before the latest one. At most 16384 bytes, keeping the end." },
+        "reply_tail": { "type": "string", "maxLength": 16384, "description": "The newest assistant text (not tool calls) before the latest human turn. At most 16384 bytes, keeping the end." },
+        "turn": { "type": "integer", "minimum": 0, "maximum": 1000000, "description": "Human turns before the latest one." }
+      }
+    },
+    "request": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["endpoint", "effort", "thinking", "per_message_off"],
+      "description": "What the request itself declares, read on the machine as sent. Byte bounds are UTF-8, cut on a rune boundary.",
+      "properties": {
+        "endpoint": { "enum": ["messages", "chat", "responses"], "description": "Anthropic Messages, OpenAI chat completions or OpenAI Responses." },
+        "labels": {
+          "type": "object",
+          "additionalProperties": false,
+          "description": "Raw values of these request headers when present, names lower-cased. A value over its bound is left out, never cut. Codex's turn metadata also comes from the body's client_metadata[\"x-codex-turn-metadata\"] when no header carries it; on a Claude Code child, x-caveman-agent (when the agent sent none) is the subagent_type of the tool call in the newest assistant message, which a forked child resends. Left out when none.",
+          "properties": {
+            "x-claude-code-request-class": { "$ref": "#/$defs/label" },
+            "x-claude-code-compaction": { "$ref": "#/$defs/label" },
+            "x-claude-code-agent-id": { "$ref": "#/$defs/label" },
+            "x-claude-code-parent-agent-id": { "$ref": "#/$defs/label" },
+            "x-claude-code-context-compacted": { "$ref": "#/$defs/label" },
+            "x-openai-subagent": { "$ref": "#/$defs/label" },
+            "x-codex-turn-metadata": { "type": "string", "minLength": 1, "maxLength": 16384, "description": "Codex's turn metadata JSON, whole; at most 16384 bytes." },
+            "x-codex-parent-thread-id": { "$ref": "#/$defs/label" },
+            "thread-id": { "$ref": "#/$defs/label" },
+            "x-caveman-agent": { "$ref": "#/$defs/label" },
+            "x-parent-session-id": { "$ref": "#/$defs/label" }
+          }
+        },
+        "tool_names": { "type": "array", "maxItems": 128, "items": { "type": "string", "minLength": 1, "maxLength": 64 }, "description": "The request's declared tool names in order (Anthropic tools[].name; OpenAI tools[].name or tools[].function.name), at most 128; a name over 64 bytes is left out. Left out when none." },
+        "effort": { "enum": ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "The effort the request carries as sent: Anthropic output_config.effort, Responses reasoning.effort, chat reasoning_effort; empty when none or another value." },
+        "thinking": { "enum": ["adaptive", "enabled", "disabled", "between_tools", ""], "description": "Anthropic top-level thinking.type as sent; empty when none, another value or another provider." },
+        "per_message_off": { "type": "boolean", "description": "This session's per-message effort is latched off: Anthropic refused a mark and the retry with top-level effort only was served, or it answered a request without marks with refusal wording." }
+      }
+    },
+    "last": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort", "age_s", "input_tokens", "cache_read_tokens", "cache_write_tokens", "compacted"],
+      "description": "What this session's previous upstream request ran, read from the provider's answer and the bytes sent; requests the runtime did not ask about (a model outside models, routing off) and side requests the agent labels auxiliary are skipped. Left out on the session's first request. A Claude Code child (x-claude-code-agent-id) is a session of its own.",
+      "properties": {
+        "model": { "type": "string", "maxLength": 128, "description": "The model the provider's answer names; the model sent when it names none (an encoded answer)." },
+        "effort": { "enum": ["", "none", "minimal", "low", "medium", "high", "xhigh", "max"], "description": "The effort in force in the bytes sent: the newest per-message mark, else the top-level field; empty when none or another value." },
+        "age_s": { "$ref": "#/$defs/count", "description": "Seconds since that request's answer finished." },
+        "input_tokens": { "$ref": "#/$defs/count", "description": "Total input tokens in the provider's usage, cache reads and writes included." },
+        "cache_read_tokens": { "$ref": "#/$defs/count", "description": "Cache-read input tokens in the provider's usage." },
+        "cache_write_tokens": { "$ref": "#/$defs/count", "description": "Cache-write (creation) input tokens in the provider's usage." },
+        "compacted": { "type": "boolean", "description": "That request carried x-claude-code-context-compacted or was a compaction." }
+      }
+    },
+    "state": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "The opaque state Cloud answered this session's previous ask with, sent back unchanged. Kept in memory for one login, never on disk." },
+    "parent_state": { "type": "string", "minLength": 1, "maxLength": 4096, "description": "The parent session's state, on a subagent's asks." }
   },
   "$defs": {
-    "count": { "type": "integer", "minimum": 0, "maximum": 1000000000 }
+    "count": { "type": "integer", "minimum": 0, "maximum": 1000000000 },
+    "label": { "type": "string", "minLength": 1, "maxLength": 256 }
   }
 }
