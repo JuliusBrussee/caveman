@@ -15,8 +15,6 @@ Compress natural language files (CLAUDE.md, todos, preferences) into caveman-spe
 
 `/caveman-compress <filepath>` or when user asks to compress a memory file.
 
-**Requires an explicit filepath.** If the user pastes raw text instead of naming a file, do NOT improvise an inline compression — ask them for the filepath to compress, or offer to save the pasted text to a file first. Writing your own reasoning/commentary about the request into the compressed output (e.g. "User passed text directly, not a filepath...") is the exact failure this guards against (PLEX-6282) — never let that leak into a saved file.
-
 ## Process
 
 1. The compression scripts live in `scripts/` (adjacent to this SKILL.md). If the path is not immediately available, search for `scripts/__main__.py` next to this SKILL.md.
