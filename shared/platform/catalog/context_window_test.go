@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
@@ -25,5 +26,14 @@ func TestContextWindowTokensRequiresExactCatalogMatch(t *testing.T) {
 			t.Errorf("ContextWindowTokens(%q, %q) = %d, %v; want %d, %v",
 				test.provider, test.model, got, ok, test.want, test.ok)
 		}
+	}
+}
+
+func TestEffortLevels(t *testing.T) {
+	if got, ok := catalog.EffortLevels("openai", "gpt-6-sol"); !ok || strings.Join(got, ",") != "none,low,medium,high,xhigh,max" {
+		t.Fatalf("gpt-6-sol = %v %v", got, ok)
+	}
+	if got, ok := catalog.EffortLevels("openai", "no-such-model"); ok {
+		t.Fatalf("unknown model = %v", got)
 	}
 }

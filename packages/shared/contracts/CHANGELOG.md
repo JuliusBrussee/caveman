@@ -19,6 +19,16 @@
   `prev_text` and `reply_tail` (at most 16384 bytes each) and `turn`
   (0..1000000). Every field keeps its end. The description now says the ask
   carries raw conversation text.
+- `route-ask-v1` (additive, hub route-ask-v2): optional, strict `pool` next to
+  `models`, at most 64 entries of `{ id, model, host, via: "local" }`: the
+  harness's own models (`harness/<model>`) then every provider login the
+  person added (`caveman providers add|login`) times the catalog models its
+  host serves. Left out when no login adds an entry. The answer may carry
+  `pool_id` and `via` (`local` | `cloud`; Cloud may add `via: "cloud"`
+  entries on its side, which the runtime sends to the Cloud gateway with
+  `x-caveman-route: <pool_id>`, pool_id `cloud:<provider>:<model>`, on the
+  project gateway key only). A Cloud whose 400 names `pool` is asked once
+  more without it.
 - Schema `$id`s name `contracts-v2.1.0`.
 
 ## 2.0.0 — 2026-09-24

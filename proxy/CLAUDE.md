@@ -201,6 +201,42 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   none in `/me` means `counts`, an unreadable `/me` lowers it to `counts`, `off` or no level sends
   nothing. Model ids from other origins go as `custom`. Signing in or out never changes another
   stage.
+- **pool routing** (`internal/pool`, `internal/translate`, `internal/gateway/route_pool.go`):
+  the provider keys and logins a person adds (`caveman providers add|login`;
+  `$CAVEMAN_HOME/provider-logins.json` lists ids, where each secret lives and the `cloud` switch,
+  written under `provider-logins.json.lock` by the CLI and the runtime alike; the secret is in the
+  keychain service `caveman-provider` or a 0600 file under `provider-logins/`, never both) become
+  the ask's additive `pool` (`harness/<model>`, then `<host>/<model>` per login times the static
+  catalog models its host serves, on a wire `translate.Supported` reaches from the caller's
+  grammar; at most 64; left out when no login adds one; only a 400 naming `pool` is asked again
+  without it, and pool then stays off for that login). An answer's `pool_id` + `via`: a harness
+  entry applies like `model`; a login entry goes straight to that host on that login
+  (`RouteTarget`, translated when its grammar differs, the unstripped body so each host gets its own
+  reasoning back, top-level effort, the agent's copy naming the asked model); `via: cloud`
+  (`cloud:<provider>:<model>`) sends the agent's own bytes in its grammar to the Cloud gateway
+  (`gatewayUrl`, else `baseURL`) with `x-caveman-route` (and `x-caveman-effort` when the answer
+  carries one) on the project gateway key only (the gateway
+  refuses login tokens; no key, or `caveman providers cloud off`, runs the asked model), and that
+  whole request DOES pass through Caveman Cloud. Route asks to the gateway use the project key too.
+  Any failure before content reaches the agent (refused translation, translator panic, connect
+  error, non-2xx, or a 2xx that fails or ends first: `translate.ErrNotServed`, the translator holds
+  its output until the first content, for at most `gateHold` (10 s) even while the host sends only
+  comments or pings; after it the headers go and pings start, only between the upstream's events)
+  falls back to the asked model on the harness credential, at the answered effort fitted to that
+  model's levels (`translate.FitEffort`: the Claude table, the catalog's `effort_levels`, high at
+  most with thinking off), and marks the ask rejected; a stream cut after content aborts HTTP
+  framing and never closes a half-finished tool call, while the host's own failure event after
+  content ends the stream as sent, without an abort (`pool_upstream_failed`). The row keeps
+  `route_pool_id`, `route_reason` and the host's answer id (`upstream_response_id`, e.g.
+  OpenRouter's `gen-…`); each failure is logged. A translated Messages stream's `message_start`
+  carries an input estimate (`x-caveman-input-tokens: estimated`) that `message_delta`'s exact
+  count replaces. A pool turn is not `last` and books no dollars off Anthropic/OpenAI list
+  prices. Every request to Anthropic's/OpenAI's own API (not pass-through) drops reasoning another host
+  wrote (`translate.AnthropicNative`/`OpenAINative`, byte for byte when there is none; a Responses
+  host's encrypted reasoning is route-tagged so only that host gets it back; per-message effort
+  marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages callers reach it
+  through Messages→Responses, chat callers get no OpenAI entry. Chat callers reach chat hosts only. Terms: no Claude Pro/Max, Google or Copilot login is ever added; every OAuth row
+  in `providers.json` carries a terms note.
 - **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
 
 See ../../CLAUDE.md (root)

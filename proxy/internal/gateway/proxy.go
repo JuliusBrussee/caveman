@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/bedrock"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
@@ -399,9 +400,58 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Route: the answer moves the compressed request to another model of the
-	// same provider and sets its effort. Anything else keeps the asked model.
+	// same provider and sets its effort, or sends it to a pool entry on another
+	// login or the Cloud gateway. Anything else keeps the asked model.
 	if awaitRoute != nil {
 		answer := awaitRoute()
+		if target := answer.Target; target != nil {
+			// The bytes compression produced go, unless they lean on the
+			// retrieve tool loop, which only runs on the harness's own path.
+			// Unstripped: the translator hands each host its own reasoning.
+			sent := transform.Body
+			if retrieveInjected {
+				sent = body
+			}
+			w.Header().Set("x-caveman-routed-from", modelRequested)
+			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
+			if result.errMsg != "" && s.logger != nil {
+				s.logger.Warn("pool target failed", "pool_id", target.PoolID, "via", target.Via, "reason", result.errMsg, "served", result.served, "request_id", requestID)
+			}
+			if result.served {
+				evidence.route = answer
+				evidence.acceptedBody = sent
+				routed := meta
+				routed.Provider, routed.Model = target.Host, target.Model
+				if target.Host != "anthropic" && target.Host != "openai" {
+					// A plan, Caveman Cloud or a host without list prices here: honest zero dollars.
+					evidence.statsPricingUnsupportedReason = "custom_provider_origin"
+				}
+				if run != nil && run.key != "" {
+					// last stays the harness's own previous request (contracts: a
+					// model outside models is skipped); Cloud's state carries the move.
+					s.routes.markMoved(run.key)
+				}
+				estimateWG.Wait()
+				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, false, compressionEligible)
+				if result.errMsg != "" && result.errMsg != "pool_upstream_failed" && result.stream {
+					panic(http.ErrAbortHandler) // a cut stream never ends as a clean EOF
+				}
+				return
+			}
+			w.Header().Del("x-caveman-routed-from")
+			if answer.Reject != nil {
+				answer.Reject() // the rest of this ask stays on the asked model
+			}
+			// The asked model runs at the answered effort, as a non-pool answer
+			// would, fitted to that model's levels (the word was chosen for the target).
+			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID,
+				Effort: translate.FitEffort(grammarOf(meta.Endpoint), meta.Model, answer.Effort, transform.Body), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
+		}
+		// The harness's own path: reasoning another host wrote earlier in the
+		// conversation goes no further than that host; a body without any goes
+		// byte for byte.
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		if answer.Model != "" && answer.Model != meta.Model {
 			if routed, ok := setModel(transform.Body, answer.Model); ok {
 				transform.Body = routed
@@ -414,7 +464,16 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
 	} else if run != nil {
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
+	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
+		// Every other request to Anthropic's or OpenAI's own API too (encoded,
+		// subscription, routing off): byte for byte when it carries nothing
+		// another host wrote. Pass-through and other origins are left alone:
+		// only the provider's own API refuses another host's reasoning.
+		if upstream, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{}); err == nil && statsPricingOriginKnown(meta.Provider, upstream) {
+			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		}
 	}
 	transformedHash := sha256.Sum256(transform.Body)
 	evidence.acceptedBody = transform.Body
@@ -858,6 +917,9 @@ type requestEvidence struct {
 	// route is the route stage's answer; modelRequested what the agent asked for.
 	route          RouteAnswer
 	modelRequested string
+	// poolID is the pool entry the request went to first; upstreamID the
+	// host's own answer id (translate.Reply.UpstreamID).
+	poolID, upstreamID string
 }
 
 func requestEvidenceFromHeaders(headers http.Header) requestEvidence {
@@ -1590,6 +1652,8 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		RouteOutcome:                 evidence.route.Outcome,
 		RouteReason:                  evidence.route.Reason,
 		RouteDecisionID:              evidence.route.DecisionID,
+		RoutePoolID:                  evidence.poolID,
+		UpstreamResponseID:           evidence.upstreamID,
 		ProviderOriginKnown:          evidence.statsPricingUnsupportedReason != "custom_provider_origin",
 		Endpoint:                     meta.Endpoint,
 		Stream:                       meta.Stream,

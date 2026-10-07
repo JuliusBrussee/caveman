@@ -25,9 +25,10 @@ import (
 
 // The route stage (ADR 0083 §4: parse, ask, compress, route). The ask starts
 // before compression so the Cloud round trip overlaps it; the answer is applied
-// to the bytes compression produced. Same provider only in this cut: an answer
-// names another model of the provider the agent already talks to, swapped into
-// the body's top-level "model", and the effort to run at. Every failure keeps
+// to the bytes compression produced. An answer names another model of the
+// provider the agent already talks to, swapped into the body's top-level
+// "model", and the effort to run at; or a pool entry on another login or the
+// Cloud gateway (RouteAnswer.Target, route_pool.go). Every failure keeps
 // the asked model and runs at the request's own top-level effort: a session
 // that has per-message state keeps its marks and fixed top-level field (so its
 // history does not change) and gets the agent's effort (or, when it sets
@@ -93,6 +94,9 @@ type RouteAnswer struct {
 	// Reject, when set, tells the link the provider refused the routed model
 	// or effort, so the rest of this ask stays as the agent asked.
 	Reject func()
+	// Target, when set, sends the request to a pool entry off the harness's
+	// own provider and credential (route_pool.go); Model is then unset.
+	Target *RouteTarget
 }
 
 // CloudLink is the optional signed-in Cloud connection: the route stage asks
@@ -417,6 +421,16 @@ func (rs *routeSessions) served(key string, last RouteLast, at time.Time, moved 
 	if session := rs.get(key, true); session != nil {
 		session.last, session.lastAt = &last, at
 		session.moved = session.moved || moved
+	}
+}
+
+// markMoved records that a pool host (another login, or Caveman Cloud)
+// served one of key's requests.
+func (rs *routeSessions) markMoved(key string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if session := rs.get(key, true); session != nil {
+		session.moved = true
 	}
 }
 
