@@ -621,10 +621,11 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 		}
 	}
 	err := cut()
-	if terminal && tail == nil {
+	if terminal && (tail == nil || err != nil) {
 		// Ended at the answer's end without the upstream closing the
 		// stream: the last event is ended, and chat's [DONE] sent. A reset
-		// after the end changes nothing.
+		// after the end changes nothing; a line it cut short is dropped.
+		tail = nil
 		if openData {
 			_, _ = w.Write([]byte("\n"))
 		}
@@ -762,9 +763,10 @@ func relayFailed(data []byte) bool {
 	return string(kind) == "error" || string(kind) == "response.failed" || len(failure) > 0 && failure[0] == '{'
 }
 
-// finishReason reports a chat chunk carrying a non-empty finish_reason. A
-// raw `"finish_reason"` followed by a colon is always a key: inside a JSON
-// string every quote is escaped.
+// finishReason reports a chat chunk carrying a non-empty string
+// finish_reason. A raw `"finish_reason"` followed by a colon is a key (inside
+// a JSON string every quote is escaped), at whatever depth: a chat chunk has
+// it only on its choices.
 func finishReason(data []byte) bool {
 	for rest := data; ; {
 		at := bytes.Index(rest, []byte(`"finish_reason"`))

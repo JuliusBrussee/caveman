@@ -895,34 +895,40 @@ func TestThirdReviewFindings(t *testing.T) {
 	}
 }
 
-// An answer ends when the upstream's terminal event arrives, not when the
-// upstream closes the connection: with the upstream lingering 30 s after it,
-// every streamed direction (the relay included) sends its final event at
-// once, with the usage. A chat upstream that never sends [DONE] holds the
-// answer for usageGrace at most.
-func TestTerminalEventEndsTheStream(t *testing.T) {
-	callers := map[string]string{
+// streamCallers, streamTargets and streamAnswers are one streamed turn per
+// grammar: the caller's body, the upstream's options, a whole answer.
+var (
+	streamCallers = map[string]string{
 		Chat:      `{"model":"x","stream":true,"stream_options":{"include_usage":true},"messages":[{"role":"user","content":"hi"}]}`,
 		Messages:  `{"model":"m","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}`,
 		Responses: `{"model":"m","stream":true,"input":"hi"}`,
 	}
-	targets := map[string]Options{
+	streamTargets = map[string]Options{
 		Messages:  {Model: "claude-opus-5-5", Route: "anthropic"},
 		Responses: {Model: "gpt-6-sol", Route: "openai"},
 		Chat:      {Model: "deepseek-v4-flash", Route: "deepseek"},
 	}
-	chatFrames := []string{`{"id":"c","choices":[{"delta":{"content":"hi"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`,
+	streamChatFrames = []string{`{"id":"c","choices":[{"delta":{"content":"hi"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`,
 		`{"id":"c","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":50}}`}
-	answers := map[string]string{
+	streamAnswers = map[string]string{
 		Messages: anthropicText("hi"),
 		Responses: upstreamResponses(`{"type":"response.created","response":{"id":"r"}}`,
 			`{"type":"response.output_item.added","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[]}}`,
 			`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"hi"}`,
 			`{"type":"response.output_item.done","output_index":0,"item":{"type":"message","id":"msg_1","role":"assistant","content":[{"type":"output_text","text":"hi"}]}}`,
 			`{"type":"response.completed","response":{"id":"r","status":"completed","usage":{"input_tokens":10,"output_tokens":50,"total_tokens":60}}}`),
-		Chat: chatStream(chatFrames...),
+		Chat: chatStream(streamChatFrames...),
 	}
-	final := map[string]string{Messages: "message_stop", Chat: "data: [DONE]", Responses: "response.completed"}
+	streamFinal = map[string]string{Messages: "message_stop", Chat: "data: [DONE]", Responses: "response.completed"}
+)
+
+// An answer ends when the upstream's terminal event arrives, not when the
+// upstream closes the connection: with the upstream lingering 30 s after it,
+// every streamed direction (the relay included) sends its final event at
+// once, with the usage. A chat upstream that never sends [DONE] holds the
+// answer for usageGrace at most.
+func TestTerminalEventEndsTheStream(t *testing.T) {
+	callers, targets, answers, final, chatFrames := streamCallers, streamTargets, streamAnswers, streamFinal, streamChatFrames
 	run := func(from, to, answer string, within time.Duration) {
 		t.Helper()
 		_, reply, err := Request(from, to, []byte(callers[from]), targets[to])
@@ -1027,6 +1033,25 @@ func TestRelayDecidesByEventType(t *testing.T) {
 	if out, _, err := relayServe(t, Chat, `{"model":"x","stream":true,"messages":[]}`, failed, true); !errors.Is(err, ErrUpstreamFailed) || !strings.HasSuffix(out, `"busy"}}`+"\n\n") {
 		t.Errorf("chat error: err %v %q", err, out)
 	}
+	// Content that reads like a held event opens the gate like any content;
+	// a held event keeps it shut.
+	for grammar, stream := range map[string]string{
+		Messages: sse(`{"type":"message_start","message":{"id":"m","usage":{"input_tokens":1}}}`,
+			`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"message_start"}}`,
+			`{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`),
+		Responses: sse(`{"type":"response.created","response":{"id":"r"}}`,
+			`{"type":"response.output_text.delta","item_id":"msg_1","output_index":0,"delta":"response.in_progress"}`,
+			`{"type":"response.failed","response":{"id":"r","error":{"code":"server_error","message":"busy"}}}`),
+	} {
+		body := map[string]string{Messages: `{"model":"m","max_tokens":10,"stream":true,"messages":[]}`, Responses: `{"model":"m","stream":true,"input":"hi"}`}[grammar]
+		if out, _, err := relayServe(t, grammar, body, stream, true); !errors.Is(err, ErrUpstreamFailed) || !strings.Contains(out, "busy") {
+			t.Errorf("%s content reading like an event: err %v\n%s", grammar, err, out)
+		}
+	}
+	held := sse(`{"type":"message_start","message":{"id":"m","usage":{"input_tokens":1}}}`, `{"type":"ping"}`, `{"type":"error","error":{"type":"overloaded_error","message":"busy"}}`)
+	if out, _, err := relayServe(t, Messages, `{"model":"m","max_tokens":10,"stream":true,"messages":[]}`, held, true); !errors.Is(err, ErrNotServed) || out != "" {
+		t.Errorf("held events opened the gate: err %v %q", err, out)
+	}
 }
 
 // slowWriter stalls once, on the write that carries marker, as a client whose
@@ -1049,57 +1074,93 @@ func (s *slowWriter) Write(p []byte) (int, error) {
 func (s *slowWriter) Flush() {}
 
 // A client slower than usageGrace on the finish chunk still gets the usage
-// and [DONE] the upstream had already sent.
+// and [DONE] the upstream had already sent. (The relay arms the clock at the
+// finish chunk, before writing it; a translated stream writes nothing until
+// the usage or [DONE] arrives.)
 func TestSlowClientKeepsTheUsage(t *testing.T) {
-	stream := chatStream(`{"id":"c","choices":[{"delta":{"content":"one"}}]}`, `{"id":"c","choices":[{"delta":{},"finish_reason":"stop"}]}`, `{"id":"c","choices":[],"usage":{"prompt_tokens":10,"completion_tokens":50}}`)
+	stream := chatStream(streamChatFrames...)
 	for run := 0; run < 5; run++ {
-		for name, serve := range map[string]func(*slowWriter, io.ReadCloser) (Usage, error){
-			"relay": func(w *slowWriter, body io.ReadCloser) (Usage, error) {
-				w.marker = `"finish_reason":"stop"`
-				return Relay(Chat, []byte(`{"model":"x","stream":true,"messages":[]}`), "shown").Serve(w, &http.Response{StatusCode: 200, Header: http.Header{}, Body: body})
-			},
-			"messages>chat": func(w *slowWriter, body io.ReadCloser) (Usage, error) {
-				w.marker = `"text_delta"`
-				_, reply, err := Request(Messages, Chat, []byte(`{"model":"m","max_tokens":10,"stream":true,"messages":[{"role":"user","content":"hi"}]}`), Options{Model: "deepseek-v4-flash", Route: "deepseek"})
-				if err != nil {
-					return Usage{}, err
-				}
-				return reply.Serve(w, &http.Response{StatusCode: 200, Header: http.Header{}, Body: body})
-			},
-		} {
-			upstream, feed := io.Pipe()
-			go func() { _, _ = io.WriteString(feed, stream) }() // then lingers
-			w := &slowWriter{ResponseRecorder: httptest.NewRecorder(), stall: usageGrace + 50*time.Millisecond}
-			usage, err := serve(w, upstream)
-			_ = feed.Close()
-			if err != nil || usage.OutputTokens != 50 || !strings.Contains(w.Body.String(), "[DONE]") && name == "relay" {
-				t.Errorf("%s run %d: err %v usage %+v\n%s", name, run, err, usage, w.Body.String())
-			}
+		upstream, feed := io.Pipe()
+		go func() { _, _ = io.WriteString(feed, stream) }() // then lingers
+		w := &slowWriter{ResponseRecorder: httptest.NewRecorder(), marker: `"finish_reason":"stop"`, stall: usageGrace + 50*time.Millisecond}
+		usage, err := Relay(Chat, []byte(`{"model":"x","stream":true,"messages":[]}`), "shown").Serve(w, &http.Response{StatusCode: 200, Header: http.Header{}, Body: upstream})
+		_ = feed.Close()
+		if err != nil || usage.OutputTokens != 50 || strings.Count(w.Body.String(), "[DONE]") != 1 {
+			t.Errorf("run %d: err %v usage %+v\n%s", run, err, usage, w.Body.String())
 		}
 	}
 }
 
-// A reset right after the terminal event: the answer is whole, so no error
-// follows it.
-func TestResetAfterTheAnswerIsNoError(t *testing.T) {
-	resetAfter := func(answer string) io.ReadCloser {
-		upstream, feed := io.Pipe()
-		go func() {
-			_, _ = io.WriteString(feed, answer)
-			_ = feed.CloseWithError(io.ErrUnexpectedEOF)
-		}()
-		return upstream
+// resetReader gives data, then a connection reset; reset closes once the
+// reset was handed over.
+type resetReader struct {
+	data  []byte
+	reset chan struct{}
+}
+
+func (r *resetReader) Read(p []byte) (int, error) {
+	if len(r.data) > 0 {
+		n := copy(p, r.data)
+		r.data = r.data[n:]
+		return n, nil
 	}
-	for run := 0; run < 5; run++ {
-		recorder := httptest.NewRecorder()
-		_, err := Relay(Messages, []byte(`{"model":"m","max_tokens":10,"stream":true,"messages":[]}`), "shown").Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: resetAfter(anthropicText("hi"))})
-		if out := recorder.Body.String(); err != nil || strings.Contains(out, "event: error") {
-			t.Fatalf("run %d: err %v\n%s", run, err, out)
-		}
-		_, reply, _ := Request(Chat, Messages, []byte(`{"model":"x","stream":true,"messages":[{"role":"user","content":"hi"}]}`), Options{Model: "claude-opus-5-5", Route: "anthropic"})
-		recorder = httptest.NewRecorder()
-		if _, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: resetAfter(anthropicText("hi"))}); err != nil || !strings.Contains(recorder.Body.String(), "[DONE]") {
-			t.Fatalf("run %d chat>messages: err %v\n%s", run, err, recorder.Body.String())
+	select {
+	case <-r.reset:
+	default:
+		close(r.reset)
+	}
+	return 0, io.ErrUnexpectedEOF
+}
+
+// afterReset holds the first write the caller gets until the upstream reader
+// has met the reset, so the reset is on record before the stream ends.
+type afterReset struct {
+	*httptest.ResponseRecorder
+	reset  chan struct{}
+	waited bool
+}
+
+func (w *afterReset) Write(p []byte) (int, error) {
+	if !w.waited {
+		w.waited = true
+		<-w.reset
+		time.Sleep(20 * time.Millisecond) // the reader records it right after
+	}
+	return w.ResponseRecorder.Write(p)
+}
+
+func (w *afterReset) Flush() {}
+
+// A reset after the answer's terminal event changes nothing, in every
+// direction and the relay: the answer ends as it would have, with no error,
+// whether the reset came after the end or cut a later line short (inside
+// [DONE], inside the usage chunk, inside a CRLF blank line).
+func TestResetAfterTheAnswerIsNoError(t *testing.T) {
+	cutBlank := func(answer string) string { // CRLF framing, cut inside the last blank line
+		crlf := strings.ReplaceAll(answer, "\n", "\r\n")
+		return crlf[:len(crlf)-1]
+	}
+	shapes := map[string]map[string]string{
+		Messages:  {"whole": streamAnswers[Messages], "crlf blank cut": cutBlank(streamAnswers[Messages])},
+		Responses: {"whole": streamAnswers[Responses], "crlf blank cut": cutBlank(streamAnswers[Responses])},
+		Chat: {"whole": streamAnswers[Chat], "cut inside [DONE]": sse(streamChatFrames...) + "data: [DO",
+			"cut inside the usage": sse(streamChatFrames[:2]...) + `data: {"id":"c","choices":[],"usa`},
+	}
+	failure := map[string]string{Messages: "event: error", Chat: `{"error"`, Responses: "response.failed"}
+	for from, body := range streamCallers {
+		for to, opts := range streamTargets {
+			for shape, answer := range shapes[to] {
+				_, reply, err := Request(from, to, []byte(body), opts)
+				if err != nil {
+					t.Fatal(err)
+				}
+				upstream := &resetReader{data: []byte(answer), reset: make(chan struct{})}
+				w := &afterReset{ResponseRecorder: httptest.NewRecorder(), reset: upstream.reset}
+				_, err = reply.Serve(w, &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(upstream)})
+				if out := w.Body.String(); err != nil || !strings.Contains(out, streamFinal[from]) || strings.Contains(out, failure[from]) {
+					t.Errorf("%s>%s %s: err %v\n%s", from, to, shape, err, out)
+				}
+			}
 		}
 	}
 }

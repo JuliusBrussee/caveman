@@ -442,7 +442,8 @@ func eachItem(arr []byte, fn func(raw []byte, o obj)) bool {
 
 // topMember is the value of key among the members of the object data (the
 // last of duplicates), nil when absent or data is no object. It reads the
-// members in place and keeps none: no allocation.
+// members in place and keeps none: it allocates only to decode a key longer
+// than key that holds an escape.
 func topMember(data []byte, key string) []byte {
 	i := skipSpace(data, 0)
 	if i >= len(data) || data[i] != '{' {
