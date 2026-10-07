@@ -69,6 +69,7 @@ func newMsgBuilder(size int) *msgBuilder {
 	if pooled, ok := arenas.Get().(*[]byte); ok && cap(*pooled) >= size {
 		b.arena = (*pooled)[:0]
 	} else {
+		size = capHint(size, 0)
 		b.arena = make([]byte, 0, size+size/8+1024)
 	}
 	return b
@@ -269,7 +270,7 @@ func (b *msgBuilder) assemble(breakpoints bool) []byte {
 			break
 		}
 	}
-	out := make([]byte, 0, len(b.arena)+len(b.messages)*48+256)
+	out := make([]byte, 0, capHint(len(b.arena), 256)+capHint(len(b.messages), 0)*48)
 	out = append(out, '[')
 	for index, message := range b.messages {
 		marked := -1

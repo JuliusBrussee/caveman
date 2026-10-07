@@ -227,6 +227,18 @@ func items(raw []byte) [][]byte {
 
 // --- writing ------------------------------------------------------------------
 
+// maxHint bounds a capacity hint taken from a body's length: no body comes
+// near it, and the sum stays far from overflowing.
+const maxHint = 1 << 30
+
+// capHint is n (at most maxHint) plus extra: a buffer's capacity hint.
+func capHint(n, extra int) int {
+	if n > maxHint {
+		n = maxHint
+	}
+	return n + extra
+}
+
 // appendString appends s as a JSON string. Invalid UTF-8 becomes U+FFFD, as
 // encoding/json writes it.
 func appendString[T ~string | ~[]byte](dst []byte, s T) []byte {
@@ -377,7 +389,7 @@ func topFields(body []byte) (map[string]json.RawMessage, error) {
 	if !ok {
 		return nil, errBadJSON
 	}
-	out := make(map[string]json.RawMessage, len(kvs)+4)
+	out := make(map[string]json.RawMessage, capHint(len(kvs), 4))
 	for _, member := range kvs {
 		out[string(unescapedKey(member.key))] = member.val
 	}
@@ -507,7 +519,7 @@ func editArray(arr []byte, edit func(raw []byte, o obj) (replacement []byte, dro
 	if changes == nil || !ok {
 		return arr, false // a malformed array is never rewritten into a shorter valid one
 	}
-	out := make([]byte, 0, len(arr)+64)
+	out := make([]byte, 0, capHint(len(arr), 64))
 	out = append(out, '[')
 	for at, raw := range raws {
 		if replacement, changed := changes[at]; changed {
@@ -613,7 +625,7 @@ func validText(body []byte) []byte {
 	if utf8.Valid(body) && !surrogateEscapes(body) {
 		return body
 	}
-	out := make([]byte, 0, len(body)+64)
+	out := make([]byte, 0, capHint(len(body), 64))
 	for i := 0; i < len(body); {
 		switch c := body[i]; {
 		case c == '\\' && i+1 < len(body):

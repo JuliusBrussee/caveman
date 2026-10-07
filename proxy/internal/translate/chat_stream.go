@@ -61,7 +61,7 @@ func (e *chatEmitter) chunk(delta []byte, finish string, content bool) {
 	if !e.stream {
 		return
 	}
-	out := make([]byte, 0, len(delta)+160)
+	out := make([]byte, 0, capHint(len(delta), 160))
 	out = append(out, `data: {"id":`...)
 	out = appendString(out, e.id)
 	out = append(out, `,"object":"chat.completion.chunk","created":`...)

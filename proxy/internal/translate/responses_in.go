@@ -389,7 +389,7 @@ func responsesChatBody(top map[string]json.RawMessage, opts Options) (map[string
 	tools, bridge := bridgeTools(items0(top["tools"]))
 	system, items := splitSystem(top["instructions"], items)
 	replay := opts.replay()
-	w := chatWriter{dst: make([]byte, 0, len(top["input"])+len(top["instructions"])+1024)}
+	w := chatWriter{dst: make([]byte, 0, capHint(len(top["input"]), capHint(len(top["instructions"]), 1024)))}
 	w.dst = append(w.dst, '[')
 	if len(system) > 0 {
 		w.dst = appendJoined(append(w.dst, `{"role":"system","content":`...), "", system, `\n\n`)

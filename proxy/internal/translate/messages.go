@@ -258,7 +258,7 @@ func stripForeignThinking(body map[string]json.RawMessage, route string) bool {
 	if !changed {
 		return false
 	}
-	out := make([]byte, 0, len(messages)+64)
+	out := make([]byte, 0, capHint(len(messages), 64))
 	out = append(out, '[')
 	for _, e := range edits {
 		out = appendComma(out)

@@ -317,7 +317,7 @@ func anthropicChoiceFromChat(raw []byte, noParallel bool) []byte {
 func chatResponsesBody(top map[string]json.RawMessage, opts Options) (map[string]json.RawMessage, error) {
 	c := readChatTop(top, opts)
 	route := opts.route()
-	dst := make([]byte, 0, len(top["messages"])+1024)
+	dst := make([]byte, 0, capHint(len(top["messages"]), 1024))
 	dst = append(dst, '[')
 	var instructions [][]byte
 	leading := true

@@ -380,7 +380,7 @@ func chatToolChoice(choice obj) json.RawMessage {
 // sending the thinking blocks signed `replay` back as reasoning_content (""
 // sends none).
 func messagesToChat(top map[string]json.RawMessage, replay string) (json.RawMessage, error) {
-	dst := make([]byte, 0, len(top["messages"])+len(top["system"])+1024)
+	dst := make([]byte, 0, capHint(len(top["messages"]), capHint(len(top["system"]), 1024)))
 	dst = append(dst, '[')
 	if system := systemTokens(top["system"]); system != nil {
 		dst = appendJoined(append(dst, `{"role":"system","content":`...), "", system, `\n`)
@@ -698,7 +698,7 @@ func responsesTools(raw []byte) (json.RawMessage, error) {
 // them), tool_use blocks function_call items, the route's own thinking a
 // reasoning item, and text, images and documents one message.
 func messagesToResponses(messages []byte, opts Options) (json.RawMessage, error) {
-	dst := make([]byte, 0, len(messages)+1024)
+	dst := make([]byte, 0, capHint(len(messages), 1024))
 	dst = append(dst, '[')
 	own := opts.responsesSignature("")
 	var err error
