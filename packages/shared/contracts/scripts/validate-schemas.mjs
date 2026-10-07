@@ -159,6 +159,10 @@ for (const [extra, valid] of [
   [{ request, last: { ...last, effort: "adaptive" } }, false],
   [{ request, state: "" }, false],
   [{ request, state: "s".repeat(4097) }, false],
+  // Additive cache_ttl: the TTL the request writes at.
+  ...["5m", "30m", "1h", "24h"].map((ttl) => [{ request: { ...request, cache_ttl: ttl } }, true]),
+  [{ request: { ...request, cache_ttl: "2h" } }, false],
+  [{ request: { ...request, cache_ttl: "" } }, false],
 ]) {
   const body = { ...routeAsk({ text: "fix the login bug" }), ...JSON.parse(JSON.stringify(extra)) };
   if (validateRouteAsk(body) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(extra).slice(0, 200)} should be ${valid ? "valid" : "invalid"}`);
