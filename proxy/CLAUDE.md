@@ -220,11 +220,12 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   whole request DOES pass through Caveman Cloud. Route asks to the gateway use the project key too.
   Any failure before content reaches the agent (refused translation, translator panic, connect
   error, non-2xx, or a 2xx that fails or ends first: `translate.ErrNotServed`, the translator holds
-  its output until the first content, or for at most `gateHold` (10 s) of silence, after which the
-  headers go and pings start) falls back to the asked model on the harness credential, still at the
-  answered effort, and marks the ask rejected; a stream cut after content aborts HTTP framing and never closes a
+  its output until the first content, for at most `gateHold` (10 s) even while the host sends only
+  comments or pings; after it the headers go and pings start) falls back to the asked model on the
+  harness credential, at the answered effort fitted to that model's levels (`translate.FitEffort`),
+  and marks the ask rejected; a stream cut after content aborts HTTP framing and never closes a
   half-finished tool call. A pool turn is not `last` and books no dollars off Anthropic/OpenAI list
-  prices. Every request on the harness's own Anthropic/OpenAI path drops reasoning another host
+  prices. Every request to Anthropic's/OpenAI's own API (not pass-through) drops reasoning another host
   wrote (`translate.AnthropicNative`/`OpenAINative`, byte for byte when there is none; a Responses
   host's encrypted reasoning is route-tagged so only that host gets it back; per-message effort
   marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages callers reach it
