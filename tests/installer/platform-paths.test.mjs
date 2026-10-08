@@ -5,7 +5,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 const require = createRequire(import.meta.url);
-const { hookCommand, jetbrainsRoots } = require('../../bin/lib/platform-paths.js');
+const { hookCommand, jetbrainsRoots } = require('../../installer/lib/platform-paths.js');
 
 // #835: Claude Code runs hooks through Git Bash on Windows unless the hook
 // sets "shell": "powershell". The old PowerShell call-operator shape

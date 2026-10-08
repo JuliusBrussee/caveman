@@ -3,6 +3,7 @@
 package ccr
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -30,5 +31,20 @@ func createSQLiteFile(path string) error {
 		return err
 	}
 	// Link is atomic and refuses to replace an existing file or symlink.
-	return os.Link(file.Name(), path)
+	return publishSQLiteFile(file.Name(), path, os.Link)
+}
+
+func publishSQLiteFile(source, target string, link func(string, string) error) error {
+	err := link(source, target)
+	if err == nil || !errors.Is(err, os.ErrPermission) {
+		return err
+	}
+	// Android/Termux may reject hard links. O_EXCL still publishes an empty
+	// regular file atomically without replacing an existing path. The temp
+	// inode is disposable; SQLite has not opened it yet.
+	published, createErr := os.OpenFile(target, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if createErr != nil {
+		return createErr
+	}
+	return published.Close()
 }

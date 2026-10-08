@@ -38,6 +38,12 @@ exit 0
     env: {
       ...process.env,
       HOME: home,
+      USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: "",
+      CODEX_HOME: "",
+      GEMINI_CLI_HOME: "",
+      HERMES_HOME: "",
+      XDG_CONFIG_HOME: join(home, ".config"),
       CAVEMAN_HOME: home,
       CAVE_NO_KEYCHAIN: "1",
       NO_COLOR: "1",

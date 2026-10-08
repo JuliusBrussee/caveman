@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 
 import { applyModules, currentSelection, planModules, renderPlan, type ModulePlan, type ModuleSelection } from "./apply.js";
+import { ROUTING_ON_LINE } from "./cloud.js";
 import { cloudConfigPath } from "./config-home.js";
 import { MODULES, findModule, type ModuleId } from "./registry.js";
 
@@ -173,9 +174,10 @@ function initialSelection(opts: OnboardOptions): ModuleSelection {
 }
 
 // Routing stays on whatever happens here; without an account it waits, and
-// `caveman login` finishes it later.
+// `caveman login` finishes it later (its sign-in says what routing sends).
+// Already signed in, routing starts now, so this says it.
 async function routingStep(opts: OnboardOptions, deps: OnboardDeps, input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors) {
-  if (await deps.signedIn()) return;
+  if (await deps.signedIn()) return void out.write(`${ROUTING_ON_LINE}\n\n`);
   const waits = (why: string) => out.write(`${c.yellow("○")} routing is on and ${why} · ${c.cyan(`${deps.cmd} login`)}\n\n`);
   if (!deps.interactive || opts.yes) return waits("starts after you sign in");
   out.write("Routing needs a free Caveman account.\n");
@@ -194,7 +196,7 @@ async function routingStep(opts: OnboardOptions, deps: OnboardDeps, input: NodeJ
   } catch (error) {
     // Esc during the receipt step, after the credentials were saved.
     if (skip.signal.aborted && await deps.signedIn()) {
-      out.write(`  ${c.green("✓")} signed in\n\n`);
+      out.write(`  ${c.green("✓")} signed in\n\n${ROUTING_ON_LINE}\n\n`);
       return;
     }
     if (skip.signal.aborted) return waits("starts after you sign in");

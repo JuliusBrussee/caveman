@@ -40,7 +40,20 @@
     if (textarea) send.dataset.composerSubmit = "";
     else send.dataset.testid = "send-button";
   }
-  form.append(editor, send);
+  if (location.search.includes("detached")) {
+    // Editor nested inside its form, send control in a sibling toolbar outside
+    // it: the layout where stopping the search at the form left Enter inert.
+    let wrap = editor;
+    for (let i = 0; i < 3; i++) { const d = document.createElement("div"); d.append(wrap); wrap = d; }
+    const shell = document.createElement("div");
+    const toolbar = document.createElement("div");
+    form.replaceWith(shell);
+    form.append(wrap);
+    toolbar.append(send);
+    shell.append(form, toolbar);
+  } else {
+    form.append(editor, send);
+  }
   const store = { enabled: true, level: "caveman", sites: {} };
   const listeners = [];
   window.chrome = {
@@ -56,6 +69,13 @@
       onChanged: { addListener(fn) { listeners.push(fn); } },
     },
   };
+  if (editor.classList.contains("ProseMirror")) {
+    // ProseMirror (Claude's tiptap, ChatGPT's rich editor) redraws the DOM from
+    // its model in its MutationObserver callback: markup changes, text does not.
+    new MutationObserver(() => {
+      for (const br of editor.querySelectorAll("br:not(.ProseMirror-trailingBreak)")) br.className = "ProseMirror-trailingBreak";
+    }).observe(editor, { childList: true, subtree: true });
+  }
   let draft = "";
   const fixture = window.fixture = { sent: [], feedback: 0, hold: false, store, editor, send };
   editor.addEventListener("input", () => {

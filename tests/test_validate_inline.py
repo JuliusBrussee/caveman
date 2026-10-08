@@ -10,9 +10,18 @@ from scripts.validate import (  # noqa: E402
     ValidationResult,
     extract_code_blocks,
     extract_inline_codes,
+    extract_urls,
     validate,
     validate_inline_codes,
 )
+
+
+class TestUrlInBackticks(unittest.TestCase):
+    """A backtick is never a URL character; a URL in inline code used to be
+    extracted with the closing backtick glued on (#163)."""
+
+    def test_trailing_backtick_not_part_of_url(self):
+        self.assertEqual(extract_urls("see `https://x.io/a` now"), {"https://x.io/a"})
 
 
 class TestIndentedFence(unittest.TestCase):

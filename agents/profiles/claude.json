@@ -35,10 +35,10 @@
   "attribution": {
     "header": "x-cave-agent"
   },
-  "tested_agent_version": "2.1.288",
+  "tested_agent_version": "2.1.291",
   "injection_completeness": "builder-assisted",
-  "last_verified_at": "2026-10-03",
-  "verified_by": "local pinned-binary probe (claude 2.1.288 on Node 24.16.0, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-10-06",
+  "verified_by": "local pinned-binary probe (claude 2.1.291 on Node 22.22.2, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }

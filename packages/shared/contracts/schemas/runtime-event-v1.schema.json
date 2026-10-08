@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.0.0/packages/shared/contracts/schemas/runtime-event-v1.schema.json",
+  "$id": "https://raw.githubusercontent.com/JuliusBrussee/caveman/contracts-v2.1.0/packages/shared/contracts/schemas/runtime-event-v1.schema.json",
   "title": "Caveman runtime/v1 event batch",
   "description": "What a signed-in local runtime sends to Cloud: one event per model request, in batches. The tenant comes from the bearer token, never from the body. The client sends at most the fields its data level allows; Cloud drops anything above the organization's level (ADR 0085 §5). Provider-reported token counts are measured; anything the runtime estimates is inferred, and the two never share a field. Prompt text, responses, file contents and headers are never part of an event.",
   "type": "object",

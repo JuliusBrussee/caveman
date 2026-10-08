@@ -459,3 +459,81 @@ func openAIPixelResponse() string {
 func geminiPixelResponse() string {
 	return `{"candidates":[{"content":{"parts":[{"text":"ok"}]}}],"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":10}}`
 }
+
+func newPixelCacheServer(adapter providers.Adapter, rt *captureTransport, cache PrefixCache) *Server {
+	return New(Config{
+		Adapters:    []providers.Adapter{adapter},
+		Auth:        stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "pixel"}},
+		Creds:       stubCreds{key: "sk-byok"},
+		Sink:        &captureSink{},
+		Compressor:  &pixelStoreCompressor{},
+		PrefixCache: cache,
+		HTTPClient:  &http.Client{Transport: rt},
+	})
+}
+
+// TestPixelModeKeepsPreviousTurnStable: pixel renders the live message, which
+// the provider then caches as images. The next turn carries that message below
+// the floor and must re-send the same image bytes, not the text.
+func TestPixelModeKeepsPreviousTurnStable(t *testing.T) {
+	t.Setenv("CAVE_PIXEL_MODELS", "")
+	rows := strings.Repeat("TOOL_RESULT_A row with values.\\n", 420)
+	toolResult := func(marked bool) string {
+		marker := ""
+		if marked {
+			marker = `,"cache_control":{"type":"ephemeral"}`
+		}
+		return `{"role":"user","content":[{"type":"tool_result","tool_use_id":"tool_a","content":"` + rows + `"` + marker + `}]}`
+	}
+	head := `{"model":"claude-fable-5","max_tokens":128,"system":"You are Claude Code.","messages":[`
+	turn1 := head + toolResult(true) + `]}`
+	turn2 := head + toolResult(false) + `,{"role":"assistant","content":[{"type":"text","text":"read it"}]},` +
+		`{"role":"user","content":[{"type":"text","text":"` + strings.Repeat("next question with context. ", 120) + `","cache_control":{"type":"ephemeral"}}]}]}`
+	rt := &captureTransport{responses: []string{anthropicPixelResponse("claude-fable-5"), anthropicPixelResponse("claude-fable-5")}}
+	srv := newPixelCacheServer(anthropic.New("https://upstream.test"), rt, newTestPrefixCache())
+
+	serveBody(t, srv, "/v1/messages", turn1, map[string]string{"x-api-key": "sk-byok", "anthropic-version": "2023-06-01"})
+	serveBody(t, srv, "/v1/messages", turn2, map[string]string{"x-api-key": "sk-byok", "anthropic-version": "2023-06-01"})
+
+	if !strings.Contains(string(rt.bodies[0]), `"type":"image"`) {
+		t.Fatalf("test setup: turn 1 was not rendered:\n%.400s", rt.bodies[0])
+	}
+	first, _, ok1 := anthropic.CachedPrefixComponents(rt.bodies[0])
+	second, _, ok2 := anthropic.CachedPrefixComponents(rt.bodies[1])
+	if !ok1 || !ok2 || !bytes.Equal(first[2], second[2]) {
+		t.Fatalf("turn 2 re-sent turn 1's cached message differently:\n turn 1: %.300s\n turn 2: %.300s", first[2], second[2])
+	}
+}
+
+// TestPixelModeOpenAIKeepsPreviousTurnStable: OpenAI caches every long prompt
+// implicitly, so the user message rendered on turn 1 must come back as the same
+// images on turn 2 — in Chat Completions and in Responses.
+func TestPixelModeOpenAIKeepsPreviousTurnStable(t *testing.T) {
+	t.Setenv("CAVE_PIXEL_MODELS", "")
+	first := strings.Repeat("OPENAI_LIVE_USER_CONTEXT detailed instruction.\\n", 400)
+	second := strings.Repeat("OPENAI_SECOND_USER_CONTEXT detailed instruction.\\n", 400)
+	for _, tc := range []struct{ name, path, turn1, turn2 string }{
+		{"chat", "/v1/chat/completions",
+			`{"model":"gpt-5.6","messages":[{"role":"system","content":"sys"},{"role":"user","content":"` + first + `"}]}`,
+			`{"model":"gpt-5.6","messages":[{"role":"system","content":"sys"},{"role":"user","content":"` + first + `"},{"role":"assistant","content":"ok"},{"role":"user","content":"` + second + `"}]}`},
+		{"responses", "/v1/responses",
+			`{"model":"gpt-5.6","input":[{"type":"message","role":"user","content":"` + first + `"}]}`,
+			`{"model":"gpt-5.6","input":[{"type":"message","role":"user","content":"` + first + `"},{"type":"message","role":"assistant","content":"ok"},{"type":"message","role":"user","content":"` + second + `"}]}`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rt := &captureTransport{responses: []string{openAIPixelResponse(), openAIPixelResponse()}}
+			srv := newPixelCacheServer(openai.New("https://upstream.test"), rt, newTestPrefixCache())
+			serveBody(t, srv, tc.path, tc.turn1, map[string]string{"authorization": "Bearer sk-openai"})
+			serveBody(t, srv, tc.path, tc.turn2, map[string]string{"authorization": "Bearer sk-openai"})
+			if !strings.Contains(string(rt.bodies[0]), "data:image/png;base64,") {
+				t.Fatalf("test setup: turn 1 was not rendered:\n%.300s", rt.bodies[0])
+			}
+			a, _, ok1 := wholePromptComponents(rt.bodies[0])
+			b, _, ok2 := wholePromptComponents(rt.bodies[1])
+			last := len(a) - 1
+			if !ok1 || !ok2 || len(b) <= last || !bytes.Equal(a[last], b[last]) {
+				t.Fatalf("turn 2 re-sent turn 1's user message differently:\n turn 1: %.300s\n turn 2: %.300s", a[last], b[last])
+			}
+		})
+	}
+}

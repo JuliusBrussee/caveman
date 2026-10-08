@@ -29,6 +29,49 @@ jobs:
       - run: go vet ./...
       - run: go test ./...
 
+  # Every other Go job builds with the runner's default toolchain, which has
+  # cgo. The release binaries are built by scripts/build-release-binaries.mjs
+  # instead, and while that script used CGO_ENABLED=0 the shipped code
+  # compressor parsed Go only, with every test here green (#1020). This lane
+  # builds the linux/amd64 release set with the script's own flags (cgo through
+  # the pinned zig, static musl), runs the release-shape tests compiled the same
+  # way, runs the built engine's embedded evals, and checks the binaries are
+  # static. After merge it also cross-builds all six targets, so a Go or zig bump
+  # that breaks the darwin or windows link fails here, not at release time.
+  release-shape:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+      # Same pin as release-binaries.yml.
+      - name: Install pinned zig
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/zig"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP/zig" --strip-components=1
+          echo "ZIG=$RUNNER_TEMP/zig/zig" >> "$GITHUB_ENV"
+      - name: Build, test and smoke the linux/amd64 release set
+        run: node scripts/build-release-binaries.mjs --test --out "$RUNNER_TEMP/release"
+      - name: Linux cgo binaries are static
+        run: |
+          set -euo pipefail
+          for f in "$RUNNER_TEMP"/release/caveman-{proxy,engine}_linux_amd64; do
+            file "$f" | grep -q 'statically linked' || { file "$f"; echo "$f is not static" >&2; exit 1; }
+          done
+      - name: Cross-build all six release targets
+        if: github.event_name != 'pull_request'
+        run: node scripts/build-release-binaries.mjs --out "$RUNNER_TEMP/release-all"
+
   # The middleware store suite on both backends, and the multi-replica runtime
   # tests, against a real Postgres. Locally they skip unless
   # CAVEMAN_TEST_POSTGRES_URL is set.

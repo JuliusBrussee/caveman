@@ -35,6 +35,8 @@ jobs:
             build-mode: none
           - language: python
             build-mode: none
+          - language: actions
+            build-mode: none
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:

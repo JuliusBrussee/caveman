@@ -1,7 +1,7 @@
 // caveman — JSONC-tolerant settings.json read/write + scoped hook maintenance.
 //
 // Lifted in spirit from gsd-build/get-shit-done's stripJsonComments + readSettings.
-// Reused by bin/install.js and (optionally) by hooks/caveman-activate.js so a
+// Reused by installer/install.js and (optionally) by hooks/caveman-activate.js so a
 // commented settings.json no longer crashes the installer or the runtime hooks.
 //
 // Public API:
@@ -259,12 +259,13 @@ function removeCavemanHooks(settings) {
 // Walk every hook command. If it's a bare `node /path/to/<managed>.js` (no
 // absolute node path) and the basename is one of ours, rewrite to use
 // `absoluteNode` so GUI launchers with minimal PATH still find Node. Only
-// touches commands matching the exact bare-node shape — won't false-positive
-// on user-authored hooks that just happen to mention "caveman".
+// touches commands matching the exact bare-node shape (plus trailing `--flag`
+// args, e.g. the SessionEnd `--record`) — won't false-positive on
+// user-authored hooks that just happen to mention "caveman".
 function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = process.platform) {
   if (!settings || !settings.hooks || !absoluteNode) return 0;
   let rewritten = 0;
-  const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))\s*$/;
+  const reBare = /^node\s+("([^"]+)"|'([^']+)'|(\S+))((?:\s+--[a-z-]+)*)\s*$/;
   for (const ev of Object.keys(settings.hooks)) {
     if (!Array.isArray(settings.hooks[ev])) continue;
     for (const entry of settings.hooks[ev]) {
@@ -279,7 +280,7 @@ function rewriteLegacyManagedHookCommands(settings, absoluteNode, platform = pro
         // One shape, one place. This used to emit PowerShell call-operator
         // syntax on win32, which Git Bash — Claude Code's default hook shell
         // on Windows — rejects as a syntax error (#835).
-        h.command = hookCommand(absoluteNode, [scriptPath], platform);
+        h.command = hookCommand(absoluteNode, [scriptPath], platform) + m[5];
         rewritten++;
       }
     }

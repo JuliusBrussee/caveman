@@ -1,8 +1,8 @@
 // This repo is public, and routing decisions are made by Caveman Cloud. The
-// local runtime only asks: it sends the caller's models plus counts
-// (contracts route-ask-v1), then applies the answer or fails open. No tracked
-// file may carry names from the private router or its policy, scoring or
-// classification.
+// local runtime only asks: it sends the caller's models, counts and the raw
+// conversation text (contracts route-ask-v1), then applies the answer or fails
+// open. No tracked file may carry names from the private router or its policy,
+// scoring or classification.
 const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');

@@ -14,8 +14,9 @@ import { test } from "node:test";
 import { hermesHome } from "../dist/index.js";
 import { nativeStub, stubEnv } from "./harness/stub-bin.mjs";
 
-// Hermes 0.19.1 hermes_constants.py uses LOCALAPPDATA on Windows, strips
-// HERMES_HOME, and treats a tilde inside that environment value literally.
+// Hermes 0.21.5 hermes_constants.py uses LOCALAPPDATA on Windows, strips
+// HERMES_HOME, and expands env vars then a leading tilde in it
+// (Path(expanduser(expandvars(value)))). 0.19.1 took the value literally.
 test("Hermes home matches native Windows and POSIX default roots", () => {
   const local = join(homedir(), "synthetic local app data");
   assert.equal(hermesHome({}, "darwin"), join(homedir(), ".hermes"));
@@ -37,7 +38,7 @@ test("Hermes home matches native Windows and POSIX default roots", () => {
   );
 });
 
-test("Hermes explicit home preserves literal tilde and resolves relative paths", () => {
+test("Hermes explicit home expands tilde and env vars and resolves relative paths", () => {
   for (const platform of ["darwin", "win32"]) {
     assert.equal(
       hermesHome({ HERMES_HOME: "  relative profile  " }, platform),
@@ -45,7 +46,19 @@ test("Hermes explicit home preserves literal tilde and resolves relative paths",
     );
     assert.equal(
       hermesHome({ HERMES_HOME: "~/literal-profile" }, platform),
-      resolve("~/literal-profile"),
+      join(homedir(), "literal-profile"),
+    );
+    assert.equal(
+      hermesHome({ HERMES_HOME: "$ROOT/a/${SUB}", ROOT: "/srv", SUB: "b" }, platform),
+      resolve("/srv/a/b"),
+    );
+    assert.equal(
+      hermesHome({ HERMES_HOME: "$UNSET_HERMES_VAR/p" }, platform),
+      resolve("$UNSET_HERMES_VAR/p"),
+    );
+    assert.equal(
+      hermesHome({ HERMES_HOME: "%ROOT%/p", ROOT: "/srv" }, platform),
+      resolve(platform === "win32" ? "/srv/p" : "%ROOT%/p"),
     );
     assert.equal(
       hermesHome(
@@ -60,7 +73,7 @@ test("Hermes explicit home preserves literal tilde and resolves relative paths",
 for (const override of [
   undefined,
   "  relative profile  ",
-  "~/literal-profile",
+  "~/tilde-profile",
 ]) {
   test(`Hermes MCP install reaches the native config root: ${override ?? "platform default"}`, (t) => {
     const root = mkdtempSync(join(tmpdir(), "cave-hermes home "));
@@ -106,7 +119,9 @@ if (ARGV[0] === "version") console.log(JSON.stringify({version:"test",capabiliti
     });
     assert.equal(out.status, 0, out.stderr);
     const expected =
-      override !== undefined
+      override?.startsWith("~/")
+        ? join(home, override.slice(2))
+        : override !== undefined
         ? resolve(root, override.trim())
         : process.platform === "win32"
           ? join(local, "hermes")
@@ -116,6 +131,6 @@ if (ARGV[0] === "version") console.log(JSON.stringify({version:"test",capabiliti
       /mcp_servers:/,
     );
     if (override?.startsWith("~"))
-      assert.equal(existsSync(join(home, "literal-profile")), false);
+      assert.equal(existsSync(join(root, "~")), false);
   });
 }

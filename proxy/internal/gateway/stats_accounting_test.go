@@ -367,7 +367,7 @@ func TestStatsChatGPTRecordsFinalBytesAndSeparateEquivalent(t *testing.T) {
 			_, _ = responseCapture.Write([]byte(chatRespBody))
 			rawHash, acceptedHash := sha256.Sum256(original), sha256.Sum256(test.accepted)
 			request := httptest.NewRequest(http.MethodPost, "/chatgpt/responses", nil)
-			srv.recordChatGPT(RequestContext{}, request, "request", "trace", "/responses", time.Now(), 200, "", requestCapture, rawHash[:], acceptedHash[:], test.complete, responseCapture, int64(len(chatRespBody)), false, nil, nil, true, test.accepted)
+			srv.recordChatGPT(RequestContext{}, request, "request", "trace", "/responses", time.Now(), 200, "", requestCapture, rawHash[:], acceptedHash[:], test.complete, responseCapture, int64(len(chatRespBody)), false, nil, nil, true, test.accepted, "")
 			row := sink.last(t)
 			if !test.complete {
 				if row.RequestTokenBasis != "" || row.RequestEstimatedInputDeltaUSD != nil {

@@ -15,6 +15,12 @@ REQUIRED_METADATA = {
     "n_prompts",
     "terse_prefix",
 }
+USAGE_TOKENS = {
+    "input_tokens",
+    "output_tokens",
+    "cache_creation_input_tokens",
+    "cache_read_input_tokens",
+}
 
 
 class SnapshotContractError(ValueError):
@@ -77,7 +83,33 @@ def validate_snapshot(data: Any) -> dict[str, Any]:
                 raise SnapshotContractError(
                     f"arm {arm} output {position} must be a string"
                 )
+
+    # Optional: Claude-reported usage per call, same layout as arms.
+    if "usage" in data:
+        validate_usage(data["usage"], arms, n_prompts)
     return data
+
+
+def validate_usage(usage: Any, arms: dict[str, Any], n_prompts: int) -> None:
+    if not isinstance(usage, dict) or set(usage) != set(arms):
+        raise SnapshotContractError("usage arms must match the output arms")
+    for arm, cells in usage.items():
+        if not isinstance(cells, list) or len(cells) != n_prompts:
+            count = len(cells) if isinstance(cells, list) else "no"
+            raise SnapshotContractError(
+                f"usage.{arm} contains {count} cells; expected {n_prompts}"
+            )
+        for position, cell in enumerate(cells):
+            where = f"usage.{arm} cell {position}"
+            if not isinstance(cell, dict) or USAGE_TOKENS - cell.keys():
+                raise SnapshotContractError(f"{where} must have {sorted(USAGE_TOKENS)}")
+            for key in USAGE_TOKENS:
+                value = cell[key]
+                if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+                    raise SnapshotContractError(f"{where} {key} must be a non-negative integer")
+            cost = cell.get("total_cost_usd", 0)
+            if isinstance(cost, bool) or not isinstance(cost, (int, float)) or cost < 0:
+                raise SnapshotContractError(f"{where} total_cost_usd must be a non-negative number")
 
 
 def load_snapshot(path: Path) -> dict[str, Any]:

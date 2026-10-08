@@ -1,6 +1,6 @@
 {
   "name": "@caveman-ai/middleware",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Native framework middleware over the Caveman compression runtime.",
   "license": "Apache-2.0",
   "repository": {
@@ -242,7 +242,10 @@
       "0.125.0",
       "0.126.0",
       "0.127.0",
-      "0.128.0"
+      "0.128.0",
+      "0.129.0",
+      "0.130.0",
+      "0.131.0"
     ],
     "@google/genai": [
       "2.21.0",
@@ -277,7 +280,7 @@
     "ai": ">=7.0.94 <8",
     "@ai-sdk/provider": ">=4.0.11 <5",
     "openai": ">=7.12.1 <8",
-    "@anthropic-ai/sdk": ">=0.124.0 <0.129",
+    "@anthropic-ai/sdk": ">=0.124.0 <0.132",
     "@google/genai": ">=2.21.0 <3",
     "langchain": ">=1.5.10 <2",
     "@langchain/core": ">=1.2.9 <2",

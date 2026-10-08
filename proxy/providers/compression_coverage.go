@@ -2,7 +2,7 @@ package providers
 
 // CompressionCoverageVersion changes whenever a registered request surface is
 // added, removed, or changes compression eligibility.
-const CompressionCoverageVersion = "2026-09-07.1"
+const CompressionCoverageVersion = "2026-10-05.1"
 
 type CompressionRouteCoverage struct {
 	Provider string `json:"provider"`
@@ -52,5 +52,17 @@ func CompressionRouteMatrix() []CompressionRouteCoverage {
 		{Provider: "bedrock", Route: "/bedrock/model/", Grammar: "bedrock-runtime-dynamic-prefix", Status: "unsupported", Reason: "signed provider-specific body grammar is not safely splice-covered"},
 		{Provider: "bedrock", Route: "/bedrock/anthropic/", Grammar: "bedrock-mantle-anthropic", Status: "unsupported", Reason: "Mantle is an opt-in passthrough surface without Bedrock-specific compression proof"},
 		{Provider: "vertex", Route: "/vertex/", Grammar: "vertex-predict-dynamic-prefix", Status: "unsupported", Reason: "publisher-specific request grammar is not safely splice-covered"},
+		// Read-only metadata reads (Base.MetadataRoutes). They are registered
+		// request surfaces, so they carry an explicit decision here rather than
+		// being absent from the truth table — but a GET model catalog read has no
+		// request body to compress at all, which is why every row is unsupported.
+		{Provider: "openai", Route: "/v1/models", Grammar: "openai-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "openai", Route: "/openai/v1/models", Grammar: "openai-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "anthropic", Route: "/v1/models", Grammar: "anthropic-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "anthropic", Route: "/anthropic/v1/models", Grammar: "anthropic-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "openai_compatible", Route: "/compat/v1/models", Grammar: "openai-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "openai_compatible", Route: "/compat/stub/v1/models", Grammar: "openai-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "openai_compatible", Route: "/compat/openai-compatible/v1/models", Grammar: "openai-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
+		{Provider: "openai_compatible", Route: "/compat/{name}/v1/models", Grammar: "openai-models-metadata", Status: "unsupported", Reason: "read-only metadata endpoint carries no request body"},
 	}
 }

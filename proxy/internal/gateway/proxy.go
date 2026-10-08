@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/bedrock"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
@@ -92,12 +93,24 @@ func isOpenCodeChatGPTSubscription(r *http.Request) bool {
 
 }
 
+func isPiChatGPTSubscription(r *http.Request, verifiedAgentPath bool) bool {
+	return verifiedAgentPath &&
+		r.Method == http.MethodPost &&
+		r.URL.Path == "/codex/responses" &&
+		r.URL.RawPath == "" &&
+		r.URL.RawQuery == "" &&
+		r.Header.Get("x-cave-agent") == "pi" &&
+		strings.TrimSpace(r.Header.Get("ChatGPT-Account-ID")) != "" &&
+		strings.HasPrefix(strings.TrimSpace(r.Header.Get("Authorization")), "Bearer ")
+}
+
 func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
+	piChatGPTPath := r.URL.Path == "/w/pi/codex/responses" && r.URL.RawPath == "" && r.URL.RawQuery == ""
 	if !normalizeAgentPath(r) {
 		httpx.Error(w, r, http.StatusNotFound, "cave_route_not_found", "Proxy path is not recognized.")
 		return
 	}
-	if isOpenCodeChatGPTSubscription(r) {
+	if isOpenCodeChatGPTSubscription(r) || isPiChatGPTSubscription(r, piChatGPTPath) {
 		r.URL.Path = "/chatgpt/responses"
 		r.URL.RawPath = ""
 		s.chatgpt(w, r)
@@ -116,6 +129,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	rc, err := s.auth.Authenticate(r.Context(), r)
 	if err != nil {
 		s.rejectUnauthorized(w, r)
+		return
+	}
+	// Read-only provider metadata (GET /v1/models) forwards unchanged on its own
+	// path: the pipeline below is built around an inference body this request
+	// does not have. Checked after Authenticate for the same route-oracle reason,
+	// and before matchAdapter because that allowlist is POST-only (issue #1187).
+	if adapter := s.matchMetadataAdapter(r); adapter != nil {
+		s.metadataPassthrough(w, r, adapter, s.creds.Resolve(adapter.Name(), r), requestID)
 		return
 	}
 	adapter := s.matchAdapter(r)
@@ -190,8 +211,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	transform := providers.TransformResult{Body: body, OptimizerIDs: []string{}}
 	var comp *compressionOutcome
 	// toolSchemaHandle is the CCR handle of the original tool catalog, set only
-	// when the tool-schema annotation strip actually rewrote it.
+	// when the tool-schema annotation strip actually rewrote it. stripFrozen
+	// says the session's harm tripwire froze a strip that would have run.
 	toolSchemaHandle := ""
+	stripFrozen := false
+	// streamRaw: a PAYG stream that the server-side retrieve path forwarded raw.
+	streamRaw := false
 	// breakpointPlanned records that the cache-breakpoint planner placed provider
 	// cache metadata on this request. The session ledger needs it to know which
 	// levers were active when it later evaluates the harm tripwire.
@@ -213,11 +238,16 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// Ask (ADR 0083 §4): the Cloud round trip runs while compression does. The
 	// request-wide opt-out and an encoded body keep the model untouched too.
 	var awaitRoute func() RouteAnswer
+	var run *routeRun
 	modelRequested := meta.Model
 	evidence.modelRequested = modelRequested
+	// count_tokens runs the same thinking-binding check as Messages
+	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
+	// and drop_block, is never asked about and gets no heal retry.
+	countTokens := meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages/count_tokens")
 	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
 		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
-		routable(meta.Provider, meta.Endpoint) {
+		(routable(meta.Provider, meta.Endpoint) || countTokens) {
 		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
 		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
 		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
@@ -228,12 +258,31 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		case uerr != nil || !statsPricingOriginKnown(meta.Provider, upstream):
 			evidence.route = RouteAnswer{Outcome: "off", Reason: "custom_provider_origin"}
 		default:
+			// A session id guessed from timing (sessionFallback) is not exact
+			// enough to carry another session's marks: the agent's own wins.
+			exact := ""
+			if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+				exact = evidence.SessionID
+			}
+			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
+			run.asked, run.record = meta.Model, effectiveRuntimeMode == "record"
+			if countTokens {
+				run.perRequest, run.replay = true, true
+				break
+			}
+			last, perMessageOff := s.routes.facts(run.key, time.Now())
 			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
-				SessionID: evidence.SessionID, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
+				ContextTokens: int(float64(len(body)) * s.routes.tokensPerByte(run.key, run.parent)),
 			})
 		}
 	}
+	// The cache tripwire holds this request only to prefixes accepted before
+	// its forwarding was decided: one still in flight then (a fork's raw retry,
+	// say) may not have been cached, or pinned, yet.
+	sentSeq := s.prefixSeq.Add(1)
 	switch effectiveRuntimeMode {
 	case "record":
 		// always a pure pass-through. When observe-estimate is on, measure — on
@@ -263,24 +312,6 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if !compiledPlanAllowed {
 			break
 		}
-		// The epoch gate is STATEFUL: derivedEpochAllows re-anchors the stored
-		// prefix on every observe. Calling it twice per request — once with the
-		// client's original body, once with the transformed one — anchored turn
-		// N's baseline to bytes the client never sent, so turn N+1 compared the
-		// original against it, saw divergence, and skipped compression for the
-		// whole turn. That flipped the provider cache prefix the gate exists to
-		// protect, and on a wrapped session with the tool-schema strip enabled it
-		// alternated compression on/off every other turn. Evaluate ONCE, against
-		// the bytes the client actually sent, and reuse the answer. Still lazy:
-		// requests that never reach a transform never anchor.
-		epochChecked, epochOK := false, false
-		epochAllows := func() bool {
-			if !epochChecked {
-				epochChecked = true
-				epochOK = s.cacheEpochAllows(r, adapter, meta, body, evidence.SessionID)
-			}
-			return epochOK
-		}
 		// Subscription-classified traffic falls back to S0 passthrough whenever the
 		// live-zone conditions do not hold (operator off-switch, no schema-aware
 		// prefix stabilizer, no MCP recovery, no durable prefix cache) — the path
@@ -291,23 +322,42 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if subscriptionPassthrough {
 			break
 		}
-		serverRetrieveAllowed := authMode == AuthModePAYG && !s.recoveryViaMCP && !meta.Stream && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint)
-		if serverRetrieveAllowed {
+		serverRetrieve := authMode == AuthModePAYG && !s.recoveryViaMCP && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint)
+		if serverRetrieve {
 			if _, canRetrieve := s.compressor.(Retriever); !canRetrieve {
-				serverRetrieveAllowed = false
+				serverRetrieve = false
 			}
 		}
+		// The server-side retrieve tool rides only a non-streaming request, and the
+		// tools component heads the cached prefix. A stream on this path goes out
+		// raw, and a conversation is held to the form its longest lineage was
+		// cached in (raw_pin.go): once a turn of it streamed, it stays raw. A
+		// stream after compressed turns is the one bust this path cannot avoid.
+		serverRetrieveAllowed := serverRetrieve && !meta.Stream && !s.heldRawByStream(adapter, meta, body)
 		// Marker-only compression needs a recovery path the caller can actually reach.
 		// PAYG keeps its pre-existing MCP-recovery rule; subscription and OAuth go
 		// exclusively through the live-zone predicate above (which itself requires MCP
 		// recovery), so neither can ever compress with no way back to the elided bytes.
 		markerOnlyAllowed := (s.mcpRecoveryAvailable(body) && authMode != AuthModeOAuth && authMode != AuthModeSubscription) || nonPAYGLiveZone
-		if (markerOnlyAllowed || serverRetrieveAllowed) && epochAllows() {
-			// The request reached the compression path as a candidate. It is eligible
-			// whether or not compressRequest ultimately shrinks any bytes — the
-			// requests_eligible_for_compression denominator counts candidates, not wins.
-			compressionEligible = true
-			comp = s.compressRequest(adapter, body, meta, &transform, requestID, lockedRoutes)
+		// A stream carrying the caveman MCP tool compresses on the marker path,
+		// so it did not go out raw for being a stream.
+		streamRaw = serverRetrieve && meta.Stream && s.prefixCache != nil && !markerOnlyAllowed
+		if (markerOnlyAllowed || serverRetrieveAllowed) && s.rawPinned(adapter, meta, body) {
+			// The provider accepted this conversation only raw once (see
+			// raw_pin.go): what it cached is the original bytes, so everything
+			// that extends it goes out exactly as the client sent it.
+			break
+		}
+		if markerOnlyAllowed || serverRetrieveAllowed {
+			// Substitution is never gated: a block the provider cached in replaced
+			// form is re-sent replaced whatever this request's epoch says, because
+			// forwarding the original there busts the prefix at that block. A
+			// declared framework epoch may veto only NEW compression. An allowed
+			// request is a compression candidate whether or not anything shrinks —
+			// the eligibility denominator counts candidates, not wins.
+			allowNew := s.cacheEpochAllows(r, adapter, meta, body, evidence.SessionID)
+			compressionEligible = allowNew
+			comp = s.rewriteRequest(adapter, body, meta, &transform, requestID, lockedRoutes, allowNew)
 		}
 		if serverRetrieveAllowed {
 			if injected, ok := injectRetrieveTool(meta.Provider, meta.Endpoint, transform.Body); ok {
@@ -330,9 +380,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// stripToolSchema for the determinism invariant that makes a frozen-prefix
 		// rewrite admissible here. It runs last so its byte offsets are computed on
 		// the bytes actually going upstream, and it is skipped under a compiled
-		// Cave Build, whose transform set is locked to what evals approved.
-		if len(lockedRoutes) == 0 && s.toolSchemaStripAllowed(adapter, body, evidence.SessionID) && epochAllows() {
-			if stripped, handle, ok := s.stripToolSchema(transform.Body, meta, requestID); ok {
+		// Cave Build, whose transform set is locked to what evals approved. No
+		// epoch gate: a pure function of the catalog must not flip per request.
+		if len(lockedRoutes) == 0 && s.toolSchemaStripApplies(adapter, body) {
+			if !s.ledger.LeverAllowed(evidence.SessionID, leverToolSchemaStrip) {
+				stripFrozen = true // the harm tripwire's deliberate rollover (see stripToolSchema)
+			} else if stripped, handle, ok := s.stripToolSchema(transform.Body, meta, requestID); ok {
 				transform.Body = stripped
 				transform.OptimizerIDs = append(transform.OptimizerIDs, toolSchemaStripOptimizerID)
 				toolSchemaHandle = handle
@@ -345,7 +398,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if authMode == AuthModeSubscription {
 			break
 		}
-		comp = s.pixelRequest(adapter, body, meta, &transform, requestID)
+		if s.rawPinned(adapter, meta, body) {
+			break // the provider cached this conversation as text (raw_pin.go)
+		}
+		comp = s.pixelRequest(body, meta, &transform, requestID)
 	default:
 		if authMode != AuthModeSubscription {
 			t, terr := adapter.ApplyProviderNativeTransforms(r.Context(), bytes.NewReader(body), meta, providers.TransformPolicy{
@@ -380,9 +436,58 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	// Route: the answer moves the compressed request to another model of the
-	// same provider. Anything else keeps the asked model.
+	// same provider and sets its effort, or sends it to a pool entry on another
+	// login or the Cloud gateway. Anything else keeps the asked model.
 	if awaitRoute != nil {
 		answer := awaitRoute()
+		if target := answer.Target; target != nil {
+			// The bytes compression produced go, unless they lean on the
+			// retrieve tool loop, which only runs on the harness's own path.
+			// Unstripped: the translator hands each host its own reasoning.
+			sent := transform.Body
+			if retrieveInjected {
+				sent = body
+			}
+			w.Header().Set("x-caveman-routed-from", modelRequested)
+			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
+			if result.errMsg != "" && s.logger != nil {
+				s.logger.Warn("pool target failed", "pool_id", target.PoolID, "via", target.Via, "reason", result.errMsg, "served", result.served, "request_id", requestID)
+			}
+			if result.served {
+				evidence.route = answer
+				evidence.acceptedBody = sent
+				routed := meta
+				routed.Provider, routed.Model = target.Host, target.Model
+				if target.Host != "anthropic" && target.Host != "openai" {
+					// A plan, Caveman Cloud or a host without list prices here: honest zero dollars.
+					evidence.statsPricingUnsupportedReason = "custom_provider_origin"
+				}
+				if run != nil && run.key != "" {
+					// last stays the harness's own previous request (contracts: a
+					// model outside models is skipped); Cloud's state carries the move.
+					s.routes.markMoved(run.key)
+				}
+				estimateWG.Wait()
+				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, "", compressionEligible)
+				if result.errMsg != "" && result.errMsg != "pool_upstream_failed" && result.stream {
+					panic(http.ErrAbortHandler) // a cut stream never ends as a clean EOF
+				}
+				return
+			}
+			w.Header().Del("x-caveman-routed-from")
+			if answer.Reject != nil {
+				answer.Reject() // the rest of this ask stays on the asked model
+			}
+			// The asked model runs at the answered effort, as a non-pool answer
+			// would, fitted to that model's levels (the word was chosen for the target).
+			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID,
+				Effort: translate.FitEffort(grammarOf(meta.Endpoint), meta.Model, answer.Effort, transform.Body), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
+		}
+		// The harness's own path: reasoning another host wrote earlier in the
+		// conversation goes no further than that host; a body without any goes
+		// byte for byte.
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		if answer.Model != "" && answer.Model != meta.Model {
 			if routed, ok := setModel(transform.Body, answer.Model); ok {
 				transform.Body = routed
@@ -392,25 +497,37 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
 		}
+		// Routing off or signed out stays byte for byte, and so does a session
+		// whose key a provider refused.
+		if (answer.Outcome != "off" || answer.Reason != "") && !s.routes.keyRefused(run.key) {
+			transform.Body = run.withCacheKey(meta.Provider, transform.Body)
+		}
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
 		evidence.route = answer
+	} else if run != nil {
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
+	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
+		// Every other request to Anthropic's or OpenAI's own API too (encoded,
+		// subscription, routing off), and every chat request whatever its
+		// origin (the reasoning envelopes are this runtime's own: DeepSeek or
+		// OpenRouter would get another host's reasoning): byte for byte when
+		// it carries nothing another host wrote. Pass-through and other
+		// origins are left alone: only the provider's own API refuses another
+		// host's reasoning.
+		chat := strings.HasSuffix(meta.Endpoint, "/chat/completions")
+		if upstream, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{}); chat || err == nil && statsPricingOriginKnown(meta.Provider, upstream) {
+			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		}
 	}
-	transformedHash := sha256.Sum256(transform.Body)
+	transformedHash := rawHash
+	if !bytes.Equal(transform.Body, body) {
+		transformedHash = sha256.Sum256(transform.Body)
+	}
 	evidence.acceptedBody = transform.Body
 	providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown := providerPrefixEvidence(adapter, transform.Body, meta)
-
-	// Observe-only prefix-monotonicity check (issue #133): compare this request's
-	// frozen-prefix component hashes against the previous request in the same
-	// session and flag cache_bust if the new prefix does not extend the prior one.
-	// It never blocks or modifies traffic — the flag is persisted and a Warn names
-	// the first diverging component index. Evaluated once here on the bytes we send
-	// upstream; the byte-safe retry below keeps this verdict rather than re-running
-	// the stateful monitor for the same request.
-	cacheBust, divergingComponentIndex := s.prefixMonitor.observe(evidence.SessionID, providerCacheComponentSHA256)
-	if cacheBust && s.logger != nil {
-		s.logger.Warn("session frozen-cache prefix did not extend prior request; possible cache bust",
-			"request_id", requestID, "session_id", evidence.SessionID,
-			"diverging_component_index", divergingComponentIndex)
-	}
+	cacheBustCause := ""
+	rawRetried := false
 
 	upstreamURL, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
 	if err != nil {
@@ -425,7 +542,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !statsPricingOriginKnown(meta.Provider, upstreamURL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
 	}
-	authContext := providers.WithRequestPayloadHash(r.Context(), transform.Body)
+	authContext := providers.WithRequestPayloadSHA256(r.Context(), transformedHash)
 	upstreamHeaders, err := adapter.SanitizeAndMapHeaders(authContext, r, credential, upstreamURL)
 	if err != nil {
 		providerHeaderError(w, r, err)
@@ -435,6 +552,22 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
+	if run != nil {
+		switch {
+		case meta.Model != modelRequested:
+			// An identity answer, so the agent's copy can name the model it asked for.
+			upstreamHeaders.Del("accept-encoding")
+		case !run.off || run.heal || run.keyed: // a refused key is read from the error too
+			withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
+		}
+		if run.dropBlocks {
+			upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
+		}
+	}
+	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
+	if run != nil && run.marked && !run.wire.responses {
+		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
+	}
 	// Each retry attempt needs a fresh body reader, so the request is built per
 	// attempt from the buffered payload rather than once up front.
 	buildUpstream := func(payload []byte, header http.Header) func() (*http.Request, error) {
@@ -460,13 +593,75 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		Optimizers:  strings.Join(transform.OptimizerIDs, ","),
 	}, wholeBody(body), wholeBody(transform.Body))
 
+	// A fresh child on its siblings' new prefix waits for the first of them
+	// to have its first content (route_cache.go fanout).
+	release := func(bool) {}
+	if run != nil && !run.off && !run.record {
+		if key, ok := fanoutKey(run.parent, meta.Provider, meta.Model, grammarOf(meta.Endpoint), transform.Body); ok {
+			release = s.fanout.enter(r.Context(), key)
+			defer release(false)
+		}
+	}
 	resp, err := s.doUpstream(r.Context(), buildUpstream(transform.Body, upstreamHeaders))
 	s.inflight.Add(-1)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
 		estimateWG.Wait() // join the observe estimate before record() reads it
-		s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_unavailable", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+		s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_unavailable", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 		return
+	}
+	// A 400 naming the thinking binding or the per-message marks earns one heal
+	// retry (route.go routeHeal); if that is refused too, the original-bytes
+	// retry below still runs. On Responses only marks (configuration_update) heal.
+	if run != nil && resp.StatusCode == http.StatusBadRequest && (meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") ||
+		meta.Provider == "openai" && strings.HasSuffix(meta.Endpoint, "/responses") && run.marked) {
+		if retry, kind, from := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
+			headers := healHeaders
+			switch kind {
+			case healDropBlock:
+				headers = withBeta(upstreamHeaders, bindingBeta)
+			case healStrip:
+				headers = upstreamHeaders
+			}
+			s.capture.record(captureMeta{
+				RequestID:   requestID,
+				Provider:    meta.Provider,
+				Endpoint:    meta.Endpoint,
+				RuntimeMode: effectiveRuntimeMode,
+				Optimizers:  strings.Join(append(slices.Clone(transform.OptimizerIDs), "route-heal"), ","),
+			}, wholeBody(body), wholeBody(retry))
+			s.inflight.Add(1)
+			healed, herr := s.doUpstream(r.Context(), buildUpstream(retry, headers))
+			s.inflight.Add(-1)
+			if herr == nil {
+				run.dropBlocks = run.dropBlocks || kind == healDropBlock
+				run.stripped = run.stripped || kind == healStrip
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				_ = resp.Body.Close()
+				agent := transform.Body // the agent's own messages, for a remembered strip
+				if run.marked {
+					agent = run.unmarked
+				}
+				resp, upstreamHeaders = healed, headers
+				transform.Body, transformedHash, evidence.acceptedBody = retry, sha256.Sum256(retry), retry
+				transform.OptimizerIDs = append(slices.Clone(transform.OptimizerIDs), "route-heal")
+				providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, retry, meta)
+				// Later requests keep the history that was served; a compaction or
+				// side request does not change the session.
+				switch {
+				case healed.StatusCode >= 300:
+					if kind != healMarks && !run.perRequest && healRefused(healed) {
+						s.routes.healFailed(run.key, kind == healDropBlock) // the next request tries the next path
+					}
+				case kind == healMarks:
+					run.marked = false
+					s.routes.latch(run.key, meta.Model) // top-level effort served where the marks were not
+				case run.perRequest:
+				default:
+					s.routes.healed(run.key, kind == healDropBlock, agent, from)
+				}
+			}
+		}
 	}
 	// byte-safe fail-open: if the upstream rejects a request whose bytes we
 	// modified, retry ONCE with the original bytes before surfacing the error —
@@ -474,13 +669,34 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// (Measured 2026-07-07: Anthropic answers subscription-OAuth requests whose
 	// first system block changed with an opaque 429; any future fingerprint check
 	// lands here too.) The retry claims no optimization and books no savings.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) {
+	// A 429 that says it is a rate limit is returned instead: raw bytes cannot
+	// beat the limit, and the client's own retry reproduces this request. An
+	// accepted retry pins the conversation raw (pinRaw), because the original
+	// bytes are what the provider cached.
+	// A 429 on the asked model of a request whose bytes the route stage changed
+	// (effort, marks, strip, drop_block) is the provider's rate limit, not its
+	// bytes: retrying the original (without the session's marks) cannot help.
+	// On a moved model it falls back to the asked one as before. The original
+	// keeps the session's prompt_cache_key (route_cache.go), so a request the
+	// route stage only keyed is not sent again, unless the 4xx names the key:
+	// then the agent's own bytes go.
+	original, originalHash := body, rawHash
+	if run != nil && run.keyed && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		if head, _ := peekError(resp); !bytes.Contains(bytes.ToLower(head), []byte("prompt_cache_key")) {
+			original = withCacheKey(body, run.key)
+			originalHash = sha256.Sum256(original)
+		} else {
+			s.routes.refuseKey(run.key) // later requests of the session go without it
+		}
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) && !rateLimited(resp) &&
+		!(run != nil && (run.applied || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
+		retryAuthContext := providers.WithRequestPayloadSHA256(r.Context(), originalHash)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
 			providerHeaderError(w, r, rerr)
@@ -491,29 +707,36 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		s.applyUpstreamAuthFallback(adapter.Name(), credential, retryHeaders)
 		s.inflight.Add(1)
-		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(body, retryHeaders))
+		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(original, retryHeaders))
 		s.inflight.Add(-1)
 		if derr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
 			estimateWG.Wait() // join the observe estimate; passed uniformly (zeroed at Record on this failed status)
-			evidence.acceptedBody = body
-			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, rawHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+			evidence.acceptedBody = original
+			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 			return
 		}
+		if retryResp.StatusCode >= 200 && retryResp.StatusCode < 300 {
+			s.pinRaw(adapter, meta, body, transform.Body)
+		}
+		rawRetried = true
 		resp = retryResp
 		upstreamHeaders = retryHeaders
+		if reject := evidence.route.Reject; reject != nil && (meta.Model != modelRequested || run != nil && run.applied) {
+			reject() // the rest of this ask stays on the asked model and the request's own effort
+		}
+		if run != nil {
+			run.effort = "" // the original bytes: read back from them
+		}
 		if meta.Model != modelRequested {
 			meta.Model = modelRequested
 			w.Header().Del("x-caveman-routed-from")
-			if evidence.route.Reject != nil {
-				evidence.route.Reject() // the rest of this ask stays on the asked model
-			}
 			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
 		}
-		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
-		evidence.acceptedBody = body
-		transformedHash = rawHash
-		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, body, meta)
+		transform = providers.TransformResult{Body: original, OptimizerIDs: []string{}}
+		evidence.acceptedBody = original
+		transformedHash = originalHash
+		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, original, meta)
 		comp = nil
 		toolSchemaHandle = ""
 		breakpointPlanned = false
@@ -529,7 +752,25 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Endpoint:      meta.Endpoint,
 			RuntimeMode:   effectiveRuntimeMode,
 			RetryOriginal: true,
-		}, wholeBody(body), wholeBody(body))
+		}, wholeBody(body), wholeBody(original))
+	}
+	// The cache tripwire (prefix_monitor.go) compares what this request repeats
+	// of its session's cached prefixes, client bytes and forwarded bytes both.
+	// It never blocks or modifies traffic. It runs once, on the bytes the
+	// provider ACCEPTED: a rejected attempt cached nothing, and anchoring it made
+	// the turn after a raw retry read as a bust. A request the caller opted out
+	// of transforms is skipped: its raw bytes are the caller's choice, not ours.
+	// Splitting two large bodies is not free, so it runs alongside the response
+	// stream; estimateWG is joined before every record() that reads the cause.
+	if resp.StatusCode < 400 && effectiveRuntimeMode == rc.RuntimeMode {
+		estimateWG.Add(1)
+		go func(meta providers.RequestMetadata, accepted []byte, rawRetried bool, sessionID string) {
+			defer estimateWG.Done()
+			cacheBustCause = s.observeCachedPrefix(adapter, meta, body, accepted, acceptance{
+				rawRetry: rawRetried, streamRaw: streamRaw && !rawRetried, stripFrozen: stripFrozen,
+				sent: sentSeq, session: sessionID, requestID: requestID,
+			})
+		}(meta, transform.Body, rawRetried, evidence.SessionID)
 	}
 	var retrieveCalls []providers.UsageObservation
 	var retrieved bool
@@ -538,6 +779,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		resp, retrieveCalls, retrieved, replayedOriginal = s.runRetrieveLoop(r.Context(), s.httpClient, upstreamURL, upstreamHeaders, transform.Body, body, comp.recoveryHandles(), resp, adapter, meta.Provider, meta.Endpoint, requestID)
 	}
 	if replayedOriginal {
+		if run != nil {
+			run.effort = ""
+		}
 		if meta.Model != modelRequested {
 			meta.Model = modelRequested
 			w.Header().Del("x-caveman-routed-from")
@@ -561,22 +805,37 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The response protocol is authoritative: Vertex and compressed requests may
 	// stream without a readable JSON stream flag. Never buffer their SSE/events.
+	resp.Body = &releaseOnRead{ReadCloser: resp.Body, release: release, ok: resp.StatusCode < 300, stream: sseEvents(resp.Header)}
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
+	// The agent reads the model it asked for when the route stage moved the
+	// request (route.go shownModel); a compressed answer is left as it is.
+	encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
+	moved := run != nil && meta.Model != modelRequested && (encoding == "" || strings.EqualFold(encoding, "identity"))
+	var shown []byte
 	if !meta.Stream {
 		data, rerr := readUpstreamBody(resp)
 		if rerr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_body_read_failed", "Upstream response could not be read completely.")
 			estimateWG.Wait()
-			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_body_read_failed", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_body_read_failed", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 			return
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
+		if moved {
+			if out, ok := setModel(data, modelRequested); ok {
+				shown = out
+				resp.Header.Set("Content-Length", strconv.Itoa(len(shown)))
+			}
+		}
 	}
 	defer resp.Body.Close()
 
+	if moved && meta.Stream {
+		resp.Header.Del("Content-Length") // the agent's copy may be another length
+	}
 	copySafeResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("x-cave-project", rc.Label)
 	w.Header().Set("x-cave-mode", rc.RuntimeMode)
@@ -611,7 +870,20 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	usageScanner := adapter.NewUsageScanner(resp.Header)
-	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, usageScanner), meta.Stream, requestID)
+	var served servedModel
+	scanned := io.Writer(usageScanner)
+	if run != nil && !run.off {
+		scanned = io.MultiWriter(usageScanner, &served)
+	}
+	src := io.Reader(io.TeeReader(resp.Body, scanned))
+	switch {
+	case shown != nil:
+		_, _ = io.Copy(scanned, resp.Body) // the provider's bytes still feed usage and last
+		src = bytes.NewReader(shown)
+	case moved && meta.Stream:
+		src = newShownModel(src, meta.Model, modelRequested)
+	}
+	counter, copyErrCode := s.streamResponse(w, r, src, meta.Stream, requestID, nil)
 	ttfb := time.Since(start).Milliseconds()
 	if !counter.firstByteAt.IsZero() {
 		ttfb = counter.firstByteAt.Sub(start).Milliseconds()
@@ -647,6 +919,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		activeLevers = append(activeLevers, leverBreakpointPlan)
 	}
 	s.observeSession(evidence.SessionID, activeLevers, finalUsage, requestID)
+	if run != nil && !run.off && !run.auxiliary && run.key != "" && resp.StatusCode < 300 && errCode == "" {
+		// What this session's next ask reports as its previous request (route-ask-v1
+		// last). One the route stage was off for (another model, signed out) or a
+		// side request with its own history is not it.
+		if run.effort == "" {
+			run.effort = effortInForce(meta.Endpoint, transform.Body)
+		}
+		s.routes.served(run.key, RouteLast{
+			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
+			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
+			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
+		}, time.Now(), meta.Model != modelRequested && !run.perRequest, len(body))
+	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
@@ -658,12 +943,21 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		combinedUsage.CallObservations = append(append([]providers.UsageObservation{}, retrieveCalls...), finalUsage)
 	}
 	estimateWG.Wait() // join the observe estimate; overlapped the upstream round-trip + response stream
-	s.record(start, ttfb, requestID, traceID, rc, meta, authMode, resp.StatusCode, counter.n, len(body), rawHash, transformedHash, errCode, transform.OptimizerIDs, combinedUsage, comp, toolSchemaHandle, retrieved, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBust, compressionEligible)
+	s.record(start, ttfb, requestID, traceID, rc, meta, authMode, resp.StatusCode, counter.n, len(body), rawHash, transformedHash, errCode, transform.OptimizerIDs, combinedUsage, comp, toolSchemaHandle, retrieved, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 	if copyErrCode != "" {
 		// Headers are committed. Abort HTTP framing instead of returning a clean
 		// EOF for an incomplete SSE/gzip body; never replay a partial response.
 		panic(http.ErrAbortHandler)
 	}
+}
+
+// rateLimited reports a 429 that says it is a rate limit: it carries
+// Retry-After, which Anthropic documents on every rate-limit 429. The
+// anthropic-ratelimit-* headers prove nothing: Anthropic sends them on every
+// response. A 429 without Retry-After (the opaque one, the spend cap) gets
+// the raw retry; replaying the spend cap raw only fails again.
+func rateLimited(resp *http.Response) bool {
+	return resp.StatusCode == http.StatusTooManyRequests && resp.Header.Get("Retry-After") != ""
 }
 
 func providerHeaderError(w http.ResponseWriter, r *http.Request, err error) {
@@ -717,6 +1011,9 @@ type requestEvidence struct {
 	// route is the route stage's answer; modelRequested what the agent asked for.
 	route          RouteAnswer
 	modelRequested string
+	// poolID is the pool entry the request went to first; upstreamID the
+	// host's own answer id (translate.Reply.UpstreamID).
+	poolID, upstreamID string
 }
 
 func requestEvidenceFromHeaders(headers http.Header) requestEvidence {
@@ -887,23 +1184,18 @@ func validGatewayDigest(value string) bool {
 }
 
 // cacheEpochAllows binds framework-frozen prefix identity to gateway transform
-// authorization without putting prompt bytes in headers or telemetry. Legacy
-// callers that send neither header keep existing provider-adapter enforcement;
-// a partial/invalid framework declaration fails closed to pass-through.
+// authorization without putting prompt bytes in headers or telemetry. It decides
+// only whether a request may compress NEW content; substituting an earlier
+// replacement never asks it. Callers that send neither header are allowed: the
+// derived gate that stood in for them compared the client's own bytes, so it
+// only ever saw client-caused divergence, and its one action — forwarding the
+// original bytes — moved that divergence earlier, to the first block it had
+// compressed (#1105). A partial/invalid framework declaration fails closed.
 func (s *Server) cacheEpochAllows(r *http.Request, adapter providers.Adapter, meta providers.RequestMetadata, body []byte, sessionID string) bool {
 	epoch := strings.TrimSpace(r.Header.Get("x-cave-cache-epoch"))
 	digest := strings.TrimSpace(r.Header.Get("x-cave-cache-prefix-sha256"))
 	if epoch == "" && digest == "" {
-		// Header-less wrap clients (Claude Code, Codex, Gemini CLI) never declare a
-		// cache epoch or prefix digest, so without a derived path the gate never runs
-		// for the wrap's actual users (issue #133). It CANNOT reuse cacheguard.Inspect:
-		// that compares whole-prefix digests for equality, but the Anthropic frozen
-		// prefix grows every turn as the cache floor advances (content_compress.go), so
-		// whole-prefix equality reads legitimate append-only growth as drift and would
-		// skip compression from turn 2 onward — a coverage regression for the exact
-		// clients this path serves. Instead gate on the SAME append-only component
-		// check SLICE 1 uses (derivedEpochAllows).
-		return s.derivedEpochAllows(adapter, meta, body, sessionID)
+		return true
 	}
 	if epoch == "" || digest == "" || s.cacheGuard == nil {
 		return false
@@ -918,41 +1210,6 @@ func (s *Server) cacheEpochAllows(r *http.Request, adapter providers.Adapter, me
 		if s.logger != nil {
 			s.logger.Warn("cache epoch rejected transformed request; forwarding original bytes",
 				"warnings", result.Warnings)
-		}
-		return false
-	}
-	return true
-}
-
-// derivedEpochAllows is the compression gate for header-less wrap clients. It reuses
-// SLICE 1's append-only component comparison (prefix_monitor) rather than
-// cacheguard's whole-prefix equality, so it is extension-tolerant: a request whose
-// frozen prefix APPEND-ONLY EXTENDS the stored one is allowed AND re-anchors the
-// stored prefix to the new (longer) one, so a growing Claude Code session keeps
-// compressing every turn instead of getting stuck on turn 1. Only a genuine
-// divergence — a frozen component changed, dropped, or reordered (the same
-// condition SLICE 1 flags as cache_bust) — is drift: compression is skipped and the
-// ORIGINAL bytes are forwarded (byte-safe, blocks nothing, books nothing). The gate
-// re-anchors on divergence too, so a real prefix change resyncs the next turn rather
-// than stalling compression for the rest of the session.
-//
-// With no correlated session, or an adapter that exposes no frozen prefix, it keeps
-// the legacy behavior of leaving provider-adapter enforcement in charge (allow).
-func (s *Server) derivedEpochAllows(adapter providers.Adapter, meta providers.RequestMetadata, body []byte, sessionID string) bool {
-	if sessionID == "" {
-		return true
-	}
-	_, components, boundaryKnown := providerPrefixEvidence(adapter, body, meta)
-	if components == "" || !boundaryKnown {
-		return true
-	}
-	epochID := "wrap:" + sessionID + ":" + meta.Provider + ":" + meta.Endpoint
-	bust, divergingIndex := s.cacheEpochGate.observe(epochID, components)
-	if bust {
-		if s.logger != nil {
-			s.logger.Warn("derived cache epoch prefix diverged; forwarding original bytes",
-				"provider", meta.Provider, "endpoint", meta.Endpoint,
-				"diverging_component_index", divergingIndex)
 		}
 		return false
 	}
@@ -1135,6 +1392,21 @@ func (s *Server) compressRequest(
 	requestID string,
 	lockedRoutes []compiledRoute,
 ) *compressionOutcome {
+	return s.rewriteRequest(adapter, body, meta, transform, requestID, lockedRoutes, true)
+}
+
+// rewriteRequest is compressRequest with the new-compression veto exposed:
+// allowNew=false still substitutes every replacement already emitted, because
+// those bytes are in the provider cache, and compresses nothing new.
+func (s *Server) rewriteRequest(
+	adapter providers.Adapter,
+	body []byte,
+	meta providers.RequestMetadata,
+	transform *providers.TransformResult,
+	requestID string,
+	lockedRoutes []compiledRoute,
+	allowNew bool,
+) *compressionOutcome {
 	if s.compressor == nil {
 		return nil
 	}
@@ -1166,9 +1438,37 @@ func (s *Server) compressRequest(
 	replacements := make([][]byte, len(blocks))
 	var before, after int
 	var handles []string
+	// fresh holds this request's new compressions until the splice proves them.
+	type freshBlock struct {
+		i             int
+		scope, handle string
+		before, after int
+	}
+	var fresh []freshBlock
 	query := extractCompressionQuery(meta.Provider, meta.Endpoint, body)
 	queryComp, queryAware := s.compressor.(QueryAwareCompressor)
 	activeRoutes := make([]bool, len(lockedRoutes))
+	use := func(i int, replacement []byte, handle string) {
+		replacements[i] = replacement
+		handles = append(handles, handle)
+		if len(lockedRoutes) > 0 {
+			activeRoutes[routeByBlock[i]] = true
+		}
+	}
+	// keepRaw records that block i goes out raw. If another request already
+	// decided these bytes (a concurrent fork, a lookup that failed), the store
+	// answers with that decision and it is followed instead.
+	keepRaw := func(i int, scope string) {
+		if s.prefixCache == nil {
+			return
+		}
+		stored, err := s.prefixCache.RememberReplacement(scope, blocks[i].content, nil, RawDecisionHandle)
+		if err != nil {
+			s.unpersistedRaw.add(scope, blocks[i].content)
+		} else if len(stored) > 0 {
+			use(i, stored, ccrHandleOf(stored))
+		}
+	}
 	for i, block := range blocks {
 		if len(lockedRoutes) > 0 && routeByBlock[i] < 0 {
 			continue // unmatched frozen history is never rewritten under this lock.
@@ -1184,18 +1484,26 @@ func (s *Server) compressRequest(
 		}
 		if s.prefixCache != nil {
 			if stored, handle, hit := s.prefixCache.LookupReplacement(cacheScope, block.content); hit {
-				replacements[i] = stored
-				handles = append(handles, handle)
-				if len(lockedRoutes) > 0 {
-					activeRoutes[routeByBlock[i]] = true
+				// The first decision wins: replaced bytes are re-sent exactly, and a
+				// block that went out raw stays raw in every conversation.
+				if handle != RawDecisionHandle {
+					use(i, stored, handle)
 				}
 				continue
 			}
 		}
-		// A frozen block the cache does not know was never compressed by us (or its
-		// entry was evicted): forward the client's original bytes. That is the
-		// re-sync path — it costs one prefix rebuild and is stable from then on.
-		if !block.live {
+		// Raw while the store could not record it. A stored row outranks this:
+		// the raw send may have been this process's own fault (a failed lookup)
+		// on bytes other conversations hold replaced. Record it now if we can.
+		if s.unpersistedRaw.has(cacheScope, block.content) {
+			keepRaw(i, cacheScope)
+			continue
+		}
+		// Undecided. A frozen block nobody sent replaced (a --resume history built
+		// without the proxy, an evicted entry) and a live block this request may not
+		// compress both go out raw now, which makes raw their first decision.
+		if !block.live || !allowNew {
+			keepRaw(i, cacheScope)
 			continue
 		}
 		out, tb, ta := []byte(nil), 0, 0
@@ -1207,15 +1515,13 @@ func (s *Server) compressRequest(
 			route := lockedRoutes[routeIndex]
 			typed := s.compressor.(TypedCompressor)
 			out, tb, ta = typed.CompressSegmentType(block.content, route.ContentType)
-			if out != nil && tb > 0 && ta < tb {
-				activeRoutes[routeIndex] = true
-			}
 		} else if queryAware && query != "" {
 			out, tb, ta = queryComp.CompressSegmentQuery(block.content, query)
 		} else {
 			out, tb, ta = s.compressor.CompressSegment(block.content)
 		}
 		if out == nil || tb <= 0 || ta >= tb {
+			keepRaw(i, cacheScope)
 			continue
 		}
 		handle, err := s.compressor.StoreOriginal(block.content)
@@ -1227,46 +1533,78 @@ func (s *Server) compressRequest(
 					s.logger.Warn("compress recovery store returned empty handle; keeping block original", "request_id", requestID)
 				}
 			}
+			keepRaw(i, cacheScope)
 			continue
 		}
-		replacement := appendCCRMarker(out, handle)
+		replacements[i] = appendCCRMarker(out, handle)
+		fresh = append(fresh, freshBlock{i: i, scope: cacheScope, handle: handle, before: tb, after: ta})
+	}
+	if len(handles) == 0 && len(fresh) == 0 {
+		return nil // nothing rewritten — pass through, claim nothing.
+	}
+	splice := func() ([]byte, bool) {
+		out, err := reassemble(replacements)
+		if err == nil && len(out) > 0 && json.Valid(out) {
+			return out, true
+		}
+		if s.logger != nil {
+			s.logger.Warn("compress splice failed", "error", redact.Error(err), "request_id", requestID)
+		}
+		return nil, false
+	}
+	// A new replacement is remembered only once the request carrying it is known
+	// to assemble: a row recorded for a request that then went out raw would be
+	// re-sent next turn in place of bytes the provider cached raw. If the new
+	// compression cannot be spliced, those blocks go out raw and the replacements
+	// earlier turns were cached with are still re-sent.
+	newBody, ok := splice()
+	if !ok && len(fresh) > 0 {
+		for _, f := range fresh {
+			replacements[f.i] = nil
+			keepRaw(f.i, f.scope)
+		}
+		fresh = nil
+		newBody, ok = splice()
+	}
+	if !ok {
+		// ponytail: the memo rows assembled when first sent, so only a
+		// non-deterministic splice gets here; that turn goes out raw.
+		return nil
+	}
+	resplice := false
+	for _, f := range fresh {
+		candidate := replacements[f.i]
 		if s.prefixCache != nil {
-			// A rewrite we cannot re-issue next turn must not go out at all: it would
-			// diverge the prefix on the very next request. Fail open to the original.
-			stored, err := s.prefixCache.RememberReplacement(cacheScope, block.content, replacement, handle)
-			if err != nil || len(stored) == 0 {
+			stored, err := s.prefixCache.RememberReplacement(f.scope, blocks[f.i].content, candidate, f.handle)
+			if err != nil {
+				// A rewrite we cannot re-issue next turn must not go out at all: it
+				// would diverge the prefix on the very next request.
 				if s.logger != nil {
 					s.logger.Warn("prefix replacement store failed for block; keeping block original", "error", redact.Error(err), "request_id", requestID)
 				}
+				s.unpersistedRaw.add(f.scope, blocks[f.i].content)
+				replacements[f.i], resplice = nil, true
 				continue
 			}
-			replacement = stored
+			if !bytes.Equal(stored, candidate) {
+				// Another request decided these bytes first; its decision is re-sent.
+				replacements[f.i], resplice = nil, true
+				if len(stored) > 0 {
+					use(f.i, stored, ccrHandleOf(stored))
+				}
+				continue
+			}
 		}
-		replacements[i] = replacement
-		before += tb
-		after += ta
-		handles = append(handles, handle)
+		use(f.i, candidate, f.handle)
+		before += f.before
+		after += f.after
 	}
-	if len(handles) == 0 {
-		return nil // nothing rewritten — pass through, claim nothing.
-	}
-	newBody, err := reassemble(replacements)
-	if err != nil {
-		if s.logger != nil {
-			s.logger.Warn("compress reassembly failed; forwarding original bytes unchanged", "error", redact.Error(err), "request_id", requestID)
+	if resplice {
+		if newBody, ok = splice(); !ok {
+			return nil // ponytail: same ceiling, with this turn's rows already recorded
 		}
-		return nil
 	}
-	if len(newBody) == 0 {
-		return nil
-	}
-	if !json.Valid(newBody) {
-		if s.logger != nil {
-			s.logger.Warn("compress splice produced invalid JSON; forwarding original bytes unchanged", "request_id", requestID)
-		}
-		return nil
-	}
-	if bytes.Equal(newBody, body) {
+	if len(handles) == 0 || bytes.Equal(newBody, body) {
 		return nil
 	}
 	transform.Body = newBody
@@ -1319,6 +1657,65 @@ func joinRecoveryHandles(handles []string) string {
 	return "+" + strconv.Itoa(elided) + "," + strings.Join(uniq[len(uniq)-recoveryHandleListMax:], ",")
 }
 
+// rawMemory holds raw decisions the PrefixCache failed to write, so this
+// process keeps sending those blocks raw even if they come back live (a client
+// re-sending an accepted turn) after the store recovers. It is consulted only
+// on a store miss, and the decision is written through once the store takes it.
+// ponytail: in-process only; a restart before that write forgets them.
+type rawMemory struct {
+	mu    sync.Mutex
+	keys  map[[32]byte]struct{}
+	order [][32]byte
+}
+
+const rawMemoryCap = 4096
+
+func rawMemoryKey(scope string, content []byte) [32]byte {
+	h := sha256.New()
+	_, _ = h.Write([]byte(scope))
+	_, _ = h.Write([]byte{0})
+	_, _ = h.Write(content)
+	var key [32]byte
+	h.Sum(key[:0])
+	return key
+}
+
+func (m *rawMemory) add(scope string, content []byte) {
+	key := rawMemoryKey(scope, content)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.keys == nil {
+		m.keys = map[[32]byte]struct{}{}
+	}
+	if _, ok := m.keys[key]; ok {
+		return
+	}
+	m.keys[key] = struct{}{}
+	if m.order = append(m.order, key); len(m.order) > rawMemoryCap {
+		delete(m.keys, m.order[0])
+		m.order = m.order[1:]
+	}
+}
+
+func (m *rawMemory) has(scope string, content []byte) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if len(m.keys) == 0 {
+		return false
+	}
+	_, ok := m.keys[rawMemoryKey(scope, content)]
+	return ok
+}
+
+// ccrHandleOf reads the handle back out of a replacement's trailing marker.
+func ccrHandleOf(replacement []byte) string {
+	rest, ok := bytes.CutSuffix(replacement, []byte(">>"))
+	if i := bytes.LastIndex(rest, []byte("<<ccr:")); ok && i >= 0 {
+		return string(rest[i+len("<<ccr:"):])
+	}
+	return ""
+}
+
 func appendCCRMarker(out []byte, handle string) []byte {
 	marker := []byte("<<ccr:" + handle + ">>")
 	withMarker := slices.Grow(slices.Clone(out), 1+len(marker))
@@ -1343,7 +1740,7 @@ func (s *Server) matchAdapter(r *http.Request) providers.Adapter {
 
 // record prices the request from the catalog and writes one truthful row to the
 // sink. Standalone savings are always labeled "inferred".
-func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, rc RequestContext, meta providers.RequestMetadata, authMode AuthMode, status int, responseBytes int64, requestBytes int, rawHash, transformedHash [32]byte, errorCode string, optimizers []string, usage providers.UsageObservation, comp *compressionOutcome, toolSchemaHandle string, retrieved bool, estimate *estimateOutcome, evidence requestEvidence, providerCachePrefixSHA256, providerCacheComponentSHA256 string, cacheBoundaryKnown, cacheBust, compressionEligible bool) {
+func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, rc RequestContext, meta providers.RequestMetadata, authMode AuthMode, status int, responseBytes int64, requestBytes int, rawHash, transformedHash [32]byte, errorCode string, optimizers []string, usage providers.UsageObservation, comp *compressionOutcome, toolSchemaHandle string, retrieved bool, estimate *estimateOutcome, evidence requestEvidence, providerCachePrefixSHA256, providerCacheComponentSHA256 string, cacheBoundaryKnown bool, cacheBustCause string, compressionEligible bool) {
 	if s.sink == nil {
 		return
 	}
@@ -1439,7 +1836,8 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		ProviderCachePrefixSHA256:    providerCachePrefixSHA256,
 		ProviderCacheComponentSHA256: providerCacheComponentSHA256,
 		CacheBoundaryKnown:           cacheBoundaryKnown,
-		CacheBust:                    cacheBust,
+		CacheBust:                    cacheBustCause != "",
+		CacheBustCause:               cacheBustCause,
 		CompressionEligible:          compressionEligible,
 		AgentSlug:                    labelOrDefault(rc.AgentSlug, "unlabeled-agent"),
 		Provider:                     meta.Provider,
@@ -1449,6 +1847,8 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		RouteOutcome:                 evidence.route.Outcome,
 		RouteReason:                  evidence.route.Reason,
 		RouteDecisionID:              evidence.route.DecisionID,
+		RoutePoolID:                  evidence.poolID,
+		UpstreamResponseID:           evidence.upstreamID,
 		ProviderOriginKnown:          evidence.statsPricingUnsupportedReason != "custom_provider_origin",
 		Endpoint:                     meta.Endpoint,
 		Stream:                       meta.Stream,
@@ -1490,18 +1890,18 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 	if evidence.statsPricingUnsupportedReason != "" {
 		statsMeta.PricingUnsupportedReason = evidence.statsPricingUnsupportedReason
 	}
-	requestAccounting(&row, statsMeta, usage, evidence.originalBody, evidence.acceptedBody, retrieved)
 	// The legacy inferred-dollar field now uses the whole-request net delta too.
 	// Marker/tool overhead and regressions must not disappear behind segment wins.
 	// Not when the tool-schema strip also ran: that delta spans both transforms,
 	// and the strip books a handle and nothing else — no tokens, no dollars.
-	if authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers) && row.RequestEstimatedInputDeltaUSD != nil {
-		row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
-	}
-	s.sink.Record(row)
-	if s.cloud != nil {
-		s.cloud.Observe(row)
-	}
+	bookDelta := authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers)
+	original, accepted := evidence.originalBody, evidence.acceptedBody
+	s.finishRecord(row, true, func(row *RequestRecord) {
+		requestAccounting(row, statsMeta, usage, original, accepted, retrieved)
+		if bookDelta && row.RequestEstimatedInputDeltaUSD != nil {
+			row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
+		}
+	})
 }
 
 // costBreakdown prices normalized provider usage. Cache and reasoning fields are
@@ -1735,12 +2135,23 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 // returned code is "" for a clean copy; anything else means the client holds a
 // partial body and the caller must panic(http.ErrAbortHandler) AFTER recording
 // the row, so HTTP framing breaks instead of looking like a clean EOF.
-func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.Reader, stream bool, requestID string) (*countingWriter, string) {
+type streamCompletionTracker interface {
+	markClientWrite()
+	terminalDelivered() bool
+}
+
+func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.Reader, stream bool, requestID string, completion streamCompletionTracker) (*countingWriter, string) {
 	if stream {
 		_ = http.NewResponseController(w).Flush()
 	}
 	counter := &countingWriter{w: w}
-	if _, err := copyFlush(counter, src); err != nil {
+	if _, err := copyFlush(counter, src, completion); err != nil {
+		if r.Context().Err() != nil && completion != nil && completion.terminalDelivered() {
+			// Pi closes the stream as soon as it has consumed response.completed.
+			// That cancellation is safe to accept only after the terminal frame
+			// was fully written to the client; every earlier interruption fails closed.
+			return counter, ""
+		}
 		if s.logger != nil {
 			s.logger.Warn("client stream copy failed", "error", redact.Error(err), "request_id", requestID)
 		}
@@ -1752,7 +2163,7 @@ func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.R
 	return counter, ""
 }
 
-func copyFlush(dst *countingWriter, src io.Reader) (int64, error) {
+func copyFlush(dst *countingWriter, src io.Reader, completion streamCompletionTracker) (int64, error) {
 	buf := make([]byte, 32*1024)
 	var written int64
 	for {
@@ -1768,6 +2179,9 @@ func copyFlush(dst *countingWriter, src io.Reader) (int64, error) {
 			}
 			if nr != nw {
 				return written, io.ErrShortWrite
+			}
+			if completion != nil {
+				completion.markClientWrite()
 			}
 		}
 		if er != nil {

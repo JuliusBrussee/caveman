@@ -6,13 +6,17 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log/slog"
 	"math"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
@@ -33,6 +37,7 @@ type Store struct {
 	logger           *slog.Logger
 	persistent       bool
 	middlewareWriter chan struct{}
+	prefixWrites     atomic.Int64
 }
 
 const schema = `
@@ -55,6 +60,7 @@ CREATE TABLE IF NOT EXISTS requests (
   provider_cache_component_sha256 TEXT,
   cache_boundary_known INTEGER,
   cache_bust INTEGER,
+  cache_bust_cause TEXT,
   compression_eligible INTEGER,
   agent_slug TEXT,
   provider TEXT,
@@ -108,7 +114,10 @@ CREATE TABLE IF NOT EXISTS requests (
   price_cache_read_per_million REAL,
   price_cache_write_per_million REAL,
   price_cache_write_1h_per_million REAL,
-  price_reasoning_per_million REAL
+  price_reasoning_per_million REAL,
+  route_pool_id TEXT,
+  route_reason TEXT,
+  upstream_response_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -225,6 +234,12 @@ CREATE TABLE IF NOT EXISTS prefix_replacements (
   last_used_at TEXT NOT NULL
 );
 
+CREATE INDEX IF NOT EXISTS idx_prefix_replacements_lru
+  ON prefix_replacements(last_used_at, original_sha256);
+
+CREATE INDEX IF NOT EXISTS idx_prefix_replacements_handle_lru
+  ON prefix_replacements(handle, last_used_at, original_sha256);
+
 CREATE TABLE IF NOT EXISTS learn_sinks (
   sink_id TEXT PRIMARY KEY,
   title TEXT NOT NULL,
@@ -323,8 +338,12 @@ var migrations = []string{
 	`ALTER TABLE requests ADD COLUMN provider_cache_component_sha256 TEXT`,
 	`ALTER TABLE requests ADD COLUMN cache_boundary_known INTEGER`,
 	`ALTER TABLE requests ADD COLUMN cache_bust INTEGER`,
+	`ALTER TABLE requests ADD COLUMN cache_bust_cause TEXT`,
 	`ALTER TABLE requests ADD COLUMN compression_eligible INTEGER`,
 	`ALTER TABLE requests ADD COLUMN request_hash_complete INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE requests ADD COLUMN route_pool_id TEXT`,
+	`ALTER TABLE requests ADD COLUMN route_reason TEXT`,
+	`ALTER TABLE requests ADD COLUMN upstream_response_id TEXT`,
 	`ALTER TABLE usage_events ADD COLUMN cache_creation_input_tokens INTEGER`,
 	`ALTER TABLE learn_sinks ADD COLUMN tokens_observed INTEGER`,
 }
@@ -392,6 +411,86 @@ func (s *Store) Close() error { return s.db.Close() }
 // traffic (the byte-safe ethos). Basis is recorded as the lifecycle set it —
 // always "inferred" in standalone.
 func (s *Store) Record(rec gateway.RequestRecord) {
+	sanitizeRequestRecord(&rec)
+	if _, err := s.db.Exec(insertRequestSQL, requestRecordArgs(&rec)...); err != nil && s.logger != nil {
+		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)
+	}
+}
+
+// RecordBatch persists rows in one transaction (gateway.BatchSink): the rows
+// Record would write, with one commit. If the transaction cannot be used, each
+// row falls back to Record.
+//
+// The commit runs with synchronous(NORMAL) on its own connection: under WAL
+// that syncs at checkpoints instead of on every commit, so the request rows
+// cost no fsync each. A power loss or OS crash can drop the last batches
+// committed before it; a process crash or a clean exit loses none. Every
+// other write to this database (recovery originals, the prefix-replacement
+// cache, middleware state) keeps the default FULL.
+func (s *Store) RecordBatch(recs []gateway.RequestRecord) {
+	// Middleware writes wait their turn here rather than in SQLite's busy
+	// handler (see middlewareWrite).
+	s.middlewareWriter <- struct{}{}
+	defer func() { <-s.middlewareWriter }()
+	if err := s.recordBatch(recs); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("local spend store batch failed; writing rows one by one", "error", err, "rows", len(recs))
+		}
+		for _, rec := range recs {
+			s.Record(rec)
+		}
+	}
+}
+
+func (s *Store) recordBatch(recs []gateway.RequestRecord) error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	var level int
+	if err := conn.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&level); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer func() {
+		if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=`+strconv.Itoa(level)); err != nil {
+			// Never hand a NORMAL connection back to the pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		_ = conn.Close()
+	}()
+	if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=NORMAL`); err != nil {
+		return err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	// Runs before the restore above, so a panic mid-batch cannot leave the
+	// connection inside a transaction (no-op after Commit).
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx, insertRequestSQL)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		sanitizeRequestRecord(&rec)
+		// One failed insert fails the batch: it rolls back, and each row then
+		// gets its own Record, as it would have without batching.
+		if _, err := stmt.ExecContext(ctx, requestRecordArgs(&rec)...); err != nil {
+			return fmt.Errorf("insert request %s: %w", rec.RequestID, err)
+		}
+	}
+	_ = stmt.Close()
+	// A failed commit wrote nothing, so the rows are written again one by
+	// one. (Only a commit SQLite rolled back itself mid-batch, on a full
+	// disk or an I/O error, could leave earlier rows in and duplicate them.)
+	return tx.Commit()
+}
+
+// sanitizeRequestRecord is the persistence boundary's own validation of a row.
+func sanitizeRequestRecord(rec *gateway.RequestRecord) {
 	// Standalone is never allowed to mint Cloud verification, even if a buggy
 	// embedder passes a forged Basis. Enforce provenance again at persistence
 	// boundary instead of trusting lifecycle callers.
@@ -513,12 +612,13 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.RawRequestSHA256 = ""
 		rec.TransformedRequestSHA256 = ""
 	}
-	sanitizeStatsMeasurement(&rec)
-	_, err := s.db.Exec(
-		`INSERT INTO requests (
+	sanitizeStatsMeasurement(rec)
+}
+
+const insertRequestSQL = `INSERT INTO requests (
 		    ts, request_id, trace_id, label, session_id, session_correlation_basis, agent_build_sha256, efficiency_plan_sha256,
 		    context_bill, transform_trace, transform_location, cache_epoch, cache_prefix_sha256,
-		    provider_cache_prefix_sha256, provider_cache_component_sha256, cache_boundary_known, cache_bust, compression_eligible,
+		    provider_cache_prefix_sha256, provider_cache_component_sha256, cache_boundary_known, cache_bust, cache_bust_cause, compression_eligible,
 		    agent_slug, provider, model, route_from, route_to, endpoint, stream,
             status_code, error_code, latency_ms, ttfb_ms, request_bytes, response_bytes,
             input_tokens, output_tokens, cached_input_tokens, cache_creation_input_tokens,
@@ -530,11 +630,14 @@ func (s *Store) Record(rec gateway.RequestRecord) {
             request_token_basis, request_measurement_status, request_estimated_input_delta_usd, request_savings_basis,
             pricing_known, pricing_provider, pricing_model, pricing_catalog_version,
             price_input_per_million, price_output_per_million, price_cache_read_per_million,
-            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
+            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million,
+            route_pool_id, route_reason, upstream_response_id
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+
+func requestRecordArgs(rec *gateway.RequestRecord) []any {
+	return []any{rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
 		rec.ContextBill, rec.TransformTrace, rec.TransformLocation, rec.CacheEpoch, rec.CachePrefixSHA256,
-		rec.ProviderCachePrefixSHA256, rec.ProviderCacheComponentSHA256, rec.CacheBoundaryKnown, rec.CacheBust, rec.CompressionEligible,
+		rec.ProviderCachePrefixSHA256, rec.ProviderCacheComponentSHA256, rec.CacheBoundaryKnown, rec.CacheBust, rec.CacheBustCause, rec.CompressionEligible,
 		rec.AgentSlug, rec.Provider, rec.Model, rec.RouteFrom, rec.RouteTo, rec.Endpoint, rec.Stream,
 		rec.StatusCode, rec.ErrorCode, rec.LatencyMS, rec.TTFBMS, rec.RequestBytes, rec.ResponseBytes,
 		rec.InputTokens, rec.OutputTokens, rec.CachedInputTokens, rec.CacheCreationInputTokens,
@@ -547,9 +650,7 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.PricingKnown, rec.PricingProvider, rec.PricingModel, rec.PricingCatalogVersion,
 		rec.PriceInputPerMillion, rec.PriceOutputPerMillion, rec.PriceCacheReadPerMillion,
 		rec.PriceCacheWritePerMillion, rec.PriceCacheWrite1hPerMillion, rec.PriceReasoningPerMillion,
-	)
-	if err != nil && s.logger != nil {
-		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)
+		rec.RoutePoolID, rec.RouteReason, rec.UpstreamResponseID,
 	}
 }
 
@@ -564,11 +665,14 @@ type Stats struct {
 	CompressionTokensAfter     int64            `json:"compression_tokens_after"`
 	CompressionTokensSaved     int64            `json:"compression_tokens_saved"`
 	CompressionTokenCountBasis string           `json:"compression_token_count_basis"`
-	// CacheBustRequests counts requests whose frozen prefix did not extend the prior
-	// request in their session (observe-only). RequestsEligibleForCompression counts
+	// CacheBustRequests counts requests that did not extend what their session
+	// cached (observe-only). RequestsEligibleForCompression counts
 	// requests that reached the compression path as candidates (issue #133).
 	CacheBustRequests              int64 `json:"cache_bust_requests"`
 	RequestsEligibleForCompression int64 `json:"requests_eligible_for_compression"`
+	// CavemanCacheBustRequests counts the busts caveman caused: the client's
+	// bytes repeated a cached prefix and the forwarded bytes did not. Any is a bug.
+	CavemanCacheBustRequests int64 `json:"caveman_cache_bust_requests"`
 	// WouldSaveTokens is the observe-only would-have-saved token total across all
 	// rows; WouldSaveUSD is its inferred dollar total (nil when no row was
 	// list-price eligible — never a guessed price). Neither is ever a booked saving.
@@ -611,9 +715,11 @@ type ObserveSummary struct {
 	// cached_input_tokens: the window was dominated by cache WRITES, so a small
 	// compression cut is not an honest headline saving and must be refused.
 	HeadlineCompressionRefused bool `json:"headline_compression_refused"`
-	// CacheBustRequests counts requests in the window whose frozen prefix did not
-	// extend the prior request in their session (observe-only; see prefix_monitor.go).
+	// CacheBustRequests counts requests in the window that did not extend what
+	// their session cached (observe-only; see prefix_monitor.go).
 	CacheBustRequests int64 `json:"cache_bust_requests"`
+	// CavemanCacheBustRequests is the subset caveman caused (see Stats).
+	CavemanCacheBustRequests int64 `json:"caveman_cache_bust_requests"`
 	// RequestsEligibleForCompression counts requests that reached the compression
 	// path as candidates, regardless of whether any bytes were saved (issue #133).
 	RequestsEligibleForCompression int64  `json:"requests_eligible_for_compression"`
@@ -792,11 +898,12 @@ func (s *Store) Summary() (Stats, error) {
 		COALESCE(SUM(compression_tokens_before),0), COALESCE(SUM(compression_tokens_after),0),
 		COALESCE(SUM(would_save_tokens),0), COUNT(would_save_usd), COALESCE(SUM(would_save_usd),0),
 		COALESCE(SUM(CASE WHEN cache_bust <> 0 THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN compression_eligible <> 0 THEN 1 ELSE 0 END),0)
+		COALESCE(SUM(CASE WHEN compression_eligible <> 0 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN cache_bust_cause = 'caveman' THEN 1 ELSE 0 END),0)
 		FROM requests`)
 	if err := row.Scan(&out.Requests, &out.TotalCost, &out.TotalSaved, &out.CompressionTokensBefore, &out.CompressionTokensAfter,
 		&out.WouldSaveTokens, &wouldSaveUSDCount, &wouldSaveUSDSum,
-		&out.CacheBustRequests, &out.RequestsEligibleForCompression); err != nil {
+		&out.CacheBustRequests, &out.RequestsEligibleForCompression, &out.CavemanCacheBustRequests); err != nil {
 		return out, err
 	}
 	out.CompressionTokensSaved = out.CompressionTokensBefore - out.CompressionTokensAfter
@@ -863,13 +970,14 @@ func (s *Store) ObserveSummarySince(since string) (ObserveSummary, error) {
 		COALESCE(SUM(savings_usd),0), COUNT(would_save_usd), COALESCE(SUM(would_save_usd),0),
 		COALESCE(SUM(cached_input_tokens),0), COALESCE(SUM(cache_creation_input_tokens),0),
 		COALESCE(SUM(CASE WHEN cache_bust <> 0 THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN compression_eligible <> 0 THEN 1 ELSE 0 END),0)
+		COALESCE(SUM(CASE WHEN compression_eligible <> 0 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN cache_bust_cause = 'caveman' THEN 1 ELSE 0 END),0)
 		FROM requests`+where, args...)
 	if err := row.Scan(&out.Spans, &out.TokensIn, &out.WouldSaveTokens,
 		&out.CompressionTokensBefore, &out.CompressionTokensAfter, &out.CompressionTokensSaved,
 		&out.SavingsUSD, &usdCount, &usdSum,
 		&out.CachedInputTokens, &out.CacheCreationInputTokens,
-		&out.CacheBustRequests, &out.RequestsEligibleForCompression); err != nil {
+		&out.CacheBustRequests, &out.RequestsEligibleForCompression, &out.CavemanCacheBustRequests); err != nil {
 		return out, err
 	}
 	if out.CachedInputTokens < 0 {

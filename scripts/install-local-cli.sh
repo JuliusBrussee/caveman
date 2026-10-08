@@ -4,7 +4,9 @@ set -euo pipefail
 # install-local-cli.sh — one command from a fresh clone to a working
 # `caveman claude`:
 #   1. builds the CLI if dist/ is missing (pnpm)
-#   2. writes the bin/cave shim and links it as BOTH `cave` and `caveman`
+#   2. writes the .local-bin/cave shim and links it as BOTH `cave` and `caveman`
+#      (not bin/: the plugin root is the repo root, and a top-level bin/ in a
+#      checkout added as a local marketplace lands on PATH — #1035)
 #   3. builds all six Go binaries into ~/.caveman/bin when a Go
 #      toolchain is present — the CLI resolves that directory automatically, so
 #      no PATH edit is needed for compression/metering to work
@@ -37,8 +39,8 @@ if [[ ! -f "$cli_dir/dist/index.js" ]]; then
   fi
 fi
 
-mkdir -p bin
-cat > bin/cave <<'SH'
+mkdir -p .local-bin
+cat > .local-bin/cave <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
 source_path="${BASH_SOURCE[0]}"
@@ -56,12 +58,12 @@ if [[ -f "$repo/packages/cli/dist/index.js" ]]; then
 fi
 exec node "$repo/cli/dist/index.js" "$@"
 SH
-chmod +x bin/cave
+chmod +x .local-bin/cave
 
 link_shim() {
   local dir="$1"
-  ln -sf "$PWD/bin/cave" "$dir/cave"
-  ln -sf "$PWD/bin/cave" "$dir/caveman"
+  ln -sf "$PWD/.local-bin/cave" "$dir/cave"
+  ln -sf "$PWD/.local-bin/cave" "$dir/caveman"
   echo "→ linked cave + caveman into $dir"
 }
 if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
@@ -69,8 +71,10 @@ if [[ -d /usr/local/bin && -w /usr/local/bin ]]; then
 elif [[ -d "$HOME/.local/bin" && -w "$HOME/.local/bin" ]]; then
   link_shim "$HOME/.local/bin"
 else
-  echo "⚠ no writable /usr/local/bin or ~/.local/bin — add $PWD/bin to PATH yourself" >&2
+  echo "⚠ no writable /usr/local/bin or ~/.local/bin — add $PWD/.local-bin to PATH yourself" >&2
 fi
+# Shim from before the move; the links above now point at .local-bin/cave.
+rm -f bin/cave && { rmdir bin 2>/dev/null || true; }
 
 if command -v go >/dev/null 2>&1; then
   cave_bin="${CAVEMAN_HOME:-$HOME/.caveman}/bin"

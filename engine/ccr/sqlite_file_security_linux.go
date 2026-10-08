@@ -6,7 +6,9 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"runtime"
 	"strconv"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -19,6 +21,24 @@ import (
 var fchmodatEmptyPath = func(fd int) error {
 	return unix.Fchmodat(fd, "", 0o600, unix.AT_EMPTY_PATH)
 }
+
+// androidBuildProp ships on every Android system image. It is a variable so a
+// test can point it at a fixture.
+var androidBuildProp = "/system/build.prop"
+
+// detectAndroid reports whether this process runs on Android, where seccomp
+// kills fchmodat2 with SIGSYS. Termux builds report GOOS=linux, and Codex
+// starts stdio MCP servers with a cleared environment, so neither GOOS nor
+// ANDROID_ROOT is enough on its own: the filesystem probe covers both.
+func detectAndroid() bool {
+	if runtime.GOOS == "android" || os.Getenv("ANDROID_ROOT") != "" {
+		return true
+	}
+	_, err := os.Stat(androidBuildProp)
+	return err == nil
+}
+
+var onAndroid = sync.OnceValue(detectAndroid)
 
 func chmodSQLiteFile(path string, info os.FileInfo) error {
 	// Closing an ordinary descriptor for the database or -shm drops ALL POSIX
@@ -37,8 +57,10 @@ func chmodSQLiteFile(path string, info os.FileInfo) error {
 	if !opened.Mode().IsRegular() || !os.SameFile(info, opened) {
 		return fmt.Errorf("file changed while opening")
 	}
-	if err := fchmodatEmptyPath(fd); !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EINVAL) {
-		return err
+	if !onAndroid() {
+		if err := fchmodatEmptyPath(fd); !errors.Is(err, unix.EOPNOTSUPP) && !errors.Is(err, unix.EINVAL) {
+			return err
+		}
 	}
 	// Kernels before fchmodat2/AT_EMPTY_PATH require procfs. This is the pinned
 	// descriptor's kernel-controlled link, NOT the swappable database pathname.

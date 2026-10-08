@@ -231,10 +231,14 @@
       if (getText(el) !== original) return;
     }
     transaction.draft = getText(el);
-    if (!isTextarea(el)) transaction.richDraft = el.innerHTML;
     if (ok && (!transaction.draft.startsWith(prefix) || !transaction.draft.endsWith(original) ||
         !/^\n{2,}$/.test(transaction.draft.slice(prefix.length, -original.length)))) return;
     if (!transaction.draft.trim()) return;
+    // Snapshot the rich draft after the editor's own mutation handling, which
+    // runs as a microtask: ProseMirror redraws the inserted lines there (markup
+    // changes, text does not), and a snapshot taken before it cancelled every
+    // send, leaving the directive in the box and the message unsent.
+    if (!isTextarea(el)) queueMicrotask(() => { transaction.richDraft = el.innerHTML; });
     fireSend(transaction);
   }
 

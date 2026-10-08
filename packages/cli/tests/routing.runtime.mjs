@@ -132,6 +132,30 @@ test("status --json carries the plan from /me and no weekly cap", async () => {
   }
 });
 
+// Turning routing on while signed in says what it sends, as the sign-in does;
+// signed out, nothing is sent yet and the sign-in will say it.
+test("on routing says what routing sends", async () => {
+  const fx = modulesFixture();
+  const stub = await cloud(routing({ free_allowance: 100000, used: 3, state: "ok" }));
+  const line = /^routing is on · sends your latest ask \(with what your agent attaches to it\), the one before it, the end of the agent's last reply and request facts \(tools, effort, agent headers, token counts\) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing; requests go to your providers on your keys, only ones routed to a Caveman Cloud model pass through it · caveman off routing to stop$/m;
+  try {
+    assert.equal((await runCli(["off", "routing", "--yes"], fx.env)).code, 0);
+    const signedOut = await runCli(["on", "routing", "--yes"], fx.env);
+    assert.equal(signedOut.code, 0, signedOut.stderr);
+    assert.doesNotMatch(signedOut.stdout, line);
+    const env = { ...fx.env, CAVE_TOKEN: "test-token", CAVE_API_URL: stub.url };
+    assert.equal((await runCli(["off", "routing", "--yes"], env)).code, 0);
+    const on = await runCli(["on", "routing", "--yes"], env);
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, line);
+    const again = await runCli(["on", "routing", "--yes"], env);
+    assert.match(again.stdout, line, "already on still says it");
+  } finally {
+    stub.close();
+    fx.cleanup();
+  }
+});
+
 // caveman-proxy routes only on an explicit switch; status never claims routing
 // for a config that never turned it on.
 test("routing never switched on says so, even signed in", async () => {

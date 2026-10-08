@@ -58,6 +58,10 @@ exception) fonts. The upstream MIT and font notices are preserved in
 The runtime binaries and container image link third-party Go modules (MIT,
 BSD-3-Clause, Apache-2.0); every binary release ships their license texts as
 `THIRD_PARTY_GO_LICENSES.tar.gz`, and the image under `/licenses/third_party/`.
+The release `caveman-proxy` and `caveman-engine` are built with `zig cc` and
+statically link Zig's compiler runtime (MIT), musl libc on Linux (MIT), and the
+mingw-w64 runtime on Windows (ZPL-2.1); their notices ship as `LICENSE.zig`,
+`COPYRIGHT.musl` and `COPYING.mingw-w64`.
 The CLI contains a port of part of Qwen Code (Apache-2.0) and bundles
 MIT-licensed `@clack/prompts` and its dependencies; see `packages/cli/NOTICE`.
 The extension ships the Geist fonts under the SIL Open Font License 1.1

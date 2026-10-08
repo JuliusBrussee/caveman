@@ -115,6 +115,81 @@ for (const [reason] of Object.entries(v11.reason_catalog)) {
   if (!/^[a-z][a-z0-9_]{0,63}$/.test(reason)) throw new Error(`reason_catalog: ${reason} violates the reason grammar`);
 }
 
+// Route ask: the ask is optional and strict, its text required and non-blank.
+const validateRouteAsk = ajv.getSchema(`${SCHEMA_BASE}route-ask-v1.schema.json`);
+const routeAsk = (ask) => ({
+  models: ["claude-opus-5-5", "claude-sonnet-5-5"],
+  signals: { agent: "claude", context_tokens: 1200, tools_declared: 3, tool_errors: 0, images: false },
+  ...(ask && { ask }),
+});
+for (const [ask, valid] of [
+  [undefined, true],
+  [{ text: "fix the login bug" }, true],
+  [{ text: "now add a test", prev_text: "fix the login bug", reply_tail: "Fixed.", turn: 1 }, true],
+  [{ text: " \n " }, false],
+  [{ prev_text: "fix the login bug" }, false],
+  [{ text: "fix it", turn: 1000001 }, false],
+  [{ text: "fix it", model_hint: "x" }, false],
+]) {
+  if (validateRouteAsk(routeAsk(ask)) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(ask)} should be ${valid ? "valid" : "invalid"}`);
+}
+// What the request declares, what the session's previous request ran, and Cloud's state.
+const request = { endpoint: "messages", effort: "high", thinking: "adaptive", per_message_off: false };
+const last = { model: "claude-opus-5-5", effort: "low", age_s: 42, input_tokens: 52000, cache_read_tokens: 50000, cache_write_tokens: 1200, compacted: false };
+for (const [extra, valid] of [
+  [{ request }, true],
+  [{ request: { ...request, labels: { "x-claude-code-agent-id": "a1" }, tool_names: ["Read", "Bash"] }, last, state: "opaque", parent_state: "parent" }, true],
+  [{ request: { ...request, labels: { "thread-id": "t2", "x-codex-parent-thread-id": "t1", "x-codex-turn-metadata": "m".repeat(16384) } } }, true],
+  [{ request: { ...request, labels: { "x-codex-turn-metadata": "m".repeat(16385) } } }, false],
+  [{ request: { ...request, labels: { "x-unknown-label": "v" } } }, false],
+  [{ request: { ...request, effort: "adaptive" } }, false],
+  [{ request: { ...request, endpoint: "chat", effort: "", thinking: "" } }, true],
+  [{ request, parent_state: "s".repeat(4096) }, true],
+  [{ request: { ...request, endpoint: "embeddings" } }, false],
+  [{ request: { effort: "high", thinking: "", per_message_off: false } }, false],
+  [{ request: { ...request, thinking: "sometimes" } }, false],
+  [{ request: { ...request, model: "x" } }, false],
+  [{ request: { ...request, labels: { "X-Claude-Code-Agent-Id": "a1" } } }, false],
+  [{ request: { ...request, labels: Object.fromEntries(Array.from({ length: 17 }, (_, i) => [`x-${i}`, "v"])) } }, false],
+  [{ request: { ...request, labels: { "x-openai-subagent": "v".repeat(257) } } }, false],
+  [{ request: { ...request, tool_names: Array.from({ length: 129 }, (_, i) => `t${i}`) } }, false],
+  [{ request: { ...request, tool_names: ["n".repeat(65)] } }, false],
+  [{ request, last: { ...last, compacted: undefined } }, false],
+  [{ request, last: { ...last, age_s: -1 } }, false],
+  [{ request, last: { ...last, effort: "adaptive" } }, false],
+  [{ request, state: "" }, false],
+  [{ request, state: "s".repeat(4097) }, false],
+  // Additive cache_ttl: the TTL the request writes at.
+  ...["5m", "30m", "1h", "24h"].map((ttl) => [{ request: { ...request, cache_ttl: ttl } }, true]),
+  [{ request: { ...request, cache_ttl: "2h" } }, false],
+  [{ request: { ...request, cache_ttl: "" } }, false],
+]) {
+  const body = { ...routeAsk({ text: "fix the login bug" }), ...JSON.parse(JSON.stringify(extra)) };
+  if (validateRouteAsk(body) !== valid) throw new Error(`route-ask-v1: ${JSON.stringify(extra).slice(0, 200)} should be ${valid ? "valid" : "invalid"}`);
+}
+// The pool of what the person has set up (additive, hub route-ask-v2).
+const pool = [
+  { id: "harness/claude-opus-5-5", model: "claude-opus-5-5", host: "anthropic", via: "local" },
+  { id: "openrouter/kimi-k3", model: "kimi-k3", host: "openrouter", via: "local" },
+];
+for (const [value, valid] of [
+  [pool, true],
+  [Array.from({ length: 64 }, (_, i) => ({ id: `openai/m${i}`, model: `m${i}`, host: "openai", via: "local" })), true],
+  [Array.from({ length: 65 }, (_, i) => ({ id: `openai/m${i}`, model: `m${i}`, host: "openai", via: "local" })), false],
+  [[], false],
+  [[{ ...pool[1], via: "cloud" }], false],
+  [[{ ...pool[1], via: undefined }], false],
+  [[{ ...pool[1], key: "sk-secret" }], false],
+  [[{ ...pool[1], host: "Open Router" }], false],
+  [[{ ...pool[1], id: "/leading-slash" }], false],
+  [[{ ...pool[1], model: "m".repeat(129) }], false],
+]) {
+  const body = { ...routeAsk({ text: "fix the login bug" }), request, pool: JSON.parse(JSON.stringify(value)) };
+  if (validateRouteAsk(body) !== valid) throw new Error(`route-ask-v1 pool: ${JSON.stringify(value).slice(0, 200)} should be ${valid ? "valid" : "invalid"}`);
+}
+// A compaction or side request carries no ask.
+if (!validateRouteAsk({ ...routeAsk(), request })) throw new Error("route-ask-v1: a body without the ask must be valid");
+
 // OpenAPI: every relative $ref must land on a schema file (and JSON pointer) in this package.
 const openapiPath = path.join(packageRoot, "openapi", "middleware.openapi.json");
 const openapi = JSON.parse(await readFile(openapiPath, "utf8"));

@@ -20,6 +20,10 @@ const { spawnSync } = require('child_process');
 const HOOKS_DIR = path.resolve(__dirname, '..', 'src', 'hooks');
 const SKILL_SRC = path.resolve(__dirname, '..', 'skills');
 
+// A headless runner exports CLAUDE_CODE_ENTRYPOINT=sdk-*, which starts
+// SessionStart under the manual policy (#377). Spawns copy process.env.
+delete process.env.CLAUDE_CODE_ENTRYPOINT;
+
 let passed = 0;
 let failed = 0;
 
@@ -52,10 +56,10 @@ function makeInstall(omit = []) {
   return { root, hooks };
 }
 
-function runHook(hooks, name, { stdin = '', env = {} } = {}) {
+function runHook(hooks, name, { stdin = '', env = {}, args = [] } = {}) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-home-'));
   try {
-    return spawnSync(process.execPath, [path.join(hooks, name)], {
+    return spawnSync(process.execPath, [path.join(hooks, name), ...args], {
       input: stdin,
       encoding: 'utf8',
       env: { ...process.env, CLAUDE_CONFIG_DIR: home, ...env },
@@ -116,6 +120,20 @@ test('CAVEMAN_DEFAULT_MODE=off still opts out without the config module', () => 
   });
 });
 
+// #621: with no state module there is no session state to inherit, so the
+// SubagentStart path stays silent rather than guessing a mode.
+test('--subagent exits 0 and injects nothing without the config module', () => {
+  withInstall(['caveman-config.js'], ({ hooks }) => {
+    const r = spawnSync(process.execPath, [path.join(hooks, 'caveman-activate.js'), '--subagent'], {
+      input: JSON.stringify({ session_id: 't', cwd: '/tmp', hook_event_name: 'SubagentStart', agent_type: 'Explore' }),
+      encoding: 'utf8',
+      env: { ...process.env, CLAUDE_CONFIG_DIR: hooks },
+    });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.stdout, '');
+  });
+});
+
 console.log('\ncaveman-mode-tracker.js — missing siblings');
 
 test('missing caveman-config.js: exits 0, emits nothing', () => {
@@ -150,6 +168,16 @@ test('prints one actionable line instead of a stack trace', () => {
     assert.doesNotMatch(r.stderr, /MODULE_NOT_FOUND/);
     assert.doesNotMatch(r.stderr, /Require stack:/);
     assert.ok(r.stderr.trim().split('\n').length <= 3, `expected a short message, got:\n${r.stderr}`);
+  });
+});
+
+// As a SessionEnd hook there is no report to fail loudly into: any stderr or
+// non-zero exit surfaces as a hook error while the user is quitting.
+test('--record (SessionEnd) exits 0 silently instead', () => {
+  withInstall(['caveman-config.js'], ({ hooks }) => {
+    const r = runHook(hooks, 'caveman-stats.js', { args: ['--record'], stdin: '{"session_id":"x"}' });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.strictEqual(r.stdout + r.stderr, '');
   });
 });
 

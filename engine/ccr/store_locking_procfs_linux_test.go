@@ -5,6 +5,7 @@ package ccr
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -76,6 +77,9 @@ func TestProcfsChmodFallbackTightensMode(t *testing.T) {
 // is only reached after the caller's Lstat rejects a symlink, so this pins the
 // caller's guard rather than the fallback's own O_NOFOLLOW.
 func TestProcfsChmodFallbackRefusesSymlink(t *testing.T) {
+	if onAndroid() {
+		t.Skip("Android O_PATH symlink semantics differ; covered on Linux")
+	}
 	forceProcfsFallback(t)
 
 	dir := t.TempDir()
@@ -105,6 +109,9 @@ func TestProcfsChmodFallbackRefusesSymlink(t *testing.T) {
 // green fallback test.
 func forceProcfsFallback(t *testing.T) {
 	t.Helper()
+	if onAndroid() {
+		return
+	}
 	probe := filepath.Join(t.TempDir(), "probe")
 	if err := os.WriteFile(probe, nil, 0o644); err != nil {
 		t.Fatal(err)
@@ -122,4 +129,54 @@ func forceProcfsFallback(t *testing.T) {
 	original := fchmodatEmptyPath
 	fchmodatEmptyPath = func(int) error { return unix.EOPNOTSUPP }
 	t.Cleanup(func() { fchmodatEmptyPath = original })
+}
+
+// Codex scrubs the MCP server environment, so ANDROID_ROOT alone misses
+// caveman-mcp on Termux; the system image marker must still be detected.
+func TestDetectAndroidFromBuildProp(t *testing.T) {
+	t.Setenv("ANDROID_ROOT", "")
+	original := androidBuildProp
+	t.Cleanup(func() { androidBuildProp = original })
+
+	androidBuildProp = filepath.Join(t.TempDir(), "build.prop")
+	if err := os.WriteFile(androidBuildProp, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !detectAndroid() {
+		t.Fatal("build.prop present with ANDROID_ROOT unset: want Android detected")
+	}
+	if runtime.GOOS == "android" {
+		return
+	}
+	androidBuildProp = filepath.Join(t.TempDir(), "missing")
+	if detectAndroid() {
+		t.Fatal("no build.prop, no ANDROID_ROOT: want not Android")
+	}
+}
+
+// On Android the fchmodat2 syscall itself is fatal (SIGSYS), so the gate must
+// skip it outright and go straight to procfs.
+func TestChmodSQLiteFileSkipsFchmodat2OnAndroid(t *testing.T) {
+	originalAndroid, originalFchmodat := onAndroid, fchmodatEmptyPath
+	t.Cleanup(func() { onAndroid, fchmodatEmptyPath = originalAndroid, originalFchmodat })
+	onAndroid = func() bool { return true }
+	fchmodatEmptyPath = func(int) error {
+		t.Fatal("fchmodat2 called on Android")
+		return nil
+	}
+
+	path := filepath.Join(t.TempDir(), "ccr.db")
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := PrepareSQLitePath(path); err != nil {
+		t.Fatalf("prepare on Android: %v", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if perm := info.Mode().Perm(); perm != 0o600 {
+		t.Fatalf("mode %v, want -rw-------", perm)
+	}
 }

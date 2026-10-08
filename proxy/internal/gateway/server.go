@@ -167,18 +167,27 @@ type Retriever interface {
 // fails OPEN: a miss, an unavailable store, or a write error means the original
 // bytes are forwarded and no new replacement is created — the proxy never emits a
 // rewrite it could not reproduce on the next turn.
+//
+// It records the FIRST forwarding decision for a block, raw included: a block
+// that went out raw is remembered as an empty replacement under
+// RawDecisionHandle, so a later compression of the same bytes in any
+// conversation can never put them on the wire replaced.
 type PrefixCache interface {
 	// LookupReplacement returns the exact replacement bytes previously emitted for
-	// these original bytes plus the CCR handle they disclose. An evicted or absent
-	// entry is a plain miss: the caller forwards the original, which re-syncs the
-	// prefix at a one-time cost and stays stable from then on.
+	// these original bytes plus the CCR handle they disclose, or (nil,
+	// RawDecisionHandle, true) for a block that went out raw. An evicted or absent
+	// entry is a plain miss.
 	LookupReplacement(scope string, original []byte) (replacement []byte, handle string, ok bool)
-	// RememberReplacement durably records original→replacement and returns the
-	// AUTHORITATIVE bytes for that original — the caller must forward what comes
-	// back, not what it passed in. Storage is first-write-wins so two requests that
-	// compressed the same block can never put two different prefixes on the wire.
+	// RememberReplacement durably records original→replacement (nil under
+	// RawDecisionHandle records raw) and returns the AUTHORITATIVE bytes for that
+	// original — nil when raw won. The caller must forward what comes back, not
+	// what it passed in. Storage is first-write-wins so two requests that saw the
+	// same block can never put two different prefixes on the wire.
 	RememberReplacement(scope string, original, replacement []byte, handle string) (stored []byte, err error)
 }
+
+// RawDecisionHandle is the PrefixCache handle of a block forwarded raw.
+const RawDecisionHandle = "raw"
 
 // PrefixStabilizer is the optional adapter capability that exposes the frozen
 // (already-cached) blocks alongside the live zone, so the proxy can substitute a
@@ -188,6 +197,14 @@ type PrefixCache interface {
 // nothing to stabilize and keep the byte-identical passthrough.
 type PrefixStabilizer interface {
 	ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]providers.RewritableBlock, func([][]byte) ([]byte, error), bool)
+}
+
+// CachedPrefixInspector splits a request into the components the provider's
+// prompt cache keys on (cache markers stripped) and reports how many of them
+// this request caches. Adapters without it are treated as caching the whole
+// prompt (see cachedPrefix).
+type CachedPrefixInspector interface {
+	CachedPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, int, bool)
 }
 
 // PrefixEvidenceInspector returns ordered exact provider-wire JSON components
@@ -219,11 +236,13 @@ type RequestRecord struct {
 	ProviderCachePrefixSHA256    string
 	ProviderCacheComponentSHA256 string
 	CacheBoundaryKnown           bool
-	// CacheBust is set by the observe-only prefix-monotonicity check when this
-	// request's frozen prefix did not extend the previous request in the same
-	// session (see prefix_monitor.go). It is a diagnostic flag only — it never
+	// CacheBust is set by the observe-only cache tripwire when this request did
+	// not extend the prefix its session cached (see prefix_monitor.go), and
+	// CacheBustCause says who changed the bytes: "client", "caveman",
+	// "raw_retry", "stream_switch" or "lever_freeze". Diagnostic only — it never
 	// blocks or modifies traffic and never affects any savings figure.
-	CacheBust bool
+	CacheBust      bool
+	CacheBustCause string
 	// CompressionEligible marks that this request reached the compression path as a
 	// candidate (compress mode, recovery-reachable, cache-epoch allowed) regardless
 	// of whether any bytes were ultimately saved. It is the denominator behind the
@@ -236,11 +255,18 @@ type RequestRecord struct {
 	Model     string
 	RouteFrom string
 	RouteTo   string
-	// The route stage's outcome for the runtime/v1 sender (see route.go); not
-	// stored. Empty when no route stage ran.
+	// The route stage's outcome for the runtime/v1 sender (see route.go); the
+	// reason is stored too. Empty when no route stage ran.
 	RouteOutcome    string
 	RouteReason     string
 	RouteDecisionID string
+	// RoutePoolID is the pool entry the route stage sent the request to (on
+	// a fallback row too, with RouteReason saying why it failed);
+	// UpstreamResponseID the pool host's own id for its answer (OpenRouter's
+	// gen-…), to look the call up there: on a fallback row it is the failed
+	// pool host's id, not the harness's. Stored, with RouteReason.
+	RoutePoolID        string
+	UpstreamResponseID string
 	// ProviderOriginKnown: the request went to the provider's own API, so its
 	// model ids are catalog names rather than local paths. Not stored.
 	ProviderOriginKnown      bool
@@ -330,17 +356,20 @@ type Server struct {
 	// PrefixCache). A nil cache means the proxy cannot maintain a rewrite across
 	// turns, which is what the non-PAYG live-zone paths fail closed on.
 	prefixCache PrefixCache
-	cacheGuard  *cacheguard.Guard
-	// prefixMonitor runs the observe-only per-session prefix-monotonicity check
-	// (see prefix_monitor.go). It flags cache_bust when a request's frozen prefix
-	// does not extend the prior request in the same session.
+	// unpersistedRaw remembers blocks that went out raw while prefixCache could
+	// not record it (see rawMemory).
+	unpersistedRaw rawMemory
+	// rawPins are conversations the provider accepted only raw, and lineages
+	// the cached prefixes that went out replaced (see raw_pin.go).
+	rawPins    rawPins
+	lineages   lineages
+	cacheGuard *cacheguard.Guard
+	// prefixMonitor is the observe-only cache tripwire (see prefix_monitor.go). It
+	// flags cache_bust when a request does not extend what its session cached,
+	// and says whether the client or caveman changed the bytes. prefixSeq orders
+	// sends and acceptances for it.
 	prefixMonitor *prefixMonitor
-	// cacheEpochGate is the compression GATE for header-less wrap clients: a second,
-	// independent prefix monitor keyed on the derived cache epoch. It cannot share
-	// prefixMonitor's state (that one is consulted on every request; this one only
-	// on compress candidates), and unlike cacheguard it tolerates append-only
-	// frozen-prefix growth — see derivedEpochAllows.
-	cacheEpochGate *prefixMonitor
+	prefixSeq     atomic.Uint64
 	// recoveryViaMCP records that the wrapped agent fulfills caveman_retrieve itself
 	// (via the caveman MCP server, sharing the CCR store) — set by `caveman wrap`
 	// when it installed that tool. When true, compress mode reshapes streaming and
@@ -388,6 +417,12 @@ type Server struct {
 	// what is sent, recorded, or claimed.
 	capture *bodyCapture
 	cloud   CloudLink
+	// routes is what the route stage remembers per session (route.go).
+	routes routeSessions
+	// recorder finishes rows off the request path (Config.AsyncRecord).
+	recorder *recorder
+	// fanout staggers sibling children on one new prefix (route_cache.go).
+	fanout fanout
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
@@ -416,15 +451,18 @@ type Server struct {
 // rule for non-PAYG traffic is unchanged. Subscription rows it produces are
 // tokens-only: the row's dollar fields stay zero (see record()).
 func (s *Server) liveZoneCompressionAllowed(adapter providers.Adapter, body []byte) bool {
+	return s.liveZoneConfigured(adapter) && s.mcpRecoveryAvailable(body)
+}
+
+// liveZoneConfigured is every live-zone condition except the recovery proof,
+// which a request may carry in its own (possibly still encoded) body.
+func (s *Server) liveZoneConfigured(adapter providers.Adapter) bool {
 	switch s.subscriptionCompress {
 	case "", "live_zone":
 	default:
 		return false
 	}
 	if adapter == nil {
-		return false
-	}
-	if !s.mcpRecoveryAvailable(body) {
 		return false
 	}
 	return s.prefixStabilized(adapter)
@@ -508,6 +546,13 @@ type Config struct {
 	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender). Nil
 	// keeps the proxy local-only.
 	Cloud CloudLink
+	// AsyncRecord finishes each telemetry row off the request path: the
+	// request token count, the sink write (batched when the sink is a
+	// BatchSink) and the Cloud observe run after the handler returns, so
+	// neither the client's connection nor a stream's last chunk waits on them.
+	// Rows reach the sink in the order they were recorded; Close writes out the
+	// rest. Off, every row is in the sink before ServeHTTP returns.
+	AsyncRecord bool
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -524,6 +569,13 @@ func BoundUpstreamTransport(t *http.Transport) {
 	// left on http.DefaultTransport, and an idle keep-alive socket to a provider
 	// must not be held open indefinitely.
 	t.IdleConnTimeout = 90 * time.Second
+	// Go keeps only 2 idle connections per host by default, so a third
+	// concurrent caller (agent fan-out, a team behind one proxy) closes its
+	// connection after each response and the next request to that provider pays
+	// a new TCP and TLS handshake. Keep a pool sized for that concurrency; the
+	// idle timeout above still retires what goes quiet.
+	t.MaxIdleConns = 1024
+	t.MaxIdleConnsPerHost = 256
 }
 
 // New constructs a standalone proxy Server.
@@ -563,7 +615,7 @@ func New(cfg Config) *Server {
 		// date that change to a config change rather than to the provider.
 		cfg.Logger.Info("cache-breakpoint planner enabled", "mode", breakpointPlanModeFrontier)
 	}
-	return &Server{
+	s := &Server{
 		adapters:             cfg.Adapters,
 		auth:                 cfg.Auth,
 		creds:                cfg.Creds,
@@ -572,7 +624,6 @@ func New(cfg Config) *Server {
 		prefixCache:          cfg.PrefixCache,
 		cacheGuard:           cacheguard.New(),
 		prefixMonitor:        newPrefixMonitor(),
-		cacheEpochGate:       newPrefixMonitor(),
 		recoveryViaMCP:       cfg.RecoveryViaMCP,
 		observeEstimate:      cfg.ObserveEstimate,
 		chatGPTUpstream:      strings.TrimSuffix(upstream, "/"),
@@ -590,6 +641,10 @@ func New(cfg Config) *Server {
 		capture:              newBodyCapture(os.Getenv("CAVE_CAPTURE_DIR"), cfg.Logger),
 		cloud:                cfg.Cloud,
 	}
+	if cfg.AsyncRecord && cfg.Sink != nil {
+		s.recorder = newRecorder(s.writeRecords, cfg.Logger)
+	}
+	return s
 }
 
 // Handler returns the standalone HTTP handler: health, metrics, and the proxy

@@ -1,10 +1,10 @@
 # caveman — installer shim (Windows / PowerShell).
 #
-# Thin wrapper around bin/install.js (the unified Node installer). Every flag
-# you'd pass to bin/install.js can be passed here; we just forward them.
+# Thin wrapper around installer/install.js (the unified Node installer). Every flag
+# you'd pass to installer/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.ps1 | iex
 #
 # Local clone:
 #   pwsh install.ps1 [flags]
@@ -32,10 +32,10 @@ function Install-Caveman {
 
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
-  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v3.1.0" }
+  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v3.2.0" }
   # The CLI release the first run comes from when caveman is not installed;
   # kept equal to packages/cli/package.json (tests/installer/shim-security).
-  $CliVersion = "2.0.1"
+  $CliVersion = "2.1.0"
 
   # Require Node ≥18.
   $node = Get-Command node -ErrorAction SilentlyContinue
@@ -61,7 +61,7 @@ caveman: Node.js (>=18) required. Install:
   $local = $null
   if ($PSCommandPath) {
     $here = Split-Path -Parent $PSCommandPath
-    $local = Join-Path $here "bin/install.js"
+    $local = Join-Path $here "installer/install.js"
     if (-not (Test-Path $local)) { $local = $null }
   }
 
@@ -76,9 +76,24 @@ caveman: Node.js (>=18) required. Install:
     }
 
     # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
-    # package, and a literal `--` was tripping bin/install.js's parseArgs as an
+    # package, and a literal `--` was tripping installer/install.js's parseArgs as an
     # unknown flag.
-    & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
+    # npm 12 disables git package fetches by default (EALLOWGIT). Allow only the
+    # root package requested here; older npm versions do not understand this
+    # config flag.
+    # 2>$null mirrors install.sh's `2>/dev/null`: npm writes its "does not support
+    # Node.js" notice to stderr, and a contaminated value would floor the major to 0.
+    $npxVersion = [string](& npx --version 2>$null)
+    $npxMajor = 0
+    if ($npxVersion -match '^(\d+)') {
+      $npxMajor = [int]$Matches[1]
+    }
+
+    if ($npxMajor -ge 12) {
+      & npx --allow-git=root -y "github:$Repo#$PinnedRef" @InstallerArgs
+    } else {
+      & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
+    }
   }
   if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 

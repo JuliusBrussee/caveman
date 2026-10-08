@@ -14,7 +14,7 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # Node 18 is the supported floor (engines ">=18"; bin/install.js refuses to
+  # Node 18 is the supported floor (engines ">=18"; installer/install.js refuses to
   # run below it) and the only version nothing else covers: engine-ci's
   # root-surfaces job and the macos job below already run these suites on 22.
   node:

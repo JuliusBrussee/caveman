@@ -1,5 +1,5 @@
 #!/bin/bash
-# caveman — uninstaller for the SessionStart + UserPromptSubmit hooks
+# caveman — uninstaller for the SessionStart + SubagentStart + UserPromptSubmit + SessionEnd hooks
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the mode state
 # Usage: bash src/hooks/uninstall.sh
 #   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.sh)
@@ -10,8 +10,8 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 SETTINGS_HELPER=""
-if [ -f "$SCRIPT_DIR/../../bin/lib/settings.js" ]; then
-  SETTINGS_HELPER="$SCRIPT_DIR/../../bin/lib/settings.js"
+if [ -f "$SCRIPT_DIR/../../installer/lib/settings.js" ]; then
+  SETTINGS_HELPER="$SCRIPT_DIR/../../installer/lib/settings.js"
 fi
 
 HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
@@ -51,8 +51,8 @@ if [ -f "$SETTINGS" ]; then
     # session start. Same reason the node -e failure above exits non-zero.
     echo "ERROR: 'node' not found — cannot safely edit settings.json."
     echo "       Nothing was removed. Install node and re-run, or remove the"
-    echo "       caveman SessionStart, UserPromptSubmit and statusLine entries"
-    echo "       from $SETTINGS by hand first."
+    echo "       caveman SessionStart, SubagentStart, UserPromptSubmit, SessionEnd and statusLine"
+    echo "       entries from $SETTINGS by hand first."
     exit 1
   else
     # Back up before editing, same policy as install.sh: never overwrite an
@@ -67,7 +67,7 @@ if [ -f "$SETTINGS" ]; then
       const settingsPath = process.env.CAVEMAN_SETTINGS;
       // A settings.json with // comments is valid for Claude Code but not for
       // JSON.parse. Bail out before touching anything rather than half-
-      // uninstalling: bin/install.js --uninstall handles JSONC properly.
+      // uninstalling: installer/install.js --uninstall handles JSONC properly.
       let settings;
       const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
       try {
@@ -85,7 +85,7 @@ if [ -f "$SETTINGS" ]; then
       // Own ONLY handlers whose command targets one of our exact script
       // basenames. A bare 'caveman' substring also matches user-authored hooks
       // that merely mention the word in a path (#593). Mirrors
-      // referencesManagedScript() in bin/lib/settings.js — keep the two in sync.
+      // referencesManagedScript() in installer/lib/settings.js — keep the two in sync.
       const MANAGED = new Set([
         'caveman-activate.js', 'caveman-mode-tracker.js', 'caveman-stats.js',
         'caveman-statusline.sh', 'caveman-statusline.ps1',
@@ -186,7 +186,7 @@ fi
 #
 # .caveman-history.jsonl is deliberately NOT removed: it is the user's
 # accumulated lifetime savings record, not caveman plumbing. Keep this list in
-# sync with the uninstall block in bin/install.js.
+# sync with the uninstall block in installer/install.js.
 for state in ".caveman-active" ".caveman-active.prev" ".caveman-mode-log.jsonl" ".caveman-statusline-suffix" ".caveman-nudge-shown" ".caveman-statusline-stale"; do
   if [ -f "$CLAUDE_DIR/$state" ]; then
     rm "$CLAUDE_DIR/$state"

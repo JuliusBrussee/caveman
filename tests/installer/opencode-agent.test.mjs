@@ -20,7 +20,7 @@ import { createRequire } from 'node:module';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const requireCjs = createRequire(import.meta.url);
-const { transformOpencodeAgentFrontmatter } = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'opencode-agent.js'));
+const { transformOpencodeAgentFrontmatter } = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'opencode-agent.js'));
 
 const SHIPPED_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 
@@ -242,4 +242,26 @@ test('shipped cavecrew agents carry no bare alias after transform', () => {
       assert.match(model[1], /\//, `${file}: any surviving model must be provider-qualified, got ${model[1]}`);
     }
   }
+});
+
+// ── opencode Tab cycle (#725) ─────────────────────────────────────────────
+// opencode defaults an agent's `mode` to `all`, and Tab cycles every
+// primary-capable agent, so the cavecrew helpers landed in the Tab rotation.
+test('subagent option adds `mode: subagent` when frontmatter has no mode', () => {
+  const src = '---\nname: a\ndescription: >\n  folded text\n---\nbody\n';
+  const out = transformOpencodeAgentFrontmatter(src, { subagent: true });
+  assert.match(frontmatter(out), /^mode: subagent$/m);
+  assert.match(frontmatter(out), /^description: >\n {2}folded text$/m, 'folded description intact');
+  assert.match(out, /\n---\nbody\n$/, 'body intact');
+});
+
+test('subagent option keeps an explicit mode and never duplicates it', () => {
+  const src = '---\nname: a\nmode: primary\n---\nbody\n';
+  const out = transformOpencodeAgentFrontmatter(src, { subagent: true });
+  assert.equal(out, src);
+});
+
+test('no option leaves mode out (OMP bytes unchanged)', () => {
+  const src = '---\nname: a\n---\nbody\n';
+  assert.equal(transformOpencodeAgentFrontmatter(src), src);
 });

@@ -24,7 +24,8 @@ COPY mem/ mem/
 COPY proxy/ proxy/
 COPY shared/ shared/
 
-# CGO_ENABLED=0 and -trimpath match scripts/build-release-binaries.mjs.
+# CGO_ENABLED=0: unlike the release caveman-proxy (cgo via zig, see
+# scripts/build-release-binaries.mjs), the image's code compressor parses Go only.
 # -buildvcs=false because .dockerignore keeps .git out of the build context.
 # -X main.version stamps `var version = "dev"` in proxy/cmd/caveman-proxy/main.go.
 RUN --mount=type=cache,target=/go/pkg/mod \

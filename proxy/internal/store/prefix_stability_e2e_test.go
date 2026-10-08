@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
@@ -156,5 +157,70 @@ func TestE2EPrefixStabilityWithRealStore(t *testing.T) {
 	}
 	if diverged > 0 {
 		t.Fatalf("%d/%d concurrent turn-2 requests flipped the frozen prefix back to the client's original bytes", diverged, len(rt.bodies))
+	}
+}
+
+// e2eAlternatingCompressor turns every other block down, so requests in flight
+// together reach different first decisions for the same bytes.
+type e2eAlternatingCompressor struct{ calls atomic.Int64 }
+
+func (c *e2eAlternatingCompressor) CompressSegment(seg []byte) ([]byte, int, int) {
+	if c.calls.Add(1)%2 == 0 {
+		return nil, 0, 0
+	}
+	return []byte("CMP:" + e2eHandle(seg)), 100, 40
+}
+
+func (*e2eAlternatingCompressor) StoreOriginal(b []byte) (string, error) { return e2eHandle(b), nil }
+
+// TestE2EConcurrentDecisionsAgree: requests in flight together that reach
+// different first decisions for one live block (one compresses it, another
+// turns it down) must all forward the decision the real store took first.
+// Each records its decision before it forwards and follows the row the store
+// answers with, so the provider never sees the block in two forms.
+func TestE2EConcurrentDecisionsAgree(t *testing.T) {
+	st, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	defer st.Close()
+
+	rt := &e2eTransport{}
+	srv := gateway.New(gateway.Config{
+		Adapters:       []providers.Adapter{anthropic.New("https://upstream.test")},
+		Auth:           e2eAuth{},
+		Creds:          e2eCreds{},
+		Sink:           e2eSink{},
+		Compressor:     &e2eAlternatingCompressor{},
+		PrefixCache:    st,
+		HTTPClient:     &http.Client{Transport: rt},
+		RecoveryViaMCP: true,
+	})
+
+	for round := 0; round < 16; round++ {
+		block := strings.Repeat(fmt.Sprintf("shared live block %d ", round), 40)
+		rt.mu.Lock()
+		rt.bodies = nil
+		rt.mu.Unlock()
+		var wg sync.WaitGroup
+		for i := 0; i < 8; i++ {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				e2eServe(srv, e2eConversation(strings.Repeat(fmt.Sprintf("context %d of round %d ", i, round), 40), block))
+			}(i)
+		}
+		wg.Wait()
+		rt.mu.Lock()
+		compressed := 0
+		for _, b := range rt.bodies {
+			if strings.Contains(string(b), "CMP:"+e2eHandle([]byte(block))) {
+				compressed++
+			}
+		}
+		if compressed != 0 && compressed != len(rt.bodies) {
+			t.Errorf("round %d: %d of %d concurrent requests forwarded the block compressed and the rest raw", round, compressed, len(rt.bodies))
+		}
+		rt.mu.Unlock()
 	}
 }

@@ -2,7 +2,7 @@
 
 These hooks are **bundled with the caveman plugin** and activate automatically when the plugin is installed. No manual setup required.
 
-If you installed caveman standalone (without the plugin), the unified Node installer at `bin/install.js` wires them into your `settings.json` for you — run `node bin/install.js --only claude` from a clone, or `npx -y github:JuliusBrussee/caveman -- --only claude` for the curl-pipe path.
+If you installed caveman standalone (without the plugin), the unified Node installer at `installer/install.js` wires them into your `settings.json` for you — run `node installer/install.js --only claude` from a clone, or `npx -y github:JuliusBrussee/caveman -- --only claude` for the curl-pipe path.
 
 ## What's Included
 
@@ -46,6 +46,21 @@ session's mode. Doing that is how an explicit "stop caveman" used to get
 silently undone by the next auto-compaction. `clear` counts as a fresh start,
 since it is an explicit user reset.
 
+**Headless sessions start off.** `claude -p` and Agent SDK sessions
+(`CLAUDE_CODE_ENTRYPOINT=sdk-cli`, `sdk-ts`, `sdk-py`) are often tools that
+probe Claude and parse the reply, so they start under the `manual` policy:
+nothing injected until an explicit `/caveman`. Interactive surfaces (terminal,
+VS Code, desktop) are unaffected. Set `CAVEMAN_DEFAULT_MODE=<mode>` in the
+environment to opt a headless run back in.
+
+### `caveman-activate.js --subagent` — SubagentStart hook
+
+- SessionStart context reaches only the main conversation, so subagents never saw caveman. This hook hands each new subagent **this session's** active skill
+- Injects nothing once the session has stored `off`, so "stop caveman" never leaks into subagents, even if another window turns caveman on
+- A session with no stored mode at all (its SessionStart hook never ran or failed) falls back to the shared mirror, the same as the per-turn reminder its main conversation gets
+- Skips the cavecrew agents (they already talk ultracave), one-shot modes (`commit`/`review`/`compress`), and projects whose repo config says `defaultMode: "off"`
+- Read-only: it never writes mode state, logs, or marker files
+
 ### `caveman-mode-tracker.js` — UserPromptSubmit hook
 
 - Fires on every user prompt, checks for `/caveman`, `/ultracave`, `/megacave` commands and natural-language activation/deactivation phrases ("talk like caveman", "stop caveman", "normal mode")
@@ -59,7 +74,14 @@ since it is an explicit user reset.
 - Reads the session JSON Claude Code sends on stdin, takes `session_id`, and renders **that window's** mode; falls back to the legacy mirror when there is no usable id
 - Shows `[CAVEMAN]`, `[ULTRACAVE]`, `[MEGACAVE]`, `[CAVEMAN:COMMIT]`, etc. A deactivated session renders nothing at all — never `[CAVEMAN:OFF]`
 - Never blocks: an interactive terminal is not read from, and the stdin read has a 1s ceiling (integer, because macOS ships bash 3.2 and it rejects fractional `read -t`)
-- Appends the lifetime savings suffix `⛏ 12.4k` from `$CLAUDE_CONFIG_DIR/.caveman-statusline-suffix` (written by `caveman-stats.js` on each `/caveman-stats` run; absent until the first run, so fresh installs render no fake number). Opt out with `CAVEMAN_STATUSLINE_SAVINGS=0`.
+- Shows mode only. The old `⛏` savings suffix is gone: `.caveman-statusline-suffix` is ignored, because a transcript cannot show what caveman saved
+
+### `caveman-stats.js --record` — SessionEnd hook
+
+- Runs when Claude Code ends a session
+- Reads `session_id` and `transcript_path` from the hook payload on stdin (first complete JSON object, 2s watchdog) and appends one snapshot to `$CLAUDE_CONFIG_DIR/.caveman-history.jsonl`: recorded output and cache-read tokens, turns, and per-mode attribution. No savings figures
+- Writes no stdout and always exits 0, so it never interrupts shutdown
+- Duplicate snapshots are safe: lifetime views (`--all`, `--since`) count only the newest row per `session_id`
 
 ## Statusline Badge
 
@@ -69,7 +91,7 @@ The statusline badge shows which caveman mode is active directly in your Claude 
 
 If you already have a custom statusline, caveman does not overwrite it and Claude stays quiet. Add the badge snippet to your existing script instead.
 
-**Standalone users:** the unified installer (`bin/install.js`, invoked by the `install.sh` / `install.ps1` shims at the repo root) wires the statusline automatically if you do not already have a custom statusline. If you do, the installer leaves it alone and prints the merge note.
+**Standalone users:** the unified installer (`installer/install.js`, invoked by the `install.sh` / `install.ps1` shims at the repo root) wires the statusline automatically if you do not already have a custom statusline. If you do, the installer leaves it alone and prints the merge note.
 
 **Manual setup:** If you need to configure it yourself, add one of these to `~/.claude/settings.json`:
 
@@ -154,6 +176,9 @@ SessionStart hook ──┐                                        ┌── Use
               .caveman-active      Statusline script  ◀── session JSON on stdin
            (last-write-wins,        [CAVEMAN] / [ULTRACAVE] / [MEGACAVE]
             compat only)
+
+SessionEnd hook ──(session_id, transcript_path)──▶ caveman-stats.js --record
+                                                     ──appends──▶ .caveman-history.jsonl
 ```
 
 SessionStart stdout is injected as hidden system context — Claude sees it, users
@@ -173,12 +198,12 @@ If installed via the standalone Node installer:
 ```bash
 npx -y github:JuliusBrussee/caveman -- --uninstall
 # or, from a clone:
-node bin/install.js --uninstall
+node installer/install.js --uninstall
 ```
 
 Or manually:
 1. Remove the caveman hook files from `$CLAUDE_CONFIG_DIR/hooks/` (default `~/.claude/hooks/`): `caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, and `caveman-statusline.{sh,ps1}`.
-2. Remove the SessionStart, UserPromptSubmit, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
+2. Remove the SessionStart, SubagentStart, UserPromptSubmit, SessionEnd, and statusLine entries from `$CLAUDE_CONFIG_DIR/settings.json`.
 3. Delete the mode state from `$CLAUDE_CONFIG_DIR`: the `.caveman-sessions/` directory, `.caveman-active`, `.caveman-active.prev`, `.caveman-mode-log.jsonl`, `.caveman-statusline-suffix`, and `.caveman-nudge-shown`.
 
 The uninstaller does all of step 3 for you, but deliberately leaves

@@ -17,8 +17,10 @@
   },
   "command_hook": { "method": "hermes-plugin" },
   "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "0.19.1",
+  "tested_agent_version": "0.21.5",
   "injection_completeness": "builder-assisted",
+  "last_verified_at": "2026-10-06",
+  "verified_by": "local pinned-binary probe (hermes 0.21.5 = release v2026.9.24 at f97608f1, editable install on Python 3.12, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }

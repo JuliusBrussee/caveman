@@ -53,6 +53,9 @@ var (
 
 const contextWindowTokensCapability = "context_window_tokens"
 
+// effortLevelsCapability is read by EffortLevels only; it never prices.
+const effortLevelsCapability = "effort_levels"
+
 // ContextWindowTokens returns the provider-declared context window from an
 // exact provider+model catalog match. Regional rows must agree; missing,
 // malformed, non-positive, or conflicting capability values fail closed.
@@ -73,6 +76,37 @@ func ContextWindowTokens(provider, model string) (int, bool) {
 		found = true
 	}
 	return window, found
+}
+
+// EffortLevels returns the reasoning efforts an exact provider+model catalog
+// match accepts (capabilities.effort_levels). Rows that disagree, or a missing
+// or malformed list, report false.
+func EffortLevels(provider, model string) ([]string, bool) {
+	once.Do(load)
+	provider = canonicalCapabilityProvider(provider)
+	var levels []string
+	for _, entry := range entries {
+		if entry.Provider != provider || entry.Model != model {
+			continue
+		}
+		raw, ok := entry.Capabilities[effortLevelsCapability].([]any)
+		if !ok || len(raw) == 0 {
+			return nil, false
+		}
+		row := make([]string, 0, len(raw))
+		for _, value := range raw {
+			level, ok := value.(string)
+			if !ok {
+				return nil, false
+			}
+			row = append(row, level)
+		}
+		if levels != nil && strings.Join(levels, ",") != strings.Join(row, ",") {
+			return nil, false
+		}
+		levels = row
+	}
+	return levels, levels != nil
 }
 
 func canonicalCapabilityProvider(provider string) string {

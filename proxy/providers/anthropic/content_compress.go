@@ -35,7 +35,8 @@ func (a Adapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetad
 	}
 	rawMessages := make([]json.RawMessage, len(messages))
 	for i, span := range messages {
-		rawMessages[i] = append(json.RawMessage(nil), body[span.start:span.end]...)
+		// A read-only view: ComputeFrozenCount only reads, so no copy.
+		rawMessages[i] = body[span.start:span.end:span.end]
 	}
 	floor := ComputeFrozenCount(rawMessages)
 	if floor < 0 || floor > len(messages) {
@@ -53,6 +54,61 @@ func (a Adapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetad
 		out = append(out, frozenField("message", stripCacheControl(body[messages[i].start:messages[i].end])))
 	}
 	return out, true
+}
+
+// CachedPrefixComponents splits a Messages request into what the provider's
+// prompt cache keys on — system, tools, then every message, each with
+// cache_control stripped — and reports how many of those components the request
+// caches: through its last marked message, through the last message under
+// top-level automatic caching, only system and tools when just those are
+// marked, and none when nothing is. Unlike FrozenPrefixComponents it does not
+// clamp to the live floor:
+// the message a client marks on this turn is cached BY this request, so the
+// next request has to reproduce its forwarded bytes as well.
+func CachedPrefixComponents(body []byte) (components [][]byte, cached int, ok bool) {
+	root, ok := rootObjectSpan(body)
+	if !ok {
+		return nil, 0, false
+	}
+	messagesValue, ok := findObjectField(body, root, "messages")
+	if !ok || messagesValue.start >= len(body) || body[messagesValue.start] != '[' {
+		return nil, 0, false
+	}
+	messages, ok := arrayElements(body, messagesValue)
+	if !ok {
+		return nil, 0, false
+	}
+	components = make([][]byte, 0, 2+len(messages))
+	for _, name := range []string{"system", "tools"} {
+		var value []byte
+		if span, exists := findObjectField(body, root, name); exists {
+			value = stripCacheControl(body[span.start:span.end])
+			if len(value) != span.end-span.start {
+				cached = 2
+			}
+		}
+		components = append(components, frozenField(name, value))
+	}
+	for _, span := range messages {
+		raw := body[span.start:span.end]
+		components = append(components, frozenField("message", stripCacheControl(raw)))
+		if messageHasContentCacheControl(raw) {
+			cached = len(components)
+		}
+	}
+	if _, automatic := findObjectField(body, root, "cache_control"); automatic {
+		cached = len(components)
+	}
+	return components, cached, true
+}
+
+// CachedPrefixComponents is the adapter form of the package function; a token
+// count is never cached, so it has no cached prefix.
+func (a Adapter) CachedPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, int, bool) {
+	if strings.Contains(meta.Endpoint, "count_tokens") {
+		return nil, 0, false
+	}
+	return CachedPrefixComponents(body)
 }
 
 func frozenField(name string, value []byte) []byte {

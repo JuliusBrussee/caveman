@@ -22,7 +22,7 @@
 Cited by **[Adobe Research](https://arxiv.org/abs/2606.24083)** · A/B tested by **[JetBrains](https://blog.jetbrains.com/ai/2026/07/speak-to-ai-agents-like-cavemen-tosave-tokens/)** · Remade for Elasticsearch on **[Elasticsearch Labs](https://www.elastic.co/search-labs/blog/elastic-caveman-ai-token-reduction)**<br>
 **#1** on [Hacker News](https://news.ycombinator.com/item?id=47647455) · **#1** on GitHub Trending · *"No way this actually works."* [ThePrimeagen](https://www.youtube.com/watch?v=L29q2LRiMRc)
 
-**[How it talks](#how-caveman-talks) · [Install](#install) · [The numbers](#the-numbers) · [The proxy](#big-rock-the-proxy) · [What you get](#what-you-get) · [In the wild](#in-the-wild)**
+**[How it talks](#how-caveman-talks) · [Install](#install) · [The numbers](#the-numbers) · [The proxy](#big-rock-the-proxy) · [The skill](#small-rock-the-skill) · [What you get](#what-you-get) · [In the wild](#in-the-wild)**
 
 </div>
 
@@ -68,9 +68,9 @@ Caveman is a voice, not broken grammar. Every reply follows the same structure:
 | **Answer first** | `[thing] [action] [reason]. [next step].` No greeting, no "let me", no recap, no "hope this helps" |
 | **One idea per sentence** | Built on [ASD-STE100](https://www.asd-ste100.org/), the controlled English written for aircraft maintenance manuals: 20 words max, active voice, one term per thing |
 | **Meaning never dropped** | Articles can go. *not*, *never*, *no*, *only* never go. Numbers and units stay exact |
-| **Payload verbatim** | Code, commands, paths, and error messages untouched, character for character |
+| **Payload verbatim** | Code, commands, paths, error messages, and your existing code comments untouched, character for character. Small fix shows the changed lines, not the whole file again |
 | **Quiet tool runs** | No chatter between tool calls. One line per phase, one line with the result |
-| **Knows when to stop** | Security warnings, irreversible actions, step-by-step orders, and confused users get full sentences. Then grunt resumes |
+| **Knows when to stop** | Security warnings, irreversible actions, step-by-step orders, questions back to you, and confused users get full sentences. Then grunt resumes |
 | **Never performs** | No "me think", no caveman prefix. If caveman phrasing isn't shorter, plain wins |
 | **Your prompts stay yours** | Never rewritten. [Research say that backfire](#the-numbers) |
 
@@ -79,38 +79,13 @@ Every reply runs a check before it sends: opener that announces the plan, delete
 ## Install
 
 ```bash
-npx skills add JuliusBrussee/caveman -g
+npm install -g @caveman-ai/cli && caveman setup --install
+caveman claude        # or codex · gemini · aider · kilo · qwen · opencode · hermes · openclaw · pi
 ```
 
-Works in Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Cline, Copilot, and [30+ more](./INSTALL.md). Type `/caveman` if it doesn't start on its own. Say `stop caveman` to go back. One rock. That it.
+**This is the proxy, the big rock.** Your agent reads 33.2% fewer input tokens across whole sessions, same answers. It runs on your machine, with your keys and your Claude Pro/Max login. Needs Node.js 22.13+. After the first run, plain `claude` stays caveman'd. One rock. That it.
 
-<details>
-<summary><strong>Other ways in</strong>: Claude Code plugin, Gemini, every agent at once, Windows, uninstall</summary>
-
-<br>
-
-```bash
-# Claude Code plugin, auto-starts every session
-claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman
-
-# Gemini CLI
-gemini extensions install https://github.com/JuliusBrussee/caveman
-
-# Every agent on your machine at once, plus the Claude Code statusline badge (Node.js 22.13+)
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.sh | bash
-```
-
-Windows, PowerShell 5.1+:
-
-```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.ps1 | iex
-```
-
-Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall`
-
-Install broke? Open your agent in this repo and say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
-
-</details>
+[What the proxy does](#big-rock-the-proxy) · Only want shorter answers? [Get just the skill](#small-rock-the-skill)
 
 ## The numbers
 
@@ -147,7 +122,7 @@ Two findings shaped caveman. Adobe found that cavemanning *your* prompt makes an
 | `/caveman` | 4,119 |
 | `/ultracave` | **2,693** |
 
-New models already know "be concise", so that line is the real baseline. On top of it, `/caveman` cuts 3% more at the median and `/ultracave` cuts 35% more. [Harness](./evals/README.md)
+New models already know "be concise", so that line is the real baseline. On top of it, `/caveman` cuts 3% more at the median and `/ultracave` cuts 35% more. Measured on the 3.1.0 skill text, not yet re-run on this release's. [Harness](./evals/README.md)
 
 <!-- BENCHMARK-TABLE-START -->
 <!-- BENCHMARK-TABLE-END -->
@@ -157,9 +132,9 @@ New models already know "be concise", so that line is the real baseline. On top 
 | What | Result |
 |---|---|
 | A web page the agent reads (`caveman browse`, 200-row table) | **121 tokens instead of 15,704** for a Playwright snapshot, 129.8× smaller. Tiny forms lose 2.3×. [Bench](./browse/BENCHMARK.md) |
-| Memory files like `CLAUDE.md` (`/caveman-compress`) | **46% smaller** across five fixtures, with every heading, code block, and path intact. [Bench](./skills/caveman-compress/README.md#benchmarks) |
+| Memory files like `CLAUDE.md` (`/caveman-compress`) | **4,138 tokens instead of 6,198** across five fixtures, 22.8% to 49.1% smaller per file, with every heading, code block, and path intact. [Bench](./skills/caveman-compress/README.md#benchmarks) |
 
-The rules add about 1,000 input tokens to every call. If you pay per request instead of per token (GitHub Copilot premium requests), a shorter answer costs the same, so skip it. Every case where caveman loses: [HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
+The `/caveman` rules are about 1,160 tokens of text (tiktoken count). What that adds to your bill depends on caching; not measured yet. If you pay per request instead of per token (GitHub Copilot premium requests), a shorter answer costs the same, so skip it. Every case where caveman loses: [HONEST-NUMBERS.md](./docs/HONEST-NUMBERS.md).
 
 ## Big rock: the proxy
 
@@ -167,12 +142,7 @@ The rules add about 1,000 input tokens to every call. If you pay per request ins
 
 The skill shrinks what the agent **says**. The proxy shrinks what it **reads**: logs, test output, JSON, diffs, web pages. It runs on your machine, with your keys and your Claude Pro/Max login. Every original stays on your disk, and the agent can pull it back any time.
 
-```bash
-npm install -g @caveman-ai/cli && caveman setup --install
-caveman claude        # or codex · gemini · aider · kilo · qwen · opencode · hermes · openclaw · pi
-```
-
-Then:
+Installed it [above](#install)? Then:
 
 ```bash
 caveman learn                 # rank where your tokens go, from agent history already on disk
@@ -196,6 +166,58 @@ pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.11+
 ```
 
 [TypeScript guide](./packages/middleware/typescript/README.md) · [Python guide](./packages/middleware/python/README.md) · [Every framework](https://docs.caveman.so/docs/sdk/middleware/frameworks) · [One container for the whole team](docs/technical/deploy.md)
+
+## Small rock: the skill
+
+**Only want shorter answers? This is output compression alone. No proxy.**
+
+```bash
+npx skills add JuliusBrussee/caveman -g
+```
+
+<a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman" alt="skills.sh"></a>
+
+Works in Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Cline, Copilot, and [30+ more](./INSTALL.md). Type `/caveman` (`$caveman` in Codex) if it doesn't start on its own. Say `stop caveman` to go back.
+
+<details>
+<summary><strong>Other ways in</strong>: Claude app and phone, Claude Code plugin, Gemini, every agent at once, Windows, uninstall</summary>
+
+<br>
+
+Claude on the web, the phone app, or Cowork? No terminal. Add caveman to your Claude account once, in Customize > Plugins: [steps](./INSTALL.md#claude-apps-claudeai-desktop-mobile-cowork). Not tested end to end yet.
+
+```bash
+# Claude Code plugin, auto-starts every interactive session, subagents too
+claude plugin marketplace add JuliusBrussee/caveman && claude plugin install caveman@caveman
+
+# Gemini CLI
+gemini extensions install https://github.com/JuliusBrussee/caveman
+
+# Every agent on your machine at once, plus the Claude Code statusline badge (Node.js 22.13+)
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.sh | bash
+```
+
+Already inside Claude Code? Same rock, slash form. Type these where you talk to Claude:
+
+```text
+/plugin marketplace add JuliusBrussee/caveman
+/plugin install caveman@caveman
+```
+
+Windows, PowerShell 5.1+:
+
+```powershell
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.ps1 | iex
+```
+
+On npm 12 or newer, new npm block git install. One-liners above handle it themselves from v3.2.0 on. Old one-liner pinned to v3.1.0 or older still fail there: use one above, or this:
+`npx --allow-git=root -y github:JuliusBrussee/caveman#v3.2.0`
+
+Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall` (on npm 12+, add `--allow-git=root` too)
+
+Install broke? Open your agent in this repo and say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
+
+</details>
 
 ## What you get
 
@@ -235,7 +257,7 @@ Started as a joke in April 2026. Now past 100,000 stars. Joke got serious. Voice
 
 ## Privacy
 
-The skill runs on your machine and sends nothing. The `caveman` CLI sends usage stats by default: commands run, token counts, a random install ID, OS, and IP. Never your prompts, code, or file paths. One person maintains this for free, and those stats show what to build next. Turn it off for good with `caveman telemetry off` or `DO_NOT_TRACK=1`. The full list, and how to delete what was sent: [SECURITY.md](./SECURITY.md).
+The skill runs on your machine and sends nothing. The `caveman` CLI sends usage stats by default: commands run, token counts, a random install ID, OS, and IP. Never your prompts, code, or file paths. One person maintains this for free, and those stats show what to build next. Turn it off for good with `caveman telemetry off` or `DO_NOT_TRACK=1`. Routing, once you sign in, sends your latest ask (with whatever your agent attaches to it, such as CLAUDE.md, memory or @-mentioned files), the one before it and the end of the agent's last reply to Caveman Cloud to pick the model and effort, with each request's tool names, effort, a few agent headers and the previous request's token counts; on the Free plan Caveman may keep it to improve routing. Requests go from your machine to your provider, or to another provider you added with `caveman providers add`, on your own key; only a request routed to a Caveman Cloud model passes through Caveman Cloud, whole (system prompt, tool results, code), running on your Caveman project's stored key and billed to that project; `caveman providers cloud off` stops that. `caveman off routing` stops it. The full list, and how to delete sent telemetry: [SECURITY.md](./SECURITY.md).
 
 ## License
 
