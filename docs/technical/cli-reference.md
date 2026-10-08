@@ -38,6 +38,12 @@ caveman run -- my-agent --project .
 Arguments after an agent name are passed to that agent. Arguments after `--`
 in `caveman run` are passed to the selected command.
 
+`caveman claude` sets up the same native wiring as `caveman enable claude`
+(`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) without asking, so the
+Claude Code IDE extension and desktop app get the same routing and Auto model
+as the terminal; `caveman disable claude` removes it. A leading Caveman flag
+(`caveman claude --off …`) keeps a run session-only.
+
 ## Modules
 
 Caveman is six modules, each on unless you turn it off:
@@ -47,7 +53,7 @@ Caveman is six modules, each on unless you turn it off:
 | `output` | the agent says less |
 | `input` | logs, JSON, code and diffs shrink before the model reads them |
 | `waste-fixes` | finds your agent's worst waste and fixes it |
-| `routing` | adds Auto to your agent's model picker (Claude Code, OpenCode): on Auto, the right model and effort each turn; any other model runs as picked. Needs a free account. Each request on Auto sends your latest ask (with whatever your agent attaches to it, such as CLAUDE.md, memory or @-mentioned files), the one before it, the end of the agent's last reply and request facts (tool names, effort settings, agent headers, the previous request's token counts) to Caveman Cloud; on the Free plan Caveman may keep it to improve routing |
+| `routing` | adds Auto to your agent's model picker while signed in (Claude Code, OpenCode, Codex on a ChatGPT login): on Auto, the right model and effort each turn; any other model runs as picked. Needs a free account. Each request on Auto sends your latest ask (with whatever your agent attaches to it, such as CLAUDE.md, memory or @-mentioned files), the one before it, the end of the agent's last reply and request facts (tool names, effort settings, agent headers, the previous request's token counts) to Caveman Cloud; on the Free plan Caveman may keep it to improve routing |
 | `scripts` | reusable scripts your agent keeps (installs `caveman-blocks`) |
 | `browse` | compressed pages for browser tools |
 
