@@ -17,8 +17,9 @@ const (
 	// request bodies their token counts still hold. A full queue makes the
 	// next record wait: back-pressure, never a dropped row.
 	recordQueueMax = 64
-	// recordBatchMax bounds the rows one sink write carries.
-	recordBatchMax = 128
+	// recordBatchMax bounds the rows one sink write carries, and so how long
+	// one transaction holds the database's write lock.
+	recordBatchMax = 64
 )
 
 type finishedRecord struct {
