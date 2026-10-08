@@ -176,6 +176,33 @@ func TestCacheWarmHeadersAndBytesAreTheAnsweredRequests(t *testing.T) {
 	}
 }
 
+func TestCacheWarmReplaysTheRoutedRequest(t *testing.T) {
+	// The route stage set the effort: the warm replays the bytes that carried it,
+	// with the headers they went with, so it reads the entry real traffic wrote.
+	rt := &warmTransport{}
+	f := newWarmFixture(t, rt, anthropicAPI, nil)
+	f.srv.cloud = &fakeCloud{answer: RouteAnswer{Outcome: "routed", Effort: "low"}}
+	f.serve(t, reqBody(""), warmHeaders)
+	if !strings.Contains(rt.body(0), `"effort":"low"`) {
+		t.Fatalf("the route stage did not change the request; the test proves nothing: %s", rt.body(0))
+	}
+	f.clock.advance(270 * time.Second)
+	if rt.count() != 2 || rt.body(1) != strings.Replace(rt.body(0), `"max_tokens":4096`, `"max_tokens":0`, 1) {
+		t.Fatalf("warm = %d %s", rt.count(), rt.body(1))
+	}
+	sent, warm := rt.headers[0].Clone(), rt.headers[1].Clone()
+	sent.Del("Accept-Encoding")
+	warm.Del("Accept-Encoding")
+	for k, v := range sent {
+		if strings.Join(warm[k], "\x00") != strings.Join(v, "\x00") {
+			t.Fatalf("header %s: sent %q, warm %q", k, v, warm[k])
+		}
+	}
+	if len(sent) != len(warm) {
+		t.Fatalf("header sets differ: %v / %v", sent, warm)
+	}
+}
+
 func TestCacheWarmParentRequestStopsSubagentWarms(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
