@@ -268,8 +268,8 @@ func TestCacheWarmSubscription429PausesTheLogin(t *testing.T) {
 	if rt.count() != 5 {
 		t.Fatalf("pause outlived the hour: %d", rt.count())
 	}
-	// The response's own reset wins: epoch seconds or RFC 3339, the later of it
-	// and Retry-After; one in the past or absurdly far is not believed.
+	// The response's own wait wins: Retry-After, else the limit window's reset
+	// (epoch seconds or RFC 3339); one in the past or absurdly far is not believed.
 	now := time.Unix(1_800_000_000, 0)
 	for name, tc := range map[string]struct {
 		h    http.Header
@@ -278,7 +278,7 @@ func TestCacheWarmSubscription429PausesTheLogin(t *testing.T) {
 		"unified reset":     {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"1800010800"}}, 3 * time.Hour},
 		"rfc 3339":          {http.Header{"Anthropic-Ratelimit-Unified-Reset": {now.Add(2 * time.Hour).UTC().Format(time.RFC3339)}}, 2 * time.Hour},
 		"retry-after":       {http.Header{"Retry-After": {"120"}}, 2 * time.Minute},
-		"the later of both": {http.Header{"Retry-After": {"120"}, "Anthropic-Ratelimit-Unified-Reset": {"1800010800"}}, 3 * time.Hour},
+		"retry-after first": {http.Header{"Retry-After": {"120"}, "Anthropic-Ratelimit-Unified-Reset": {"1800010800"}}, 2 * time.Minute},
 		"reset in the past": {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"1700000000"}}, time.Hour},
 		"reset next year":   {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"1900000000"}}, time.Hour},
 		"nothing":           {http.Header{}, time.Hour},

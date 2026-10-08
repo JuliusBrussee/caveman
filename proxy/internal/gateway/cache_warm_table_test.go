@@ -348,11 +348,11 @@ func warmAnswerFor(model string, tool, encoded bool) warmAnswer {
 	}
 }
 
-// One line per answered request says what was planned or why nothing was,
+// One line per answered request says what was planned (info) or why nothing was (debug),
 // with the session as a hash and no content or credential.
 func TestCacheWarmLogsThePlanOrTheSkip(t *testing.T) {
 	var logs bytes.Buffer
-	f := newWarmFixture(t, &warmTransport{}, anthropicAPI, slog.New(slog.NewTextHandler(&logs, nil)))
+	f := newWarmFixture(t, &warmTransport{}, anthropicAPI, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	r := httptest.NewRequest("POST", "/v1/messages", nil)
 	line := func(a warmAnswer) string {
 		logs.Reset()

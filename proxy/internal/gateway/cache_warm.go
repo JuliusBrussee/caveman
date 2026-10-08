@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -153,7 +154,7 @@ func (w *cacheWarmer) begin(key string) func() {
 	if e := w.entries[key]; e != nil {
 		if e.pending {
 			e.pending = false
-			seen = append(seen, warmGap{class: e.class, d: now.Sub(e.lastStart)})
+			seen = append(seen, warmGap{class: e.class, d: max(0, now.Sub(e.lastStart))}) // a clock set back is no gap
 		}
 		w.stopLocked(e)
 	}
@@ -332,12 +333,16 @@ func (w *cacheWarmer) scheduleLocked(e *warmEntry, gen int, req *warmRequest, k 
 			e.timer = w.clock.AfterFunc(cacheWarmBusyRetry, fire)
 			return
 		}
-		w.mu.Unlock()
-		// A warm unanswered when the entry would have expired is lost either way.
-		ctx, cancel := context.WithTimeout(context.Background(), req.ttl-delay)
-		again := w.send(ctx, req)
-		cancel()
-		w.mu.Lock()
+		again := false
+		func() {
+			w.mu.Unlock()
+			defer w.mu.Lock()
+			defer func() { _ = recover() }() // a warm never takes the proxy down
+			// A warm unanswered when the entry would have expired is lost either way.
+			ctx, cancel := context.WithTimeout(context.Background(), req.ttl-delay)
+			defer cancel()
+			again = w.send(ctx, req)
+		}()
 		if e.gen == gen && !(again && w.scheduleLocked(e, gen, req, k+1, now, horizon)) {
 			w.releaseLocked(e)
 		}
@@ -503,10 +508,10 @@ func shortHash(v string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// backoffUntil is how long a 429 pauses warming on its credential: until the
-// later of the response's Retry-After and anthropic-ratelimit-unified-reset
-// (a subscription's limit window: epoch seconds, or RFC 3339) when it names
-// one within eight days; otherwise one hour for a subscription login, whose
+// backoffUntil is how long a 429 pauses warming on its credential: the
+// response's Retry-After, else its anthropic-ratelimit-unified-reset (a
+// subscription's limit window: epoch seconds, or RFC 3339), when that is
+// within eight days; otherwise one hour for a subscription login, whose
 // limits reset on rolling windows and not at midnight, and one minute for an
 // API key.
 func backoffUntil(now time.Time, h http.Header, authMode AuthMode) time.Time {
@@ -519,8 +524,8 @@ func backoffUntil(now time.Time, h http.Header, authMode AuthMode) time.Time {
 	if s, serr := strconv.ParseInt(reset, 10, 64); serr == nil {
 		at, err = time.Unix(s, 0), nil
 	}
-	if err == nil && at.After(until) {
-		until = at
+	if err == nil && until.IsZero() {
+		until = at // Retry-After, when the provider sends one, is the shorter and exact wait
 	}
 	if until.After(now) && until.Before(now.Add(8*24*time.Hour)) {
 		return until
@@ -644,7 +649,11 @@ func (s *Server) armCacheWarm(r *http.Request, a warmAnswer) {
 		if id == "" {
 			id = a.key // the agent's own session header: no session id is stored for it
 		}
-		s.logger.Info("cache warm plan", "session", shortHash(id), "model", a.meta.Model, "class", class,
+		level := slog.LevelInfo
+		if skip != "" {
+			level = slog.LevelDebug // most requests plan nothing; only a planned chain is news
+		}
+		s.logger.Log(r.Context(), level, "cache warm plan", "session", shortHash(id), "model", a.meta.Model, "class", class,
 			"ttl", ttl.String(), "warms", warms, "skip", skip)
 	}
 }
@@ -704,7 +713,7 @@ func (s *Server) sendCacheWarm(ctx context.Context, req *warmRequest) bool {
 	}
 	s.recordCacheWarm(start, req, status, errCode, n, usage)
 	if s.logger != nil && errCode != "" {
-		s.logger.Info("cache warm stopped", "reason", errCode, "session_id", req.session, "model", req.meta.Model)
+		s.logger.Info("cache warm stopped", "reason", errCode, "session", shortHash(req.session), "model", req.meta.Model)
 	}
 	return errCode == "" && usage.CachedInputTokens > 0
 }

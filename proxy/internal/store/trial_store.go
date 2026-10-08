@@ -334,7 +334,8 @@ func (s *Store) requestOrigins(trialID string) ([]originRow, error) {
 		`SELECT COALESCE(MIN(ts), ''), COALESCE(MAX(ts), ''),
 		        COALESCE(agent_slug, ''), COALESCE(provider, ''), COALESCE(model, ''),
 		        COALESCE(SUM(CASE WHEN `+cacheWarmRow+` THEN 0 ELSE 1 END), 0),
-		        COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
+		        COALESCE(SUM(CASE WHEN `+cacheWarmRow+` THEN 0 ELSE input_tokens END), 0),
+		        COALESCE(SUM(CASE WHEN `+cacheWarmRow+` THEN 0 ELSE output_tokens END), 0),
 		        COALESCE(SUM(total_cost_usd), 0)
 		   FROM requests
 		  WHERE (? = '' OR label = ?)
