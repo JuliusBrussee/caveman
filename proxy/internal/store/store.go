@@ -798,6 +798,9 @@ func (s *Store) SessionUsage(sessionID string) (sessionusage.Snapshot, error) {
 // agent request (no turn, no last request, no span).
 const cacheWarmRow = "COALESCE(optimization_ids,'') = 'cache-warm'"
 
+// notCacheWarm is the WHERE clause of a query over agent requests only.
+const notCacheWarm = " WHERE NOT (" + cacheWarmRow + ")"
+
 // Summary returns aggregate spend across all recorded requests. The savings
 // basis is "inferred" whenever any row carries a non-`verified` basis, which in
 // standalone is always — the value is never re-projected to a monthly figure.
@@ -866,14 +869,15 @@ func (s *Store) Summary() (Stats, error) {
 // produced one.
 func (s *Store) ObserveSummarySince(since string) (ObserveSummary, error) {
 	out := ObserveSummary{Basis: "inferred", TokenAccounting: map[string]int64{}}
-	where := ""
+	// The proxy's own cache warms are not spans of the session.
+	where := notCacheWarm
 	var args []any
 	if trimmed := strings.TrimSpace(since); trimmed != "" {
 		t, err := time.Parse(time.RFC3339, trimmed)
 		if err != nil {
 			return out, fmt.Errorf("invalid --since %q (want RFC3339): %w", trimmed, err)
 		}
-		where = " WHERE ts >= ?"
+		where += " AND ts >= ?"
 		args = append(args, t.UTC().Format(storeTSLayout))
 	}
 	var usdCount int64
@@ -944,8 +948,10 @@ func roundUSDCents(v float64) float64 {
 	return math.Round(v*100) / 100
 }
 
+// countRequestProvenance counts agent requests: cache warms (inside
+// Stats.Requests, disclosed as CacheWarmRequests) are in neither breakdown.
 func (s *Store) countRequestProvenance(column string, out map[string]int64) error {
-	return s.countRequestProvenanceWhere(column, out, "")
+	return s.countRequestProvenanceWhere(column, out, notCacheWarm)
 }
 
 func (s *Store) countRequestProvenanceWhere(column string, out map[string]int64, where string, args ...any) error {
@@ -1023,6 +1029,7 @@ func validEvidenceValue(value string, limit int) bool {
 
 // RecentRequests returns the N newest request rows. Empty stores return an empty
 // array; no synthetic row is ever created to make a first-request check pass.
+// A cache warm is the proxy's request, not the agent's, and is not listed.
 func (s *Store) RecentRequests(limit int) ([]RecentRequest, error) {
 	if limit <= 0 {
 		return []RecentRequest{}, nil
@@ -1034,7 +1041,7 @@ func (s *Store) RecentRequests(limit int) ([]RecentRequest, error) {
 		`SELECT ts, COALESCE(agent_slug, ''), COALESCE(provider, ''), COALESCE(model, ''),
 		        COALESCE(endpoint, ''), COALESCE(input_tokens, 0), COALESCE(output_tokens, 0), basis,
 		        COALESCE(token_usage_basis, 'unavailable'), COALESCE(auth_mode, 'unknown')
-		   FROM requests
+		   FROM requests`+notCacheWarm+`
 		  ORDER BY ts DESC, id DESC
 		  LIMIT ?`,
 		limit,

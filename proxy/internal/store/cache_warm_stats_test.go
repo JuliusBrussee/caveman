@@ -105,3 +105,28 @@ func TestStatsReportKeepsWarmSpendOutOfRequests(t *testing.T) {
 		}
 	}
 }
+
+func TestRequestViewsLeaveWarmsOut(t *testing.T) {
+	s := warmStore(t)
+	stats, err := s.Summary()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Spend keeps the warm; the per-request breakdowns do not.
+	if stats.TotalCost != 0.54 || stats.TokenAccounting["provider_complete"] != 1 || stats.AuthModeAccounting["payg"] != 1 {
+		t.Fatalf("summary = %+v", stats)
+	}
+	for _, since := range []string{"", time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)} {
+		obs, err := s.ObserveSummarySince(since)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if obs.Spans != 1 || obs.TokensIn != 1000 || obs.TokenAccounting["provider_complete"] != 1 {
+			t.Fatalf("observe since %q = %+v", since, obs)
+		}
+	}
+	recent, err := s.RecentRequests(10)
+	if err != nil || len(recent) != 1 {
+		t.Fatalf("recent = %+v %v", recent, err)
+	}
+}
