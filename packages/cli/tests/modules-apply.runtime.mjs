@@ -423,7 +423,7 @@ test("switching routing off and on takes Auto out of and back into wired agents"
   const auto = () => JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION;
   try {
     assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
-    assert.equal(auto(), "caveman-auto");
+    assert.equal(auto(), "caveman-auto[1m]");
     const off = await runCli(["off", "routing", "--yes"], fx.env);
     assert.equal(off.code, 0, off.stderr);
     assert.deepEqual(planLines(off.stdout), [
@@ -433,7 +433,7 @@ test("switching routing off and on takes Auto out of and back into wired agents"
     ]);
     assert.equal(auto(), undefined);
     assert.equal((await runCli(["on", "routing", "--yes"], fx.env)).code, 0);
-    assert.equal(auto(), "caveman-auto");
+    assert.equal(auto(), "caveman-auto[1m]");
   } finally {
     fx.cleanup();
   }

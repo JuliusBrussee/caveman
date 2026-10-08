@@ -3792,7 +3792,7 @@ function claudeOffProxyLane(...envs: Record<string, unknown>[]): boolean {
 // Adds Auto's picker keys to a Claude Code env and returns the keys added:
 // only absent ones, and none while the user has a custom option of their own.
 function addClaudeAutoEnv(env: Record<string, unknown>): string[] {
-  if (env.ANTHROPIC_CUSTOM_MODEL_OPTION !== undefined && env.ANTHROPIC_CUSTOM_MODEL_OPTION !== AUTO_MODEL) return [];
+  if (env.ANTHROPIC_CUSTOM_MODEL_OPTION !== undefined && env.ANTHROPIC_CUSTOM_MODEL_OPTION !== CLAUDE_AUTO_MODEL) return [];
   const added = Object.keys(CLAUDE_AUTO_ENV).filter((key) => env[key] === undefined);
   for (const key of added) env[key] = CLAUDE_AUTO_ENV[key];
   return added;
@@ -3822,7 +3822,7 @@ export function syncAutoEntries(): void {
           } else {
             for (const key of ours) if (env[key] === CLAUDE_AUTO_ENV[key]) delete env[key];
             owned.auto_env = [];
-            if (root.model === AUTO_MODEL) delete root.model;
+            if (isClaudeAutoModel(root.model)) delete root.model;
           }
           if (Object.keys(env).length > 0) root.env = env; else delete root.env;
         } else {
@@ -3834,7 +3834,7 @@ export function syncAutoEntries(): void {
             const provider = providers[id] as Record<string, unknown>;
             const models = objectValue(provider.models);
             if (gwLocal && autoModelOffered(id)) {
-              if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = OPENCODE_AUTO_MODEL;
+              if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = opencodeAutoModel(id);
               if (ours.includes(id) || objectValue(models[AUTO_MODEL]).name === AUTO_NAME) next.push(id);
             } else if (ours.includes(id) && objectValue(models[AUTO_MODEL]).name === AUTO_NAME) {
               delete models[AUTO_MODEL];
@@ -3870,7 +3870,7 @@ function clearAutoModelChoice(agent: NativeAgent): void {
       const path = claudeSettingsPath();
       const bytes = fileBytes(path);
       const root = parseJsonFileObject(path, bytes);
-      if (bytes && root.model === AUTO_MODEL) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+      if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
     } else if (agent === "opencode") {
       const path = join(homedir(), ".config", "opencode", "opencode.json");
       const bytes = fileBytes(path);
@@ -3916,17 +3916,31 @@ function setNativeOptOut(agent: string, out: boolean): void {
 // Code 2.1.294 reads from ..._SUPPORTED_CAPABILITIES (a comma list; an unlisted
 // one is off), the ones Sonnet and Opus 5.5 have, so Auto keeps the effort and
 // thinking controls. temperature and mid_conversation_system stay off.
+// The id carries `[1m]`: for an id Claude Code does not know, that suffix is
+// what gives the session a 1M context window (200K without it), the window of
+// every Claude model Auto runs on. Claude Code strips it before sending, so
+// the proxy still reads AUTO_MODEL.
+const CLAUDE_AUTO_MODEL = `${AUTO_MODEL}[1m]`;
+
+// A saved /model choice of Auto, with or without the suffix.
+function isClaudeAutoModel(model: unknown): boolean {
+  return model === CLAUDE_AUTO_MODEL || model === AUTO_MODEL;
+}
+
 const CLAUDE_AUTO_ENV: Readonly<Record<string, string>> = {
-  ANTHROPIC_CUSTOM_MODEL_OPTION: AUTO_MODEL,
+  ANTHROPIC_CUSTOM_MODEL_OPTION: CLAUDE_AUTO_MODEL,
   ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: AUTO_NAME,
   ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION: AUTO_DESCRIPTION,
   ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES: "effort,max_effort,xhigh_effort,thinking,adaptive_thinking,interleaved_thinking",
 };
 
 // OpenCode's Auto entry, under each provider caveman routes. OpenCode's model
-// config has no description field; the limits are ones every model Auto may
-// run on clears, so compaction starts in time.
-const OPENCODE_AUTO_MODEL = { name: AUTO_NAME, reasoning: true, tool_call: true, attachment: true, limit: { context: 200000, output: 32000 } };
+// config has no description field; the context limit is one every model Auto
+// may run on clears, so compaction starts in time: 1M on Anthropic (Opus and
+// Sonnet 5.5), 272K on OpenAI, where a ChatGPT login serves no more.
+function opencodeAutoModel(provider: "openai" | "anthropic") {
+  return { name: AUTO_NAME, reasoning: true, tool_call: true, attachment: true, limit: { context: provider === "anthropic" ? 1000000 : 272000, output: 32000 } };
+}
 
 function capabilityInputValue(key: CapabilityKey, value: unknown): CapabilityValue | undefined {
   if (key === "think.mode") return wrapModeValue(value);
@@ -7916,7 +7930,7 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   // already set is theirs and stays.
   const autoEnv = wrapMode(gw) === "local" && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env) ? addClaudeAutoEnv(env) : [];
   // Without Auto a saved choice of it would fail: it goes, only that value.
-  if (!autoEnv.length && env.ANTHROPIC_CUSTOM_MODEL_OPTION !== AUTO_MODEL && settings.model === AUTO_MODEL) delete settings.model;
+  if (!autoEnv.length && env.ANTHROPIC_CUSTOM_MODEL_OPTION !== CLAUDE_AUTO_MODEL && isClaudeAutoModel(settings.model)) delete settings.model;
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
@@ -8443,7 +8457,7 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
       throw new Error(`${configPath} provider.${providerID}.models must be a JSON object; refusing to overwrite it`);
     }
     if (wrapMode(gw) === "local" && autoModelOffered(providerID as "openai" | "anthropic") && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
-      provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: OPENCODE_AUTO_MODEL };
+      provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: opencodeAutoModel(providerID as "openai" | "anthropic") };
       autoModels.push(providerID);
     }
     providers[providerID] = provider;
@@ -10641,7 +10655,7 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
     }
     if (agent.id === "opencode" && wrapMode(gw) === "local") {
       const ids = (["openai", "anthropic"] as const).filter((id) => autoModelOffered(id));
-      if (ids.length) rendered = deepMerge(rendered, { provider: Object.fromEntries(ids.map((id) => [id, { models: { [AUTO_MODEL]: OPENCODE_AUTO_MODEL } }])) });
+      if (ids.length) rendered = deepMerge(rendered, { provider: Object.fromEntries(ids.map((id) => [id, { models: { [AUTO_MODEL]: opencodeAutoModel(id) } }])) });
     }
     if (agent.id === "opencode" && process.env[inj.env_var]) {
       // OpenCode treats inline JSONC as its own configuration layer. Replacing

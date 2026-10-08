@@ -1511,12 +1511,14 @@ test("routing on puts Auto in Claude's and OpenCode's pickers; disable takes it 
     assert.equal(out.code, 0, out.stderr);
   }
   const env = JSON.parse(readFileSync(settingsPath, "utf8")).env;
-  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto");
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto[1m]", "the [1m] id gives Auto a 1M window in Claude Code");
   assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME, "Auto");
   assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION, "Caveman pick model + effort each turn. Hard ask, big brain. Easy ask, save rocks.");
   assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES, "effort,max_effort,xhigh_effort,thinking,adaptive_thinking,interleaved_thinking");
   const providers = JSON.parse(readFileSync(opencodePath, "utf8")).provider;
   for (const id of ["openai", "anthropic"]) assert.equal(providers[id].models["caveman-auto"].name, "Auto", id);
+  assert.equal(providers.anthropic.models["caveman-auto"].limit.context, 1000000, "Opus and Sonnet 5.5 run at 1M");
+  assert.equal(providers.openai.models["caveman-auto"].limit.context, 272000, "what a ChatGPT login serves");
   assert.equal(providers.anthropic.models.mine.name, "Mine");
   // Ownership is the journal, not byte-equality: an entry the user tuned still goes.
   const tuned = JSON.parse(readFileSync(opencodePath, "utf8"));
@@ -1560,7 +1562,7 @@ test("Auto follows the login: logout takes it out of Claude Code's settings", as
     writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ modules: { routing: true }, baseURL, token: "tok" }) + "\n");
     const settingsPath = join(fx.home, ".claude", "settings.json");
     assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
-    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto");
+    assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto[1m]");
     const out = await run(["logout"], { ...fx.env, CAVE_NO_KEYCHAIN: "1" });
     assert.equal(out.code, 0, out.stderr);
     assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, undefined, "signed out: no Auto");
@@ -1619,7 +1621,7 @@ test("logout takes Auto and a saved choice of it out without any binary on PATH"
     writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ modules: { routing: true }, baseURL: `http://127.0.0.1:${server.address().port}`, token: "tok" }) + "\n");
     assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
     const settingsPath = join(fx.home, ".claude", "settings.json");
-    writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, "utf8")), model: "caveman-auto" }, null, 2) + "\n");
+    writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, "utf8")), model: "caveman-auto[1m]" }, null, 2) + "\n");
     const out = await run(["logout"], { ...fx.env, CAVE_NO_KEYCHAIN: "1", PATH: "/usr/bin:/bin", CAVEMAN_MCP_BIN: "/missing", CAVEMAN_PROXY_BIN: "/missing" });
     assert.equal(out.code, 0, out.stderr);
     const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
@@ -1639,7 +1641,7 @@ test("a commented settings.json enables, and a third-party Anthropic upstream ge
   writeFileSync(settingsPath, '{\n  // mine\n  "env": { "KEEP": "yes" },\n}\n');
   const out = await run(["enable", "claude"], fx.env);
   assert.equal(out.code, 0, out.stderr);
-  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto");
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto[1m]");
   assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
   writeFileSync(join(fx.home, ".caveman", "caveman.yaml"), "providers:\n  anthropic:\n    base_url: https://gateway.example.com\n");
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);

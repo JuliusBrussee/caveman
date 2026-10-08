@@ -94,7 +94,7 @@ test("routing on puts Auto in wrapped OpenCode's and Claude Code's pickers, off 
       const providers = JSON.parse(buildWrapEnv(profile, "http://127.0.0.1:8787", "false").OPENCODE_CONFIG_CONTENT).provider;
       const env = buildWrapEnv(claude, "http://127.0.0.1:8787", "false");
       for (const id of ["openai", "anthropic"]) assert.equal(providers[id].models?.["caveman-auto"]?.name, routing ? "Auto" : undefined, id);
-      assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, routing ? "caveman-auto" : undefined);
+      assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, routing ? "caveman-auto[1m]" : undefined);
       assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME, routing ? "Auto" : undefined);
       assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES, routing ? "effort,max_effort,xhigh_effort,thinking,adaptive_thinking,interleaved_thinking" : undefined);
     });

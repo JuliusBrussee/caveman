@@ -50,6 +50,10 @@ Auto is offered only while you are signed in with routing on, and only for a
 provider the local runtime sends to its own API. Claude Code set to Bedrock,
 Vertex or Foundry (`CLAUDE_CODE_USE_*`) gets no Auto; if you turn one of those
 on after Auto was added, pick another model with `/model`.
+In Claude Code, Auto has a 1M context window (its id is `caveman-auto[1m]`),
+the window of the Claude models it runs on. In OpenCode it is 1M on Anthropic
+and 272K on OpenAI; in Codex it is what the ChatGPT model list gives
+`gpt-6.1-sol`.
 A saved Codex `model = "caveman-auto"` (top level or under `[profiles.*]`) only
 works while Caveman is wired; `caveman disable codex` clears the top-level one,
 a profile's is yours to change.
