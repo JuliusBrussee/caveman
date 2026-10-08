@@ -1819,7 +1819,16 @@ func mergeProviderOutcomeQualifiers(provider string, obj map[string]any, usage *
 	}
 	if rawUsage, ok := obj["usage"].(map[string]any); ok {
 		if iterations, present := rawUsage["iterations"]; present {
-			if values, ok := iterations.([]any); !ok || len(values) > 0 {
+			// Anthropic lists the request's own sampling as "message" iterations
+			// on every response. Only another kind (compaction, an advisor's
+			// model) is billed apart from the top-level counts.
+			values, ok := iterations.([]any)
+			for _, value := range values {
+				if entry, _ := value.(map[string]any); entry["type"] != "message" {
+					ok = false
+				}
+			}
+			if !ok {
 				usage.PricingUnsupportedReason = "unsupported_model_fallback_pricing"
 			}
 		}
