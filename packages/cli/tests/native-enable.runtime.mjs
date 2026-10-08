@@ -1888,6 +1888,7 @@ test("routing on puts Auto in Claude's and OpenCode's pickers; disable takes it 
   assert.equal(providers.anthropic.models["caveman-auto"].limit.context, 1000000, "Opus and Sonnet 5.5 run at 1M");
   assert.equal(providers.openai.models["caveman-auto"].limit.context, 872000, "the most a ChatGPT login serves");
   assert.equal(providers.anthropic.models.mine.name, "Mine");
+  assert.equal(providers["opencode-go"].models?.["caveman-auto"], undefined, "Auto runs on OpenAI and Anthropic only");
   // Ownership is the journal, not byte-equality: an entry the user tuned still goes.
   const tuned = JSON.parse(readFileSync(opencodePath, "utf8"));
   tuned.provider.openai.models["caveman-auto"].limit = { context: 1, output: 1 };
@@ -2063,4 +2064,86 @@ test("a sync that changes nothing leaves the user's layout and comments alone", 
     assert.equal(out.stderr, "");
     assert.equal(readFileSync(path, "utf8"), mine, path);
   }
+});
+
+for (const [name, enabledSignedIn] of [["login", false], ["logout", true]]) {
+  test(`disable after a ${name} sync keeps what the user added since enable`, async () => {
+    const fx = fixture();
+    const signedOut = () => writeFileSync(join(fx.home, ".caveman", "cloud.json"), "{}\n");
+    signedInRouting(fx);
+    if (!enabledSignedIn) signedOut();
+    const settingsPath = join(fx.home, ".claude", "settings.json");
+    const opencodePath = join(fx.home, ".config", "opencode", "opencode.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    mkdirSync(dirname(opencodePath), { recursive: true });
+    writeFileSync(settingsPath, JSON.stringify({ theme: "dark" }) + "\n");
+    writeFileSync(opencodePath, JSON.stringify({ theme: "system" }) + "\n");
+    for (const agent of ["claude", "opencode"]) assert.equal((await run(["enable", agent], fx.env)).code, 0, agent);
+    // What the user and the agent add after enable.
+    const mine = { permissions: { allow: ["Bash(npm test)"] }, statusLine: { type: "command", command: "mine" } };
+    writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, "utf8")), ...mine }, null, 2) + "\n");
+    writeFileSync(opencodePath, JSON.stringify({ ...JSON.parse(readFileSync(opencodePath, "utf8")), keybinds: { leader: "ctrl+x" } }, null, 2) + "\n");
+    if (enabledSignedIn) signedOut(); else signedInRouting(fx);
+    const synced = await syncAuto(fx.env);
+    assert.equal(synced.code, 0, synced.stderr);
+    assert.equal(/caveman-auto/.test(readFileSync(settingsPath, "utf8")), !enabledSignedIn, "the sync rewrote settings.json");
+    assert.equal(/caveman-auto/.test(readFileSync(opencodePath, "utf8")), !enabledSignedIn, "the sync rewrote opencode.json");
+    for (const agent of ["claude", "opencode"]) {
+      const out = await run(["doctor", agent], fx.env);
+      assert.equal(JSON.parse(out.stdout).state, "installed", `${agent}: a synced file is not a degraded install`);
+    }
+    for (const agent of ["claude", "opencode"]) {
+      const out = await run(["disable", agent], fx.env);
+      assert.equal(out.code, 0, `${agent}: ${out.stderr}`);
+    }
+    assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { theme: "dark", ...mine }, "settings.json keeps the user's later keys");
+    assert.deepEqual(JSON.parse(readFileSync(opencodePath, "utf8")), { theme: "system", keybinds: { leader: "ctrl+x" } }, "opencode.json keeps the user's later keys");
+  });
+}
+
+test("disable across profiles takes Caveman's Auto and a saved choice of it out of each, never the user's own option", async () => {
+  const fx = fixture();
+  signedInRouting(fx);
+  const work = join(fx.home, "accounts", "work", "settings.json");
+  assert.equal((await run(["enable", "claude"], { ...fx.env, CLAUDE_CONFIG_DIR: dirname(work) })).code, 0);
+  const wired = JSON.parse(readFileSync(work, "utf8"));
+  assert.equal(wired.env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto[1m]");
+  // /model → Auto in the journaled profile, and in a copy of it no journal knows.
+  writeFileSync(work, JSON.stringify({ ...wired, model: "caveman-auto[1m]", theme: "dark" }, null, 2) + "\n");
+  const copy = join(fx.home, ".claude-copy", "settings.json");
+  mkdirSync(dirname(copy));
+  writeFileSync(copy, JSON.stringify({ ...wired, model: "caveman-auto[1m]", theme: "dark" }, null, 2) + "\n");
+  const own = join(fx.home, ".claude-own", "settings.json");
+  mkdirSync(dirname(own));
+  const ownEnv = { ANTHROPIC_CUSTOM_MODEL_OPTION: "my-model", ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: "Auto" };
+  writeFileSync(own, JSON.stringify({ model: "my-model", env: { ...ownEnv, ANTHROPIC_BASE_URL: "http://127.0.0.1:8787/w/claude" } }) + "\n");
+
+  // The shell that disables is on the default profile, not on either of them.
+  const out = await run(["disable", "claude"], fx.env);
+  assert.equal(out.code, 0, out.stderr);
+  for (const path of [work, copy]) {
+    const after = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(after.env?.ANTHROPIC_BASE_URL, undefined, path);
+    assert.equal(after.model, undefined, `${path}: a saved Auto would reach Anthropic directly`);
+    assert.doesNotMatch(JSON.stringify(after.env ?? {}), /CUSTOM_MODEL_OPTION/, path);
+    assert.equal(after.theme, "dark", path);
+  }
+  assert.deepEqual(JSON.parse(readFileSync(own, "utf8")), { model: "my-model", env: ownEnv });
+});
+
+test("logout clears a saved choice of Auto made in a session-only caveman claude, with no native wiring", async () => {
+  const fx = fixture();
+  signedInRouting(fx);
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify({ model: "caveman-auto[1m]", theme: "dark" }) + "\n");
+  assert.equal((await syncAuto(fx.env)).code, 0);
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).model, "caveman-auto[1m]", "signed in with routing on: Auto still answers");
+  writeFileSync(join(fx.home, ".caveman", "cloud.json"), "{}\n");
+  const out = await syncAuto(fx.env);
+  assert.equal(out.code, 0, out.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { theme: "dark" });
+  writeFileSync(settingsPath, '// mine\n{"model":"opus"}\n');
+  assert.equal((await syncAuto(fx.env)).code, 0);
+  assert.equal(readFileSync(settingsPath, "utf8"), '// mine\n{"model":"opus"}\n', "any other choice is left alone");
 });

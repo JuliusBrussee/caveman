@@ -3809,7 +3809,12 @@ export function syncAutoEntries(): void {
       withIntegrationLock(agent, () => {
         const journal = readNativeJournal(agent);
         const operation = journal?.operations.find((op) => op.kind === (agent === "claude" ? "claude-settings" : "opencode-config"));
-        if (!journal || !operation) return;
+        if (!journal || !operation) {
+          // Not wired, yet a session-only `caveman claude` offers Auto too:
+          // once it is gone a saved choice of it would reach Anthropic directly.
+          if (agent === "claude" && !(gwLocal && autoModelOffered("anthropic"))) clearAutoModelChoice(agent);
+          return;
+        }
         const before = fileBytes(operation.file);
         if (!before) return;
         const root = parseJsonFileObject(operation.file, before);
@@ -3853,7 +3858,8 @@ export function syncAutoEntries(): void {
         const after = jsonBytes(root);
         atomicWriteFile(operation.file, after);
         operation.owned = owned;
-        operation.after_sha256 = bytesHash(after);
+        // after_sha256 stays enable's: the backup is from before enable, so a
+        // synced file must take disable's merge path, never the wholesale restore.
         atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
       });
     } catch (error) {
@@ -8504,8 +8510,8 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
     if (provider.models !== undefined && !isPlainObject(provider.models)) {
       throw new Error(`${configPath} provider.${providerID}.models must be a JSON object; refusing to overwrite it`);
     }
-    if (wrapMode(gw) === "local" && autoModelOffered(providerID as "openai" | "anthropic") && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
-      provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: opencodeAutoModel(providerID as "openai" | "anthropic") };
+    if ((providerID === "openai" || providerID === "anthropic") && wrapMode(gw) === "local" && autoModelOffered(providerID) && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
+      provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: opencodeAutoModel(providerID) };
       autoModels.push(providerID);
     }
     providers[providerID] = provider;
@@ -9795,6 +9801,18 @@ function cleanClaudeProfile(root: Record<string, unknown>): boolean {
       if (Object.keys(values).length === 0) delete root.env;
       changed = true;
     }
+    // Auto's picker keys while the option is still Caveman's (a custom option
+    // of the user's own stays, as in addClaudeAutoEnv), each only while ours.
+    if (values.ANTHROPIC_CUSTOM_MODEL_OPTION === CLAUDE_AUTO_MODEL) {
+      for (const key of Object.keys(CLAUDE_AUTO_ENV)) if (values[key] === CLAUDE_AUTO_ENV[key]) delete values[key];
+      if (Object.keys(values).length === 0) delete root.env;
+      changed = true;
+    }
+  }
+  // A saved choice of Auto would reach Anthropic directly once the route is gone.
+  if (isClaudeAutoModel(root.model)) {
+    delete root.model;
+    changed = true;
   }
   const servers = root.mcpServers;
   if (servers && typeof servers === "object" && !Array.isArray(servers)) {
