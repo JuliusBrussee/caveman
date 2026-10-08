@@ -221,8 +221,8 @@ deleted per install.
 
 ## Authenticated Caveman Cloud traffic
 
-Connected commands require stored credentials or `CAVE_TOKEN`; new logins are
-blocked during beta. Sync sends usage metadata and aggregate findings, never
+Connected commands require stored credentials or `CAVE_TOKEN`; `caveman login`
+creates them when the server accepts sign-ins. Sync sends usage metadata and aggregate findings, never
 prompts, responses, credentials, tool evidence, or source paths. Subscription
 traffic omits dollar figures, and synced local data remains `inferred`. Managed
 gateway mode carries request and response content through Caveman Cloud; local
