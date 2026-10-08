@@ -94,9 +94,15 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 - **cache safety is byte-stable replacement**: a compressed live-zone turn becomes prefix on next request, so same logical message must re-serialize to deterministically identical bytes every time. Replacement is pure function of segment content (deterministic compressor + content-hash CCR marker), held in durable replacement cache and re-substituted below cache floor; new compression stays live-zone-only. Cache miss/write failure forwards original bytes. Cross-turn stability covers **anthropic, openai, azureopenai/openaicompat, and gemini** through `ExtractStabilizable`; `bedrock` and `vertex` expose no compressible blocks and stay pass-through. Anthropic uses declared `cache_control`; OpenAI/Gemini use latest-user/latest-tool zones against implicit provider caches. Replacement cache is SQLite spend store and must retain `journal_mode(WAL)` + `busy_timeout`.
 - **pixel mode**: S4 lossy text→PNG (`pxpipe` port). Default allowlist is `claude-fable-5,gpt-5.6` via `CAVE_PIXEL_MODELS`; original request is always in CCR before transformed bytes are sent; savings stay inferred-only; any error is byte-identical pass-through.
 - **route stage is optional and fails open** (`internal/cloudlink`, `internal/gateway/route.go`):
-  it asks Cloud `POST /v1/route` only while the CLI is signed in with `modules.routing: true` in
-  `$CAVEMAN_HOME/cloud.json`, for API-key Anthropic Messages / OpenAI chat or responses requests
-  whose model is in the same-provider pool (subscription traffic never routes, ADR 0083 §7). The
+  it asks Cloud `POST /v1/route` only for requests naming Auto (`AutoModel`, `caveman-auto`, the
+  picker entry the CLI adds while `modules.routing: true` in `$CAVEMAN_HOME/cloud.json`), while the
+  CLI is signed in with that switch on, for Anthropic Messages / OpenAI chat or responses requests on
+  an API key or a subscription alike; any other model goes as sent (`route.outcome: off`), the
+  session's marks and heal still applied. Auto goes upstream as the provider's `autoFallback` model
+  (Anthropic `claude-sonnet-5-5`, OpenAI `gpt-6-sol`; count_tokens too, and with no Cloud link),
+  which is also the asked model the ask carries and what every failure runs. A move on a
+  subscription stays on the provider's own API on that subscription's credential; pool entries go
+  out on their own login or the Cloud gateway key, never on it. The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
   caller's models, counts, what the request declares (the raw values of eleven allowlisted agent
   headers, never cut: a value over 256 bytes, 16 KiB for Codex's turn metadata, which also comes
@@ -169,7 +175,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   drop_block, a heal retry) is returned as is. When the model moved, the agent's copy of the
   answer names the model it asked for (Claude Code drops its thinking on another name): a JSON
   answer's top-level `model`, and in a stream every `"model":"<sent>"` pair, rewritten
-  incrementally across reads; the upstream is asked for an identity answer, a compressed one is
+  incrementally across reads (an Auto request names Auto, moved or not); the upstream is asked for an identity answer, a compressed one is
   left as it is, and usage, stats and `last` read the provider's bytes. The pass-through header
   and encoded bodies never route, nor does any origin but the provider's own API (Azure,
   OpenRouter, LiteLLM, a custom base URL); record mode does (routing is its own module). A limit
