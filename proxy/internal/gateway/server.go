@@ -542,6 +542,13 @@ func BoundUpstreamTransport(t *http.Transport) {
 	// left on http.DefaultTransport, and an idle keep-alive socket to a provider
 	// must not be held open indefinitely.
 	t.IdleConnTimeout = 90 * time.Second
+	// Go keeps only 2 idle connections per host by default, so a third
+	// concurrent caller (agent fan-out, a team behind one proxy) closes its
+	// connection after each response and the next request to that provider pays
+	// a new TCP and TLS handshake. Keep a pool sized for that concurrency; the
+	// idle timeout above still retires what goes quiet.
+	t.MaxIdleConns = 1024
+	t.MaxIdleConnsPerHost = 256
 }
 
 // New constructs a standalone proxy Server.
