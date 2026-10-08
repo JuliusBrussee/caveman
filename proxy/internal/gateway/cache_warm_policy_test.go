@@ -182,8 +182,8 @@ func TestCacheWarmReplaysTheRoutedRequest(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
 	f.srv.cloud = &fakeCloud{answer: RouteAnswer{Outcome: "routed", Effort: "low"}}
-	f.serve(t, reqBody(""), warmHeaders)
-	if !strings.Contains(rt.body(0), `"effort":"low"`) {
+	f.serve(t, auto(t, reqBody("")), warmHeaders)
+	if !strings.Contains(rt.body(0), `"effort":"low"`) || strings.Contains(rt.body(0), AutoModel) {
 		t.Fatalf("the route stage did not change the request; the test proves nothing: %s", rt.body(0))
 	}
 	f.clock.advance(270 * time.Second)
