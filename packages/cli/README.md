@@ -171,12 +171,11 @@ sync local request history. The CLI's usage telemetry setting remains in effect;
 `caveman logout` revokes the session. HTTPS is required except for HTTP loopback development.
 Hosted login remains unavailable during beta.
 
-Read agents in the connected project with `caveman cloud agent factory list`
-and `caveman cloud agent factory show <id>`. These commands need
-`trace:read_metadata` access. Factory cases, execution approvals and policy
-remain in the dashboard; the CLI connection cannot grant that authority.
-The existing `cloud agent list|show|run` commands still address optimization
-proposals.
+Caveman Cloud commands (projects, keys, providers, billing, Cave Score, costs,
+Cave Plan, traces, experiments, agents and the Cloud MCP server) moved to the
+separate `cvm` CLI: `npm i -g @caveman-ai/cloud`, then `cvm tools list`. The old
+`caveman` verbs print the matching `cvm` command and exit 2. `caveman` keeps
+`login`, `logout`, `whoami`, `sync`, `receipts verify` and the file imports below.
 
 Connected telemetry imports stay under existing `cloud audit` governance verb:
 
@@ -203,13 +202,10 @@ caveman setup --agent-native codex
 caveman setup --agent-native claude
 ```
 
-This writes an MCP command, not an access token, into the agent config. Runtime
-requests use the existing `caveman login` credential store and still pass through
-control-api authentication, project scope, RBAC, audit, and tenant isolation.
-Read tools expose structured reports, Cave Plan, trace metadata/spans, and
-experiment evidence. Agent MCP intentionally exposes no lifecycle mutation:
-control-api needs server-authoritative transition and evidence gates first.
-Agent-facing CLI experiment commands are read-only for same reason.
+This writes an MCP command, not an access token, into the agent config. The
+project-scoped read tools are served by `cvm mcp`, so agent-native setup needs
+`cvm` on PATH (`npm i -g @caveman-ai/cloud`); without it, setup stops before any
+write and prints the install line.
 
 Core changes coding behavior but remains independently controllable. Compression,
 recovery, and telemetry continue when Core is off:

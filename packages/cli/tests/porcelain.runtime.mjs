@@ -90,7 +90,8 @@ test("tools and cloud discovery keep named product order, tiering, and caps", as
     assert.ok(defaultToolCount <= 15, "default tools cap");
     assert.equal(allToolCount, 15);
     assert.ok(allToolCount <= 15, "all-tools cap");
-    assert.equal(cloudCount, 14);
+    assert.equal(cloudCount, 4);
+    assert.match(cloud.stdout, /everything else: cvm · npm i -g @caveman-ai\/cloud/);
     assert.ok(cloudCount <= 15, "cloud cap");
     assert.doesNotMatch(tools.stdout, /shrink-hook|practices|check/);
     assert.doesNotMatch(tools.stdout, /caveman help tools --all/);

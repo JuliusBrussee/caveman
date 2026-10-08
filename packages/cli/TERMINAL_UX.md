@@ -55,8 +55,9 @@ Default output stays bounded. Detail never disappears; it moves behind `--all`,
 - `caveman tools`: local commands grouped by think, remember, execute, inspect.
   Default stays at 15 entries; advanced internal surfaces use
   `caveman help tools --all`.
-- `caveman cloud`: connected commands grouped by account, evidence, governance,
-  with login as clear starting action.
+- `caveman cloud`: the few connected commands left (whoami, receipts verify,
+  audit imports, sync), login as clear starting action, and a pointer to `cvm`
+  for everything else.
 - errors: one problem, one likely correction, one help pointer. No stack trace.
 
 ## Output contracts

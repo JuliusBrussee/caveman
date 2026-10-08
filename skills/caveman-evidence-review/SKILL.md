@@ -31,17 +31,12 @@ experiment from this skill.
 
 ## Step 1 — Load context
 
-Prefer MCP:
-
-```text
-caveman_context {}
-```
-
-CLI fallback:
+Caveman Cloud reads go through `cvm` (`npm i -g @caveman-ai/cloud`). The same
+operations are available as MCP tools through `cvm mcp`.
 
 ```bash
-caveman cloud whoami
-caveman cloud projects list
+cvm context whoami
+cvm projects list
 ```
 
 Stop if login or project selection is missing. Ask the user to run
@@ -49,30 +44,24 @@ Stop if login or project selection is missing. Ask the user to run
 
 ## Step 2 — Establish baseline
 
-Use `caveman_report` for:
-
-- `overview`
-- `costs`
-- `score`
-- `workflows`
-- `verified_savings`
-
-Then use `caveman_plan` for ranked daily headroom. If question is narrow, skip
-unrelated reports. Read shortest set that can answer it.
-
-CLI fallback:
+Read these reports:
 
 ```bash
-caveman cloud costs
-caveman cloud score
-caveman cloud plan --json
+cvm reports overview
+cvm reports costs
+cvm plan score
+cvm reports workflows
+cvm reports verified_savings
 ```
+
+Then read the ranked daily headroom with `cvm plan project_plan`. If question is
+narrow, skip unrelated reports. Read shortest set that can answer it.
 
 State report window and basis before interpreting direction.
 
 ## Step 3 — Test the leading explanation with traces
 
-Use `caveman_trace_search`. Choose a bounded window and closed filters:
+Use `cvm traces search`. Choose a bounded window and closed filters:
 workflow, agent, model, provider, error code, runtime mode, cache status,
 optimization id, status class, token/cost/latency bounds, compression, or
 monitor verdict.
@@ -87,28 +76,24 @@ Useful groupings:
 Compare a suspect cohort with a control cohort or earlier bounded window.
 Do not infer causality from one expensive trace.
 
-CLI fallback:
-
 ```bash
-caveman cloud traces search \
-  --workflow <slug> \
+cvm traces search \
   --from <RFC3339> \
   --to <RFC3339> \
-  --sort total_cost_usd \
-  --dir desc \
+  --filters '{"workflow":["<slug>"]}' \
+  --sort '{"by":"total_cost_usd","dir":"desc"}' \
   --limit 25
 ```
 
 ## Step 4 — Inspect representative traces
 
-Call `caveman_trace_get` for a small number of high-signal trace ids. Inspect
+Read a small number of high-signal trace ids. Inspect
 request and span metadata, latency, status, token counts, cache state, applied
 optimizers, and model route. Keep payload retrieval off.
 
-CLI fallback:
-
 ```bash
-caveman cloud traces show <trace-id> --spans
+cvm traces get <trace-id>
+cvm traces spans <trace-id>
 ```
 
 ## Step 5 — Report

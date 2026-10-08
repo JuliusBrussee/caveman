@@ -55,12 +55,6 @@ import {
   AGENT_SKILL_SUITES,
 } from "./agent-skills.generated.js";
 import { NATIVE_CORE, NATIVE_PACK, NATIVE_SKILL_INSTRUCTIONS } from "./native-pack.generated.js";
-import {
-  serveAgentMcp,
-  type AgentMcpClient,
-  type JSONObject,
-  type JSONValue,
-} from "./agent-mcp.js";
 import { portableInvocation } from "./portable-command.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
@@ -200,23 +194,13 @@ const TOOL_DISCOVERY: DiscoveryGroup[] = [
 const CLOUD_DISCOVERY: DiscoveryGroup[] = [
   { heading: "account", verbs: [
     { verb: "whoami", description: "show connected identity" },
-    { verb: "projects", description: "list or create projects" },
-    { verb: "keys", description: "create or revoke project keys" },
-    { verb: "providers", description: "list or verify providers" },
-    { verb: "billing", description: "inspect billing and verified savings" },
   ] },
   { heading: "evidence", verbs: [
-    { verb: "score", description: "show scoped Cave Score" },
-    { verb: "costs", description: "show provider-complete cost totals" },
-    { verb: "plan", description: "show ranked inferred Cave Plan" },
-    { verb: "traces", description: "search or export request metadata" },
-    { verb: "experiments", description: "inspect or manage eval-gated experiments" },
-    { verb: "receipts", description: "verify or export signed receipts" },
+    { verb: "receipts", description: "verify signed receipt bundles offline" },
   ] },
   { heading: "governance", verbs: [
-    { verb: "audit", description: "import or report audit evidence" },
+    { verb: "audit", description: "import audit or eval evidence files" },
     { verb: "sync", description: "sync local metadata to connected org" },
-    { verb: "agent", description: "inspect agents and optimization proposals" },
   ] },
 ];
 
@@ -282,58 +266,65 @@ function agentBuildCheck(argv: string[]): void {
 
 const CLOUD_HANDLERS: Record<string, CommandHandler> = {
   whoami: () => get("/api/v1/auth/me").then(print),
-  projects: (argv) => {
-    if (argv[0] === "list") return get("/api/v1/projects").then(print);
-    if (argv[0] === "create") {
-      return post("/api/v1/projects", {
-        name: flagFrom(argv, "--name", "CLI Project"),
-        slug: flagFrom(argv, "--slug", "cli-project"),
-      }).then(print);
-    }
-    return commandUsage("projects list|create");
-  },
-  keys: async (argv) => {
-    if (argv[0] === "create") return createKey(argv);
-    if (argv[0] === "revoke") return post(`/api/v1/projects/${await projectId()}/keys/${argv[1] ?? ""}/revoke`, {}).then(print);
-    return commandUsage("keys create|revoke <id>");
-  },
-  providers: async (argv) => {
-    if (argv[0] === "list") return get(`/api/v1/projects/${await projectId()}/providers`).then(print);
-    if (argv[0] === "verify") return post(`/api/v1/projects/${await projectId()}/providers/${argv[1] ?? ""}/verify`, {}).then(print);
-    return commandUsage("providers list|verify <id>");
-  },
-  billing: (argv) => {
-    if (argv[0] === "status") return billingStatus(argv);
-    if (argv[0] === "charges") return billingCharges(argv);
-    return commandUsage("billing status|charges");
-  },
-  score: () => get("/api/v1/reports/cave-score").then(print),
-  costs: () => get("/api/v1/reports/costs").then(print),
-  plan,
-  traces: traceCommand,
-  experiments: experimentCommand,
-  "mcp-serve": () => serveCloudAgentMcp(),
   receipts: (argv) => {
     if (argv[0] === "verify") return receiptsVerify(argv);
-    if (argv[0] === "export") return receiptsExport(argv);
-    return commandUsage("receipts verify <bundle.json>|export");
+    if (argv[0] === "export") return movedToCvm("receipts", argv);
+    return commandUsage("receipts verify <bundle.json>");
   },
-  audit,
+  audit: (argv) => {
+    if (argv[0] === "import") return auditImport(argv);
+    if (argv[0] === "eval-import") return auditEvalImport(argv);
+    return movedToCvm("audit", argv);
+  },
   sync: () => sync(),
-  agent: async (argv) => {
-    if (argv[0] === "factory") {
-      if (argv[1] === "list" && argv.length === 2) return get(`/api/v1/projects/${await projectId()}/agents`).then(print);
-      if (argv[1] === "show" && argv.length === 3 && /^[A-Za-z0-9_-]+$/.test(argv[2]!)) {
-        return get(`/api/v1/projects/${await projectId()}/agents/${argv[2]}`).then(print);
-      }
-      return commandUsage("agent factory list|show <id>");
-    }
-    if (argv[0] === "list") return get("/api/v1/optimization-proposals").then(print);
-    if (argv[0] === "show") return get(`/api/v1/optimization-proposals/${argv[1] ?? ""}`).then(print);
-    if (argv[0] === "run") return post(`/api/v1/optimization-proposals/${argv[1] ?? ""}/run`, {}).then(print);
-    return commandUsage("agent list|show <id>|run <id> | agent factory list|show <id>");
-  },
 };
+
+// Cloud commands that moved to the separate `cvm` CLI (@caveman-ai/cloud).
+// Key: old verb plus any subverbs; value: the `cvm <family> <verb>` to run.
+const MOVED_TO_CVM: Record<string, string> = {
+  projects: "projects list",
+  "projects create": "projects create",
+  keys: "tools list",
+  providers: "providers list",
+  "providers verify": "providers verify",
+  billing: "human billing_account",
+  "billing charges": "tools list",
+  score: "plan score",
+  costs: "reports costs",
+  plan: "plan project_plan",
+  traces: "traces list",
+  "traces search": "traces search",
+  "traces show": "traces get",
+  "traces export": "tools list",
+  experiments: "experiments list",
+  "experiments show": "experiments get",
+  "experiments results": "experiments results",
+  "mcp-serve": "mcp",
+  "receipts export": "human metering_receipts",
+  audit: "human create_audit",
+  "audit report": "human audit",
+  agent: "proposals list",
+  "agent show": "proposals get",
+  "agent run": "tools list",
+  "agent factory": "workflows list_agents",
+  "agent factory show": "workflows get_agent",
+  opportunities: "fixes list_opportunities",
+  "deploy status": "context system_status",
+};
+
+for (const verb of ["projects", "keys", "providers", "billing", "score", "costs", "plan", "traces", "experiments", "mcp-serve", "agent"]) {
+  CLOUD_HANDLERS[verb] = (argv) => movedToCvm(verb, argv);
+}
+
+function movedToCvm(verb: string, argv: string[]): never {
+  let key = verb;
+  for (const word of argv) {
+    if (!MOVED_TO_CVM[`${key} ${word}`]) break;
+    key = `${key} ${word}`;
+  }
+  console.error(`${invokedAs()} ${key} moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm ${MOVED_TO_CVM[key]}`);
+  process.exit(2);
+}
 
 const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   help,
@@ -355,7 +346,7 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   // Unprinted (porcelain caps): sync Go binaries to this CLI's pin, then check
   // npm for a newer CLI — the one verb that answers "am I current?".
   update: (argv) => update(argv),
-  opportunities: (argv) => argv[0] === "list" ? get("/api/v1/opportunities").then(print) : commandUsage("opportunities list"),
+  opportunities: (argv) => movedToCvm("opportunities", argv),
   snippets,
   dev: (argv) => {
     if (argv[0] === "up") return shellHint("make dev");
@@ -365,7 +356,7 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   },
   deploy: (argv) => {
     if (argv[0] === "aws") return shellHint("make deploy-aws");
-    if (argv[0] === "status") return get("/api/v1/system/status").then(print);
+    if (argv[0] === "status") return movedToCvm("deploy", argv);
     return commandUsage("deploy aws|status");
   },
   start: (argv) => start(argv),
@@ -401,7 +392,10 @@ function printDiscovery(group: CommandGroup, all = false): void {
     console.log(`\n${section.heading}`);
     for (const entry of entries) console.log(`  ${entry.verb.padEnd(13)} ${entry.description}`);
   }
-  if (group === "cloud") console.log(`\nstart: ${invokedAs()} login`);
+  if (group === "cloud") {
+    console.log(`\nstart: ${invokedAs()} login`);
+    console.log("everything else: cvm · npm i -g @caveman-ai/cloud");
+  }
 }
 
 function resolveInvocation(raw: string[]): ResolvedInvocation {
@@ -895,12 +889,10 @@ function pruneSessionMarkers() {
 }
 
 function telemetryCommandName(): string {
-  if (currentInvocation.verb === "mcp-serve") return "mcp";
   return TELEMETRY_COMMANDS.has(currentInvocation.verb) ? currentInvocation.verb : "unknown";
 }
 
 function telemetrySubcommand(): string | undefined {
-  if (currentInvocation.verb === "mcp-serve") return "run";
   if (currentInvocation.verb === "setup" && currentInvocation.argv.includes("--agent-native")) return "install";
   if (currentInvocation.verb === "telemetry" && !currentInvocation.argv[0]) return "status";
   const sub = currentInvocation.argv[0];
@@ -3393,7 +3385,7 @@ async function setup(argv: string[] = []) {
   }
   console.log(`${mark("warn")} ${missingRequired.length} of ${rows.filter((r) => r.required).length} required binaries missing — affected commands run as loud, byte-safe`);
   console.log(`   pass-throughs: nothing is compressed, savings honestly report 0.`);
-  console.log(`   Connected verbs (login, plan, score, costs, …) work regardless — they only need HTTP.`);
+  console.log(`   Connected verbs (login, sync, …) work regardless — they only need HTTP.`);
   console.log("");
   console.log(`Get the signed binaries:`);
   console.log(`  ${cyan("caveman setup --install")}`);
@@ -3930,7 +3922,7 @@ export const OFF_STATES = {
   weeklyCap: (used: string, allowance: string): OffState => ({
     id: "weekly-cap",
     line: `weekly plan cap reached — connected traffic returns 429 until Monday 00:00 UTC; local wrap is unaffected (${used} of ${allowance} optimized tokens this week)`,
-    fix: "caveman cloud billing",
+    fix: "cvm human billing_account",
   }),
   invalidMode: (value: string): OffState => ({
     id: "invalid-mode",
@@ -11645,13 +11637,11 @@ function resolveMcpCommand(): { command: string; args: string[] } {
   return { command: "caveman-mcp", args: [] };
 }
 
+// The caveman-cloud MCP server is served by the separate `cvm` CLI.
 function resolveCloudMcpCommand(): { command: string; args: string[] } {
-  const entry = process.argv[1];
-  if (!entry) {
-    console.error("caveman mcp: cannot resolve CLI entrypoint for caveman-cloud server");
-    process.exit(1);
-  }
-  return { command: process.execPath, args: [realpathSync(entry), "cloud", "mcp-serve"] };
+  const cvm = which("cvm");
+  if (!cvm) throw new Error("caveman-cloud MCP moved to cvm. Install: npm i -g @caveman-ai/cloud, then rerun this command");
+  return { command: cvm, args: ["mcp"] };
 }
 
 // resolveDelegateMcpCommand locates the dependency-free caveman-delegate stdio
@@ -11862,7 +11852,7 @@ function mcpUsage(): never {
   console.error(`usage: ${prefix} install|uninstall [agent] [--server caveman|caveman-browse|caveman-cloud|caveman-delegate]`);
   console.error("  caveman: recovery tools for streaming compression and pixel disclosure");
   console.error("  caveman-browse: compressed browser tools");
-  console.error("  caveman-cloud: project-scoped reports, traces, plans, and read-only experiment evidence");
+  console.error("  caveman-cloud: Caveman Cloud tools served by `cvm mcp` (npm i -g @caveman-ai/cloud)");
   console.error("  caveman-delegate: pi-harness delegate tool for bounded subtasks (opt-in via execute.delegate)");
   console.error("  with no agent, installs for every known agent detected on PATH.");
   console.error("  uninstall removes the tool registration and the marker again.");
@@ -13968,7 +13958,7 @@ function mcpInstall(target?: string, serverName = "caveman"): number {
           ? "caveman_browse"
           : serverName === "caveman-delegate"
             ? "caveman_delegate"
-            : "caveman cloud tools";
+            : "cvm mcp tools";
       process.stderr.write(`${mark("ok")} ${a.display_name}: ${tool} installed\n`);
     }
   }
@@ -18578,7 +18568,7 @@ async function status(argv: string[]) {
   else if (!signedIn) next = history && !snapshot.stateOne
     ? "caveman learn"
     : "caveman login   (free · 1 seat · no card)";
-  else next = snapshot.moves < 1 ? "caveman learn" : "caveman cloud plan";
+  else next = snapshot.moves < 1 ? "caveman learn" : "cvm plan project_plan";
 
   const plan = entitlement && allowance !== null && entitlement.optimized_tokens_week !== undefined
     ? { plan: entitlement.plan, used: entitlement.optimized_tokens_week, allowance }
@@ -18664,18 +18654,6 @@ function cliVersion(): string {
   } catch {
     return "0.0.0";
   }
-}
-
-async function createKey(argv: string[]) {
-  const body = await post(`/api/v1/projects/${await projectId()}/keys`, { name: flagFrom(argv, "--name", "cli-key"), scopes: ["proxy:write", "sdk:write"] });
-  print(body);
-}
-
-async function audit(argv: string[]) {
-  if (argv[0] === "import") return auditImport(argv);
-  if (argv[0] === "eval-import") return auditEvalImport(argv);
-  if (argv[0] === "report") return get(`/api/v1/audits/${argv[1] ?? "aud_demo"}`).then(print);
-  return post("/api/v1/audits", { last: flagFrom(argv, "--last", "7d") }).then(print);
 }
 
 // auditImport reads a telemetry export file and POSTs it to /api/v1/imports.
@@ -19076,294 +19054,8 @@ function fail(reason: string): never {
   process.exit(1);
 }
 
-// receiptsExport writes the org's signed receipts to a self-verifying bundle
-// file. It reads from the LOCAL control plane (in the customer's own env) and
-// never contacts Caveman — the air-gapped meter export. The downloaded bundle is
-// then checkable offline with `caveman receipts verify`.
-//   caveman receipts export [--since YYYY-MM-DD] [--until YYYY-MM-DD] -o bundle.json
-async function receiptsExport(argv: string[]) {
-  const since = flagFrom(argv, "--since", "");
-  const until = flagFrom(argv, "--until", "");
-  const out = flagFrom(argv, "-o", flagFrom(argv, "--out", "receipts-bundle.json"));
-  const query = new URLSearchParams();
-  if (since) query.set("since", since);
-  if (until) query.set("until", until);
-  const qs = query.toString();
-  const bundle = await get(`/api/v1/metering/receipts${qs ? "?" + qs : ""}`);
-  await writeFile(out, JSON.stringify(bundle, null, 2) + "\n", { mode: 0o600 });
-  print({ exported: out, receipts: Array.isArray(bundle.receipts) ? bundle.receipts.length : 0 });
-}
-
-// plan prints the Cave Architect's ranked Cave Plan in one operator voice
-// (--json for the raw object). Savings are a per-day rate, basis "inferred".
-async function plan(argv: string[]) {
-  if (argv.length > 1 || (argv.length === 1 && argv[0] !== "--json")) {
-    console.error(`usage: ${invokedCommand("plan")} [--json]`);
-    process.exit(2);
-  }
-  const data = await get(`/api/v1/projects/${await projectId()}/cave-plan`);
-  if (argv.includes("--json")) return print(data);
-  const h = data.headline ?? {};
-  console.log("");
-  console.log("  CAVE PLAN — projected savings");
-  console.log(`  ${usd(h.base)}/day  (${usd(h.low)} - ${usd(h.high)}, ${h.basis ?? "inferred"})  -  ${h.move_count ?? 0} moves`);
-  console.log("");
-  const classBreakdown = data.savings_by_class ?? data["head" + "room_by_class"] ?? [];
-  for (const c of classBreakdown) {
-    console.log(`  ${c.safety_class}: ${usd(c.base)}/day  (${c.move_count} ${c.move_count === 1 ? "move" : "moves"})`);
-  }
-  if (classBreakdown.length) console.log("");
-  for (const m of data.moves ?? []) {
-    const save = (m.savings_usd_base ?? 0) > 0 ? `${usd(m.savings_usd_base)}/day` : "enablement";
-    const gate = m.requires_eval_gate ? " - eval-gated" : "";
-    console.log(`  - ${m.title}  [${save}]  ${m.safety_class}${gate}`);
-    console.log(`    ${m.summary}`);
-    console.log("");
-  }
-  if ((data.no_signal ?? []).length) console.log(`  cave still watching for: ${data.no_signal.join(", ")}`);
-}
-
-function parseBooleanFlag(argv: string[], name: string): boolean | undefined {
-  const raw = flagFrom(argv, name, "");
-  if (raw === "") return undefined;
-  if (raw === "true") return true;
-  if (raw === "false") return false;
-  console.error(`${name} must be true or false`);
-  process.exit(2);
-}
-
-function parseNumberFlag(argv: string[], name: string): number | undefined {
-  const raw = flagFrom(argv, name, "");
-  if (raw === "") return undefined;
-  const value = Number(raw);
-  if (!Number.isFinite(value)) {
-    console.error(`${name} must be a finite number`);
-    process.exit(2);
-  }
-  return value;
-}
-
-const TRACE_SEARCH_VALUE_FLAGS = new Set([
-  "--workflow",
-  "--agent",
-  "--model",
-  "--provider",
-  "--error-code",
-  "--session-id",
-  "--trace-id",
-  "--status-class",
-  "--has-error",
-  "--compressed",
-  "--min-cost-usd",
-  "--max-cost-usd",
-  "--min-tokens",
-  "--max-tokens",
-  "--min-latency-ms",
-  "--max-latency-ms",
-  "--from",
-  "--to",
-  "--date-field",
-  "--group-by",
-  "--sort",
-  "--dir",
-  "--limit",
-]);
-
-function validateTraceSearchArgs(argv: string[]): void {
-  for (let index = 0; index < argv.length; index++) {
-    const value = argv[index]!;
-    if (value === "--json") continue;
-    const equal = value.indexOf("=");
-    const name = equal >= 0 ? value.slice(0, equal) : value;
-    if (!TRACE_SEARCH_VALUE_FLAGS.has(name)) {
-      console.error(`unknown trace search argument: ${value}`);
-      process.exit(2);
-    }
-    if (equal < 0) {
-      const next = argv[index + 1];
-      if (!next || next.startsWith("--")) {
-        console.error(`${name} requires a value`);
-        process.exit(2);
-      }
-      index++;
-    }
-  }
-}
-
-function traceSearchBody(argv: string[]): Record<string, unknown> {
-  validateTraceSearchArgs(argv);
-  const filters: Record<string, unknown> = {};
-  for (const [flag, key] of [
-    ["--workflow", "workflow"],
-    ["--agent", "agent"],
-    ["--model", "model"],
-    ["--provider", "provider"],
-    ["--error-code", "error_code"],
-    ["--session-id", "session_id"],
-    ["--trace-id", "trace_id"],
-    ["--status-class", "status_class"],
-  ] as const) {
-    const value = flagFrom(argv, flag, "");
-    if (value) filters[key] = [value];
-  }
-  for (const [flag, key] of [
-    ["--has-error", "has_error"],
-    ["--compressed", "compressed"],
-  ] as const) {
-    const value = parseBooleanFlag(argv, flag);
-    if (value !== undefined) filters[key] = value;
-  }
-  for (const [flag, key] of [
-    ["--min-cost-usd", "min_cost_usd"],
-    ["--max-cost-usd", "max_cost_usd"],
-    ["--min-tokens", "min_total_tokens"],
-    ["--max-tokens", "max_total_tokens"],
-    ["--min-latency-ms", "min_latency_ms"],
-    ["--max-latency-ms", "max_latency_ms"],
-  ] as const) {
-    const value = parseNumberFlag(argv, flag);
-    if (value !== undefined) filters[key] = value;
-  }
-  const body: Record<string, unknown> = {};
-  if (Object.keys(filters).length > 0) body.filters = filters;
-  const from = flagFrom(argv, "--from", "");
-  const to = flagFrom(argv, "--to", "");
-  const dateField = flagFrom(argv, "--date-field", "");
-  const groupBy = flagFrom(argv, "--group-by", "");
-  if (from) body.from = from;
-  if (to) body.to = to;
-  if (dateField) body.date_field = dateField;
-  if (groupBy) body.group_by = groupBy;
-  const sortBy = flagFrom(argv, "--sort", "");
-  const sortDir = flagFrom(argv, "--dir", "");
-  if (sortBy || sortDir) body.sort = { by: sortBy || "timestamp", dir: sortDir || "desc" };
-  const pageSize = parseNumberFlag(argv, "--limit");
-  if (pageSize !== undefined) {
-    if (!Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 500) {
-      console.error("--limit must be an integer from 1 to 500");
-      process.exit(2);
-    }
-    body.page_size = pageSize;
-  }
-  return body;
-}
-
-async function traceCommand(argv: string[]) {
-  const action = argv[0] ?? "";
-  if (action === "list") {
-    const project = await projectId();
-    return get(`/api/v1/traces?${new URLSearchParams({ project_id: project })}`).then(print);
-  }
-  if (action === "search") {
-    const project = await projectId();
-    return post(`/api/v1/traces/search?${new URLSearchParams({ project_id: project })}`, traceSearchBody(argv.slice(1))).then(print);
-  }
-  if (action === "show") {
-    const traceId = argv[1];
-    if (!traceId) return commandUsage("traces show <id>");
-    const encoded = encodeURIComponent(traceId);
-    const query = `?${new URLSearchParams({ project_id: await projectId() })}`;
-    if (!argv.includes("--spans")) return get(`/api/v1/traces/${encoded}${query}`).then(print);
-    const [trace, spans] = await Promise.all([
-      get(`/api/v1/traces/${encoded}${query}`),
-      get(`/api/v1/traces/${encoded}/spans${query}`),
-    ]);
-    return print({ trace, spans });
-  }
-  if (action === "export") return post("/api/v1/traces/export", {}).then(print);
-  return commandUsage("traces list|search [filters]|show <id> [--spans]|export");
-}
-
-async function experimentCommand(argv: string[]) {
-  const action = argv[0] ?? "";
-  if (action === "list") {
-    const project = await projectId();
-    return get(`/api/v1/experiments?${new URLSearchParams({ project_id: project })}`).then(print);
-  }
-  const experimentId = argv[1];
-  if ((action === "show" || action === "results") && experimentId) {
-    const suffix = action === "results" ? "/results" : "";
-    const query = new URLSearchParams({ project_id: await projectId() });
-    return get(`/api/v1/experiments/${encodeURIComponent(experimentId)}${suffix}?${query}`).then(print);
-  }
-  return commandUsage("experiments list|show <id>|results <id>");
-}
-
-function usd(value: unknown) {
-  const amount = finiteNumber(value);
-  if (amount === null) return "—";
-  return amount !== 0 && Math.abs(amount) < 1
-    ? formatCurrencyAmount(amount, "USD", 2)
-    : formatCurrencyAmount(Math.round(amount), "USD", 0);
-}
-
-function finiteNumber(value: unknown): number | null {
-  return typeof value === "number" && Number.isFinite(value) ? value : null;
-}
-
 function validNonNegativeInteger(value: unknown): number | null {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0 ? value : null;
-}
-
-function formatCurrencyAmount(amount: number, currency: unknown, digits = 2): string {
-  const code = typeof currency === "string" ? currency.trim().toUpperCase() : "";
-  if (!Number.isFinite(amount) || !/^[A-Z]{3}$/.test(code)) return "—";
-  try {
-    return new Intl.NumberFormat("en-US", { style: "currency", currency: code, minimumFractionDigits: digits, maximumFractionDigits: digits }).format(amount);
-  } catch {
-    return "—";
-  }
-}
-
-function formatMinorCurrency(cents: unknown, currency: unknown): string {
-  const amount = finiteNumber(cents);
-  return amount === null ? "—" : formatCurrencyAmount(amount / 100, currency);
-}
-
-// billingStatus prints the org's gainshare contract + reconciled month-to-date
-// fee. Inferred/projected Cave Plan values never enter this view.
-async function billingStatus(argv: string[]) {
-  const data = await get("/api/v1/billing/account");
-  if (argv.includes("--json")) return print(data);
-  const bps = finiteNumber(data.gainshare_bps);
-  const currency = data.currency;
-  console.log("");
-  console.log("  BILLING — gainshare on verified savings");
-  console.log(`  rate:    ${bps !== null && bps >= 0 && bps <= 10_000 ? `${(bps / 100).toFixed(bps % 100 === 0 ? 0 : 2)}%` : "—"} of verified savings`);
-  console.log(`  status:  ${data.connected ? data.status : "not connected"}`);
-  console.log(`  MTD fee: ${formatMinorCurrency(data.mtd_fee_cents, currency)}`);
-  if (data.next_invoice_estimate_cents != null) console.log(`  next invoice (est.): ${formatMinorCurrency(data.next_invoice_estimate_cents, currency)}`);
-  if (!data.billing_enabled) console.log("  (billing is not enabled on this deployment)");
-  console.log("");
-}
-
-// billingCharges prints the signed daily meter-delta ledger, each row pinned to
-// the receipts it summed — the "this invoice = these receipts" audit view.
-//   caveman billing charges [--since YYYY-MM-DD] [--until YYYY-MM-DD] [--json]
-async function billingCharges(argv: string[]) {
-  const since = flagFrom(argv, "--since", "");
-  const until = flagFrom(argv, "--until", "");
-  const q = new URLSearchParams();
-  if (since) q.set("since", since);
-  if (until) q.set("until", until);
-  const qs = q.toString();
-  const data = await get(`/api/v1/billing/charges${qs ? "?" + qs : ""}`);
-  if (argv.includes("--json")) return print(data);
-  const account = await get("/api/v1/billing/account");
-  const feeCurrency = typeof account.currency === "string" && /^[a-zA-Z]{3}$/.test(account.currency) ? account.currency.toUpperCase() : "";
-  const charges = Array.isArray(data.charges) ? data.charges : [];
-  console.log("");
-  console.log(`  DAY       FEE DELTA${feeCurrency ? ` (${feeCurrency})` : ""}  SAVINGS (USD)  STATUS     RECEIPTS`);
-  for (const c of charges) {
-    const fee = formatMinorCurrency(c.fee_cents, feeCurrency).padStart(12);
-    const savings = finiteNumber(c.gross_savings_usd);
-    const sav = (savings === null ? "—" : formatCurrencyAmount(savings, "USD")).padStart(13);
-    const status = String(c.status ?? "").padEnd(9);
-    const n = Array.isArray(c.receipt_hashes) ? c.receipt_hashes.length : 0;
-    console.log(`  ${c.day}  ${fee}  ${sav}   ${status}  ${n} linked`);
-  }
-  if (!charges.length) console.log("  (no charges yet)");
-  console.log("");
 }
 
 function sdkSnippet() {
@@ -19441,142 +19133,6 @@ async function get(path: string) {
     process.exit(1);
   }
   return body;
-}
-
-async function post(path: string, body: unknown) {
-  const cfg = await config();
-  requireAuth(cfg);
-  const response = await fetch(`${cfg.baseURL}${path}`, { method: "POST", headers: { authorization: `Bearer ${cfg.token}`, "content-type": "application/json", "x-cave-csrf": "cli" }, body: JSON.stringify(body) });
-  const result = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    const code = typeof (result as any)?.error === "string" ? (result as any).error : (result as any)?.error?.code;
-    const message = (result as any)?.error?.message ?? (result as any)?.message;
-    console.error([code, message].filter(Boolean).join(": ") || `request failed (${response.status})`);
-    process.exit(1);
-  }
-  return result;
-}
-
-class AgentMcpHTTPError extends Error {
-  code: string;
-  status: number | undefined;
-
-  constructor(message: string, code: string, status?: number) {
-    super(message);
-    this.name = "AgentMcpHTTPError";
-    this.code = code;
-    this.status = status;
-  }
-}
-
-function agentMcpTimeoutMS(): number {
-  const raw = process.env.CAVE_AGENT_TOOL_TIMEOUT_MS ?? "30000";
-  const value = Number(raw);
-  return Number.isSafeInteger(value) && value >= 100 && value <= 120_000 ? value : 30_000;
-}
-
-async function agentMcpRequest(
-  path: string,
-  options: { method?: "GET" | "POST"; body?: JSONObject } = {},
-): Promise<JSONValue> {
-  const cfg = await config();
-  if (!cfg.token) {
-    throw new AgentMcpHTTPError(
-      "Not logged in. Run `caveman login` or set CAVE_TOKEN for headless use.",
-      "cave_auth_required",
-      401,
-    );
-  }
-  let response: Response;
-  try {
-    const request: RequestInit = {
-      method: options.method ?? "GET",
-      signal: AbortSignal.timeout(agentMcpTimeoutMS()),
-      headers: {
-        authorization: `Bearer ${cfg.token}`,
-        ...(options.method === "POST"
-          ? { "content-type": "application/json", "x-cave-csrf": "cli" }
-          : {}),
-      },
-    };
-    if (options.method === "POST") request.body = JSON.stringify(options.body ?? {});
-    response = await fetch(`${cfg.baseURL}${path}`, request);
-  } catch (error) {
-    const timedOut = error instanceof Error && error.name === "TimeoutError";
-    throw new AgentMcpHTTPError(
-      timedOut
-        ? `Caveman API request timed out after ${agentMcpTimeoutMS()}ms.`
-        : error instanceof Error
-          ? error.message
-          : "Caveman API request failed.",
-      timedOut ? "cave_agent_tool_timeout" : "cave_network_error",
-    );
-  }
-  const body = await response.json().catch(() => ({})) as JSONObject;
-  if (!response.ok) {
-    const envelope = body.error && typeof body.error === "object" && !Array.isArray(body.error)
-      ? body.error as Record<string, unknown>
-      : {};
-    const flatCode = typeof body.error === "string" ? body.error : undefined;
-    throw new AgentMcpHTTPError(
-      typeof envelope.message === "string"
-        ? envelope.message
-        : typeof body.message === "string"
-          ? body.message
-          : `Caveman API request failed (${response.status}).`,
-      typeof envelope.code === "string" ? envelope.code : flatCode ?? "cave_request_failed",
-      response.status,
-    );
-  }
-  return body;
-}
-
-async function agentMcpProjectId(): Promise<string> {
-  const cfg = await config();
-  if (cfg.projectId) return cfg.projectId;
-  const projects = await agentMcpRequest("/api/v1/projects");
-  const projectObject = projects && typeof projects === "object" && !Array.isArray(projects)
-    ? projects
-    : {};
-  const rows = Array.isArray(projectObject.data) ? projectObject.data : [];
-  const first = rows[0];
-  if (first && typeof first === "object" && !Array.isArray(first) && typeof first.id === "string" && first.id) {
-    return first.id;
-  }
-  throw new AgentMcpHTTPError(
-    "No project selected or accessible. Create/select a project before using Caveman agent tools.",
-    "cave_project_required",
-    404,
-  );
-}
-
-function recordAgentMcpToolCall(event: { tool: string; result: "ok" | "error"; durationMs: number }): void {
-  const state = telemetryState();
-  if (!telemetrySendable(state)) return;
-  emitTelemetryEvents([{
-    schema: "cli/v1",
-    anonymous_id: telemetryAnonymousId(state),
-    event: "agent_tool_call",
-    command: "mcp",
-    subcommand: event.tool,
-    cli_version: cliVersion(),
-    os: process.platform,
-    arch: process.arch,
-    node_major: Number(process.versions.node.split(".")[0] ?? 0),
-    duration_ms: Math.max(0, event.durationMs),
-    exit_class: event.result,
-    error_class: event.result === "error" ? "other" : "",
-    ts: new Date().toISOString(),
-  }]);
-}
-
-async function serveCloudAgentMcp(): Promise<void> {
-  const client: AgentMcpClient = {
-    request: agentMcpRequest,
-    projectId: agentMcpProjectId,
-    recordToolCall: recordAgentMcpToolCall,
-  };
-  await serveAgentMcp(client);
 }
 
 // requireAuth degrades gracefully when logged out: a connected verb prints one
@@ -19866,13 +19422,6 @@ function orgFromToken(token: string): string | undefined {
   } catch {
     return undefined;
   }
-}
-
-async function projectId() {
-  const cfg = await config();
-  if (cfg.projectId) return cfg.projectId;
-  const projects = await get("/api/v1/projects");
-  return projects.data?.[0]?.id ?? "";
 }
 
 function configPath() {

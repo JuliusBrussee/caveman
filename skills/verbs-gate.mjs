@@ -3,8 +3,8 @@
 // Invariant: a skill can never document a CLI command, MCP tool, or SDK call
 // the shipped surfaces do not expose. This module derives the real surfaces
 // from source — the CLI verb tables (TOOL_DISCOVERY/CLOUD_DISCOVERY + the
-// reserved-verbs registry), both MCP servers' tool names (engine Go + the
-// agent-native TS server), and the two SDKs' method definitions — then scans
+// reserved-verbs registry), the engine MCP server's tool names, and the two
+// SDKs' method definitions — then scans
 // each canonical SKILL.md for references and reports anything that does not
 // resolve. It is pure (returns a list of violations; it never exits), so the
 // compiler and the tests share one implementation.
@@ -64,7 +64,7 @@ export function loadSurfaces({ skillsDir, cliDir }) {
   if (toolVerbs.size === 0) errors.push("could not parse TOOL_DISCOVERY verbs from CLI index.ts");
   if (cloudVerbs.size === 0) errors.push("could not parse CLOUD_DISCOVERY verbs from CLI index.ts");
 
-  // MCP tool names: engine server (Go) + agent-native server (TS).
+  // MCP tool names: engine server (Go).
   const mcpTools = new Set();
   let declaredEngineTools = [];
   try {
@@ -93,8 +93,6 @@ export function loadSurfaces({ skillsDir, cliDir }) {
       errors.push("engine-mcp-tools.json drifted from public/mcp/engine_tools.go");
     }
   }
-  const agentMcpSrc = readOptional(join(cliDir, "src", "agent-mcp.ts"));
-  for (const m of agentMcpSrc.matchAll(/name:\s*"(caveman_[a-z_]+)"/g)) mcpTools.add(m[1]);
   if (mcpTools.size === 0) errors.push("could not parse MCP tool names");
 
   // SDK method/property surface: TS + Python definitions.

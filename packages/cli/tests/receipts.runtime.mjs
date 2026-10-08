@@ -2,7 +2,6 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { createHash, generateKeyPairSync, sign as edSign } from "node:crypto";
-import { createServer } from "node:http";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -381,33 +380,4 @@ test("an empty bundle is structurally valid but never claimed as verified eviden
   assert.equal(summary.valid_bundle, true);
   assert.equal(summary.verified, false);
   assert.equal(summary.empty, true);
-});
-
-// export reads the local control plane (no Caveman cloud), writes a bundle file,
-// and that file then verifies offline — the air-gapped meter flow end to end.
-test("export writes a bundle from the local control plane, which then verifies", async () => {
-  const bundle = JSON.parse(readFileSync(fixture, "utf8"));
-  const server = createServer((req, res) => {
-    if (req.url.startsWith("/api/v1/metering/receipts")) {
-      res.writeHead(200, { "content-type": "application/json" });
-      res.end(JSON.stringify(bundle));
-    } else {
-      res.writeHead(404);
-      res.end("{}");
-    }
-  });
-  const port = await new Promise((resolve) => server.listen(0, "127.0.0.1", () => resolve(server.address().port)));
-
-  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
-  const outFile = tmp("exported.json");
-  const env = { ...process.env, HOME: home, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
-
-  const exported = await runCli(["receipts", "export", "--since", "2026-06-01", "-o", outFile], env);
-  assert.equal(exported.code, 0, exported.stderr);
-  assert.equal(JSON.parse(exported.stdout).receipts, 3);
-
-  const verified = await runCli(["receipts", "verify", outFile]);
-  assert.equal(verified.code, 0, verified.stderr);
-
-  server.close();
 });

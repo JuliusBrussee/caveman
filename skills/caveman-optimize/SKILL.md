@@ -15,10 +15,11 @@ safe. Keep the workflow operator-chosen and evidence-first.
 
 ## 1. Read the exact observations
 
-Require a logged-in Caveman CLI session and run:
+Require a logged-in Caveman session and `cvm` (`npm i -g @caveman-ai/cloud`),
+then run:
 
 ```bash
-caveman opportunities list
+cvm fixes list_opportunities
 ```
 
 Read only the `report_only_observations` array. Do not select from the lifecycle

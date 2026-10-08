@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -10,80 +10,52 @@ function normalizePrefix(value, group, verb) {
   return value.replaceAll(`caveman ${group} ${verb}`, `caveman ${verb}`);
 }
 
-function genericApiResponse(req) {
-  if (req.url === "/api/v1/billing/account") {
-    return {
-      body: {
-        gainshare_bps: 0,
-        mtd_fee_cents: 0,
-        currency: "usd",
-        connected: false,
-        status: "off",
-        billing_enabled: false,
-      },
-    };
-  }
-  if (req.url === "/api/v1/projects/proj-alias/cave-plan") {
-    return { body: { headline: { base: 0, low: 0, high: 0, basis: "inferred", move_count: 0 }, moves: [] } };
-  }
-  if (req.url?.startsWith("/api/v1/metering/receipts")) return { body: { receipts: [] } };
+function genericApiResponse() {
   return { body: {} };
 }
 
-const cloudCases = [
-  { verb: "whoami", argv: [], method: "GET", path: "/api/v1/auth/me" },
-  { verb: "projects", argv: ["list"], method: "GET", path: "/api/v1/projects" },
-  { verb: "keys", argv: ["revoke", "key-7"], method: "POST", path: "/api/v1/projects/proj-alias/keys/key-7/revoke", body: "{}" },
-  { verb: "providers", argv: ["verify", "provider-7"], method: "POST", path: "/api/v1/projects/proj-alias/providers/provider-7/verify", body: "{}" },
-  { verb: "billing", argv: ["status"], method: "GET", path: "/api/v1/billing/account" },
-  { verb: "score", argv: [], method: "GET", path: "/api/v1/reports/cave-score" },
-  { verb: "costs", argv: [], method: "GET", path: "/api/v1/reports/costs" },
-  { verb: "plan", argv: ["--json"], method: "GET", path: "/api/v1/projects/proj-alias/cave-plan" },
-  { verb: "traces", argv: ["show", "trace-7"], method: "GET", path: "/api/v1/traces/trace-7?project_id=proj-alias" },
-  { verb: "experiments", argv: ["list"], method: "GET", path: "/api/v1/experiments?project_id=proj-alias" },
-  { verb: "audit", argv: ["report", "audit-7"], method: "GET", path: "/api/v1/audits/audit-7" },
-  { verb: "agent", argv: ["run", "proposal-7"], method: "POST", path: "/api/v1/optimization-proposals/proposal-7/run", body: "{}" },
+test("cloud alias preserves whoami argv and HTTP contract", async () => {
+  const legacy = await runCliWithApi(["whoami"], { respond: genericApiResponse });
+  const grouped = await runCliWithApi(["whoami"], { prefix: "cloud", respond: genericApiResponse });
+  assert.equal(legacy.code, grouped.code);
+  assert.equal(grouped.stdout, legacy.stdout);
+  for (const run of [legacy, grouped]) {
+    assert.equal(run.requests.length, 1);
+    assert.equal(run.requests[0].method, "GET");
+    assert.equal(run.requests[0].path, "/api/v1/auth/me");
+    assert.equal(run.requests[0].headers.authorization, "Bearer alias-matrix-token");
+  }
+});
+
+const movedCases = [
+  { argv: ["projects", "list"], line: "caveman projects moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm projects list" },
+  { argv: ["traces", "show", "trace-7"], line: "caveman traces show moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm traces get" },
+  { argv: ["agent", "factory", "show", "a-1"], line: "caveman agent factory show moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm workflows get_agent" },
+  { argv: ["keys", "revoke", "key-7"], line: "caveman keys moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm tools list" },
+  { argv: ["mcp-serve"], line: "caveman mcp-serve moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm mcp" },
+  { argv: ["receipts", "export", "-o", "x.json"], line: "caveman receipts export moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm human metering_receipts" },
+  { argv: ["audit", "report", "audit-7"], line: "caveman audit report moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm human audit" },
 ];
 
-for (const item of cloudCases) {
-  test(`cloud alias preserves ${item.verb} argv and HTTP contract`, async () => {
-    const legacy = await runCliWithApi([item.verb, ...item.argv], { respond: genericApiResponse });
-    const grouped = await runCliWithApi([item.verb, ...item.argv], { prefix: "cloud", respond: genericApiResponse });
-    assert.equal(legacy.code, grouped.code);
-    assert.equal(normalizePrefix(grouped.stdout, "cloud", item.verb), legacy.stdout);
-    assert.equal(normalizePrefix(grouped.stderr, "cloud", item.verb), legacy.stderr);
-    for (const run of [legacy, grouped]) {
-      assert.equal(run.requests.length, 1, `${item.verb} must issue one authenticated request`);
-      assert.equal(run.requests[0].method, item.method);
-      assert.equal(run.requests[0].path, item.path);
-      assert.equal(run.requests[0].headers.authorization, "Bearer alias-matrix-token");
-      assert.equal(run.requests[0].body, item.body ?? "");
+for (const item of movedCases) {
+  test(`moved ${item.argv.join(" ")} prints one cvm line and exits 2 without HTTP`, async () => {
+    for (const prefix of [undefined, "cloud"]) {
+      const run = await runCliWithApi(item.argv, { respond: genericApiResponse, ...(prefix ? { prefix } : {}) });
+      assert.equal(run.code, 2);
+      assert.equal(run.requests.length, 0);
+      assert.equal(run.stdout, "");
+      assert.equal(run.stderr, `${item.line}\n`);
     }
   });
 }
 
-test("plan rejects removed engineer voice instead of silently rendering operator output", async () => {
-  for (const args of [["plan", "--engineer"], ["cloud", "plan", "--engineer"], ["plan", "--json", "--json"]]) {
-    const out = await runCli(args);
-    assert.equal(out.code, 2, `${args.join(" ")} exit code`);
-    assert.match(out.stderr, /usage: caveman (?:cloud )?plan \[--json\]/);
+test("legacy-only moved verbs print the cvm line", async () => {
+  for (const [argv, cvm] of [[["opportunities", "list"], "fixes list_opportunities"], [["deploy", "status"], "context system_status"]]) {
+    const run = await runCliWithApi(argv, { respond: genericApiResponse });
+    assert.equal(run.code, 2);
+    assert.equal(run.requests.length, 0);
+    assert.match(run.stderr, new RegExp(`moved to cvm\\. Install: npm i -g @caveman-ai/cloud, then run: cvm ${cvm}\\n$`));
   }
-});
-
-test("cloud receipts export preserves query and body-free GET", async () => {
-  const firstOut = join(mkdtempSync(join(tmpdir(), "cave-alias-receipts-")), "legacy.json");
-  const secondOut = join(mkdtempSync(join(tmpdir(), "cave-alias-receipts-")), "grouped.json");
-  const legacy = await runCliWithApi(["receipts", "export", "--since", "2026-07-01", "--until", "2026-07-02", "-o", firstOut], { respond: genericApiResponse });
-  const grouped = await runCliWithApi(["receipts", "export", "--since", "2026-07-01", "--until", "2026-07-02", "-o", secondOut], { prefix: "cloud", respond: genericApiResponse });
-  assert.equal(legacy.code, 0, legacy.stderr);
-  assert.equal(grouped.code, 0, grouped.stderr);
-  for (const run of [legacy, grouped]) {
-    assert.equal(run.requests.length, 1);
-    assert.equal(run.requests[0].method, "GET");
-    assert.equal(run.requests[0].path, "/api/v1/metering/receipts?since=2026-07-01&until=2026-07-02");
-    assert.equal(run.requests[0].body, "");
-  }
-  assert.equal(readFileSync(firstOut, "utf8"), readFileSync(secondOut, "utf8"));
 });
 
 function seedSyncDb({ env }) {
