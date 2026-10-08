@@ -640,7 +640,11 @@ func (s *Server) armCacheWarm(r *http.Request, a warmAnswer) {
 		}
 	}
 	if s.logger != nil {
-		s.logger.Info("cache warm plan", "session", shortHash(a.session), "model", a.meta.Model, "class", class,
+		id := a.session
+		if id == "" {
+			id = a.key // the agent's own session header: no session id is stored for it
+		}
+		s.logger.Info("cache warm plan", "session", shortHash(id), "model", a.meta.Model, "class", class,
 			"ttl", ttl.String(), "warms", warms, "skip", skip)
 	}
 }
