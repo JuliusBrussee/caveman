@@ -4,6 +4,12 @@
 new major. Read this file before upgrading. Prereleases publish under their own
 npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
+## 1.0.1 — 2026-10-05
+
+- Version gate: `@anthropic-ai/sdk` 0.129.0, 0.130.0 and 0.131.0 were tested
+  and are now inside the supported range (`>=0.124.0 <0.132`). Before this,
+  those releases passed content through with an `unsupported_version` warning.
+
 ## 1.0.0 — 2026-09-24
 
 - First stable release. Requires `@caveman-ai/sdk` 1.2.0 or later.

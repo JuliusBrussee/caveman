@@ -40,7 +40,8 @@ top.
   reclassifies a working binary **newer** than the pin as `drift` (not `broken`) — used by the
   non-blocking @latest lane.
 - `../../agents/drift-report.mjs` — turns a `probe --allow-newer --json` result into one GitHub issue per
-  drifted agent (idempotent; opens or updates). Runs only in the non-blocking CI lane.
+  drifted or broken (@latest fails the probe) agent (idempotent; opens or updates). Runs only in the
+  non-blocking CI lane.
 - `../../.github/workflows/agent-conformance.yml` — daily/manual real-engine compression contract for
   all profiles plus one clean **pinned** upstream-binary probe per profile, and a separate
   **non-blocking `@latest` drift-report** lane that files drift issues.

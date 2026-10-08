@@ -3,7 +3,7 @@ import re
 from collections import Counter
 from pathlib import Path
 
-URL_REGEX = re.compile(r"https?://[^\s)]+")
+URL_REGEX = re.compile(r"https?://[^\s)`]+")  # a backtick is never part of a URL
 FENCE_OPEN_REGEX = re.compile(r"^(\s{0,3})(`{3,}|~{3,})(.*)$")
 
 # A line that is nothing but a fence marker plus an optional info string, at ANY

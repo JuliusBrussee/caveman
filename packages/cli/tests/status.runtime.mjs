@@ -229,3 +229,31 @@ test("status gives cold native setup then enable path when runtime is missing", 
     isolated.cleanup();
   }
 });
+
+// The proxy counts the cache busts caveman itself caused (the client's bytes
+// repeated a cached prefix and the forwarded bytes did not). Any is a bug, so
+// status raises it; a client editing its own history is not counted.
+test("status raises caveman-caused cache busts as an off-state", async () => {
+  for (const count of [0, 2]) {
+    const isolated = statusEnv();
+    const proxy = nativeStub(join(isolated.home, "bin"), "bust-proxy", `
+if (ARGV[0] === "version") console.log(JSON.stringify({version:"test",capabilities:["run_state","mcp_recovery"]}));
+else if (ARGV[0] === "status") console.log(JSON.stringify({owner:"unknown"}));
+else if (ARGV[0] === "stats") console.log(JSON.stringify({spans:9,tokens_in:0,token_accounting:{},basis:"inferred",cache_bust_requests:5,caveman_cache_bust_requests:${count}}));
+`);
+    isolated.env.CAVEMAN_PROXY_BIN = proxy;
+    try {
+      const out = await runCli(["status", "--json"], { env: isolated.env, cwd: isolated.home });
+      assert.equal(out.code, 0, out.stderr);
+      const state = JSON.parse(out.stdout).off_states.find((item) => item.id === "cache-bust");
+      if (count === 0) {
+        assert.equal(state, undefined, "client-caused busts alone must not raise the off-state");
+      } else {
+        assert.ok(state, "caveman-caused busts must raise an off-state");
+        assert.match(state.line, /caveman changed bytes the provider had already cached on 2 requests today/);
+      }
+    } finally {
+      isolated.cleanup();
+    }
+  }
+});

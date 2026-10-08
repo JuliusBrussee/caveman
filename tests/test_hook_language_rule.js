@@ -14,7 +14,7 @@
 //   1. SKILL.md, read at runtime by loadRuleset() — the plugin install
 //      and any standalone install that also has a skills/ directory.
 //   2. The ruleset hardcoded in caveman-activate.js, used when SKILL.md cannot
-//      be found. bin/install.js's installHooks() copies HOOK_FILES alone into
+//      be found. installer/install.js's installHooks() copies HOOK_FILES alone into
 //      $CLAUDE_CONFIG_DIR/hooks/ — no SKILL.md — and default installs wire
 //      those standalone hooks precisely when the plugin install FAILED, so
 //      this branch is what a fallback-install user gets on every session.

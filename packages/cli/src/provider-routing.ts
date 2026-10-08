@@ -58,6 +58,18 @@ function compatTarget(base: URL, path: string): string {
   return base.origin + '/' + [...left, ...right.slice(overlap)].join('/');
 }
 
+export function verifiedChatGPTSubscriptionRoute(
+  gateway: string, api: string | undefined, provider: string,
+  originalBaseUrl: string | undefined, published?: PublishedUpstreams,
+): string | undefined {
+  if (api !== 'openai-codex-responses' || provider !== 'openai-codex') return undefined;
+  const original = endpoint(originalBaseUrl);
+  const upstream = endpoint(published?.provider_upstreams?.['openai-codex']);
+  if (!original || !upstream || !endpoint(gateway)) return undefined;
+  if (append(upstream, '/codex/responses') !== append(original, '/codex/responses')) return undefined;
+  return trimTrailingSlashes(gateway);
+}
+
 export function verifiedProviderRoute(
   gateway: string, api: string | undefined, provider: string,
   originalBaseUrl: string | undefined, published?: PublishedUpstreams,

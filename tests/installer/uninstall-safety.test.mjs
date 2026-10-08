@@ -2,7 +2,7 @@
 // and neither install nor uninstall may touch a hooks/package.json another
 // plugin owns.
 //
-// Both are the same class of bug: bin/install.js treating shared, user-owned
+// Both are the same class of bug: installer/install.js treating shared, user-owned
 // state in $CLAUDE_CONFIG_DIR/hooks as if caveman owned it outright.
 
 import { test } from 'node:test';
@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-uninstall-safety-'));

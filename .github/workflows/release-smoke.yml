@@ -1,0 +1,42 @@
+name: release-smoke
+
+on:
+  workflow_dispatch:
+    inputs:
+      cli-version:
+        description: Exact published stable CLI version
+        required: true
+        type: string
+      binary-tag:
+        description: Expected signed binary release tag
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  published-install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: "24.16.0"
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.13"
+      - name: Install published CLI, verify signed companions, wrap and recover
+        env:
+          CLI_VERSION: ${{ inputs.cli-version }}
+          BINARY_TAG: ${{ inputs.binary-tag }}
+          EXPECTED_REPO: ${{ github.repository }}
+        run: python .blocks/release-smoke.py --version "$CLI_VERSION" --binary-tag "$BINARY_TAG" --repo "$EXPECTED_REPO"
+        shell: bash

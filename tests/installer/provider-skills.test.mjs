@@ -6,7 +6,7 @@ import path from 'node:path';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const providerSkills = require('../../bin/lib/provider-skills.js');
+const providerSkills = require('../../installer/lib/provider-skills.js');
 
 function fixture(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman vendor skills '));

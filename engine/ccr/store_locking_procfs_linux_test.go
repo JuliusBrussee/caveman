@@ -5,6 +5,7 @@ package ccr
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 
 	"golang.org/x/sys/unix"
@@ -76,7 +77,7 @@ func TestProcfsChmodFallbackTightensMode(t *testing.T) {
 // is only reached after the caller's Lstat rejects a symlink, so this pins the
 // caller's guard rather than the fallback's own O_NOFOLLOW.
 func TestProcfsChmodFallbackRefusesSymlink(t *testing.T) {
-	if os.Getenv("ANDROID_ROOT") != "" {
+	if onAndroid() {
 		t.Skip("Android O_PATH symlink semantics differ; covered on Linux")
 	}
 	forceProcfsFallback(t)
@@ -108,7 +109,7 @@ func TestProcfsChmodFallbackRefusesSymlink(t *testing.T) {
 // green fallback test.
 func forceProcfsFallback(t *testing.T) {
 	t.Helper()
-	if os.Getenv("ANDROID_ROOT") != "" {
+	if onAndroid() {
 		return
 	}
 	probe := filepath.Join(t.TempDir(), "probe")
@@ -130,128 +131,52 @@ func forceProcfsFallback(t *testing.T) {
 	t.Cleanup(func() { fchmodatEmptyPath = original })
 }
 
-// TestAndroidGateSkipsFchmodat2 pins the testable half of the Termux report in
-// #1186. Termux builds report GOOS=linux, so a build tag cannot separate them,
-// and Android's seccomp policy answers an unknown syscall with SIGSYS — which
-// kills the process instead of returning an errno. That is why the existing
-// EOPNOTSUPP/EINVAL check could not have caught it: there is no error to
-// inspect, chmodSQLiteFile never returns, and opening the engine's store takes
-// the whole process down.
-//
-// The SIGSYS itself is not reproducible off Android. What is reproducible, and
-// what this asserts, is the gate's contract: with ANDROID_ROOT set,
-// chmodSQLiteFile must not reach fchmodat2 at all, and must still tighten the
-// mode through the procfs fallback. The spy stands in for the syscall that
-// would be fatal there; without the gate it is called, and because the spy
-// reports success the primary branch also returns early and leaves the file
-// world-readable — so this fails two ways on an ungated build.
-func TestAndroidGateSkipsFchmodat2(t *testing.T) {
-	t.Setenv("ANDROID_ROOT", "/system")
+// Codex scrubs the MCP server environment, so ANDROID_ROOT alone misses
+// caveman-mcp on Termux; the system image marker must still be detected.
+func TestDetectAndroidFromBuildProp(t *testing.T) {
+	t.Setenv("ANDROID_ROOT", "")
+	original := androidBuildProp
+	t.Cleanup(func() { androidBuildProp = original })
 
-	var called bool
-	original := fchmodatEmptyPath
-	fchmodatEmptyPath = func(int) error { called = true; return nil }
-	t.Cleanup(func() { fchmodatEmptyPath = original })
+	androidBuildProp = filepath.Join(t.TempDir(), "build.prop")
+	if err := os.WriteFile(androidBuildProp, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if !detectAndroid() {
+		t.Fatal("build.prop present with ANDROID_ROOT unset: want Android detected")
+	}
+	if runtime.GOOS == "android" {
+		return
+	}
+	androidBuildProp = filepath.Join(t.TempDir(), "missing")
+	if detectAndroid() {
+		t.Fatal("no build.prop, no ANDROID_ROOT: want not Android")
+	}
+}
+
+// On Android the fchmodat2 syscall itself is fatal (SIGSYS), so the gate must
+// skip it outright and go straight to procfs.
+func TestChmodSQLiteFileSkipsFchmodat2OnAndroid(t *testing.T) {
+	originalAndroid, originalFchmodat := onAndroid, fchmodatEmptyPath
+	t.Cleanup(func() { onAndroid, fchmodatEmptyPath = originalAndroid, originalFchmodat })
+	onAndroid = func() bool { return true }
+	fchmodatEmptyPath = func(int) error {
+		t.Fatal("fchmodat2 called on Android")
+		return nil
+	}
 
 	path := filepath.Join(t.TempDir(), "ccr.db")
-	if err := os.WriteFile(path, []byte("not yet secured"), 0o644); err != nil {
+	if err := os.WriteFile(path, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := PrepareSQLitePath(path); err != nil {
-		t.Fatalf("prepare with ANDROID_ROOT set: %v", err)
-	}
-	if called {
-		t.Error("fchmodat2 was reached with ANDROID_ROOT set; on Android that syscall raises SIGSYS and kills the process")
+		t.Fatalf("prepare on Android: %v", err)
 	}
 	info, err := os.Stat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if perm := info.Mode().Perm(); perm != 0o600 {
-		t.Fatalf("Android procfs path left mode %v, want -rw-------", perm)
+		t.Fatalf("mode %v, want -rw-------", perm)
 	}
-}
-
-// TestAndroidGateSkipsFchmodat2WithScrubbedEnvironment is the hole Devin Review
-// found in the first version of this gate (#1196): detection read ANDROID_ROOT
-// and nothing else, so a Termux launcher that scrubs the environment — plain
-// `env -u ANDROID_ROOT` is enough — put the fatal syscall back in the path
-// while looking like an ordinary Linux box. Being wrong this way kills the
-// process, since SIGSYS is not an errno the caller can catch, so detection
-// cannot rest on inherited environment alone. The filesystem markers cannot be
-// unset by a launcher.
-func TestAndroidGateSkipsFchmodat2WithScrubbedEnvironment(t *testing.T) {
-	t.Setenv("ANDROID_ROOT", "")
-	t.Setenv("ANDROID_DATA", "")
-
-	marker := filepath.Join(t.TempDir(), "linker64")
-	if err := os.WriteFile(marker, nil, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	originalMarkers := androidMarkerPaths
-	androidMarkerPaths = []string{marker}
-	t.Cleanup(func() { androidMarkerPaths = originalMarkers })
-
-	var called bool
-	original := fchmodatEmptyPath
-	fchmodatEmptyPath = func(int) error { called = true; return nil }
-	t.Cleanup(func() { fchmodatEmptyPath = original })
-
-	path := filepath.Join(t.TempDir(), "ccr.db")
-	if err := os.WriteFile(path, []byte("not yet secured"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := PrepareSQLitePath(path); err != nil {
-		t.Fatalf("prepare with ANDROID_ROOT scrubbed but an Android marker present: %v", err)
-	}
-	if called {
-		t.Error("fchmodat2 was reached on Android with a scrubbed environment; SIGSYS there kills the process")
-	}
-	if perm := info(t, path).Mode().Perm(); perm != 0o600 {
-		t.Fatalf("Android procfs path left mode %v, want -rw-------", perm)
-	}
-}
-
-// The generosity above must not cost every ordinary Linux user the primary
-// syscall: with no Android environment and no marker, fchmodat2 is still the
-// path taken. Without this, a detector that answered true unconditionally would
-// move all of Linux onto the fallback and no test would notice.
-func TestOrdinaryLinuxStillUsesFchmodat2(t *testing.T) {
-	t.Setenv("ANDROID_ROOT", "")
-	t.Setenv("ANDROID_DATA", "")
-	originalMarkers := androidMarkerPaths
-	androidMarkerPaths = []string{filepath.Join(t.TempDir(), "absent")}
-	t.Cleanup(func() { androidMarkerPaths = originalMarkers })
-
-	if onAndroid() {
-		t.Fatal("onAndroid() reported Android with no environment and no marker")
-	}
-
-	var called bool
-	original := fchmodatEmptyPath
-	fchmodatEmptyPath = func(fd int) error { called = true; return original(fd) }
-	t.Cleanup(func() { fchmodatEmptyPath = original })
-
-	path := filepath.Join(t.TempDir(), "ccr.db")
-	if err := os.WriteFile(path, []byte("not yet secured"), 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := PrepareSQLitePath(path); err != nil {
-		t.Fatalf("prepare on ordinary linux: %v", err)
-	}
-	if !called {
-		t.Error("fchmodat2 was skipped on ordinary linux; the primary path must stay primary")
-	}
-	if perm := info(t, path).Mode().Perm(); perm != 0o600 {
-		t.Fatalf("left mode %v, want -rw-------", perm)
-	}
-}
-
-func info(t *testing.T, path string) os.FileInfo {
-	t.Helper()
-	stat, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return stat
 }

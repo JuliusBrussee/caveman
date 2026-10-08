@@ -35,9 +35,9 @@ import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 const requireCjs = createRequire(import.meta.url);
-const SETTINGS = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'settings.js'));
+const SETTINGS = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'settings.js'));
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-freshinstall-'));
@@ -99,7 +99,7 @@ function isolatedInstallEnv(root) {
 }
 
 function hasClaudeCli() {
-  // We can't import bin/install.js's hasCmd directly (CJS, not exported), but
+  // We can't import installer/install.js's hasCmd directly (CJS, not exported), but
   // a plain `command -v` / `where` shell-out is equivalent for this purpose.
   if (process.platform === 'win32') {
     return spawnSync('where', ['claude'], { stdio: 'ignore' }).status === 0;
@@ -126,6 +126,7 @@ test('isolated Claude install and uninstall complete without network or real use
     }
     const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
     assert.ok(SETTINGS.hasCavemanHook(settings, 'SessionStart', 'caveman-activate'));
+    assert.ok(SETTINGS.hasCavemanHook(settings, 'SubagentStart', 'caveman-activate.js" --subagent'));
     assert.ok(SETTINGS.hasCavemanHook(settings, 'UserPromptSubmit', 'caveman-mode-tracker'));
     assert.match(getStatuslineCommand(settings), /caveman-statusline/);
 
@@ -137,6 +138,7 @@ test('isolated Claude install and uninstall complete without network or real use
     }
     const clean = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
     assert.equal(SETTINGS.hasCavemanHook(clean, 'SessionStart', 'caveman-activate'), false);
+    assert.equal(SETTINGS.hasCavemanHook(clean, 'SubagentStart', 'caveman-activate'), false);
     assert.equal(SETTINGS.hasCavemanHook(clean, 'UserPromptSubmit', 'caveman-mode-tracker'), false);
     assert.doesNotMatch(getStatuslineCommand(clean), /caveman-statusline/);
   } finally {
@@ -455,6 +457,9 @@ test('idempotent install does not duplicate hook entries (skipped without `claud
 
     const ups = cavemanHookCommands(settings, 'UserPromptSubmit', 'caveman-mode-tracker');
     assert.equal(ups.length, 1, `expected 1 UserPromptSubmit caveman hook, got ${ups.length}`);
+
+    const sub = cavemanHookCommands(settings, 'SubagentStart', 'caveman-activate');
+    assert.equal(sub.length, 1, `expected 1 SubagentStart caveman hook, got ${sub.length}`);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -521,7 +526,7 @@ test('uninstall strips caveman hooks but preserves user-authored ones (skipped w
 
 // ── Test: settings.json with JSONC comments doesn't crash (#249) ───────────
 // Regression guard: the installer used to crash here because JSON.parse can't
-// eat // or /* */. bin/lib/settings.js now strips them before merging.
+// eat // or /* */. installer/lib/settings.js now strips them before merging.
 test('install tolerates JSONC settings.json (comments + trailing commas)', { skip: !hasClaudeCli() && 'claude CLI not on PATH' }, () => {
   const dir = freshTmpDir();
   try {
@@ -582,7 +587,7 @@ test('openclaw install writes skill folder + SOUL.md bootstrap', () => {
     assert.match(skillRaw, /\nalways:\s*true/, 'skill missing always: true frontmatter');
 
     // Body after the merged frontmatter must match the source body.
-    const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+    const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
     const srcRaw = fs.readFileSync(SKILL_BODY_SRC, 'utf8');
     const srcBody = helper.splitFrontmatter(srcRaw).body;
     const installedBody = helper.splitFrontmatter(skillRaw).body;
@@ -668,7 +673,7 @@ test('openclaw install preserves user content in SOUL.md (append, not overwrite)
 
 test('openclaw install rejects SOUL.md symlinks and rolls back its skill', () => {
   if (process.platform === 'win32') return;
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
@@ -686,7 +691,7 @@ test('openclaw install rejects SOUL.md symlinks and rolls back its skill', () =>
 
 test('openclaw install rejects a symlinked skill directory', () => {
   if (process.platform === 'win32') return;
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
   const redirected = path.join(dir, 'redirected');
@@ -703,7 +708,7 @@ test('openclaw install rejects a symlinked skill directory', () => {
 });
 
 test('openclaw atomic SOUL failure preserves user bytes and rolls back partial install', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
@@ -732,7 +737,7 @@ test('openclaw install refuses a concurrent same-inode SOUL edit', () => {
   fs.mkdirSync(ws, { recursive: true });
   const soul = path.join(ws, 'SOUL.md');
   fs.writeFileSync(soul, 'original user bytes\n');
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const open = fs.openSync;
   const writeFile = fs.writeFileSync;
   let soulTempFD;
@@ -791,7 +796,7 @@ test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving
 });
 
 test('openclaw uninstall propagates skill deletion failure and restores SOUL + skill', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const ws = path.join(dir, 'ws');
   fs.mkdirSync(ws);
@@ -859,6 +864,50 @@ test('lib settings.addCommandHook is idempotent across two synthetic install pas
   }
 });
 
+test('claude hook install wires SessionEnd stats recorder once, and uninstall removes it', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude-config');
+  const env = isolatedInstallEnv(dir);
+
+  try {
+    const r1 = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    const r2 = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.equal(r1.status, 0, `first install failed:\n${r1.stdout}\n${r1.stderr}`);
+    assert.equal(r2.status, 0, `second install failed:\n${r2.stdout}\n${r2.stderr}`);
+
+    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const sessionEnd = cavemanHookCommands(settings, 'SessionEnd', 'caveman-stats');
+    assert.equal(sessionEnd.length, 1, `expected 1 SessionEnd stats hook, got ${sessionEnd.length}`);
+    assert.match(sessionEnd[0].command, /caveman-stats\.js" --record$/);
+
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    const clean = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    assert.deepEqual(cavemanHookCommands(clean, 'SessionEnd', 'caveman-stats'), []);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Windows skip: the installer spawns `claude` via spawnSync without a shell, so
+// a `claude.cmd` shim on PATH is never executed there and the plugin install can
+// never report success — the run always falls back to standalone wiring. The
+// note asserted here is platform-independent installer output, so POSIX covers it.
+test('claude plugin install success reports SessionEnd manifest coverage', {
+  skip: process.platform === 'win32' && 'installer cannot spawn a claude.cmd shim, so the plugin-success path is unreachable',
+}, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude-config');
+
+  try {
+    const r = runInstaller(['--only', 'claude'], configDir, isolatedInstallEnv(dir));
+    assert.equal(r.status, 0, `install failed:\n${r.stdout}\n${r.stderr}`);
+    assert.match(r.stdout, /plugin manifest handles SessionStart \+ SubagentStart \+ UserPromptSubmit \+ SessionEnd/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: --force migrates a mixed legacy AGENTS.md instead of wiping it (#594)
 // The old code replaced the whole file with the fenced block whenever the
 // legacy un-fenced sentinel was present — and the installer's own hint told
@@ -902,7 +951,7 @@ test('opencode: --force on legacy AGENTS.md preserves user content and takes a b
 // second block, then strip cut from the FIRST begin to the FIRST end —
 // spanning all user content in between. These drive the helper directly.
 test('openclaw: truncated begin marker does not eat user content (issue #596 chain)', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -928,7 +977,7 @@ test('openclaw: truncated begin marker does not eat user content (issue #596 cha
 });
 
 test('openclaw: strip removes multiple blocks pairwise, keeping user content between them', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -946,7 +995,7 @@ test('openclaw: strip removes multiple blocks pairwise, keeping user content bet
 });
 
 test('openclaw: orphan end marker stripped without touching content', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {
@@ -963,7 +1012,7 @@ test('openclaw: orphan end marker stripped without touching content', () => {
 });
 
 test('openclaw: append on a well-formed block stays a no-op', () => {
-  const helper = requireCjs(path.join(REPO_ROOT, 'bin', 'lib', 'openclaw.js'));
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
   const soul = path.join(dir, 'SOUL.md');
   try {

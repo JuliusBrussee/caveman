@@ -81,12 +81,22 @@ export class ProviderRouter {
       : undefined;
     let headerIssue: string | undefined;
     let oauth = true;
+    let authKnown = false;
     try {
       oauth = ctx.modelRegistry.isUsingOAuth(model);
+      authKnown = true;
     } catch {
-      // Cannot determine the auth kind ⇒ treat as OAuth and refuse (uncertain ⇒ direct).
+      // Cannot determine the auth kind ⇒ refuse (uncertain ⇒ direct).
     }
-    if (!oauth && route && !compatibilityIssue) {
+    const chatGPTSubscriptionModel = model.provider === "openai-codex" && model.api === "openai-codex-responses";
+    const authIssue = !authKnown
+      ? "authentication type could not be verified"
+      : oauth && !chatGPTSubscriptionModel
+        ? "OAuth/subscription credentials are not routed"
+        : !oauth && chatGPTSubscriptionModel && route
+          ? "ChatGPT subscription route requires OAuth"
+          : undefined;
+    if (!oauth && route && !compatibilityIssue && !chatGPTSubscriptionModel) {
       try {
         // Pi adds configured provider/auth headers during request preparation;
         // they need not appear on model.headers. Use its public resolver and
@@ -121,7 +131,7 @@ export class ProviderRouter {
       // closes/reopens. A stale result must never select its old model again.
       if (!this.gateOpen || this.gateGeneration !== gateGeneration || ctx.model !== model) return;
     }
-    if (!route || oauth || compatibilityIssue || headerIssue) {
+    if (!route || authIssue || compatibilityIssue || headerIssue) {
       if (!(await this.restoreCurrentModel(ctx))) return;
       if (!this.warnedModels.has(key)) {
         this.warnedModels.add(key);
@@ -133,9 +143,7 @@ export class ProviderRouter {
         // rewrite the value the provider dispatches on and disable it. Never offer
         // that remedy for an endpoint with no host.
         const host = hostOf(original);
-        const reason = oauth
-          ? "OAuth/subscription credentials are not routed"
-          : compatibilityIssue ?? headerIssue ?? (!host
+        const reason = authIssue ?? compatibilityIssue ?? headerIssue ?? (!host
             ? `provider endpoint "${original}" is not an HTTP URL; this provider sends no routable request`
             : expected === undefined
               ? `no compat mount named "${model.provider}" in the local proxy; add compat.${model.provider}.base_url to caveman.yaml to route it`

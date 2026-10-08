@@ -26,7 +26,8 @@ function fixture(t, source = sources) {
 function run(surface, item, action) {
   const script = join(item.source, `${action}.${surface.extension}`);
   const args = surface.extension === 'ps1' ? ['-NoProfile', '-NonInteractive', '-File', script] : [script];
-  return spawnSync(surface.command, args, { cwd: root, env: item.env, encoding: 'utf8', timeout: 20_000 });
+  // Ceiling, not budget: single pwsh runs took over 20s on a loaded machine.
+  return spawnSync(surface.command, args, { cwd: root, env: item.env, encoding: 'utf8', timeout: 60_000 });
 }
 
 for (const surface of surfaces) {

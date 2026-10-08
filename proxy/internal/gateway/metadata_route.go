@@ -21,6 +21,14 @@ func (s *Server) matchMetadataAdapter(r *http.Request) providers.Adapter {
 		return nil
 	}
 	for _, adapter := range s.adapters {
+		// Shared spellings (bare /v1/models) are decided by the request's wire
+		// protocol, never by registration order (issue #1187).
+		if matcher, ok := adapter.(providers.MetadataRequestMatcher); ok {
+			if matcher.MatchMetadataRequest(r) {
+				return adapter
+			}
+			continue
+		}
 		router, ok := adapter.(providers.MetadataRouter)
 		if !ok {
 			continue

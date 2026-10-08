@@ -41,7 +41,7 @@ Whitelist new ids plus legacy ids. Render `caveman` as `[CAVEMAN]`, `ultracave` 
 `skills/compile.mjs` already emits CLI embeds from `skills/*/SKILL.md` plus `registry.json`. Extend it:
 - Registry entries for `ultracave` and `megacave` (delivery `cli`, suite `output`).
 - Emit `src/rules/caveman-activate.md` from the caveman skill: thesis line, nine rule headlines as bullets, switch and stop lines. This is the always-on IDE rule and the opencode `AGENTS.md` body.
-- The OpenClaw bootstrap (`src/rules/caveman-openclaw-bootstrap.md` and the embedded copy in `bin/lib/openclaw.js`) and the MV3 directive (`extension/src/directive.js`) stay hand-synced; `tests/installer/rule-copies.test.mjs` and `extension/test/directive.test.mjs` fail on drift.
+- The OpenClaw bootstrap (`src/rules/caveman-openclaw-bootstrap.md` and the embedded copy in `installer/lib/openclaw.js`) and the MV3 directive (`extension/src/directive.js`) stay hand-synced; `tests/installer/rule-copies.test.mjs` and `extension/test/directive.test.mjs` fail on drift.
 Hand edits that remain: `agents/cavecrew-*.md` ("Caveman-ultra ... No narration" becomes "Ultracave voice. One line in, one line out."), `skills/caveman-help/SKILL.md` card, opencode `commands/` stubs (add `ultracave.md`, `megacave.md`, drop level text from `caveman.md`), README, INSTALL, CLAUDE.md, `skills/caveman/README.md`.
 
 ## Tests

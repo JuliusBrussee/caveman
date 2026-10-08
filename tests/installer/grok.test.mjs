@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 
 // Derived, not pinned, so this suite tracks the real skills/ set (as
 // provider-skills-integration.test.mjs does) instead of drifting stale
@@ -113,6 +113,79 @@ test('grok relative GROK_HOME resolves cwd-relative', () => {
     for (const name of SKILLS) {
       assert.ok(fs.existsSync(path.join(project, 'custom grok', 'skills', name, 'SKILL.md')), `skill ${name}/SKILL.md missing under cwd-relative GROK_HOME`);
     }
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+// ── 5. Always-on: one marker-fenced ruleset block in $GROK_HOME/AGENTS.md (#754) ──
+// Grok Build loads global rules from ~/.grok/AGENTS.md. The block goes through
+// the same append/strip helpers as OpenClaw's SOUL.md.
+const BEGIN = '<!-- caveman-begin -->';
+const END = '<!-- caveman-end -->';
+const count = (s, sub) => s.split(sub).length - 1;
+
+test('grok install writes exactly one fenced ruleset block to AGENTS.md, idempotently', () => {
+  const home = freshHome();
+  try {
+    const agentsMd = path.join(home, 'AGENTS.md');
+    fs.writeFileSync(agentsMd, '# my grok rules\n\nUse tabs.\n');
+    assert.notEqual(runInstaller(['--only', 'grok'], home).status, 2);
+    assert.notEqual(runInstaller(['--only', 'grok'], home).status, 2);
+    const body = fs.readFileSync(agentsMd, 'utf8');
+    assert.equal(count(body, BEGIN), 1, body);
+    assert.equal(count(body, END), 1, body);
+    assert.ok(body.indexOf(BEGIN) < body.indexOf(END));
+    const block = body.slice(body.indexOf(BEGIN), body.indexOf(END));
+    assert.match(block, /Respond terse like smart caveman/);
+    assert.ok(body.startsWith('# my grok rules\n\nUse tabs.\n'), 'user text above the block preserved');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('grok uninstall strips the AGENTS.md block, keeps user text, removes a caveman-only file', () => {
+  const home = freshHome();
+  const bare = freshHome();
+  try {
+    const agentsMd = path.join(home, 'AGENTS.md');
+    fs.writeFileSync(agentsMd, '# my grok rules\n');
+    runInstaller(['--only', 'grok'], home);
+    runInstaller(['--uninstall'], home);
+    assert.equal(fs.readFileSync(agentsMd, 'utf8'), '# my grok rules\n');
+
+    runInstaller(['--only', 'grok'], bare);
+    assert.ok(fs.existsSync(path.join(bare, 'AGENTS.md')), 'precondition: block written');
+    runInstaller(['--uninstall'], bare);
+    assert.equal(fs.existsSync(path.join(bare, 'AGENTS.md')), false, 'caveman-only AGENTS.md must be removed');
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(bare, { recursive: true, force: true });
+  }
+});
+
+test('grok dry-run leaves AGENTS.md alone and reports the planned block', () => {
+  const home = freshHome();
+  try {
+    const r = runInstaller(['--only', 'grok', '--dry-run'], home);
+    assert.match(r.stdout, /would add the caveman ruleset block to .*AGENTS\.md/);
+    assert.equal(fs.existsSync(path.join(home, 'AGENTS.md')), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('grok install leaves a symlinked AGENTS.md alone but still installs skills', { skip: process.platform === 'win32' && 'symlinks need privileges on Windows' }, () => {
+  const home = freshHome();
+  try {
+    const target = path.join(home, 'dotfiles-AGENTS.md');
+    fs.writeFileSync(target, '# dotfiles\n');
+    fs.symlinkSync(target, path.join(home, 'AGENTS.md'));
+    const r = runInstaller(['--only', 'grok'], home);
+    assert.equal(fs.readFileSync(target, 'utf8'), '# dotfiles\n');
+    assert.ok(fs.existsSync(path.join(skillsDir(home), 'caveman', 'SKILL.md')));
+    assert.match(r.stdout, /• grok\n/, 'skills install still reported');
+    assert.match(r.stderr, /grok-always-on/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

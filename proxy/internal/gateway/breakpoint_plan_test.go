@@ -230,8 +230,8 @@ func TestTripwireFreezesTheToolSchemaStrip(t *testing.T) {
 	if sha256.Sum256(final) != sha256.Sum256([]byte(body)) {
 		t.Fatalf("a frozen lever still rewrote the request: %s", final)
 	}
-	if comp.strips != len(responses)-1 {
-		t.Fatalf("strip ran %d times, want %d (frozen on the last)", comp.strips, len(responses)-1)
+	if got := strippedBodies(t, rt); got != len(responses)-1 {
+		t.Fatalf("strip ran on %d requests, want %d (frozen on the last)", got, len(responses)-1)
 	}
 	// A different session is unaffected — the freeze is session-scoped.
 	if !srv.ledger.LeverAllowed("sess-other", leverToolSchemaStrip) {
@@ -260,7 +260,22 @@ func TestTripwireIsInertWithoutASession(t *testing.T) {
 			t.Fatalf("sessionless traffic was frozen: %q", got)
 		}
 	}
-	if comp.strips != len(responses) {
-		t.Fatalf("strip ran %d times, want %d", comp.strips, len(responses))
+	if got := strippedBodies(t, rt); got != len(responses) {
+		t.Fatalf("strip ran on %d requests, want %d", got, len(responses))
 	}
+}
+
+// strippedBodies counts upstream requests that carried the stripped catalog.
+// The stripper itself runs once per catalog: later requests re-send its
+// memoised output (see stripToolSchema).
+func strippedBodies(t *testing.T, rt *captureTransport) int {
+	t.Helper()
+	stripped := `"tools":` + strippedToolCatalog(t)
+	n := 0
+	for _, body := range rt.bodies {
+		if strings.Contains(string(body), stripped) {
+			n++
+		}
+	}
+	return n
 }

@@ -8,7 +8,7 @@ import { fileURLToPath } from "node:url";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const { portableInvocation } = require(join(root, "bin", "lib", "portable-process.js"));
+const { portableInvocation } = require(join(root, "installer", "lib", "portable-process.js"));
 const goCache = join(tmpdir(), "caveman-windows-go-cache");
 mkdirSync(goCache, { recursive: true });
 

@@ -2,7 +2,7 @@
 // then runs under it. It must not persist an interpreter below the package's
 // supported runtime floor.
 //
-// The floor lives in bin/install.js as MIN_NODE_MAJOR rather than being read
+// The floor lives in installer/install.js as MIN_NODE_MAJOR rather than being read
 // from package.json at runtime, because that file also runs detached from a
 // checkout (the curl fallback path). These tests are what keep the constant
 // and `engines.node` from drifting apart, and what prove the guard is applied.
@@ -17,12 +17,12 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 
 function installerMinNodeMajor() {
   const src = fs.readFileSync(INSTALLER, 'utf8');
   const m = /const MIN_NODE_MAJOR = (\d+);/.exec(src);
-  assert.ok(m, 'MIN_NODE_MAJOR not found in bin/install.js');
+  assert.ok(m, 'MIN_NODE_MAJOR not found in installer/install.js');
   return Number(m[1]);
 }
 
@@ -35,7 +35,7 @@ test('MIN_NODE_MAJOR matches the engines.node floor in package.json', () => {
   assert.equal(
     installerMinNodeMajor(),
     Number(declared[1]),
-    `bin/install.js MIN_NODE_MAJOR drifted from package.json engines.node (${engines})`
+    `installer/install.js MIN_NODE_MAJOR drifted from package.json engines.node (${engines})`
   );
 });
 

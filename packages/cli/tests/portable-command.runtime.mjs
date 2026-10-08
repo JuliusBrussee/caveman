@@ -6,6 +6,10 @@ import test from "node:test";
 
 import { parseWindowsNodeShim, portableInvocation } from "../dist/portable-command.js";
 
+test("parses managed Pi's Node command shim", () => {
+  assert.equal(parseWindowsNodeShim('@ECHO off\r\nnode "%~dp0pi-launcher.js" %*\r\n'), "pi-launcher.js");
+});
+
 test("parses npm and pnpm Node command shims", () => {
   assert.equal(
     parseWindowsNodeShim('endLocal & "%_prog%" "%dp0%\\..\\pkg\\cli.js" %*'),
@@ -58,6 +62,58 @@ test("Windows Node shim launches target with Node and preserves argument bytes",
       command: process.execPath,
       args: [target, ...args],
     });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("Pi-style nested Windows shim launches JS without a shell", () => {
+  const root = mkdtempSync(join(tmpdir(), "cave nested shim "));
+  try {
+    const child = join(root, "node_modules", ".bin", "pi.cmd");
+    const script = join(root, "pi package", "cli.mjs");
+    mkdirSync(join(root, "node_modules", ".bin"), { recursive: true });
+    mkdirSync(join(root, "pi package"), { recursive: true });
+    writeFileSync(script, "// fixture\n");
+    writeFileSync(child, 'node "%~dp0\\..\\..\\pi package\\cli.mjs" %*\r\n');
+    const shim = join(root, "pi.CMD");
+    writeFileSync(shim, '@ECHO off\r\n"%~dp0node_modules\\.bin\\pi.cmd" %*\r\n');
+    const args = ["space & %PATH%", 'quote"kept'];
+    assert.deepEqual(portableInvocation(shim, args, "win32"), {
+      command: process.execPath, args: [script, ...args],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("nested shims reject unsafe wrappers, missing targets, cycles and excessive depth", () => {
+  const root = mkdtempSync(join(tmpdir(), "cave nested reject "));
+  try {
+    const shim = join(root, "pi.cmd");
+    const child = join(root, "child.bat");
+    writeFileSync(join(root, "cli.js"), "// fixture\n");
+    const args = ["x&y"];
+    const invoke = () => portableInvocation(shim, args, "win32");
+    for (const content of [
+      '"%~dp0child.bat" %*\r\necho unsafe\r\n',
+      '"%~dp0child.bat" %* & echo unsafe\r\n',
+      '"%~dp0child.exe" %*\r\n',
+      '"%~dp0child.ps1" %*\r\n',
+      '"%~dp0child.bat" %*\r\nnode "%~dp0missing.js" %*\r\n',
+      '"%~dp0child.bat" %*\r\nnode "%~dp0cli.js" %*\r\n',
+    ]) {
+      writeFileSync(shim, content);
+      assert.throws(invoke, /cannot safely launch non-Node Windows command shim/);
+    }
+    writeFileSync(shim, '"%~dp0child.bat" %*\r\n');
+    assert.throws(invoke, /Windows command shim target is missing/);
+    writeFileSync(child, '"%~dp0pi.cmd" %*\r\n');
+    assert.throws(invoke, /Windows command shim cycle/);
+    for (let i = 0; i <= 5; i++) {
+      writeFileSync(join(root, `shim${i}.cmd`), `"%~dp0shim${i + 1}.cmd" %*\r\n`);
+    }
+    assert.throws(() => portableInvocation(join(root, "shim0.cmd"), args, "win32"), /nesting too deep/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

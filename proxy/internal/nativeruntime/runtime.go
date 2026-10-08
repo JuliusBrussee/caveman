@@ -1225,7 +1225,9 @@ func (r *Runtime) afterTool(request Request, response Response, allowMask bool) 
 //
 // Only classes with a field grammar qualify, because only those produce
 // invariants: JSON records, CSV/TSV/markdown rows, and line-oriented logs
-// (logfmt and NDJSON both, via the log compressor's per-line reader). Everything
+// (logfmt and NDJSON both, via the log compressor's per-line reader), plus test
+// reports, whose compressor keeps every failure and the counts (pytest/Jest JSON
+// took this path as plain JSON before test-report existed). Everything
 // else — text, code, diff, terminal, HTML, config, search results, and anything
 // undetected — keeps today's masking behaviour exactly.
 //
@@ -1236,7 +1238,7 @@ func (r *Runtime) maskWouldDiscardFacts(output []byte) bool {
 		return false // cannot classify -> behave exactly as before
 	}
 	switch r.detect(output) {
-	case engine.TypeJSON, engine.TypeTabular, engine.TypeLog:
+	case engine.TypeJSON, engine.TypeTabular, engine.TypeLog, engine.TypeTestReport:
 		return true
 	default:
 		return false

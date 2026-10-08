@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { trimTrailingSlashes, verifiedProviderRoute, publishedUpstreamsOf, unforwardedProviderHeaders, publishedForwardHeadersOf } from '../dist/provider-routing.js';
+import { trimTrailingSlashes, verifiedChatGPTSubscriptionRoute, verifiedProviderRoute, publishedUpstreamsOf, unforwardedProviderHeaders, publishedForwardHeadersOf } from '../dist/provider-routing.js';
 const gw = 'http://127.0.0.1:8787/w/host';
 const native = { openai: 'https://api.openai.com', anthropic: 'https://api.anthropic.com', gemini: 'https://generativelanguage.googleapis.com' };
 test('provider-specific header forwarding requires a contract for the exact mount', () => {
@@ -14,6 +14,16 @@ test('provider-specific header forwarding requires a contract for the exact moun
   assert.deepEqual(unforwardedProviderHeaders('openai-completions', 'relay', { ...headers, 'X-Unrelated': 'secret' }, published), ['X-Unrelated']);
   assert.deepEqual(unforwardedProviderHeaders('openai-responses', 'relay', { Authorization: 'Bearer key', 'X-Optional': undefined }), []);
 });
+test('ChatGPT subscription route requires the exact published Codex upstream', () => {
+  const published = { provider_upstreams: { ...native, 'openai-codex': 'https://chatgpt.com/backend-api' } };
+  assert.equal(verifiedChatGPTSubscriptionRoute(gw, 'openai-codex-responses', 'openai-codex', 'https://chatgpt.com/backend-api', published), gw);
+  assert.equal(verifiedChatGPTSubscriptionRoute(gw, 'openai-codex-responses', 'openai-codex', 'https://chatgpt.com/backend-api/', published), gw);
+  assert.equal(verifiedChatGPTSubscriptionRoute(gw, 'openai-codex-responses', 'openai-codex', 'https://chatgpt.com/backend-api', { provider_upstreams: native }), undefined);
+  assert.equal(verifiedChatGPTSubscriptionRoute(gw, 'openai-codex-responses', 'openai-codex', 'https://chatgpt.com/backend-api/codex', published), undefined);
+  assert.equal(verifiedChatGPTSubscriptionRoute(gw, 'openai-responses', 'openai-codex', 'https://chatgpt.com/backend-api', published), undefined);
+  assert.equal(verifiedChatGPTSubscriptionRoute(gw, 'openai-codex-responses', 'other', 'https://chatgpt.com/backend-api', published), undefined);
+});
+
 for (const [api, base, route] of [
   ['openai-completions', 'https://api.openai.com/v1', '/openai/v1'],
   ['openai-responses', 'https://api.openai.com/v1/', '/openai/v1'],

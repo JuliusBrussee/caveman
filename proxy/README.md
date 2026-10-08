@@ -53,6 +53,22 @@ Inbound Bedrock `x-api-key` and bearer credentials are stamped as Bedrock API
 keys before auth-mode classification. A Claude Code user agent therefore cannot
 relabel paid Bedrock traffic as subscription traffic.
 
+## Codex on a ChatGPT login (`/chatgpt`)
+
+`caveman enable codex` (or `caveman codex`) points Codex at `/chatgpt` and starts
+this proxy with recovery confirmed whenever the caveman MCP server is installed.
+A `caveman-proxy` you start yourself compresses `/chatgpt` traffic only when it
+can prove the agent can fetch elided content back. Either start it with
+`CAVEMAN_MODE=compress CAVEMAN_RECOVERY=mcp` (and keep the caveman MCP server
+registered in Codex), or let each request carry Caveman's
+`mcp__caveman__caveman_retrieve` tool, top-level or in Codex's `additional_tools`
+input item. Without either, every request forwards unchanged.
+
+zstd request bodies (Codex's default) are decoded, compressed and re-encoded.
+A body that does not decode, or does not shrink, goes out as the exact original
+bytes. When a request could have been compressed and was not, the
+`chatgpt_proxy` log line says why in `skip_reason`.
+
 Driven by the `caveman` CLI: `caveman start` launches this binary, `caveman wrap
 <agent>` points the agent's provider-specific base URL at it. A Bedrock Claude
 Code wrap preserves the local AWS BYOK environment. Against a managed gateway it

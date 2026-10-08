@@ -10,4 +10,4 @@ Same floor as caveman: code, commands, paths, errors, numbers, and negations are
 
 **Skip it for** onboarding, security review, and anything other humans will read. Ultracave drops to plain prose on its own for warnings and irreversible actions.
 
-Measured once (`evals/snapshots/results.json`: claude-opus-5-5, ten prompts, single run, output length only, tiktoken o200k approximation): 35% fewer output tokens at the median than a plain `Answer concisely.` control. Length only, not correctness. See [docs/HONEST-NUMBERS.md](../../docs/HONEST-NUMBERS.md).
+Measured once on the 3.1.0 skill text (`evals/snapshots/results.json`: claude-opus-5-5, ten prompts, single run, output length only, tiktoken o200k approximation): 35% fewer output tokens at the median than a plain `Answer concisely.` control. Length only, not correctness. See [docs/HONEST-NUMBERS.md](../../docs/HONEST-NUMBERS.md).

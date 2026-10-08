@@ -1,10 +1,10 @@
 # caveman — installer shim (Windows / PowerShell).
 #
-# Thin wrapper around bin/install.js (the unified Node installer). Every flag
-# you'd pass to bin/install.js can be passed here; we just forward them.
+# Thin wrapper around installer/install.js (the unified Node installer). Every flag
+# you'd pass to installer/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.1.0/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.ps1 | iex
 #
 # Local clone:
 #   pwsh install.ps1 [flags]
@@ -28,7 +28,7 @@ function Install-Caveman {
 
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
-  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v3.1.0" }
+  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v3.2.0" }
 
   # Require Node ≥18.
   $node = Get-Command node -ErrorAction SilentlyContinue
@@ -53,7 +53,7 @@ caveman: Node.js (>=18) required. Install:
   # because it is null" crash.
   if ($PSCommandPath) {
     $here = Split-Path -Parent $PSCommandPath
-    $local = Join-Path $here "bin/install.js"
+    $local = Join-Path $here "installer/install.js"
     if (Test-Path $local) {
       & node $local @InstallerArgs
       exit $LASTEXITCODE
@@ -68,7 +68,7 @@ caveman: Node.js (>=18) required. Install:
   }
 
   # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
-  # package, and a literal `--` was tripping bin/install.js's parseArgs as an
+  # package, and a literal `--` was tripping installer/install.js's parseArgs as an
   # unknown flag.
   # npm 12 disables git package fetches by default (EALLOWGIT). Allow only the
   # root package requested here; older npm versions do not understand this

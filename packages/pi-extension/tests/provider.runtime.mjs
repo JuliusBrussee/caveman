@@ -14,7 +14,8 @@ const MODELS = [
   { provider: "relay", id: "default", api: "openai-completions", baseUrl: "http://127.0.0.1:4000/v1" },
   { provider: "relay", id: "foreign", api: "openai-completions", baseUrl: "http://127.0.0.1:4001/v1" },
 ];
-const NATIVE = { openai: "https://api.openai.com" };
+const NATIVE = { openai: "https://api.openai.com", "openai-codex": "https://chatgpt.com/backend-api" };
+const CODEX_MODEL = { provider: "openai-codex", id: "gpt-fixture", api: "openai-codex-responses", baseUrl: "https://chatgpt.com/backend-api" };
 const COMPAT = { relay: "http://127.0.0.1:4000" };
 
 // Pi assigns the active model before emitting model_select. Keep that model
@@ -86,15 +87,55 @@ test("provider switches and closeGate preserve registry and restore active endpo
   assert.deepEqual(h.registry, models);
 });
 
-test("OAuth and unknown auth restore the active routed model before claiming direct mode", async () => {
-  for (const auth of [true, new Error("auth status unavailable")]) {
+test("OAuth and unknown auth outside the verified subscription route stay direct", async () => {
+  for (const [auth, reason] of [
+    [true, /OAuth\/subscription credentials are not routed/],
+    [new Error("auth status unavailable"), /authentication type could not be verified/],
+  ]) {
     const h = harness();
     await h.router.openGate(GATEWAY, h.ctx, COMPAT, NATIVE);
     h.setOAuth(auth);
     await h.router.apply(h.ctx.model, h.ctx);
     assert.equal(h.router.routing(), false);
     assert.deepEqual(h.ctx.model, MODELS[0]);
-    assert.match(h.notices.at(-1), /OAuth\/subscription credentials are not routed/);
+    assert.match(h.notices.at(-1), reason);
+  }
+});
+
+test("verified openai-codex OAuth routes without resolving an API key", async () => {
+  const h = harness([CODEX_MODEL]);
+  h.setOAuth(true);
+  h.setAuthBehavior(() => { throw new Error("OAuth route must not resolve an API key"); });
+  await h.router.openGate(GATEWAY, h.ctx, COMPAT, NATIVE);
+  assert.equal(h.router.routing(), true, h.notices.join("\n"));
+  assert.equal(h.ctx.model.baseUrl, `${GATEWAY}/w/pi`);
+  assert.equal(await h.router.closeGate(h.ctx), true);
+  assert.deepEqual(h.ctx.model, CODEX_MODEL);
+});
+
+test("openai-codex stays direct without proxy proof, OAuth certainty, or subscription auth", async () => {
+  {
+    const h = harness([CODEX_MODEL]);
+    h.setOAuth(true);
+    await h.router.openGate(GATEWAY, h.ctx, COMPAT, { openai: NATIVE.openai });
+    assert.equal(h.router.routing(), false);
+    assert.deepEqual(h.ctx.model, CODEX_MODEL);
+    assert.match(h.notices.at(-1), /not verified by the running proxy/);
+  }
+  {
+    const h = harness([CODEX_MODEL]);
+    h.setOAuth(new Error("auth status unavailable"));
+    await h.router.openGate(GATEWAY, h.ctx, COMPAT, NATIVE);
+    assert.equal(h.router.routing(), false);
+    assert.match(h.notices.at(-1), /authentication type could not be verified/);
+  }
+  {
+    const h = harness([CODEX_MODEL]);
+    h.setOAuth(false);
+    h.setAuthBehavior(() => { throw new Error("subscription route must not resolve an API key"); });
+    await h.router.openGate(GATEWAY, h.ctx, COMPAT, NATIVE);
+    assert.equal(h.router.routing(), false);
+    assert.match(h.notices.at(-1), /ChatGPT subscription route requires OAuth/);
   }
 });
 

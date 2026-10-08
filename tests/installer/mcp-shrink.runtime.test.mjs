@@ -19,7 +19,8 @@ function isAlive(pid) {
   }
 }
 
-async function waitUntil(predicate, { timeoutMs = 5000, intervalMs = 20 } = {}) {
+// 20s ceiling: starting two node processes took over 5s on a loaded machine.
+async function waitUntil(predicate, { timeoutMs = 20_000, intervalMs = 20 } = {}) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (predicate()) return;

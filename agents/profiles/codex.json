@@ -22,7 +22,7 @@
   "tested_agent_version": "0.160.1",
   "injection_completeness": "code-only",
   "last_verified_at": "2026-10-06",
-  "verified_by": "local pinned-binary probe (codex 0.160.1 on Node 22.22.0, agents/probe-installed.mjs)",
+  "verified_by": "local pinned-binary probe (codex 0.160.1 on Node 24.16.0, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }

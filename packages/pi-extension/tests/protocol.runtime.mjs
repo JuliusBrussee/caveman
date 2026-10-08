@@ -31,6 +31,7 @@ test("route table maps supported APIs and refuses everything else", () => {
   assert.equal(routeForApi(gw, "openai-completions"), `${gw}/w/pi/openai/v1`);
   assert.equal(routeForApi(gw, "openai-responses"), `${gw}/w/pi/openai/v1`);
   assert.equal(routeForApi(gw, "google-generative-ai"), `${gw}/w/pi/v1beta`);
+  assert.equal(routeForApi(gw, "openai-codex-responses", "openai-codex"), `${gw}/w/pi`);
   assert.equal(routeForApi(gw, "openai-responses", "opencode-go"), `${gw}/w/pi/compat/opencode-go/v1`);
   assert.equal(routeForApi(gw, "openai-completions", "opencode-go"), `${gw}/w/pi/compat/opencode-go/v1`);
   assert.equal(routeForApi(gw, "anthropic-messages", "opencode-go"), `${gw}/w/pi/compat/opencode-go`);
@@ -40,13 +41,13 @@ test("route table maps supported APIs and refuses everything else", () => {
   assert.equal(routeForApi(gw, "openai-responses", "openai"), `${gw}/w/pi/openai/v1`);
   assert.equal(routeForApi(gw, "google-generative-ai", "google"), `${gw}/w/pi/v1beta`);
   assert.equal(routeForApi(gw, "openai-completions", "stubprov"), undefined, "provider outside allowlist must not route");
-  for (const api of ["azure-openai-responses", "openai-codex-responses", "mistral-conversations", "google-vertex", "bedrock-converse-stream", "made-up", undefined]) {
+  for (const api of ["azure-openai-responses", "mistral-conversations", "google-vertex", "bedrock-converse-stream", "made-up", undefined]) {
     assert.equal(routeForApi(gw, api), undefined, `api ${api} must not route`);
   }
   assert.equal(Object.keys(ROUTES_BY_API).length, 4);
 });
 
-const NATIVE = { openai: "https://api.openai.com", anthropic: "https://api.anthropic.com", gemini: "https://generativelanguage.googleapis.com" };
+const NATIVE = { openai: "https://api.openai.com", anthropic: "https://api.anthropic.com", gemini: "https://generativelanguage.googleapis.com", "openai-codex": "https://chatgpt.com/backend-api" };
 const BUILTIN_COMPAT = { "opencode-go": "https://opencode.ai/zen/go" };
 
 test("route gate compares the original provider endpoint with the running proxy", () => {
@@ -57,11 +58,16 @@ test("route gate compares the original provider endpoint with the running proxy"
   assert.equal(routeForApi(gw, "anthropic-messages", "anthropic", "https://api.anthropic.com", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/anthropic`);
   assert.equal(routeForApi(gw, "anthropic-messages", "anthropic", "http://127.0.0.1:1", BUILTIN_COMPAT, NATIVE), undefined);
   assert.equal(routeForApi(gw, "google-generative-ai", "google", "https://generativelanguage.googleapis.com/v1beta", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/gemini/v1beta`);
+  assert.equal(routeForApi(gw, "openai-codex-responses", "openai-codex", "https://chatgpt.com/backend-api", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi`);
+  assert.equal(routeForApi(gw, "openai-codex-responses", "openai-codex", "https://chatgpt.com/backend-api/", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi`);
+  assert.equal(routeForApi(gw, "openai-codex-responses", "openai-codex", "https://chatgpt.com/backend-api", BUILTIN_COMPAT, { openai: NATIVE.openai }), undefined);
+  assert.equal(routeForApi(gw, "openai-codex-responses", "openai-codex", "https://chatgpt.com/backend-api/codex", BUILTIN_COMPAT, NATIVE), undefined);
   assert.equal(routeForApi(gw, "anthropic-messages", "opencode-go", "https://opencode.ai/zen/go", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/compat/opencode-go`);
   assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://opencode.ai/zen/go/v1", BUILTIN_COMPAT, NATIVE), `${gw}/w/pi/compat/opencode-go/v1`);
   assert.equal(routeForApi(gw, "openai-completions", "opencode-go", "https://other.example/v1", BUILTIN_COMPAT, NATIVE), undefined, "a moved opencode-go endpoint must stay direct");
   assert.equal(routeForApi(gw, "openai-completions", "openai", "not a url", BUILTIN_COMPAT, NATIVE), undefined, "an unreadable base URL must stay direct");
   assert.equal(upstreamHostFor("openai"), "api.openai.com");
+  assert.equal(upstreamHostFor("openai-codex"), "chatgpt.com");
   assert.equal(upstreamHostFor("openrouter"), undefined);
   assert.equal(hostOf("https://API.OpenAI.com/v1"), "api.openai.com");
   assert.equal(hostOf("not a url"), undefined);

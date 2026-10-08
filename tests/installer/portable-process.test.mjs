@@ -7,7 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 
 const require = createRequire(import.meta.url);
-const portable = require(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "bin", "lib", "portable-process.js"));
+const portable = require(join(dirname(fileURLToPath(import.meta.url)), "..", "..", "installer", "lib", "portable-process.js"));
 
 test("absolute Windows commands use PATHEXT and skip Unix shims and directories", (t) => {
   const root = mkdtempSync(join(tmpdir(), "caveman explicit win "));
@@ -25,6 +25,10 @@ test("absolute Windows commands use PATHEXT and skip Unix shims and directories"
   }), { command: "node.exe", args: [script, "C:\\path with spaces\\", "%PATH%"] });
   assert.equal(portable.resolveWindowsCommand("npx", { ...env, Path: `"${root}"` }), `${command}.CMD`);
   assert.equal(portable.resolveWindowsCommand(join(root, "missing"), env), null);
+});
+
+test("root installer parses managed Pi's Node command shim", () => {
+  assert.equal(portable.parseWindowsNodeShim('@ECHO off\r\nnode "%~dp0pi-launcher.js" %*\r\n'), "pi-launcher.js");
 });
 
 test("root installer unwraps Windows Node shims without a shell", () => {
@@ -46,6 +50,48 @@ test("root installer unwraps Windows Node shims without a shell", () => {
   }), {
     command: "node.exe",
     args: [script, "space value", "x&y", "%PATH%"],
+  });
+});
+
+test("root installer unwraps nested cmd shims, rejects extra commands and missing children", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "caveman nested win "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const shim = join(root, "pi.CMD");
+  const child = join(root, "pi.bat");
+  const script = join(root, "cli.js");
+  writeFileSync(script, "// fixture\n");
+  writeFileSync(child, 'node "%~dp0\\cli.js" %*\r\n');
+  writeFileSync(shim, '@ECHO off\r\n"%~dp0pi.bat" %*\r\n');
+  const args = ["space & %PATH%"];
+  const invoke = () => portable.portableInvocation(shim, args, { platform: "win32", execPath: "node.exe" });
+  assert.deepEqual(invoke(), { command: "node.exe", args: [script, ...args] });
+  writeFileSync(shim, '"%~dp0pi.bat" %*\r\necho unsafe\r\n');
+  assert.throws(invoke, /cannot safely launch non-Node Windows command shim/);
+  writeFileSync(shim, '"%~dp0pi.bat" %*\r\nnode "%~dp0cli.js" %*\r\n');
+  assert.throws(invoke, /cannot safely launch non-Node Windows command shim/);
+  writeFileSync(shim, '"%~dp0missing.cmd" %*\r\n');
+  assert.throws(invoke, /Windows command shim target is missing/);
+});
+
+test("root installer unwraps the Node.js npm npx.cmd variable form", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-installer-npx-"));
+  const shim = join(root, "npx.CMD");
+  const script = join(root, "node_modules", "npm", "bin", "npx-cli.js");
+  mkdirSync(dirname(script), { recursive: true });
+  writeFileSync(shim, [
+    "@ECHO OFF",
+    "SETLOCAL",
+    'SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"',
+    '"%NODE_EXE%" "%NPX_CLI_JS%" %*',
+    "",
+  ].join("\r\n"));
+  writeFileSync(script, "");
+  assert.deepEqual(portable.portableInvocation(shim, ["-y", "skills"], {
+    platform: "win32",
+    execPath: "node.exe",
+  }), {
+    command: "node.exe",
+    args: [script, "-y", "skills"],
   });
 });
 
