@@ -95,6 +95,29 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		}
 		payload, reply = out, translated
 	}
+	// Cache affinity and the fan-out gate (route_cache.go).
+	pinned, release, unpinned := "", func(bool) {}, payload
+	// Record mode gets none of these: no pin, no key, no family affinity, no wait.
+	if target.Via != "cloud" && run != nil && run.key != "" && !run.record {
+		switch {
+		case target.Host == "openrouter":
+			pinned = s.routes.pinned(run.key, target.PoolID)
+			payload = withProviderPin(payload, pinned)
+		case (target.Host == "openai" || target.Host == "chatgpt") && target.Wire != translate.Messages:
+			payload = withCacheKey(payload, run.key)
+		}
+	}
+	if run != nil && !run.record {
+		if key, ok := fanoutKey(run.parent, target.Host, target.Model, target.Wire, payload); ok {
+			release = s.fanout.enter(r.Context(), key)
+			defer release(false)
+		}
+	}
+	unpin := func() {
+		if pinned != "" {
+			s.routes.pin(run.key, target.PoolID, "") // a failure re-routes afresh, never silently spreads
+		}
+	}
 	header := target.Header.Clone()
 	header.Set("content-type", "application/json")
 	if target.Wire == translate.Messages {
@@ -116,30 +139,61 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 		header.Set("x-caveman-effort", effort) // the gateway applies it in the target's own shape
 	}
 	if target.Affinity != "" && run != nil && run.key != "" {
-		header.Set(target.Affinity, affinityKey(run.key))
-	}
-	resp, err := s.doUpstream(r.Context(), func() (*http.Request, error) {
-		req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.URL, bytes.NewReader(payload))
-		if err != nil {
-			return nil, err
+		affinity := run.family()
+		if run.record {
+			affinity = run.key
 		}
-		req.Header = header.Clone()
-		return req, nil
-	})
+		header.Set(target.Affinity, affinityKey(affinity))
+	}
+	send := func(payload []byte) (*http.Response, error) {
+		return s.doUpstream(r.Context(), func() (*http.Request, error) {
+			req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, target.URL, bytes.NewReader(payload))
+			if err != nil {
+				return nil, err
+			}
+			req.Header = header.Clone()
+			return req, nil
+		})
+	}
+	resp, err := send(payload)
+	if pinned != "" && err == nil && resp.StatusCode >= 300 {
+		// The provider the session was pinned to refused: once more on the same
+		// entry wherever OpenRouter routes it, before the asked model runs. A
+		// transport error may come after the request was written (only failed
+		// connection setup is proven unsent), so it is never sent again here.
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		unpin()
+		pinned = ""
+		resp, err = send(unpinned)
+	}
 	if err != nil {
+		unpin()
 		return targetResult{errMsg: "pool_unreachable"}
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
+		unpin()
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		return targetResult{errMsg: fmt.Sprintf("pool_%d", resp.StatusCode)}
 	}
+	sniff := &providerSniff{ReadCloser: resp.Body, stream: strings.Contains(resp.Header.Get("content-type"), "event-stream")}
+	resp.Body = &releaseOnRead{ReadCloser: sniff, release: release, ok: true, stream: sseEvents(resp.Header)}
 	counter := &countingWriter{w: w}
 	usage, err := reply.Serve(&countedResponse{ResponseWriter: w, counter: counter}, resp)
 	if errors.Is(err, translate.ErrNotServed) {
 		// A 2xx that failed or ended before any content: nothing reached the
 		// agent, so the asked model still runs.
+		unpin()
 		return targetResult{errMsg: "pool_failed_before_content", upstreamID: reply.UpstreamID()}
+	}
+	if target.Host == "openrouter" && run != nil && run.key != "" && !run.record {
+		// Warm on the provider that served it: later requests stay there.
+		if provider := sniff.provider(); err == nil && provider != "" && usage.CacheReadTokens+usage.CacheWriteTokens > 0 {
+			s.routes.pin(run.key, target.PoolID, provider)
+		} else if err != nil {
+			unpin()
+		}
 	}
 	out := targetResult{served: true, stream: reply.Stream(), bytes: counter.n, upstreamID: reply.UpstreamID(), usage: providers.UsageObservation{
 		InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens,

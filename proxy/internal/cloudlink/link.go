@@ -97,9 +97,13 @@ type Link struct {
 	recheckAt  time.Time           // the last /me check of a limit pause
 	rechecking bool
 	pausePlan  string // the plan /me named while the limit held
-	// noPool: this login's Cloud refused an ask carrying pool with a 400 and
-	// answered it without: an older Cloud, asked without pool from then on.
-	noPool bool
+	// noPool, noCacheTTL: this login's Cloud refused an ask carrying pool or
+	// request.cache_ttl with a 400 and answered it without: an older Cloud,
+	// asked without that field from then on.
+	noPool, noCacheTTL bool
+	// accepted are the additive fields a 200 came back for while the ask
+	// carried them: a generic 400 is never blamed on them.
+	accepted map[string]bool
 
 	events eventQueue
 
@@ -178,7 +182,7 @@ func (l *Link) settings() settings {
 		if (cfg.access != "" || cfg.key != "") && (cfg.access != previous.access || cfg.key != previous.key) {
 			// A new login starts fresh: no pause and no decision from the old one.
 			// Signing out needs no reset: nothing is asked while signed out.
-			l.pauseUntil, l.decisions, l.states, l.noPool = time.Time{}, nil, nil, false
+			l.pauseUntil, l.decisions, l.states, l.noPool, l.noCacheTTL, l.accepted = time.Time{}, nil, nil, false, false, nil
 			l.forgetLocked()
 		}
 	}
@@ -572,6 +576,7 @@ type routeRequest struct {
 	Effort        string            `json:"effort"`
 	Thinking      string            `json:"thinking"`
 	PerMessageOff bool              `json:"per_message_off"`
+	CacheTTL      string            `json:"cache_ttl,omitempty"`
 }
 
 // requestFor reads routeRequest from the body: the declared tool names (at
@@ -614,6 +619,7 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 	if slices.Contains(contractEfforts, effort) {
 		out.Effort = effort
 	}
+	out.CacheTTL = cacheTTL(out.Endpoint, body, root)
 	out.Labels = labels
 	list, _ := jsonsplice.Field(body, root, "tools")
 	tools, _ := jsonsplice.Elements(body, list)
@@ -635,6 +641,50 @@ func requestFor(ask gateway.RouteAsk, root jsonsplice.Span) routeRequest {
 
 // The effort values route-ask-v1 knows; anything else goes as "".
 var contractEfforts = []string{"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+
+// cacheTTLs are the cache TTLs route-ask-v1 knows, shortest first.
+var cacheTTLs = []string{"5m", "30m", "1h", "24h"}
+
+var (
+	cacheControlRE = regexp.MustCompile(`"cache_control"\s*:\s*\{[^{}]*\}`)
+	ttlRE          = regexp.MustCompile(`"ttl"\s*:\s*"([^"\\]*)"`)
+)
+
+// cacheTTL is the TTL the request writes its cache entries at, "" when it
+// says none: on Messages the longest ephemeral cache_control ttl (none is 5m,
+// a value the contract does not know is left out); on OpenAI
+// prompt_cache_options.ttl (GPT-6's 30m), else prompt_cache_retention (24h;
+// in_memory is 5m).
+func cacheTTL(endpoint string, body []byte, root jsonsplice.Span) string {
+	if endpoint != "messages" {
+		options, _ := jsonsplice.Field(body, root, "prompt_cache_options")
+		if ttl, _ := jsonsplice.StringField(body, options, "ttl"); slices.Contains(cacheTTLs, ttl) {
+			return ttl
+		}
+		switch retention, _ := jsonsplice.StringField(body, root, "prompt_cache_retention"); retention {
+		case "24h":
+			return "24h"
+		case "in_memory", "in-memory":
+			return "5m"
+		}
+		return ""
+	}
+	longest := -1
+	for _, marker := range cacheControlRE.FindAll(body, -1) {
+		if !bytes.Contains(marker, []byte(`"ephemeral"`)) {
+			continue // a tool schema's property of that name, say
+		}
+		ttl := "5m"
+		if match := ttlRE.FindSubmatch(marker); match != nil {
+			ttl = string(match[1])
+		}
+		longest = max(longest, slices.Index(cacheTTLs, ttl))
+	}
+	if longest < 0 {
+		return ""
+	}
+	return cacheTTLs[longest]
+}
 
 // spawnedAgentType is the subagent_type of the spawn call a forked child came
 // from: a forked child resends its parent's history up to the newest assistant
@@ -837,15 +887,20 @@ type signals struct {
 }
 
 // signalsFor counts what the ask carries. Tool errors are counted over the
-// whole request; context tokens are estimated from its size.
+// whole request; context tokens are the gateway's count in the session's (a
+// child's parent's) provider tokens, else estimated from its size.
 func signalsFor(ask gateway.RouteAsk) signals {
 	agent := ask.Agent
 	if !slugRE.MatchString(agent) {
 		agent = "unlabeled-agent"
 	}
+	tokens := ask.ContextTokens
+	if tokens <= 0 {
+		tokens = ask.InputBytes / 4
+	}
 	return signals{
 		Agent:         agent,
-		ContextTokens: min(ask.InputBytes/4, 1_000_000_000),
+		ContextTokens: min(tokens, 1_000_000_000),
 		ToolsDeclared: min(ask.ToolsCount, 1_000_000_000),
 		ToolErrors:    len(toolErrorRE.FindAllIndex(ask.Body, -1)),
 		Images:        imageRE.Match(ask.Body),
@@ -865,6 +920,11 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 		}
 		last = &bounded
 	}
+	l.mu.Lock()
+	if l.noCacheTTL {
+		declared.CacheTTL = ""
+	}
+	l.mu.Unlock()
 	body := routeAsk{
 		Models: models, Pool: entries, Signals: signalsFor(ask), Ask: text, Request: declared, Last: last,
 		State: l.state(ask.SessionID), ParentState: l.state(ask.ParentSessionID),
@@ -898,22 +958,54 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 	}
 	raw, _ := io.ReadAll(io.LimitReader(response.Body, answerMax))
 	response.Body.Close()
-	if response.StatusCode == http.StatusBadRequest && len(entries) > 0 && strings.Contains(strings.ToLower(string(raw)), "pool") {
-		// An older Cloud refuses the unknown pool field by name: ask once more
-		// without it, and leave it out for the rest of this login. Any other
-		// 400 is answered as before, never retried.
+	// An older Cloud refuses an additive field it does not know with a 400:
+	// by name, or with its generic refusal of any body it cannot decode. The
+	// ask goes again without the field the 400 names, else the newest one sent
+	// that Cloud has not accepted before (cache_ttl came after pool), at most
+	// once per field; the field whose removal Cloud then answers with a 200
+	// stays out for the rest of this login. Any other 400 is answered as
+	// before, never retried.
+	var dropped []string
+	for response.StatusCode == http.StatusBadRequest {
 		l.mu.Lock()
-		l.noPool = true
+		field := refusedField(strings.ToLower(string(raw)), body, l.accepted)
 		l.mu.Unlock()
-		if l.logger != nil {
-			l.logger.Warn("Cloud refused the routing pool; asking with the harness's models only until the next login")
+		if field == "" {
+			break
 		}
-		body.Pool, entries = nil, nil
+		dropped = append(dropped, field)
+		switch field {
+		case "cache_ttl":
+			body.Request.CacheTTL = ""
+		case "pool":
+			body.Pool, entries = nil, nil
+		}
 		if response, failed, ok = post(body); !ok {
 			return failed
 		}
 		raw, _ = io.ReadAll(io.LimitReader(response.Body, answerMax))
 		response.Body.Close()
+	}
+	if response.StatusCode == http.StatusOK {
+		l.mu.Lock()
+		if l.accepted == nil {
+			l.accepted = map[string]bool{}
+		}
+		for _, field := range carriedFields(body) {
+			l.accepted[field] = true
+		}
+		if len(dropped) > 0 {
+			switch dropped[len(dropped)-1] {
+			case "pool":
+				l.noPool = true
+			case "cache_ttl":
+				l.noCacheTTL = true
+			}
+		}
+		l.mu.Unlock()
+		if len(dropped) > 0 && l.logger != nil {
+			l.logger.Warn("Cloud refused a newer route-ask field; asking without it until the next login", "field", dropped[len(dropped)-1])
+		}
 	}
 	var answer struct {
 		PoolID     string `json:"pool_id"`
@@ -984,6 +1076,34 @@ func (l *Link) ask(cfg settings, bearer string, ask gateway.RouteAsk, declared r
 		out.Model, out.Outcome = model, "routed"
 	}
 	return out
+}
+
+// carriedFields are the additive fields an ask carries, newest first.
+func carriedFields(body routeAsk) []string {
+	var carried []string
+	if body.Request.CacheTTL != "" {
+		carried = append(carried, "cache_ttl")
+	}
+	if len(body.Pool) > 0 {
+		carried = append(carried, "pool")
+	}
+	return carried
+}
+
+// refusedField is the additive field a 400 (lower-cased) is about, never one
+// a 200 already came back for: one it names that the ask still carries, else,
+// for Cloud's generic refusal, the newest one it carries; "" when none.
+func refusedField(refusal string, body routeAsk, accepted map[string]bool) string {
+	carried := slices.DeleteFunc(carriedFields(body), func(field string) bool { return accepted[field] })
+	for _, field := range carried {
+		if strings.Contains(refusal, field) {
+			return field
+		}
+	}
+	if len(carried) > 0 && strings.Contains(refusal, "cave_router_request_invalid") {
+		return carried[0]
+	}
+	return ""
 }
 
 // cloudRouteRE is a via "cloud" pool id, sent back as x-caveman-route:

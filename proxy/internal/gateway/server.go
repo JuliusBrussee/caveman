@@ -421,6 +421,8 @@ type Server struct {
 	routes routeSessions
 	// recorder finishes rows off the request path (Config.AsyncRecord).
 	recorder *recorder
+	// fanout staggers sibling children on one new prefix (route_cache.go).
+	fanout fanout
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
