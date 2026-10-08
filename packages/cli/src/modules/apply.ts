@@ -24,7 +24,8 @@ export type PlanLine = { action: "CREATE" | "UPDATE" | "DOWNLOAD" | "RUN"; targe
 export type ModulePlan = { selection: ModuleSelection; agents: string[]; lines: PlanLine[]; only?: ModuleId[]; notes?: string[] };
 export type ModuleState = { id: ModuleId; on: boolean; active: boolean; reason?: string; perAgent: Record<string, "wired" | "not wired" | "n/a"> };
 
-export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean };
+// optedOut: the user ran `caveman disable <agent>` and has not enabled it since.
+export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean; optedOut?: boolean };
 export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number };
 // A capability as every layer resolves it (defaults → global → project → env),
 // plus the global-file value alone, which is what module state is recorded in.
@@ -126,11 +127,11 @@ export function currentSelection(): ModuleSelection {
 }
 
 // The agents `on` acts on: the ones already wired, or, before any is, every
-// supported agent found on PATH.
+// supported agent found on PATH that the user did not `caveman disable`.
 export function defaultAgents(): string[] {
   const native = moduleHost().nativeAgents();
   const wired = native.filter((agent) => agent.wired);
-  return (wired.length ? wired : native.filter((agent) => agent.detected)).map((agent) => agent.id);
+  return (wired.length ? wired : native.filter((agent) => agent.detected && !agent.optedOut)).map((agent) => agent.id);
 }
 
 // Module state is the authority for the keys a module owns, but only where

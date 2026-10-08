@@ -438,3 +438,35 @@ test("switching routing off and on takes Auto out of and back into wired agents"
     fx.cleanup();
   }
 });
+
+test("on wires nothing the user disabled; a module switched off wires again", async () => {
+  const fx = modulesFixture({ agents: ["claude", "codex"] });
+  const wired = (agent) => existsSync(join(fx.env.CAVEMAN_HOME, "integrations", `${agent}.json`));
+  const optOut = () => JSON.parse(readFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), "utf8")).nativeOptOut;
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    assert.ok(wired("claude") && wired("codex"));
+    // `off` is a module choice, not an agent one: `on` brings the agents back.
+    assert.equal((await runCli(["off", "--all", "--yes"], fx.env)).code, 0);
+    assert.ok(!wired("claude") && !wired("codex"));
+    assert.equal(optOut(), undefined);
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    assert.ok(wired("claude") && wired("codex"));
+
+    for (const agent of ["claude", "codex"]) assert.equal((await runCli(["disable", agent], fx.env)).code, 0, agent);
+    assert.deepEqual(optOut(), ["claude", "codex"]);
+    assert.equal((await runCli(["enable", "codex"], fx.env)).code, 0);
+    assert.equal((await runCli(["disable", "codex"], fx.env)).code, 0);
+    assert.equal((await runCli(["off", "routing", "--yes"], fx.env)).code, 0);
+    // Nothing is wired now, and both agents are on PATH: neither comes back.
+    const on = await runCli(["on", "routing", "--yes"], fx.env);
+    assert.equal(on.code, 0, on.stderr);
+    assert.ok(!wired("claude") && !wired("codex"), on.stdout);
+    // `enable` is how a disabled agent comes back, and `on` follows it again.
+    assert.equal((await runCli(["enable", "claude"], fx.env)).code, 0);
+    assert.deepEqual(optOut(), ["codex"]);
+    assert.ok(wired("claude") && !wired("codex"));
+  } finally {
+    fx.cleanup();
+  }
+});

@@ -511,13 +511,15 @@ setModuleHost({
     id,
     detected: Boolean(which(binOf(findAgent(id)!))),
     wired: Boolean(readNativeJournal(id) || readPendingNativeJournal(id)),
+    optedOut: nativeOptedOut(id),
   })),
   planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp", { plan: true })
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   agentName: (agent) => agentShortName(findAgent(agent)!),
   wireAgent: (agent) => enableNative([agent], { quiet: true }),
-  unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent, { quiet: true }); },
+  // A module going off is not `caveman disable <agent>`: `on` wires it again.
+  unwireAgent: (agent) => { disableNativeAgent(agent as NativeAgent, { quiet: true, optOut: false }); },
   refreshAgent: (agent) => repairNativeAgent(agent as NativeAgent, { quiet: true }),
   // Wiring starts the runtime in the background; this waits briefly to say so.
   runtimeListening: async (waitMs) => {
@@ -3467,7 +3469,7 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
   try {
     restoreAgentNativeBundleSkills(journal.skills);
     restoreAgentNativeCloudMcp(agent, journal.previous_cloud_mcp);
-    if (journal.native_owned) disableNativeAgent(agent);
+    if (journal.native_owned) disableNativeAgent(agent, { optOut: false });
     unlinkSync(agentNativeBundleJournalPath(agent));
     unlinkSync(agentNativeBundleRemovalJournalPath(agent));
   } catch (error) {
@@ -3562,7 +3564,7 @@ async function setup(argv: string[] = []) {
           try { restoreAgentNativeCloudMcp(agentNative, rollbackCloudMcp); } catch (rollback) { rollbackErrors.push((rollback as Error).message); }
         }
         if (!nativeWasInstalled) {
-          try { disableNativeAgent(agentNative); } catch (rollback) { rollbackErrors.push((rollback as Error).message); }
+          try { disableNativeAgent(agentNative, { optOut: false }); } catch (rollback) { rollbackErrors.push((rollback as Error).message); }
         }
         try { unlinkSync(agentNativeBundleJournalPath(agentNative, true)); } catch { /* original error remains authority */ }
         throw new Error(`agent-native setup failed: ${(error as Error).message}${rollbackErrors.length ? `; rollback incomplete: ${rollbackErrors.join("; ")}` : "; changes rolled back"}`);
@@ -3845,10 +3847,10 @@ export function syncAutoEntries(): void {
           const saved = typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`) ? root.model.slice(0, -AUTO_MODEL.length - 1) : undefined;
           if (saved !== undefined && !next.includes(saved) && (!next.length || saved === "openai" || saved === "anthropic")) delete root.model;
         }
-        const after = jsonBytes(root);
         // Compared as values: a file in another layout (or with comments)
         // that needs no change is not rewritten.
         if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) return;
+        const after = jsonBytes(root);
         atomicWriteFile(operation.file, after);
         operation.owned = owned;
         operation.after_sha256 = bytesHash(after);
@@ -3894,6 +3896,11 @@ function clearAutoModelChoice(agent: NativeAgent): void {
 
 // `caveman disable <agent>` and `caveman enable <agent>` record the choice, so
 // the `caveman claude` door never re-wires an agent the user took out.
+function nativeOptedOut(agent: string): boolean {
+  const list = globalCapabilityDocument().nativeOptOut;
+  return Array.isArray(list) && list.includes(agent);
+}
+
 function setNativeOptOut(agent: string, out: boolean): void {
   const current = globalCapabilityDocument().nativeOptOut;
   const list = Array.isArray(current) ? current.filter((id): id is string => typeof id === "string") : [];
@@ -9600,7 +9607,9 @@ function cleanupNativeAgentFiles(target: NativeAgent, journal: NativeJournal): v
   }
 }
 
-function disableNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boolean } = {}): boolean {
+// optOut records the user's choice (`caveman disable <agent>`); a rollback or
+// a bundle removal undoes Caveman's own install and records none.
+function disableNativeAgent(target: NativeAgent, { quiet = false, optOut = true }: { quiet?: boolean; optOut?: boolean } = {}): boolean {
   const disabled = withIntegrationLock(target, () => {
     recoverPendingNativeInstallUnlocked(target);
     const journal = readNativeJournal(target);
@@ -9614,7 +9623,7 @@ function disableNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: bo
   }
   cleanupNativeAgentFiles(target, disabled);
   clearAutoModelChoice(target);
-  setNativeOptOut(target, true);
+  if (optOut) setNativeOptOut(target, true);
   if (quiet) return true;
   const name = findAgent(target)?.display_name ?? target;
   process.stderr.write(`${mark("ok")} ${name}: ${target === "aider" ? "shallow" : "native"} Caveman disabled; unrelated host edits preserved\n`);
