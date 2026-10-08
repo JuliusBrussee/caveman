@@ -143,6 +143,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusRequestEntityTooLarge, "cave_request_too_large", "Request body exceeds the proxy limit.")
 		return
 	}
+	// Auto in an encoded body is decoded so it can run on a real model.
+	if encoding := strings.TrimSpace(r.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		if decoded, ok := providers.DecodeBody(body, encoding, int(maxBytes)); ok && namesAuto(decoded) {
+			body = decoded
+			r.Header.Del("Content-Encoding")
+		}
+	}
 	body, correlatedSessionID, _ := nativeruntime.StripSessionMarkers(body, s.sessionMarkerKey)
 	if strings.HasPrefix(labelOrDefault(rc.Label, "local"), "trial:") {
 		if payloads, ok := s.sink.(PayloadSink); ok {
@@ -191,6 +198,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			evidence.originalBody, rawHash = body, sha256.Sum256(body)
 		}
 	}
+	if meta.Model == AutoModel {
+		// No provider here serves Auto: the literal id never goes upstream.
+		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto runs only on Anthropic and OpenAI (API key or subscription); pick a model for this provider.")
+		return
+	}
 
 	// byte-safe transform. record mode never transforms. On ANY transform error we
 	// forward the ORIGINAL bytes unchanged (fail-open) rather than failing the
@@ -225,7 +237,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	var awaitRoute func() RouteAnswer
 	var run *routeRun
 	modelRequested := meta.Model
-	evidence.modelRequested = modelRequested
+	evidence.modelRequested = agentModel
 	// count_tokens runs the same thinking-binding check as Messages
 	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
 	// and drop_block, is never asked about and gets no heal retry.
@@ -258,6 +270,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if agentModel != AutoModel {
 				// A model the agent named itself is never asked about; the
 				// session's marks and heal still apply, as with routing off.
+				evidence.route = RouteAnswer{Outcome: "off", Reason: "named_model"}
 				break
 			}
 			last, perMessageOff := s.routes.facts(run.key, time.Now())
@@ -426,7 +439,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if retrieveInjected {
 				sent = body
 			}
-			w.Header().Set("x-caveman-routed-from", modelRequested)
+			w.Header().Set("x-caveman-routed-from", agentModel)
 			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, agentModel)
 			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
 			if result.errMsg != "" && s.logger != nil {
@@ -470,7 +483,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if routed, ok := setModel(transform.Body, answer.Model); ok {
 				transform.Body = routed
 				meta.Model = answer.Model
-				w.Header().Set("x-caveman-routed-from", modelRequested)
+				w.Header().Set("x-caveman-routed-from", agentModel)
 			} else {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}

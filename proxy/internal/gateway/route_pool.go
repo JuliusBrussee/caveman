@@ -103,8 +103,10 @@ func (s *Server) serveTarget(w http.ResponseWriter, r *http.Request, run *routeR
 			version = r.Header.Get("anthropic-version")
 		}
 		header.Set("anthropic-version", version)
-		if grammar == translate.Messages && (target.Via == "cloud" || target.Host == "anthropic") && r.Header.Get("anthropic-beta") != "" {
-			header.Set("anthropic-beta", r.Header.Get("anthropic-beta"))
+		if grammar == translate.Messages && (target.Via == "cloud" || target.Host == "anthropic") {
+			if betas := withoutOAuthBetas(r.Header.Values("anthropic-beta")); betas != "" {
+				header.Set("anthropic-beta", betas)
+			}
 		}
 	}
 	for _, name := range target.Forward {
@@ -192,4 +194,17 @@ func nativeHistory(provider, endpoint string, body []byte) []byte {
 		return translate.ChatNative(body) // no chat API takes another host's reasoning
 	}
 	return body
+}
+
+// withoutOAuthBetas joins the agent's betas less the oauth-* ones: those
+// belong to the subscription login, and a pool target runs on another
+// credential.
+func withoutOAuthBetas(values []string) string {
+	var kept []string
+	for _, beta := range strings.Split(strings.Join(values, ","), ",") {
+		if beta = strings.TrimSpace(beta); beta != "" && !strings.HasPrefix(strings.ToLower(beta), "oauth-") {
+			kept = append(kept, beta)
+		}
+	}
+	return strings.Join(kept, ",")
 }

@@ -116,6 +116,17 @@ type CloudLink interface {
 // answer names Auto.
 const AutoModel = "caveman-auto"
 
+// namesAuto reports a JSON body whose top-level "model" is Auto.
+func namesAuto(body []byte) bool {
+	root, ok := jsonsplice.Root(body)
+	if !ok {
+		return false
+	}
+	span, _ := jsonsplice.Field(body, root, "model")
+	model, _ := jsonsplice.String(body, span)
+	return model == AutoModel
+}
+
 // autoFallback is the model Auto runs on per provider whenever the route stage
 // keeps the asked model (a Cloud failure, pause or limit, signed out, routing
 // off, another origin), and the asked model the ask

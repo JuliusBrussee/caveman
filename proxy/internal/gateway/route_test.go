@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"io"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
 )
 
 func TestSetModelSwapsOnlyTheTopLevelModel(t *testing.T) {
@@ -144,14 +146,14 @@ func TestRouteStageMovesTheModelAndRecordsBoth(t *testing.T) {
 	if got := *models; len(got) != 1 || got[0] != "claude-sonnet-5-5" {
 		t.Fatalf("upstream models = %v, want [claude-sonnet-5-5]", got)
 	}
-	if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" {
+	if rec.Header().Get("x-caveman-routed-from") != AutoModel {
 		t.Errorf("x-caveman-routed-from = %q", rec.Header().Get("x-caveman-routed-from"))
 	}
 	if len(cloud.asks) != 1 || cloud.asks[0].Model != "claude-opus-5-5" || cloud.asks[0].Agent != "claude" {
 		t.Fatalf("asks = %+v", cloud.asks)
 	}
 	row := cloud.observed[0]
-	if row.RouteFrom != "claude-opus-5-5" || row.RouteTo != "claude-sonnet-5-5" || row.Model != "claude-sonnet-5-5" || row.RouteOutcome != "routed" {
+	if row.RouteFrom != AutoModel || row.RouteTo != "claude-sonnet-5-5" || row.Model != "claude-sonnet-5-5" || row.RouteOutcome != "routed" {
 		t.Errorf("row route = from %q to %q model %q outcome %q", row.RouteFrom, row.RouteTo, row.Model, row.RouteOutcome)
 	}
 }
@@ -299,7 +301,7 @@ func TestRouteStageNeverAsksAboutANamedModel(t *testing.T) {
 	if len(cloud.asks) != 0 || string(sent) != body || !strings.Contains(rec.Body.String(), "claude-opus-5-5") {
 		t.Fatalf("asks %d, sent %s, agent read %s", len(cloud.asks), sent, rec.Body.String())
 	}
-	if row := cloud.observed[0]; row.RouteOutcome != "" || row.Model != "claude-opus-5-5" {
+	if row := cloud.observed[0]; row.RouteOutcome != "off" || row.RouteReason != "named_model" || row.Model != "claude-opus-5-5" {
 		t.Errorf("row outcome %q model %q, want no route stage on the asked model", row.RouteOutcome, row.Model)
 	}
 }
@@ -347,5 +349,41 @@ func TestAutoCountTokensAndNoCloudLink(t *testing.T) {
 		if fake, ok := cloud.(*fakeCloud); ok && len(fake.asks) != 1 {
 			t.Errorf("asks = %d, want one (Messages only)", len(fake.asks))
 		}
+	}
+}
+
+// Auto where no provider serves it (another provider, an unreadable model
+// field) is a clean 400; an encoded body naming Auto is decoded and runs.
+func TestAutoElsewhereIsRefusedAndEncodedAutoRuns(t *testing.T) {
+	srv, log := effortServer(t, &fakeCloud{}, nil)
+	compat, err := openaicompat.NewNamed("deepseek", "https://api.deepseek.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	refused := New(Config{
+		Adapters: []providers.Adapter{compat}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: roundTripFunc(func(*http.Request) (*http.Response, error) {
+			t.Fatal("Auto reached a provider that cannot serve it")
+			return nil, nil
+		})},
+	})
+	req := httptest.NewRequest(http.MethodPost, "/compat/deepseek/v1/chat/completions", strings.NewReader(`{"model":"caveman-auto","messages":[]}`))
+	rec := httptest.NewRecorder()
+	refused.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "cave_auto_unavailable") {
+		t.Fatalf("other provider: %d %s", rec.Code, rec.Body.String())
+	}
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"model":"caveman-auto","messages":[{"role":"user","content":"hi"}]}`))
+	_ = zw.Close()
+	req = httptest.NewRequest(http.MethodPost, "/v1/messages", &gz)
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("content-encoding", "gzip")
+	rec = httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	sent, header := log.last()
+	if rec.Code != http.StatusOK || string(sent) != `{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"hi"}]}` || header.Get("content-encoding") != "" {
+		t.Fatalf("gzip Auto: %d, upstream got %q (%q)", rec.Code, sent, header.Get("content-encoding"))
 	}
 }

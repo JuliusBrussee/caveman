@@ -158,7 +158,7 @@ func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") || !strings.Contains(rec.Body.String(), `"caveman-auto"`) {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
-	if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" {
+	if rec.Header().Get("x-caveman-routed-from") != AutoModel {
 		t.Errorf("routed-from = %q", rec.Header().Get("x-caveman-routed-from"))
 	}
 	req, body := c.stub.last("/chat/completions")
@@ -584,5 +584,25 @@ func TestPoolAttemptIsOnTheRow(t *testing.T) {
 	poolSend(t, c.srv, poolBody)
 	if row := last(c); row.RoutePoolID != "fireworks/kimi-k3" || row.UpstreamResponseID != "c1" {
 		t.Fatalf("served row = %q %q", row.RoutePoolID, row.UpstreamResponseID)
+	}
+}
+
+// A subscription's own betas and token stay off a pool target: the gateway
+// gets the agent's other betas on the project key only.
+func TestPoolTargetDropsTheSubscriptionsOAuthBetas(t *testing.T) {
+	c := newPoolCase(t, cloudTarget(), "low")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, poolBody)))
+	req.Header.Set("authorization", "Bearer sk-ant-oat01-subscription")
+	req.Header.Set("user-agent", "claude-cli/2.1.294")
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20, interleaved-thinking-2025-05-14")
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	c.srv.Handler().ServeHTTP(rec, req)
+	got, _ := c.stub.last("/gw/v1/messages")
+	if rec.Code != 200 || got == nil {
+		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
+	}
+	if got.Header.Get("anthropic-beta") != "interleaved-thinking-2025-05-14" || got.Header.Get("authorization") != "Bearer cave_project_key" {
+		t.Errorf("gateway got anthropic-beta %q, authorization %q", got.Header.Get("anthropic-beta"), got.Header.Get("authorization"))
 	}
 }

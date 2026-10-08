@@ -950,7 +950,7 @@ func TestRoutedAnswerShowsTheAskedModel(t *testing.T) {
 		if !stream && rec.Header().Get("content-length") != strconv.Itoa(len(body)) {
 			t.Errorf("content-length %s for %d bytes", rec.Header().Get("content-length"), len(body))
 		}
-		if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" || cloud.observed[0].Model != "claude-sonnet-5-5" {
+		if rec.Header().Get("x-caveman-routed-from") != AutoModel || cloud.observed[0].Model != "claude-sonnet-5-5" {
 			t.Errorf("routed-from %q, recorded model %q", rec.Header().Get("x-caveman-routed-from"), cloud.observed[0].Model)
 		}
 		post(t, srv, convo("high", uA, aB, uC), nil)
