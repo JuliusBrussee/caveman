@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { isolatedCliEnv, runCli, runCliWithApi } from "./_cli.mjs";
 
@@ -379,3 +379,44 @@ for (const agent of ["codex", "claude"]) {
     }
   });
 }
+
+test("a rolled-back setup and a bundle removal record no opt-out; disable does", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const bin = join(isolated.home, "bin");
+    mkdirSync(bin, { recursive: true });
+    const mcp = join(bin, "caveman-mcp");
+    const proxy = join(bin, "caveman-proxy");
+    writeFileSync(join(bin, "codex"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex 1.0.0'; fi\n", { mode: 0o755 });
+    writeFileSync(mcp, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
+    writeFileSync(proxy, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
+    Object.assign(isolated.env, { PATH: `${bin}:${isolated.env.PATH}`, CAVEMAN_MCP_BIN: mcp, CAVEMAN_PROXY_BIN: proxy });
+    const optOut = () => {
+      const path = join(isolated.home, "cloud.json");
+      return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")).nativeOptOut : undefined;
+    };
+    // A skills directory nothing can be created in: the native install
+    // succeeds, the skill write fails, and setup rolls its own install back.
+    const blocker = join(isolated.home, ".codex", "skills");
+    mkdirSync(blocker, { recursive: true });
+    chmodSync(blocker, 0o555);
+    const failed = await runCli(["setup", "--agent-native", "codex"], { env: isolated.env });
+    assert.notEqual(failed.code, 0);
+    assert.match(failed.stderr, /agent-native setup failed: .*changes rolled back/);
+    assert.equal(existsSync(join(isolated.home, "integrations", "codex.json")), false, "the native install was rolled back");
+    assert.equal(optOut(), undefined, "a rollback is not the user's choice");
+
+    chmodSync(blocker, 0o755);
+    assert.equal((await runCli(["setup", "--agent-native", "codex"], { env: isolated.env })).code, 0);
+    const removed = await runCli(["setup", "--agent-native", "codex", "--remove"], { env: isolated.env });
+    assert.equal(removed.code, 0, removed.stderr);
+    assert.equal(existsSync(join(isolated.home, "integrations", "codex.json")), false);
+    assert.equal(optOut(), undefined, "removing the bundle is not `caveman disable`");
+
+    assert.equal((await runCli(["enable", "codex"], { env: isolated.env })).code, 0);
+    assert.equal((await runCli(["disable", "codex"], { env: isolated.env })).code, 0);
+    assert.deepEqual(optOut(), ["codex"]);
+  } finally {
+    isolated.cleanup();
+  }
+});

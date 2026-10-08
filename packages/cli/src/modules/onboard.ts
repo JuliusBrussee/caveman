@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import { emitKeypressEvents } from "node:readline";
 
-import { applyModules, currentSelection, planModules, renderPlan, type ModulePlan, type ModuleSelection } from "./apply.js";
+import { applyModules, currentSelection, moduleHost, planModules, renderPlan, type ModulePlan, type ModuleSelection } from "./apply.js";
 import { ROUTING_ON_LINE } from "./cloud.js";
 import { cloudConfigPath } from "./config-home.js";
 import { MODULES, findModule, type ModuleId } from "./registry.js";
@@ -148,6 +148,9 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     }
   }
 
+  // The agents this setup chose: `caveman claude` re-wires Claude Code later
+  // only when it was one of them.
+  moduleHost().mutateConfig((out) => { out.setupAgents = [...agents]; });
   const result = await applyModules(plan, { yes: true, progress: (line) => out.write(`${line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○"))}\n`) });
   for (const problem of result.problems) out.write(`${c.red("✗")} ${problem}\n`);
   out.write("\n");

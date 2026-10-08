@@ -115,3 +115,27 @@ test("a user from before setup existed, with a native journal and no modules, la
     rmSync(home, { recursive: true, force: true });
   }
 });
+
+test("after setup chose Claude Code, caveman claude re-wires it silently, but never after disable claude", { skip }, async () => {
+  const { env, home } = doorEnv();
+  try {
+    assert.equal((await run(env, ["setup", "--yes", "--only", "output"])).code, 0);
+    assert.ok(JSON.parse(readFileSync(join(home, "cloud.json"), "utf8")).setupAgents.includes("claude"));
+    // The journal lost (an old uninstall, a wiped home): the door wires again, silently.
+    rmSync(join(home, "integrations", "claude.json"));
+    rmSync(join(home, ".claude", "settings.json"));
+    let out = await run(env, ["claude", "-p", "hi"]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout, "agent:-p hi\n", "direct launch");
+    assert.doesNotMatch(out.stderr, /planned user-scoped writes/);
+    assert.ok(existsSync(join(home, "integrations", "claude.json")));
+    // An explicit disable sticks.
+    assert.equal((await run(env, ["disable", "claude"])).code, 0);
+    out = await run(env, ["claude", "-p", "hi"]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /agent:--plugin-dir \S*caveman-wrap-claude-\S* -p hi/, "session-only after disable");
+    assert.equal(existsSync(join(home, "integrations", "claude.json")), false);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});

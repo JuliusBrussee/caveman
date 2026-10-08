@@ -156,7 +156,7 @@ func effortServer(t *testing.T, cloud CloudLink, respond func(body []byte) (int,
 
 func post(t *testing.T, srv *Server, body string, header map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, body)))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-cave-agent", "claude")
 	req.Header.Set("x-claude-code-session-id", "sess-1")
@@ -477,7 +477,7 @@ func TestRouteEffortAndLastOnOpenAI(t *testing.T) {
 			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
 		})
 		for range 2 {
-			req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(c.body))
+			req := httptest.NewRequest(http.MethodPost, c.path, strings.NewReader(auto(t, c.body)))
 			req.Header.Set("authorization", "Bearer sk-proj-api-key")
 			req.Header.Set("session_id", "codex-1")
 			srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
@@ -763,12 +763,22 @@ func TestRouteSessionsUnderConcurrency(t *testing.T) {
 	wg.Wait()
 }
 
-// A routed request does not offer br upstream: its answer is read decoded.
-// With nothing left Go's transport offers gzip and decodes it itself.
+// A request the route stage may change but keeps on its asked model (a heal
+// on a session that carries marks) does not offer br upstream: its answer is
+// read decoded. With nothing left Go's transport offers gzip and decodes it
+// itself. Auto is asked for an identity answer: the agent's copy names Auto.
 func TestRoutedRequestsDropBrotli(t *testing.T) {
-	srv, log := effortServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept"}}, nil)
+	srv, log := effortServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message"}}, nil)
+	post(t, srv, convo("high", uA, aB, uC), nil) // Auto: the session gets a mark
+	if _, header := log.last(); header.Get("accept-encoding") != "gzip" {
+		t.Errorf("Auto went upstream offering %q, want Go's own gzip", header.Get("accept-encoding"))
+	}
 	for offered, want := range map[string]string{"gzip, deflate, br": "gzip, deflate", "br;q=1.0": "gzip", "zstd, gzip": "zstd, gzip"} {
-		post(t, srv, convo("high", uA), map[string]string{"accept-encoding": offered})
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(convo("high", uA, aB, uC)))
+		req.Header.Set("x-api-key", "sk-ant-api-key")
+		req.Header.Set("x-claude-code-session-id", "sess-1")
+		req.Header.Set("accept-encoding", offered)
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
 		if _, header := log.last(); header.Get("accept-encoding") != want {
 			t.Errorf("%q went upstream as %q, want %q", offered, header.Get("accept-encoding"), want)
 		}
@@ -796,7 +806,7 @@ func TestRefusedEffortRejectsTheDecision(t *testing.T) {
 		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
 		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(`{"model":"gpt-6-sol","messages":[]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(auto(t, `{"model":"gpt-6-sol","messages":[]}`)))
 	req.Header.Set("authorization", "Bearer sk-proj-api-key")
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, req)
@@ -934,13 +944,13 @@ func TestRoutedAnswerShowsTheAskedModel(t *testing.T) {
 			t.Fatalf("upstream got %s", sent)
 		}
 		body := rec.Body.String()
-		if !strings.Contains(body, `"model":"claude-opus-5-5"`) || strings.Count(body, "claude-sonnet-5-5") != map[bool]int{false: 1, true: 0}[stream] {
+		if !strings.Contains(body, `"model":"caveman-auto"`) || strings.Count(body, "claude-sonnet-5-5") != map[bool]int{false: 1, true: 0}[stream] {
 			t.Errorf("stream=%v: the agent read %s", stream, body)
 		}
 		if !stream && rec.Header().Get("content-length") != strconv.Itoa(len(body)) {
 			t.Errorf("content-length %s for %d bytes", rec.Header().Get("content-length"), len(body))
 		}
-		if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" || cloud.observed[0].Model != "claude-sonnet-5-5" {
+		if rec.Header().Get("x-caveman-routed-from") != AutoModel || cloud.observed[0].Model != "claude-sonnet-5-5" {
 			t.Errorf("routed-from %q, recorded model %q", rec.Header().Get("x-caveman-routed-from"), cloud.observed[0].Model)
 		}
 		post(t, srv, convo("high", uA, aB, uC), nil)
@@ -996,12 +1006,12 @@ func TestRoutedOpenAIAnswerShowsTheAskedModel(t *testing.T) {
 			Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
 			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
 		})
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"gpt-6-sol","input":"go","messages":[]}`))
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"caveman-auto","input":"go","messages":[]}`))
 		req.Header.Set("authorization", "Bearer sk-proj-api-key")
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)
 		upstream.Close()
-		if want := strings.Replace(answer, "gpt-6-luna-2026-09-01", "gpt-6-sol", 1); rec.Body.String() != want {
+		if want := strings.Replace(answer, "gpt-6-luna-2026-09-01", AutoModel, 1); rec.Body.String() != want {
 			t.Errorf("%s: the agent read %s", path, rec.Body.String())
 		}
 		if cloud.observed[0].Model != "gpt-6-luna" {
@@ -1095,7 +1105,7 @@ func TestMovedStreamDropsContentLength(t *testing.T) {
 	})
 	proxied := httptest.NewServer(srv.Handler())
 	defer proxied.Close()
-	req, _ := http.NewRequest(http.MethodPost, proxied.URL+"/v1/messages", strings.NewReader(convo("high", uA)))
+	req, _ := http.NewRequest(http.MethodPost, proxied.URL+"/v1/messages", strings.NewReader(auto(t, convo("high", uA))))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -1103,7 +1113,7 @@ func TestMovedStreamDropsContentLength(t *testing.T) {
 	}
 	defer resp.Body.Close()
 	got, err := io.ReadAll(resp.Body)
-	if err != nil || string(got) != strings.Replace(stream, "claude-sonnet-5-5", "claude-opus-5-5", 1) {
+	if err != nil || string(got) != strings.Replace(stream, "claude-sonnet-5-5", AutoModel, 1) {
 		t.Fatalf("read %q, %v", got, err)
 	}
 }
@@ -1348,7 +1358,7 @@ func TestCountTokensGetsTheSessionsMarksAndHeal(t *testing.T) {
 	srv, log := effortServer(t, cloud, bindingUntilDropBlock)
 	post(t, srv, thinking("adaptive", convo("high", uA, aB, uC)), nil)
 	asks := len(cloud.asks)
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(thinking("adaptive", convo("high", uA, aB, uC, aD, uTR))))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(auto(t, thinking("adaptive", convo("high", uA, aB, uC, aD, uTR)))))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-claude-code-session-id", "sess-1")
 	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
@@ -1360,7 +1370,7 @@ func TestCountTokensGetsTheSessionsMarksAndHeal(t *testing.T) {
 		t.Errorf("betas %q, asks %d, attempts %d", beta, len(cloud.asks)-asks, len(log.bodies))
 	}
 	// A session never routed gets nothing and no memory.
-	req = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(convo("high", uA)))
+	req = httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(auto(t, convo("high", uA))))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-claude-code-session-id", "sess-never")
 	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
@@ -1618,7 +1628,7 @@ func TestForkedChildCountTokensGetsTheParentsMarks(t *testing.T) {
 	srv, log := effortServer(t, cloud, nil)
 	post(t, srv, convo("high", uA, aB, uC), nil)
 	task := `{"role":"user","content":"child task"}`
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(convo("high", uA, aB, uC, aE, task)))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(auto(t, convo("high", uA, aB, uC, aE, task))))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-claude-code-session-id", "sess-1")
 	req.Header.Set("x-claude-code-agent-id", "a1")
@@ -1737,7 +1747,7 @@ func TestCountTokensInATopOnlySession(t *testing.T) {
 	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "top"}}
 	srv, log := effortServer(t, cloud, nil)
 	post(t, srv, convo("high", uA, aB, uC), nil)
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(bare(uA, aB, uC, aD, uTR)))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages/count_tokens", strings.NewReader(auto(t, bare(uA, aB, uC, aD, uTR))))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-claude-code-session-id", "sess-1")
 	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
@@ -1876,5 +1886,35 @@ func TestCleaningKeepsPerMessageMarks(t *testing.T) {
 		if cut < 0 || !bytes.HasPrefix(pair[1], pair[0][:cut]) {
 			t.Fatalf("the prefix changed between requests %d and %d:\n%s\n%s", i+1, i+2, pair[0], pair[1])
 		}
+	}
+}
+
+// OpenAI Auto runs gpt-6.1-sol, gpt-6-astra or gpt-6-luna only: the ask offers
+// those, and an answer naming another model runs gpt-6.1-sol at its effort.
+func TestOpenAIAutoRunsOnlyItsThreeModels(t *testing.T) {
+	var sent []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent, _ = io.ReadAll(r.Body)
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"r","object":"response","model":"gpt-6.1-sol","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-sol", Effort: "high", Outcome: "routed"}}
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"caveman-auto","input":"go"}`))
+	req.Header.Set("authorization", "Bearer sk-proj-api-key")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if string(sent) != `{"model":"gpt-6.1-sol","input":"go","reasoning":{"effort":"high"}}` || !strings.Contains(rec.Body.String(), AutoModel) {
+		t.Fatalf("upstream got %s; agent read %s", sent, rec.Body.String())
+	}
+	if ask := cloud.asks[0]; ask.Model != "gpt-6.1-sol" || strings.Join(ask.Models, ",") != "gpt-6.1-sol,gpt-6-astra,gpt-6-luna" {
+		t.Errorf("ask model %q, models %v", ask.Model, ask.Models)
+	}
+	if row := cloud.observed[0]; row.RouteOutcome != "degraded" || row.RouteReason != "auto_model_refused" {
+		t.Errorf("row %q %q", row.RouteOutcome, row.RouteReason)
 	}
 }

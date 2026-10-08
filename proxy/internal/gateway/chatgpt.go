@@ -75,6 +75,25 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
 	}
+	if r.Method == http.MethodGet && suffix == "/models" && s.autoOffered() {
+		s.chatGPTAutoModels(w, r, upstreamURL)
+		return
+	}
+	if r.Method == http.MethodPost {
+		// A POST whose head names Auto goes to chatgpt_auto.go, whatever its
+		// path (Codex compaction too); any other streams on as before, with
+		// the head put back in front.
+		original := r.Body
+		head, _ := io.ReadAll(io.LimitReader(original, autoSniffRaw))
+		r.Body = struct {
+			io.Reader
+			io.Closer
+		}{io.MultiReader(bytes.NewReader(head), original), original}
+		if namesAutoHead(head, r.Header.Get("Content-Encoding")) {
+			s.chatGPTAutoDoor(w, r, rc, requestID, traceID, upstreamURL, suffix, start, evidence)
+			return
+		}
+	}
 
 	// Compression needs a complete request. Keep the existing bounded behavior:
 	// over-limit bodies stream through unchanged rather than being rejected or held
@@ -244,7 +263,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
 		requestHashComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, nil, 0, false, transform.OptimizerIDs, comp, compressEligible, transform.Body, "")
+		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, nil, 0, false, transform.OptimizerIDs, comp, compressEligible, transform.Body, "", nil)
 		return
 	}
 	// OAuth backends can reject byte-modified requests for undocumented reasons.
@@ -265,7 +284,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		})
 		if doErr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
-			s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), reqHash.Sum(nil), true, nil, 0, false, nil, nil, compressEligible, originalBody, "")
+			s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), reqHash.Sum(nil), true, nil, 0, false, nil, nil, compressEligible, originalBody, "", nil)
 			return
 		}
 		if retryResp.StatusCode >= 200 && retryResp.StatusCode < 300 {
@@ -344,7 +363,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 			rawRetry: rawRetried, sent: sentSeq, session: evidence.SessionID, requestID: requestID,
 		})
 	}
-	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, errCode, reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, respCapture, respBytes, stream, transform.OptimizerIDs, comp, compressEligible, transform.Body, cacheBustCause)
+	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, errCode, reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, respCapture, respBytes, stream, transform.OptimizerIDs, comp, compressEligible, transform.Body, cacheBustCause, nil)
 
 	// Path, status, and timing only — request headers carry the operator's
 	// OAuth credential and are never logged on this route.
@@ -368,7 +387,7 @@ func transformedChatGPTHash(raw []byte, transformed []byte) []byte {
 	return sum[:]
 }
 
-func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, traceID, endpoint string, start time.Time, status int, errCode string, reqCapture *cappedBuffer, reqHash, transformedHash []byte, requestHashComplete bool, respCapture *cappedBuffer, respBytes int64, stream bool, optimizers []string, comp *compressionOutcome, compressionEligible bool, acceptedBody []byte, cacheBustCause string) {
+func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, traceID, endpoint string, start time.Time, status int, errCode string, reqCapture *cappedBuffer, reqHash, transformedHash []byte, requestHashComplete bool, respCapture *cappedBuffer, respBytes int64, stream bool, optimizers []string, comp *compressionOutcome, compressionEligible bool, acceptedBody []byte, cacheBustCause string, route *chatGPTRoute) {
 	if s.sink == nil {
 		return
 	}
@@ -456,6 +475,9 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 		CompressionTokensAfter:     compAfter,
 		CompressionTokenCountBasis: compBasis,
 		RecoveryHandle:             compHandle,
+	}
+	if route != nil {
+		row.RouteFrom, row.RouteTo, row.RouteOutcome, row.RouteReason = route.from, model, route.answer.Outcome, route.answer.Reason
 	}
 	var acceptedLogicalBody []byte
 	if acceptedBody == nil {
@@ -756,4 +778,10 @@ func (c *cappedBuffer) Write(p []byte) (int, error) {
 	}
 	c.buf.Write(p)
 	return len(p), nil
+}
+
+// chatGPTRoute is what the route stage did for an Auto request on this route.
+type chatGPTRoute struct {
+	from   string
+	answer RouteAnswer
 }

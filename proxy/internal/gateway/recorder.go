@@ -199,6 +199,9 @@ func (s *Server) Flush() {
 // after the HTTP server has shut down and before the sink closes; a request
 // still running after Close finishes its row inline.
 func (s *Server) Close() error {
+	if s.warmer != nil {
+		s.warmer.close() // first: a warm in flight still records a row
+	}
 	if s.recorder != nil {
 		s.recorder.close()
 	}

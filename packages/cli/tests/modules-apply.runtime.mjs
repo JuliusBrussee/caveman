@@ -188,6 +188,8 @@ test("off keeps agent wiring while another module needs it", async () => {
 
     assert.equal((await runCli(["off", "output", "waste-fixes", "--yes"], fx.env)).code, 0);
     assert.ok(journal(), "wiring must stay while routing is on");
+    // caveman-proxy's cache warming reads this module state itself.
+    assert.equal(JSON.parse(readFileSync(join(fx.home, ".caveman", "cloud.json"), "utf8")).modules["waste-fixes"], false);
 
     const before = snapshot(fx.home);
     const dry = await runCli(["off", "routing", "--dry-run"], fx.env);
@@ -414,3 +416,57 @@ test("a primary key that contradicts the module state is reconciled", async () =
   }
 });
 
+
+test("switching routing off and on takes Auto out of and back into wired agents", async () => {
+  const fx = modulesFixture({ agents: ["claude"], blocks: true });
+  fx.env.CAVE_TOKEN = "signed-in"; // Auto shows only while signed in
+  const auto = () => JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION;
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    assert.equal(auto(), "caveman-auto[1m]");
+    const off = await runCli(["off", "routing", "--yes"], fx.env);
+    assert.equal(off.code, 0, off.stderr);
+    assert.deepEqual(planLines(off.stdout), [
+      ["UPDATE", "~/.caveman/cloud.json", "modules off: routing"],
+      ["UPDATE", "~/.claude/settings.json", "refresh claude hooks"],
+      ["UPDATE", "~/.claude.json", "refresh claude hooks"],
+    ]);
+    assert.equal(auto(), undefined);
+    assert.equal((await runCli(["on", "routing", "--yes"], fx.env)).code, 0);
+    assert.equal(auto(), "caveman-auto[1m]");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("on wires nothing the user disabled; a module switched off wires again", async () => {
+  const fx = modulesFixture({ agents: ["claude", "codex"] });
+  const wired = (agent) => existsSync(join(fx.env.CAVEMAN_HOME, "integrations", `${agent}.json`));
+  const optOut = () => JSON.parse(readFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), "utf8")).nativeOptOut;
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    assert.ok(wired("claude") && wired("codex"));
+    // `off` is a module choice, not an agent one: `on` brings the agents back.
+    assert.equal((await runCli(["off", "--all", "--yes"], fx.env)).code, 0);
+    assert.ok(!wired("claude") && !wired("codex"));
+    assert.equal(optOut(), undefined);
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    assert.ok(wired("claude") && wired("codex"));
+
+    for (const agent of ["claude", "codex"]) assert.equal((await runCli(["disable", agent], fx.env)).code, 0, agent);
+    assert.deepEqual(optOut(), ["claude", "codex"]);
+    assert.equal((await runCli(["enable", "codex"], fx.env)).code, 0);
+    assert.equal((await runCli(["disable", "codex"], fx.env)).code, 0);
+    assert.equal((await runCli(["off", "routing", "--yes"], fx.env)).code, 0);
+    // Nothing is wired now, and both agents are on PATH: neither comes back.
+    const on = await runCli(["on", "routing", "--yes"], fx.env);
+    assert.equal(on.code, 0, on.stderr);
+    assert.ok(!wired("claude") && !wired("codex"), on.stdout);
+    // `enable` is how a disabled agent comes back, and `on` follows it again.
+    assert.equal((await runCli(["enable", "claude"], fx.env)).code, 0);
+    assert.deepEqual(optOut(), ["codex"]);
+    assert.ok(wired("claude") && !wired("codex"));
+  } finally {
+    fx.cleanup();
+  }
+});

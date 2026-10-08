@@ -601,3 +601,34 @@ func assertUsage(t *testing.T, u UsageObservation, in, out, cached, cacheCreate,
 		t.Errorf("reasoning = %d, want %d", u.ReasoningTokens, reasoning)
 	}
 }
+
+func TestAnthropicMessageIterationsStayPriced(t *testing.T) {
+	// Anthropic reports the request's own sampling as a "message" iteration on
+	// every response; only another kind is billed apart from the top-level counts.
+	cases := map[string]string{
+		`[{"type":"message","input_tokens":2,"output_tokens":4}]`: "",
+		`[]`: "",
+		`[{"type":"compaction","input_tokens":9,"output_tokens":3},{"type":"message"}]`:             "unsupported_model_fallback_pricing",
+		`[{"type":"advisor_message","model":"claude-opus-5-5","input_tokens":9,"output_tokens":3}]`: "unsupported_model_fallback_pricing",
+		`"x"`: "unsupported_model_fallback_pricing",
+	}
+	for iterations, want := range cases {
+		var usage UsageObservation
+		ParseUsageBytes("anthropic", []byte(`{"stop_reason":"end_turn","usage":{"input_tokens":2,"output_tokens":4,"iterations":`+iterations+`}}`), &usage)
+		if usage.PricingUnsupportedReason != want || !usage.Complete() {
+			t.Errorf("iterations %s: reason %q, want %q (%+v)", iterations, usage.PricingUnsupportedReason, want, usage)
+		}
+	}
+}
+
+func TestAnthropicInferenceGeoNotAvailableIsNoGeography(t *testing.T) {
+	var usage UsageObservation
+	ParseUsageBytes("anthropic", []byte(`{"stop_reason":"end_turn","usage":{"input_tokens":2,"cache_creation_input_tokens":34890,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":34890,"ephemeral_1h_input_tokens":0},"output_tokens":4,"service_tier":"standard","inference_geo":"Not_Available","iterations":[{"type":"message","input_tokens":2,"output_tokens":4}]}}`), &usage)
+	if usage.InferenceGeo != "" || usage.PricingUnsupportedReason != "" || usage.CacheCreation5mTokens != 34890 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	ParseUsageBytes("anthropic", []byte(`{"usage":{"input_tokens":2,"output_tokens":4,"inference_geo":"us"}}`), &usage)
+	if usage.InferenceGeo != "us" {
+		t.Fatalf("a named geography was dropped: %+v", usage)
+	}
+}

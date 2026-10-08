@@ -38,7 +38,7 @@ type nullSink struct{}
 func (nullSink) Record(gateway.RequestRecord) {}
 
 // The whole path in one process: the CLI's signed-in state on disk, the proxy
-// with the link, a Cloud that routes, and a provider that records the model.
+// with the link, a Cloud that routes Auto, and a provider that records the model.
 func TestSignedInProxyRoutesAndReports(t *testing.T) {
 	var mu sync.Mutex
 	var asked, upstreamModel string
@@ -50,7 +50,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/route":
 			asked = string(raw)
-			_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked","decision_id":"0b9f6e4e-3b1a-4c7e-9a4e-1d2c3b4a5f60"}`)
+			_, _ = io.WriteString(w, `{"model":"claude-opus-5-5","reason":"ranked","decision_id":"0b9f6e4e-3b1a-4c7e-9a4e-1d2c3b4a5f60"}`)
 		case "/api/v1/auth/me":
 			_, _ = io.WriteString(w, `{"data":{"level":"decisions"}}`)
 		case "/api/v1/runtime/events":
@@ -91,7 +91,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 		})},
 		Cloud: link,
 	})
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"`+promptText+`"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"caveman-auto","max_tokens":5,"messages":[{"role":"user","content":"`+promptText+`"}]}`))
 	req.Header.Set("x-api-key", "sk-ant-api03-test")
 	req.Header.Set("x-cave-agent", "claude")
 	rec := httptest.NewRecorder()
@@ -103,8 +103,8 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 
 	mu.Lock()
 	defer mu.Unlock()
-	if upstreamModel != "claude-sonnet-5-5" {
-		t.Errorf("provider got model %q, want the routed claude-sonnet-5-5", upstreamModel)
+	if upstreamModel != "claude-opus-5-5" || !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) {
+		t.Errorf("provider got model %q, want the routed claude-opus-5-5; the agent read %s", upstreamModel, rec.Body.String())
 	}
 	if !strings.Contains(asked, `"ask":{"text":"`+promptText+`"}`) || !strings.Contains(asked, `"signals":{"agent":"claude",`) {
 		t.Errorf("ask = %s", asked)
@@ -113,7 +113,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 		t.Fatalf("events = %v", events)
 	}
 	route, _ := events[0]["route"].(map[string]any)
-	if events[0]["model_requested"] != "claude-opus-5-5" || events[0]["model_used"] != "claude-sonnet-5-5" || route["outcome"] != "routed" {
+	if events[0]["model_requested"] != "caveman-auto" || events[0]["model_used"] != "claude-opus-5-5" || route["outcome"] != "routed" {
 		t.Errorf("event = %v", events[0])
 	}
 	if raw, _ := json.Marshal(events); strings.Contains(string(raw), promptText) {

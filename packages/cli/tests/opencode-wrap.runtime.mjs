@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -86,3 +86,38 @@ for (const raw of ["{ malformed-secret", "[]", "null", '"synthetic-secret"']) {
     });
   });
 }
+
+test("routing on puts Auto in wrapped OpenCode's and Claude Code's pickers, off leaves it out", () => {
+  const claude = PROFILES.find((candidate) => candidate.id === "claude");
+  for (const routing of [true, false]) {
+    withInlineConfig(undefined, () => {
+      delete process.env.OPENCODE_CONFIG_CONTENT;
+      writeFileSync(join(process.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ modules: { routing }, baseURL: "https://api.caveman.so", tokenStore: "file" }));
+      const providers = JSON.parse(buildWrapEnv(profile, "http://127.0.0.1:8787", "false").OPENCODE_CONFIG_CONTENT).provider;
+      const env = buildWrapEnv(claude, "http://127.0.0.1:8787", "false");
+      for (const id of ["openai", "anthropic"]) assert.equal(providers[id].models?.["caveman-auto"]?.name, routing ? "Auto" : undefined, id);
+      assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, routing ? "caveman-auto[1m]" : undefined);
+      assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME, routing ? "Auto" : undefined);
+      assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES, routing ? "effort,max_effort,xhigh_effort,thinking,adaptive_thinking,interleaved_thinking" : undefined);
+    });
+  }
+});
+
+test("the Bedrock lane of a Claude Code wrap offers no Auto", () => {
+  const claude = PROFILES.find((candidate) => candidate.id === "claude");
+  withInlineConfig(undefined, () => {
+    writeFileSync(join(process.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ modules: { routing: true }, baseURL: "https://api.caveman.so", tokenStore: "file" }));
+    process.env.CAVEMAN_WRAP_PROVIDER = "bedrock";
+    try {
+      assert.equal(buildWrapEnv(claude, "http://127.0.0.1:8787", "false").ANTHROPIC_CUSTOM_MODEL_OPTION, undefined);
+    } finally {
+      delete process.env.CAVEMAN_WRAP_PROVIDER;
+    }
+    process.env.CLAUDE_CODE_USE_VERTEX = "1";
+    try {
+      assert.equal(buildWrapEnv(claude, "http://127.0.0.1:8787", "false").ANTHROPIC_CUSTOM_MODEL_OPTION, undefined);
+    } finally {
+      delete process.env.CLAUDE_CODE_USE_VERTEX;
+    }
+  });
+});

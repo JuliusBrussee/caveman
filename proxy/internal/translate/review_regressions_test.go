@@ -189,7 +189,7 @@ func TestAnsweredEffortOnEveryDirection(t *testing.T) {
 		{"messages to messages, thinking off", Messages, Messages, messagesOff, "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
 		{"responses to messages", Responses, Messages, codexBody("m", "high", "", userHello), "low", "claude-opus-5-5", "output_config", `{"effort":"low"}`},
 		{"responses to chat", Responses, Chat, codexBody("m", "high", "", userHello), "low", "g", "reasoning_effort", `"low"`},
-		{"responses to responses", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6.1-sol", "reasoning", `{"effort":"xhigh","summary":"auto"}`},
+		{"responses to responses", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6.1-sol", "reasoning", `{"effort":"max","summary":"auto"}`}, // the catalog lists max
 		{"responses to responses, catalog lists max", Responses, Responses, codexBody("m", "high", "", userHello), "max", "gpt-6-sol", "reasoning", `{"effort":"max","summary":"auto"}`},
 		{"chat to chat", Chat, Chat, chat, "low", "g", "reasoning_effort", `"low"`},
 		{"messages to chat at max", Messages, Chat, messages, "max", "g", "reasoning_effort", `"xhigh"`},
@@ -333,7 +333,8 @@ func TestFitEffort(t *testing.T) {
 		{Messages, "claude-sonnet-5-5", "max", `{"thinking":{"type":"between_tools"}}`, "high"},
 		{Messages, "claude-opus-5", "xhigh", `{"thinking":{"type":"disabled"}}`, "high"},
 		{Messages, "claude-opus-5", "xhigh", `{"thinking":{"type":"adaptive"}}`, "xhigh"},
-		{Responses, "gpt-6.1-sol", "max", ``, "xhigh"},
+		{Responses, "gpt-uncataloged", "max", ``, "xhigh"}, // no catalog row: OpenAI's common set
+		{Responses, "gpt-6.1-sol", "max", ``, "max"},
 		{Responses, "gpt-6-sol", "max", ``, "max"},
 	} {
 		if got := FitEffort(tc.grammar, tc.model, tc.effort, []byte(tc.body)); got != tc.want {

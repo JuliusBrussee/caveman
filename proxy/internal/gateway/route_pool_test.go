@@ -141,7 +141,7 @@ func localTarget(host string) *RouteTarget {
 
 func poolSend(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, body)))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-cave-agent", "claude")
 	req.Header.Set("x-claude-code-session-id", "sess-1")
@@ -174,10 +174,10 @@ func newPoolCaseMode(t *testing.T, target *RouteTarget, effort, mode string) poo
 func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	c := newPoolCase(t, localTarget("api.openai.com"), "high")
 	rec := poolSend(t, c.srv, poolBody)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") || !strings.Contains(rec.Body.String(), `"claude-opus-5-5"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") || !strings.Contains(rec.Body.String(), `"caveman-auto"`) {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
-	if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" {
+	if rec.Header().Get("x-caveman-routed-from") != AutoModel {
 		t.Errorf("routed-from = %q", rec.Header().Get("x-caveman-routed-from"))
 	}
 	req, body := c.stub.last("/chat/completions")
@@ -205,7 +205,7 @@ func TestPoolLocalTargetStreamsBackInTheCallersGrammar(t *testing.T) {
 		"data: {\"id\":\"c1\",\"model\":\"gpt-6.1-sol\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"
 	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
 	out := rec.Body.String()
-	for _, want := range []string{"event: message_start", `"claude-opus-5-5"`, "content_block_delta", "str", "eamed", "message_stop"} {
+	for _, want := range []string{"event: message_start", `"caveman-auto"`, "content_block_delta", "str", "eamed", "message_stop"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stream lacks %q:\n%s", want, out)
 		}
@@ -252,7 +252,7 @@ func cloudTarget() *RouteTarget {
 func TestPoolCloudTargetSendsTheCallersGrammarToTheGateway(t *testing.T) {
 	c := newPoolCase(t, cloudTarget(), "low")
 	rec := poolSend(t, c.srv, poolBody)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "cloud says hi") || !strings.Contains(rec.Body.String(), `"model":"claude-opus-5-5"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "cloud says hi") || !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
 	req, body := c.stub.last("/gw/v1/messages")
@@ -334,7 +334,7 @@ func TestPoolClaudeCodeOnTheChatGPTLogin(t *testing.T) {
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"
 	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"tools":[{"name":"Read","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"fix the bug"}]}`)
 	out := rec.Body.String()
-	for _, want := range []string{"event: message_start", `"claude-opus-5-5"`, "plan says hi", "message_stop"} {
+	for _, want := range []string{"event: message_start", `"caveman-auto"`, "plan says hi", "message_stop"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stream lacks %q:\n%s", want, out)
 		}
@@ -394,7 +394,8 @@ func TestPoolFailureAfterHeadersBeforeContentFallsBack(t *testing.T) {
 }
 
 // A Claude Code request with tools on an OpenAI API key goes out on the
-// Responses wire with function tools, at the answered effort.
+// Responses wire with function tools, at the answered effort (the catalog
+// lists max for gpt-6.1-sol).
 func TestPoolOpenAIKeyIsResponsesOnly(t *testing.T) {
 	header := http.Header{}
 	header.Set("authorization", "Bearer sk-openai")
@@ -416,7 +417,7 @@ func TestPoolOpenAIKeyIsResponsesOnly(t *testing.T) {
 	}
 	var sent map[string]any
 	_ = json.Unmarshal([]byte(body), &sent)
-	if encode(sent["tools"]) != `[{"name":"Bash","parameters":{"type":"object"},"strict":false,"type":"function"}]` || encode(sent["reasoning"]) != `{"effort":"xhigh","summary":"auto"}` {
+	if encode(sent["tools"]) != `[{"name":"Bash","parameters":{"type":"object"},"strict":false,"type":"function"}]` || encode(sent["reasoning"]) != `{"effort":"max","summary":"auto"}` {
 		t.Fatalf("responses body = %s", body)
 	}
 }
@@ -483,11 +484,12 @@ func TestPoolFallbackFitsTheEffortToTheAskedModel(t *testing.T) {
 	if _, body := c.stub.last("/v1/messages"); !strings.Contains(body, `"output_config":{"effort":"high"}`) {
 		t.Fatalf("max with thinking off: %s", body)
 	}
-	for model, want := range map[string]string{"gpt-6.1-sol": "xhigh", "gpt-6-sol": "max"} { // the catalog lists max for gpt-6-sol
+	// gpt-uncataloged has no catalog row (OpenAI's common set); the catalog lists max for the others.
+	for model, want := range map[string]string{"gpt-uncataloged": "xhigh", "gpt-6.1-sol": "max", "gpt-6-sol": "max"} {
 		c = newPoolCase(t, localTarget("down.example"), "max")
 		c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"harness says hi\"}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
-		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"`+model+`","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(auto(t, `{"model":"`+model+`","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`)))
 		req.Header.Set("authorization", "Bearer sk-proj-harness")
 		req.Header.Set("x-cave-agent", "codex")
 		req.Header.Set("session_id", "thread-1")
@@ -603,5 +605,25 @@ func TestPoolAttemptIsOnTheRow(t *testing.T) {
 	poolSend(t, c.srv, poolBody)
 	if row := last(c); row.RoutePoolID != "fireworks/kimi-k3" || row.UpstreamResponseID != "c1" {
 		t.Fatalf("served row = %q %q", row.RoutePoolID, row.UpstreamResponseID)
+	}
+}
+
+// A subscription's own betas and token stay off a pool target: the gateway
+// gets the agent's other betas on the project key only.
+func TestPoolTargetDropsTheSubscriptionsOAuthBetas(t *testing.T) {
+	c := newPoolCase(t, cloudTarget(), "low")
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, poolBody)))
+	req.Header.Set("authorization", "Bearer sk-ant-oat01-subscription")
+	req.Header.Set("user-agent", "claude-cli/2.1.294")
+	req.Header.Set("anthropic-beta", "oauth-2025-04-20, interleaved-thinking-2025-05-14")
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	c.srv.Handler().ServeHTTP(rec, req)
+	got, _ := c.stub.last("/gw/v1/messages")
+	if rec.Code != 200 || got == nil {
+		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
+	}
+	if got.Header.Get("anthropic-beta") != "interleaved-thinking-2025-05-14" || got.Header.Get("authorization") != "Bearer cave_project_key" {
+		t.Errorf("gateway got anthropic-beta %q, authorization %q", got.Header.Get("anthropic-beta"), got.Header.Get("authorization"))
 	}
 }

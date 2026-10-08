@@ -1892,7 +1892,9 @@ func mergePricingQualifiers(obj map[string]any, usage *UsageObservation) {
 			usage.ServiceTier = "traffic_type_" + strings.ToLower(strings.TrimSpace(traffic))
 		}
 	}
-	if geo, ok := obj["inference_geo"].(string); ok {
+	// Anthropic answers "not_available" when it does not say where inference
+	// ran: that is no geography, and the request's own (or global) pricing holds.
+	if geo, ok := obj["inference_geo"].(string); ok && !strings.EqualFold(strings.TrimSpace(geo), "not_available") {
 		usage.InferenceGeo = strings.TrimSpace(geo)
 	}
 	// Server-side tools and grounding are billed outside the token rates in the
@@ -1937,7 +1939,16 @@ func mergeProviderOutcomeQualifiers(provider string, obj map[string]any, usage *
 	}
 	if rawUsage, ok := obj["usage"].(map[string]any); ok {
 		if iterations, present := rawUsage["iterations"]; present {
-			if values, ok := iterations.([]any); !ok || len(values) > 0 {
+			// Anthropic lists the request's own sampling as "message" iterations
+			// on every response. Only another kind (compaction, an advisor's
+			// model) is billed apart from the top-level counts.
+			values, ok := iterations.([]any)
+			for _, value := range values {
+				if entry, _ := value.(map[string]any); entry["type"] != "message" {
+					ok = false
+				}
+			}
+			if !ok {
 				usage.PricingUnsupportedReason = "unsupported_model_fallback_pricing"
 			}
 		}

@@ -163,6 +163,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusRequestEntityTooLarge, "cave_request_too_large", "Request body exceeds the proxy limit.")
 		return
 	}
+	// Auto in an encoded body is decoded so it can run on a real model.
+	if encoding := strings.TrimSpace(r.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		if decoded, ok := providers.DecodeBody(body, encoding, int(maxBytes)); ok && namesAuto(decoded) {
+			body = decoded
+			r.Header.Del("Content-Encoding")
+		}
+	}
 	body, correlatedSessionID, _ := nativeruntime.StripSessionMarkers(body, s.sessionMarkerKey)
 	if strings.HasPrefix(labelOrDefault(rc.Label, "local"), "trial:") {
 		if payloads, ok := s.sink.(PayloadSink); ok {
@@ -202,6 +209,39 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// The caller's session identity, already shape-bounded by requestEvidenceFromHeaders.
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID
+	// Auto goes upstream as the provider's fallback model (the route stage may
+	// still move it); agentModel is what the agent's copy of the answer names.
+	agentModel := meta.Model
+	if fallback := autoFallback[meta.Provider]; meta.Model == AutoModel && fallback != "" {
+		if out, ok := setModel(body, fallback); ok {
+			body, meta.Model = out, fallback
+			evidence.originalBody, rawHash = body, sha256.Sum256(body)
+		}
+	}
+	if meta.Model == AutoModel {
+		// No provider here serves Auto: the literal id never goes upstream.
+		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto runs only on Claude and OpenAI models through Caveman, and this request goes to another provider (Bedrock, Vertex or a custom endpoint): pick another model with /model.")
+		return
+	}
+
+	// Cache warming (cache_warm.go): a real request stops its stream's warming
+	// before anything is sent. Only an
+	// exact stream counts: the route stage's key (x-cave-session or the
+	// agent's own session header; a Claude Code child its own, with its
+	// parent). Side requests neither stop nor start one.
+	warmKey, warmParent, warmArm, warmStart := "", "", false, time.Time{}
+	if s.warmer != nil && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
+		exact := ""
+		if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+			exact = evidence.SessionID
+		}
+		if wr := newRouteRun(r.Header, exact, meta.Endpoint, body); wr.key != "" && !wr.auxiliary {
+			warmKey, warmParent, warmArm = wr.key, wr.parent, !wr.perRequest
+			// Before the send, so the provider's lifetime starts later still.
+			warmStart = s.warmer.clock.Now()
+			defer s.warmer.begin(warmKey)()
+		}
+	}
 
 	// byte-safe transform. record mode never transforms. On ANY transform error we
 	// forward the ORIGINAL bytes unchanged (fail-open) rather than failing the
@@ -240,7 +280,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	var awaitRoute func() RouteAnswer
 	var run *routeRun
 	modelRequested := meta.Model
-	evidence.modelRequested = modelRequested
+	evidence.modelRequested = agentModel
 	// count_tokens runs the same thinking-binding check as Messages
 	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
 	// and drop_block, is never asked about and gets no heal retry.
@@ -251,10 +291,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
 		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
 		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
+		// Subscription and OAuth traffic routes too: a moved request stays on
+		// the provider's own API and the agent's own credential, and a pool
+		// entry goes out on its own login or the Cloud gateway key, never on it.
 		switch {
-		case authMode == AuthModeSubscription:
-			evidence.route = RouteAnswer{Outcome: "off", Reason: "subscription"}
-		case authMode != AuthModePAYG:
 		case uerr != nil || !statsPricingOriginKnown(meta.Provider, upstream):
 			evidence.route = RouteAnswer{Outcome: "off", Reason: "custom_provider_origin"}
 		default:
@@ -270,12 +310,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				run.perRequest, run.replay = true, true
 				break
 			}
+			if agentModel != AutoModel {
+				// A model the agent named itself is never asked about; the
+				// session's marks and heal still apply, as with routing off.
+				evidence.route = RouteAnswer{Outcome: "off", Reason: "named_model"}
+				break
+			}
 			last, perMessageOff := s.routes.facts(run.key, time.Now())
 			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
 				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
 				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
 				ContextTokens: int(float64(len(body)) * s.routes.tokensPerByte(run.key, run.parent)),
+				Models:        autoModelsFor(meta.Provider),
 			})
 		}
 	}
@@ -440,6 +487,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// login or the Cloud gateway. Anything else keeps the asked model.
 	if awaitRoute != nil {
 		answer := awaitRoute()
+		if meta.Provider == "openai" {
+			answer = autoOpenAIAnswer(answer, meta.Endpoint, modelRequested, transform.Body, false)
+		}
 		if target := answer.Target; target != nil {
 			// The bytes compression produced go, unless they lean on the
 			// retrieve tool loop, which only runs on the harness's own path.
@@ -448,8 +498,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if retrieveInjected {
 				sent = body
 			}
-			w.Header().Set("x-caveman-routed-from", modelRequested)
-			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			w.Header().Set("x-caveman-routed-from", agentModel)
+			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, agentModel)
 			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
 			if result.errMsg != "" && s.logger != nil {
 				s.logger.Warn("pool target failed", "pool_id", target.PoolID, "via", target.Via, "reason", result.errMsg, "served", result.served, "request_id", requestID)
@@ -492,7 +542,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			if routed, ok := setModel(transform.Body, answer.Model); ok {
 				transform.Body = routed
 				meta.Model = answer.Model
-				w.Header().Set("x-caveman-routed-from", modelRequested)
+				w.Header().Set("x-caveman-routed-from", agentModel)
 			} else {
 				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
 			}
@@ -552,17 +602,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
-	if run != nil {
-		switch {
-		case meta.Model != modelRequested:
-			// An identity answer, so the agent's copy can name the model it asked for.
-			upstreamHeaders.Del("accept-encoding")
-		case !run.off || run.heal || run.keyed: // a refused key is read from the error too
-			withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
-		}
-		if run.dropBlocks {
-			upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
-		}
+	switch {
+	case meta.Model != agentModel:
+		// An identity answer, so the agent's copy can name the model it asked for.
+		upstreamHeaders.Del("accept-encoding")
+	case run != nil && (!run.off || run.heal || run.keyed): // a refused key is read from the error too
+		withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
+	}
+	if run != nil && run.dropBlocks {
+		upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
 	}
 	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
 	if run != nil && run.marked && !run.wire.responses {
@@ -809,10 +857,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
-	// The agent reads the model it asked for when the route stage moved the
-	// request (route.go shownModel); a compressed answer is left as it is.
+	// The agent reads the model it asked for when the request went to another
+	// one (Auto, or the route stage moved it; route.go shownModel); a
+	// compressed answer is left as it is.
 	encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
-	moved := run != nil && meta.Model != modelRequested && (encoding == "" || strings.EqualFold(encoding, "identity"))
+	moved := meta.Model != agentModel && (encoding == "" || strings.EqualFold(encoding, "identity"))
 	var shown []byte
 	if !meta.Stream {
 		data, rerr := readUpstreamBody(resp)
@@ -825,7 +874,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
 		if moved {
-			if out, ok := setModel(data, modelRequested); ok {
+			if out, ok := setModel(data, agentModel); ok {
 				shown = out
 				resp.Header.Set("Content-Length", strconv.Itoa(len(shown)))
 			}
@@ -875,13 +924,17 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if run != nil && !run.off {
 		scanned = io.MultiWriter(usageScanner, &served)
 	}
+	var toolStopped toolStop // the warm table's class: did the answer ask for a tool
+	if warmArm {
+		scanned = io.MultiWriter(scanned, &toolStopped)
+	}
 	src := io.Reader(io.TeeReader(resp.Body, scanned))
 	switch {
 	case shown != nil:
 		_, _ = io.Copy(scanned, resp.Body) // the provider's bytes still feed usage and last
 		src = bytes.NewReader(shown)
 	case moved && meta.Stream:
-		src = newShownModel(src, meta.Model, modelRequested)
+		src = newShownModel(src, meta.Model, agentModel)
 	}
 	counter, copyErrCode := s.streamResponse(w, r, src, meta.Stream, requestID, nil)
 	ttfb := time.Since(start).Milliseconds()
@@ -919,6 +972,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		activeLevers = append(activeLevers, leverBreakpointPlan)
 	}
 	s.observeSession(evidence.SessionID, activeLevers, finalUsage, requestID)
+	if s.warmer != nil && resp.StatusCode == http.StatusTooManyRequests {
+		// No warm on this credential while the provider is limiting it.
+		s.warmer.backoff(credentialKey(upstreamHeaders), backoffUntil(s.warmer.clock.Now(), resp.Header, authMode))
+	}
+	if warmArm {
+		s.armCacheWarm(r, warmAnswer{
+			key: warmKey, subagent: warmParent != "", start: warmStart,
+			ok:      resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0,
+			adapter: adapter, meta: meta, authMode: authMode, upstream: upstreamURL, header: upstreamHeaders, body: transform.Body,
+			usage: finalUsage, tool: toolStopped.seen, encoded: encoding != "" && !strings.EqualFold(encoding, "identity"),
+			mode: effectiveRuntimeMode, label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID, basis: evidence.SessionCorrelationBasis,
+		})
+	}
 	if run != nil && !run.off && !run.auxiliary && run.key != "" && resp.StatusCode < 300 && errCode == "" {
 		// What this session's next ask reports as its previous request (route-ask-v1
 		// last). One the route stage was off for (another model, signed out) or a

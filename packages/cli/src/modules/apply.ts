@@ -24,7 +24,8 @@ export type PlanLine = { action: "CREATE" | "UPDATE" | "DOWNLOAD" | "RUN"; targe
 export type ModulePlan = { selection: ModuleSelection; agents: string[]; lines: PlanLine[]; only?: ModuleId[]; notes?: string[] };
 export type ModuleState = { id: ModuleId; on: boolean; active: boolean; reason?: string; perAgent: Record<string, "wired" | "not wired" | "n/a"> };
 
-export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean };
+// optedOut: the user ran `caveman disable <agent>` and has not enabled it since.
+export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean; optedOut?: boolean };
 export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number };
 // A capability as every layer resolves it (defaults → global → project → env),
 // plus the global-file value alone, which is what module state is recorded in.
@@ -126,11 +127,11 @@ export function currentSelection(): ModuleSelection {
 }
 
 // The agents `on` acts on: the ones already wired, or, before any is, every
-// supported agent found on PATH.
+// supported agent found on PATH that the user did not `caveman disable`.
 export function defaultAgents(): string[] {
   const native = moduleHost().nativeAgents();
   const wired = native.filter((agent) => agent.wired);
-  return (wired.length ? wired : native.filter((agent) => agent.detected)).map((agent) => agent.id);
+  return (wired.length ? wired : native.filter((agent) => agent.detected && !agent.optedOut)).map((agent) => agent.id);
 }
 
 // Module state is the authority for the keys a module owns, but only where
@@ -180,11 +181,12 @@ function wiringChanges(selection: ModuleSelection, agents: string[], only: Modul
 }
 
 // Wired agents that stay wired but carry hooks built from a key this run
-// changes, or a base URL that is no longer the traffic target (an earlier
-// login's managed gateway): any plan re-wires those, never anything else.
-function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire: string[]): string[] {
+// changes, the Auto model the routing module adds or takes away, or a base
+// URL that is no longer the traffic target (an earlier login's managed
+// gateway): any plan re-wires those, never anything else.
+function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire: string[], state: readonly (readonly [string, unknown])[]): string[] {
   const h = moduleHost();
-  const keyChanged = effects.some(([key]) => h.wiringKeys.includes(key));
+  const keyChanged = effects.some(([key]) => h.wiringKeys.includes(key)) || state.some(([id]) => id === "routing");
   return h.nativeAgents()
     .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id)))
     .map((agent) => agent.id);
@@ -371,7 +373,7 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
     }
   }
   const target = h.agentTraffic().target === "local" ? "the local runtime" : "the managed gateway";
-  for (const agent of refreshAgents(effects, unwire)) {
+  for (const agent of refreshAgents(effects, unwire, state)) {
     const was = h.agentStaleRoute(agent);
     const detail = was ? `point ${agent} at ${target} (was ${was})` : `refresh ${agent} hooks`;
     for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail });
@@ -426,7 +428,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   // reads the module state this run replaces.
   const { state, effects } = configChanges(plan.selection, plan.only);
   const { wire, unwire } = wiringChanges(plan.selection, plan.agents, plan.only);
-  const refresh = refreshAgents(effects, unwire);
+  const refresh = refreshAgents(effects, unwire, state);
   const runs = externalRuns(plan.selection, plan.only, plan.agents, wire.length > 0);
   const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
 

@@ -297,6 +297,8 @@ func runServe(logger *slog.Logger) {
 	// Rows are finished and written off the request path; server.Close below
 	// writes the last of them before the deferred spend.Close.
 	opts.AsyncRecord = true
+	opts.CacheWarm = cacheWarmSwitch(home, os.Getenv("CAVEMAN_CACHE_WARM"))
+	opts.CacheWarmState = filepath.Join(home, "cache-warm-gaps.json")
 	server := standalone.New(cfg, spend, opts)
 	flushRows = server.Flush
 
@@ -402,7 +404,7 @@ func runServe(logger *slog.Logger) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
-	_ = server.Close()
+	_ = server.Close() // saves what cache warming learned, writes the last rows
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)
 	}

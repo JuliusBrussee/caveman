@@ -416,6 +416,13 @@ func (l *Link) Ask(_ context.Context, ask gateway.RouteAsk) func() gateway.Route
 	}
 }
 
+// AutoOffered reports whether Auto is in the agents' pickers: signed in with
+// the routing module on.
+func (l *Link) AutoOffered() bool {
+	cfg := l.settings()
+	return cfg.routing && !cfg.offline && cfg.signedIn()
+}
+
 func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAnswer {
 	cfg := l.settings()
 	if !cfg.routing || cfg.offline || !cfg.signedIn() {
@@ -424,6 +431,10 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	models := poolFor(ask.Provider, ask.Model)
 	if models == nil {
 		return gateway.RouteAnswer{Outcome: "off", Reason: "model_outside_pool"}
+	}
+	if ask.Models != nil {
+		// Only these, the asked model first.
+		models = slices.DeleteFunc(models, func(id string) bool { return !slices.Contains(ask.Models, id) })
 	}
 	bearer := cfg.gatewayBearer(l.now())
 	if bearer == "" {
@@ -522,7 +533,7 @@ func (l *Link) poolEntries(ask gateway.RouteAsk, grammar string, models []string
 	l.mu.Lock()
 	off := l.noPool
 	l.mu.Unlock()
-	if off || l.logins == nil {
+	if off || l.logins == nil || ask.NoPool {
 		return nil
 	}
 	out := make([]pool.Entry, 0, len(models))
@@ -530,6 +541,9 @@ func (l *Link) poolEntries(ask gateway.RouteAsk, grammar string, models []string
 		out = append(out, pool.Entry{ID: harnessPrefix + model, Model: model, Host: ask.Provider, Via: "local"})
 	}
 	logins := l.logins.Entries(grammar, ask.Agent, poolMax-len(out), func(host, model string) bool {
+		if ask.Models != nil && sameFamily(ask.Provider, model) && !slices.Contains(ask.Models, bareModel(model)) {
+			return true // a model of the provider the ask excludes
+		}
 		return host == ask.Provider && slices.Contains(models, model) // the harness's own credential serves those
 	})
 	if len(logins) == 0 {
@@ -539,6 +553,22 @@ func (l *Link) poolEntries(ask gateway.RouteAsk, grammar string, models []string
 }
 
 const poolMax = 64
+
+// bareModel is a pool model id without a host prefix ("openai/gpt-6-sol").
+func bareModel(model string) string {
+	return model[strings.LastIndex(model, "/")+1:]
+}
+
+// sameFamily reports a pool model of provider's own family, under any host.
+func sameFamily(provider, model string) bool {
+	switch provider {
+	case "openai":
+		return strings.HasPrefix(bareModel(model), "gpt-")
+	case "anthropic":
+		return strings.HasPrefix(bareModel(model), "claude-")
+	}
+	return false
+}
 
 func poolFor(provider, model string) []string {
 	pool := pools[provider]

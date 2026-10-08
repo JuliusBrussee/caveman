@@ -40,7 +40,7 @@ const routing = (fields) => ({ user: { email: "a@b.c" }, plan: "free", products:
 test("status shows routing's free decisions from /me", async () => {
   const { row, first } = await routingRow(routing({ free_allowance: 100000, used: 1204, period_end: "2026-11-01T00:00:00Z", state: "ok" }));
   assert.match(row, /^  on  routing +wired +wired +1,204 of 100,000 free decisions this month$/);
-  assert.match(first, /^routing has no effect on subscription turns$/m);
+  assert.doesNotMatch(first, /subscription turns/, "subscriptions route too");
 });
 
 test("a 401 from /me reads as an expired login", async () => {
@@ -137,7 +137,7 @@ test("status --json carries the plan from /me and no weekly cap", async () => {
 test("on routing says what routing sends", async () => {
   const fx = modulesFixture();
   const stub = await cloud(routing({ free_allowance: 100000, used: 3, state: "ok" }));
-  const line = /^routing is on · sends your latest ask \(with what your agent attaches to it\), the one before it, the end of the agent's last reply and request facts \(tools, effort, agent headers, token counts\) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing; requests go to your providers on your keys, only ones routed to a Caveman Cloud model pass through it · caveman off routing to stop$/m;
+  const line = /^routing is on · adds Auto to your agent's model picker; each request on Auto sends your latest ask \(with what your agent attaches to it\), the one before it, the end of the agent's last reply and request facts \(tools, effort, agent headers, token counts\) to Caveman Cloud to pick the model and effort; on the Free plan Caveman may keep them to improve routing; requests go to your providers on your keys, only ones routed to a Caveman Cloud model pass through it · caveman off routing to stop$/m;
   try {
     assert.equal((await runCli(["off", "routing", "--yes"], fx.env)).code, 0);
     const signedOut = await runCli(["on", "routing", "--yes"], fx.env);

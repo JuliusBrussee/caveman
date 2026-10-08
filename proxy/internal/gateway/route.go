@@ -19,6 +19,7 @@ import (
 	"time"
 	"unicode/utf8"
 
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 )
@@ -65,6 +66,12 @@ type RouteAsk struct {
 	Last *RouteLast
 	// PerMessageOff: this session's per-message effort is latched off.
 	PerMessageOff bool
+	// Models, when set, is all Cloud may pick from for the asked model's
+	// provider (OpenAI Auto: AutoOpenAIModels); pool entries of that provider's
+	// models outside it are left out. NoPool: the ask lists no pool at all (a
+	// ChatGPT login, whose route has no pool path).
+	Models []string
+	NoPool bool
 }
 
 // RouteLast is what one session's previous upstream request ran (contracts
@@ -113,9 +120,57 @@ type CloudLink interface {
 	Observe(rec RequestRecord)
 }
 
-// routable: Anthropic Messages or OpenAI chat/responses. Only API-key traffic
-// to the provider's own API is asked about: subscription (OAuth Pro/Max) turns
-// have no per-request dollar cost, so routing does nothing there (ADR 0083 §7).
+// AutoModel is Auto, the model the CLI adds to an agent's model picker while
+// the routing module is on: the route stage asks Cloud only about requests
+// naming it. It never reaches a provider; the request runs on the provider's
+// autoFallback model unless the answer moves it, and the agent's copy of the
+// answer names Auto.
+const AutoModel = "caveman-auto"
+
+// namesAuto reports a JSON body whose top-level "model" is Auto.
+func namesAuto(body []byte) bool {
+	root, ok := jsonsplice.Root(body)
+	if !ok {
+		return false
+	}
+	span, _ := jsonsplice.Field(body, root, "model")
+	model, _ := jsonsplice.String(body, span)
+	return model == AutoModel
+}
+
+// autoFallback is the model Auto runs on per provider whenever the route stage
+// keeps the asked model (a Cloud failure, pause or limit, signed out, routing
+// off, another origin), and the asked model the ask
+// carries. OpenAI's is gpt-6.1-sol (see AutoOpenAIModels).
+var autoFallback = map[string]string{"anthropic": "claude-sonnet-5-5", "openai": "gpt-6.1-sol"}
+
+// AutoOpenAIModels are the only models OpenAI Auto runs, on an API key or a
+// ChatGPT login: gpt-6.1-sol (the default and fallback), gpt-6-astra for hard
+// asks, gpt-6-luna for easy ones. The ask offers Cloud these alone.
+var AutoOpenAIModels = []string{"gpt-6.1-sol", "gpt-6-astra", "gpt-6-luna"}
+
+// autoModelsFor is what an Auto ask offers Cloud for provider: nil, the
+// provider's whole pool, except OpenAI's fixed three.
+func autoModelsFor(provider string) []string {
+	if provider == "openai" {
+		return AutoOpenAIModels
+	}
+	return nil
+}
+
+// autoOpenAIAnswer refuses an answer naming an OpenAI model outside
+// AutoOpenAIModels (or, with noTarget, any pool entry): the fallback runs at
+// that answer's effort, fitted to it.
+func autoOpenAIAnswer(answer RouteAnswer, endpoint, fallback string, body []byte, noTarget bool) RouteAnswer {
+	if (answer.Target == nil || !noTarget) && (answer.Model == "" || slices.Contains(AutoOpenAIModels, answer.Model)) {
+		return answer
+	}
+	return RouteAnswer{Outcome: "degraded", Reason: "auto_model_refused", DecisionID: answer.DecisionID,
+		Effort: translate.FitEffort(grammarOf(endpoint), fallback, answer.Effort, body), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
+}
+
+// routable: Anthropic Messages or OpenAI chat/responses, to the provider's own
+// API, on an API key or a subscription alike.
 func routable(provider, endpoint string) bool {
 	switch provider {
 	case "anthropic":
