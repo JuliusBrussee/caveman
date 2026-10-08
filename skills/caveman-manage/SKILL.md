@@ -30,23 +30,16 @@ complete lifecycle transition table and evidence gate atomically.
 
 ## Step 1 — Load project and experiment
 
-Prefer MCP:
-
-```text
-caveman_context {}
-caveman_experiment_get {"action":"get","experiment_id":"<id>"}
-caveman_experiment_get {"action":"results","experiment_id":"<id>"}
-```
-
-Use `{"action":"list"}` when the user has not named an id.
-
-CLI fallback:
+Caveman Cloud reads go through `cvm` (`npm i -g @caveman-ai/cloud`). The same
+operations are available as MCP tools through `cvm mcp`.
 
 ```bash
-caveman cloud experiments list
-caveman cloud experiments show <id>
-caveman cloud experiments results <id>
+cvm context whoami
+cvm experiments get <id>
+cvm experiments results <id>
 ```
+
+Use `cvm experiments list` when the user has not named an id.
 
 Stop if login, project, experiment, or results are unavailable.
 

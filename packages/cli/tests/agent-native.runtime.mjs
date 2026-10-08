@@ -1,9 +1,14 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, realpathSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { isolatedCliEnv, runCli, runCliWithApi } from "./_cli.mjs";
+import { isolatedCliEnv, runCli } from "./_cli.mjs";
+
+// The caveman-cloud MCP server is `cvm mcp`; a stub on PATH stands in for it.
+function writeCvm(bin) {
+  writeFileSync(join(bin, "cvm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+}
 
 test("setup --agent-native codex installs complete native integration plus MCP and workflow suite", async () => {
   const isolated = isolatedCliEnv();
@@ -16,6 +21,7 @@ test("setup --agent-native codex installs complete native integration plus MCP a
     writeFileSync(codex, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex 1.0.0'; fi\n", { mode: 0o755 });
     writeFileSync(mcp, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
     writeFileSync(proxy, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
+    writeCvm(bin);
     Object.assign(isolated.env, {
       PATH: `${bin}:${isolated.env.PATH}`,
       CAVEMAN_MCP_BIN: mcp,
@@ -25,7 +31,7 @@ test("setup --agent-native codex installs complete native integration plus MCP a
     assert.equal(out.code, 0, out.stderr);
     const config = readFileSync(join(isolated.home, ".codex", "config.toml"), "utf8");
     assert.match(config, /\[mcp_servers\.caveman-cloud\]/);
-    assert.match(config, /cloud", "mcp-serve"/);
+    assert.match(config, /\[mcp_servers\.caveman-cloud\]\ncommand = "[^"]*cvm[^"]*"\nargs = \[(?:"[^"]*", )?"mcp"\]/);
     assert.match(config, /# >>> caveman:native-root/);
     assert.match(readFileSync(join(isolated.home, ".codex", "hooks.json"), "utf8"), /native-hook codex/);
     assert.ok(existsSync(join(isolated.home, "integrations", "codex.json")));
@@ -194,6 +200,7 @@ test("setup --agent-native refuses unjournaled stale cloud MCP before native wri
     writeFileSync(codex, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex 1.0.0'; fi\n", { mode: 0o755 });
     writeFileSync(mcp, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
     writeFileSync(proxy, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
+    writeCvm(bin);
     Object.assign(isolated.env, { PATH: `${bin}:${isolated.env.PATH}`, CAVEMAN_MCP_BIN: mcp, CAVEMAN_PROXY_BIN: proxy });
     const configPath = join(isolated.home, ".codex", "config.toml");
     mkdirSync(join(isolated.home, ".codex"), { recursive: true });
@@ -222,6 +229,7 @@ test("setup --agent-native preserves an unjournaled Claude cloud MCP registratio
     writeFileSync(claude, "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'claude 1.0.0'; fi\n", { mode: 0o755 });
     writeFileSync(mcp, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
     writeFileSync(proxy, "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
+    writeCvm(bin);
     Object.assign(isolated.env, { PATH: `${bin}:${isolated.env.PATH}`, CAVEMAN_MCP_BIN: mcp, CAVEMAN_PROXY_BIN: proxy });
     const configPath = join(isolated.home, ".claude.json");
     const before = JSON.stringify({ mcpServers: { "caveman-cloud": { command: "user-command", args: ["keep"] } }, theme: "keep" }, null, 2) + "\n";
@@ -240,7 +248,9 @@ test("setup --agent-native preserves an unjournaled Claude cloud MCP registratio
     assert.equal(installed.code, 0, installed.stderr);
     const activeBytes = readFileSync(configPath, "utf8");
     const active = JSON.parse(activeBytes);
-    assert.match(active.mcpServers["caveman-cloud"].command, /node/);
+    const cloudEntry = active.mcpServers["caveman-cloud"];
+    assert.match([cloudEntry.command, ...cloudEntry.args].join(" "), /cvm/);
+    assert.equal(cloudEntry.args.at(-1), "mcp");
     assert.ok(existsSync(join(isolated.home, ".claude", "skills", "caveman-setup", "SKILL.md")));
 
     active.mcpServers["caveman-cloud"].env = { KEEP: "user" };
@@ -276,80 +286,27 @@ test("Codex cloud MCP uninstall removes complete block and preserves unrelated c
     ].join("\n");
     mkdirSync(join(isolated.home, ".codex"), { recursive: true });
     writeFileSync(configPath, unrelated);
+    const missing = await runCli(["mcp", "install", "codex", "--server", "caveman-cloud"], { env: isolated.env });
+    assert.notEqual(missing.code, 0);
+    assert.match(missing.stderr, /moved to cvm\. Install: npm i -g @caveman-ai\/cloud/);
+    assert.equal(readFileSync(configPath, "utf8"), unrelated);
+
+    const bin = join(isolated.home, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeCvm(bin);
+    isolated.env.PATH = `${bin}:${isolated.env.PATH}`;
     const installed = await runCli(["mcp", "install", "codex", "--server", "caveman-cloud"], { env: isolated.env });
     assert.equal(installed.code, 0, installed.stderr);
-    assert.match(readFileSync(configPath, "utf8"), /cloud", "mcp-serve"/);
+    assert.match(readFileSync(configPath, "utf8"), /args = \["mcp"\]/);
 
     const out = await runCli(["mcp", "uninstall", "codex", "--server", "caveman-cloud"], { env: isolated.env });
     assert.equal(out.code, 0, out.stderr);
     const cleaned = readFileSync(configPath, "utf8");
     assert.equal(cleaned, unrelated);
-    assert.doesNotMatch(cleaned, /cloud", "mcp-serve"|mcp_servers\.caveman-cloud/);
+    assert.doesNotMatch(cleaned, /mcp_servers\.caveman-cloud/);
   } finally {
     isolated.cleanup();
   }
-});
-
-test("trace search sends closed structured filters and selected project", async () => {
-  const out = await runCliWithApi([
-    "cloud",
-    "traces",
-    "search",
-    "--workflow",
-    "support-reply",
-    "--has-error",
-    "true",
-    "--min-cost-usd",
-    "0.25",
-    "--limit",
-    "25",
-    "--sort",
-    "total_cost_usd",
-    "--dir",
-    "desc",
-  ], {
-    respond: () => ({ body: { data: [] } }),
-  });
-  assert.equal(out.code, 0, out.stderr);
-  assert.equal(out.requests.length, 1);
-  assert.equal(out.requests[0].path, "/api/v1/traces/search?project_id=proj-alias");
-  assert.deepEqual(JSON.parse(out.requests[0].body), {
-    filters: {
-      workflow: ["support-reply"],
-      has_error: true,
-      min_cost_usd: 0.25,
-    },
-    sort: { by: "total_cost_usd", dir: "desc" },
-    page_size: 25,
-  });
-});
-
-test("trace show scopes detail and spans to selected project", async () => {
-  const out = await runCliWithApi(["cloud", "traces", "show", "0123456789abcdef", "--spans"], {
-    respond: () => ({ body: {} }),
-  });
-  assert.equal(out.code, 0, out.stderr);
-  assert.deepEqual(
-    out.requests.map((request) => request.path).sort(),
-    [
-      "/api/v1/traces/0123456789abcdef/spans?project_id=proj-alias",
-      "/api/v1/traces/0123456789abcdef?project_id=proj-alias",
-    ].sort(),
-  );
-});
-
-test("experiment CLI rejects lifecycle mutation verbs without HTTP", async () => {
-  const out = await runCliWithApi([
-    "cloud",
-    "experiments",
-    "approve",
-    "exp-1",
-    "--confirm",
-    "approve:exp-1",
-  ]);
-  assert.equal(out.code, 2);
-  assert.equal(out.requests.length, 0);
-  assert.match(out.stderr, /experiments list\|show <id>\|results <id>/);
 });
 
 // #1134: `setup --agent-native <agent> --remove` is the undo for the bundle that
@@ -376,3 +333,74 @@ for (const agent of ["codex", "claude"]) {
     }
   });
 }
+
+function writeNativeStubs(bin) {
+  mkdirSync(bin, { recursive: true });
+  writeFileSync(join(bin, "codex"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'codex 1.0.0'; fi\n", { mode: 0o755 });
+  writeFileSync(join(bin, "caveman-mcp"), "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\n", { mode: 0o755 });
+  writeFileSync(join(bin, "caveman-proxy"), "#!/bin/sh\nif [ \"$1\" = \"version\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\n", { mode: 0o755 });
+  return { CAVEMAN_MCP_BIN: join(bin, "caveman-mcp"), CAVEMAN_PROXY_BIN: join(bin, "caveman-proxy") };
+}
+
+// Skipping the Cloud MCP would need a bundle journal with no cloud_mcp, which
+// older CLIs reject, so setup stops before any write and prints the install line.
+test("setup --agent-native without cvm stops before any write with the install line", async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const bin = join(isolated.home, "bin");
+    Object.assign(isolated.env, writeNativeStubs(bin), { PATH: `${bin}:/usr/bin:/bin` });
+    const out = await runCli(["setup", "--agent-native", "codex"], { env: isolated.env });
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /caveman-cloud MCP moved to cvm\. Install: npm i -g @caveman-ai\/cloud, then rerun this command/);
+    assert.equal(existsSync(join(isolated.home, ".codex", "config.toml")), false);
+    assert.equal(existsSync(join(isolated.home, "integrations", "codex.agent-native-bundle.json")), false);
+    assert.equal(existsSync(join(isolated.home, ".codex", "skills", "caveman-setup", "SKILL.md")), false);
+  } finally {
+    isolated.cleanup();
+  }
+});
+
+for (const layout of ["posix", "windows"]) {
+  test(`Cloud MCP registers node plus cvm.mjs for the ${layout} npm layout`, async () => {
+    const isolated = isolatedCliEnv();
+    try {
+      const prefix = join(isolated.home, "npm");
+      const pkg = layout === "posix"
+        ? join(prefix, "lib", "node_modules", "@caveman-ai", "cloud")
+        : join(prefix, "node_modules", "@caveman-ai", "cloud");
+      mkdirSync(join(pkg, "bin"), { recursive: true });
+      const script = join(pkg, "bin", "cvm.mjs");
+      writeFileSync(script, "#!/usr/bin/env node\n", { mode: 0o755 });
+      const bin = layout === "posix" ? join(prefix, "bin") : prefix;
+      mkdirSync(bin, { recursive: true });
+      // POSIX npm links bin/cvm to the script; on Windows the shim is a separate file.
+      if (layout === "posix") symlinkSync(script, join(bin, "cvm"));
+      else writeFileSync(join(bin, "cvm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      // Registration goes through the claude CLI: a stub records what it was asked to add.
+      const calls = join(isolated.home, "claude-calls");
+      writeFileSync(join(bin, "claude"), `#!/bin/sh\nprintf '%s\\n' "$@" >> "${calls}"\n`, { mode: 0o755 });
+      isolated.env.PATH = `${bin}:${isolated.env.PATH}`;
+      const out = await runCli(["mcp", "install", "claude", "--server", "caveman-cloud"], { env: isolated.env });
+      assert.equal(out.code, 0, out.stderr);
+      const added = readFileSync(calls, "utf8").trim().split("\n");
+      assert.deepEqual(added.slice(added.lastIndexOf("add")), ["add", "--scope", "user", "caveman-cloud", "--", process.execPath, realpathSync(script), "mcp"]);
+    } finally {
+      isolated.cleanup();
+    }
+  });
+}
+
+test("mcp-serve forwards to cvm mcp with inherited stdio for agents registered before the move", async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const bin = join(isolated.home, "bin");
+    mkdirSync(bin, { recursive: true });
+    writeFileSync(join(bin, "cvm"), "#!/bin/sh\necho \"cvm $*\"\ncat\nexit 3\n", { mode: 0o755 });
+    isolated.env.PATH = `${bin}:${isolated.env.PATH}`;
+    const out = await runCli(["cloud", "mcp-serve"], { env: isolated.env, input: "ping\n" });
+    assert.equal(out.code, 3);
+    assert.equal(out.stdout, "cvm mcp\nping\n");
+  } finally {
+    isolated.cleanup();
+  }
+});

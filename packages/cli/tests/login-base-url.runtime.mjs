@@ -100,3 +100,16 @@ test("config base URL: a saved config.json value overrides CAVE_API_URL and the 
     else delete process.env.CAVE_API_URL;
   }
 });
+
+// logout leaves `baseURL: ""` in config.json; an empty saved value must not
+// shadow CAVE_API_URL (it used to reach fetch as "Invalid URL").
+test("config base URL: an empty saved value after logout falls through to CAVE_API_URL", () => {
+  const prevEnv = process.env.CAVE_API_URL;
+  process.env.CAVE_API_URL = "http://localhost:8080";
+  try {
+    assert.equal(resolveConfigBaseUrl(""), "http://localhost:8080");
+  } finally {
+    if (prevEnv !== undefined) process.env.CAVE_API_URL = prevEnv;
+    else delete process.env.CAVE_API_URL;
+  }
+});

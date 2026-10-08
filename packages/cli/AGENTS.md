@@ -23,10 +23,14 @@ bundled `dist/learn-tui.js` Clack chunk, then
 spellings as silent legacy aliases: no deprecation text may alter piped output.
 
 Printed porcelain is `run`, `learn`, `login`, `status`, plus the agent shortcut.
-Local capabilities live under `caveman tools`; account- or network-dependent
-operations live under `caveman cloud`. `dev` and `deploy` are undocumented
-maintainer aliases. `tools` is capped at 15 printed verbs and `cloud` at 15;
-current counts are 15 and 14. Internal/advanced `shrink-hook`, `practices`, and
+Local capabilities live under `caveman tools`; `caveman cloud` keeps only
+`whoami`, `receipts verify`, `audit import|eval-import` and `sync`. Every other
+Cloud command moved to the separate `cvm` CLI (`@caveman-ai/cloud`); its old verb
+prints one `moved to cvm` line from `MOVED_TO_CVM` and exits 2 (unknown
+`cloud <verb>` points at `cvm <same argv>`). Only `mcp-serve` forwards to
+`cvm mcp`, because agents registered before the move still launch it. `dev` and `deploy`
+are undocumented maintainer aliases. `tools` is capped at 15 printed verbs and
+`cloud` at 15; current counts are 15 and 4. Internal/advanced `shrink-hook`, `practices`, and
 `check` remain callable through existing paths but are unprinted, including in
 legacy `help tools --all` output.
 
@@ -84,8 +88,6 @@ global groups < project overlay < env. Env parity is knob-specific. Inspect
 per-key source with `caveman tools config get`.
 
 ## Gotchas
-- `providers verify` must NOT return a hardcoded status; the test asserts the CLI echoes the server's value (no-placeholder rule)
-- `plan` savings display must stay per-day; never multiply to monthly projection
 - Non-PAYG coverage includes Claude Pro/Max, Codex ChatGPT, Gemini OAuth, and routed compatible agents. Codex subscription mode keeps provider config ephemeral under `CODEX_HOME`, auto-installs its MCP recovery, and starts `/chatgpt/responses` in compress mode instead of forcing record/pass-through. Plain OpenAI `/responses` and Gemini `generateContent` requests with MCP explicitly disabled have no server-retrieval grammar, so they must remain byte-identical with zero compression accounting; the compression conformance matrix pins these protocol-specific fail-closed cases instead of requiring every profile to emit a CCR marker.
 - Subscription/OAuth wrap sessions (Claude Pro/Max) compress **locally only**, live zone only, and with **no account**: `CAVEMAN_WRAP_ENTITLED` is gone from both doors and from the proxy, and both doors `delete` any inherited copy so a stray export cannot resurrect it. What both doors DO stamp is the recovery path (`CAVEMAN_RECOVERY`), explicitly (`"mcp"` or empty, never inherited): `wrap` answers it from the **agent's own** MCP install (an exported `CAVEMAN_RECOVERY=mcp` can't outlive that answer — it would have the proxy elide bytes behind markers this agent has no `caveman_retrieve` tool to expand), `start` from machine-wide MCP install evidence plus an explicit `CAVEMAN_RECOVERY=mcp` counted as the operator's own opt-in, re-stamped so the disclosure line and the proxy can never disagree; the compression disclosure line prints only when recovery holds, and no-MCP says compression is off and names `caveman mcp install <agent>`. The `subscription_compress: off` operator switch stays the operator's. Their measured reduction remains **tokens only**: a seat has no per-token marginal price, so the session footer and synced span never claim saved dollars. The local stats dashboard may show a separately labeled, same-model API equivalent from captured prices; it is hypothetical value, never subscription bill or quota savings. The session-savings line treats `oauth` like `subscription` (OAuth is list-price-eligible on Vertex alone) and qualifies unconditionally when its capped auth-mode window is truncated
 - Published runtime dependencies stay zero. TUI libraries must be bundled,

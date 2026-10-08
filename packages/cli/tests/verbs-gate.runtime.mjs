@@ -23,8 +23,8 @@ const surfaces = loadSurfaces({ skillsDir, cliDir });
 
 test("the command surface is derivable from source (no fail-open)", () => {
   assert.deepEqual(surfaces.errors, [], "surfaces must parse cleanly, else the gate would pass open");
-  assert.ok(surfaces.toolVerbs.has("skills") && surfaces.cloudVerbs.has("plan"));
-  assert.ok(surfaces.mcpTools.has("caveman_plan") && surfaces.mcpTools.has("caveman_retrieve"));
+  assert.ok(surfaces.toolVerbs.has("skills") && surfaces.cloudVerbs.has("sync"));
+  assert.ok(surfaces.mcpTools.has("caveman_retrieve"));
   assert.ok(surfaces.sdkMembers.has("compress") && surfaces.sdkMembers.has("page"));
   assert.equal(surfaces.pageRequiresSource, true);
 });

@@ -34,7 +34,7 @@ function run(argv, env) {
 
 async function fixture(t, files, options = {}) {
   const requests = [];
-  const grant = { access_token: access, refresh_token: "refresh-1", credential_kind: "none", project_id: "project-1", scope: "org:read trace:read_metadata settings:read", delivery_ack_token: "ack-1", ...options.grant };
+  const grant = { access_token: access, refresh_token: "refresh-1", credential_kind: "none", project_id: "project-1", scope: "org:read trace:read_metadata settings:read", delivery_ack_token: "ack-1", gateway_url: "https://gateway.private.example", ...options.grant };
   const server = createServer(async (req, res) => {
     let raw = "";
     for await (const chunk of req) raw += chunk;
