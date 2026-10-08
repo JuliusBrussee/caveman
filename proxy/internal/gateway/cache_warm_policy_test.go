@@ -407,3 +407,65 @@ func newUnitWarmer(send func(context.Context, *warmRequest) bool) (*cacheWarmer,
 	w.clock = c
 	return w, c
 }
+
+// Auto on Anthropic: the warm belongs to the stream, replays the bytes that
+// went upstream (the routed model, never the literal Auto id), is priced at
+// that model, and the stream's next turn stops it even when Auto routes that
+// turn to another model.
+func TestCacheWarmFollowsAutoAcrossModels(t *testing.T) {
+	rt := &warmTransport{}
+	f := newWarmFixture(t, rt, anthropicAPI, nil)
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "routed", Model: "claude-haiku-5-5"}}
+	f.srv.cloud = cloud
+	body := auto(t, reqBody(""))
+	model := func(i int) string {
+		var doc struct {
+			Model     string `json:"model"`
+			MaxTokens *int   `json:"max_tokens"`
+		}
+		if err := json.Unmarshal([]byte(rt.body(i)), &doc); err != nil || doc.MaxTokens == nil {
+			t.Fatalf("upstream body %d: %v %s", i, err, rt.body(i))
+		}
+		if strings.Contains(rt.body(i), AutoModel) {
+			t.Fatalf("the literal Auto id went upstream in request %d: %s", i, rt.body(i))
+		}
+		return doc.Model + "/" + map[bool]string{true: "warm", false: "real"}[*doc.MaxTokens == 0]
+	}
+	f.serve(t, body, warmHeaders)
+	f.clock.advance(270 * time.Second)
+	if rt.count() != 2 || model(0) != "claude-haiku-5-5/real" || model(1) != "claude-haiku-5-5/warm" {
+		t.Fatalf("turn 1: %d requests, %s then %s", rt.count(), model(0), model(1))
+	}
+	// Turn 2 at 370 s goes to another model: Haiku's second warm (540 s) is off.
+	f.clock.advance(100 * time.Second)
+	cloud.mu.Lock()
+	cloud.answer = RouteAnswer{Outcome: "routed", Model: "claude-opus-5"}
+	cloud.mu.Unlock()
+	f.serve(t, body, warmHeaders)
+	f.clock.advance(200 * time.Second) // 570 s
+	if rt.count() != 3 || model(2) != "claude-opus-5/real" {
+		t.Fatalf("the previous model's warm survived the next turn: %d requests, last %s", rt.count(), model(rt.count()-1))
+	}
+	f.clock.advance(70 * time.Second) // 640 s: 270 s after turn 2
+	if rt.count() != 4 || model(3) != "claude-opus-5/warm" {
+		t.Fatalf("turn 2 was not warmed on its own model: %d requests, last %s", rt.count(), model(rt.count()-1))
+	}
+	rows := f.warmRows()
+	if len(rows) != 2 || rows[0].Model != "claude-haiku-5-5" || rows[1].Model != "claude-opus-5" {
+		t.Fatalf("warm rows %+v", rows)
+	}
+	if !(rows[0].TotalCostUSD > 0 && rows[1].TotalCostUSD > rows[0].TotalCostUSD) {
+		t.Fatalf("warms were not priced at the model sent: haiku %v, opus %v", rows[0].TotalCostUSD, rows[1].TotalCostUSD)
+	}
+	// The plan is priced at the model sent too: a routed model the catalog
+	// does not price is never warmed, although the asked model is priced.
+	cloud.mu.Lock()
+	cloud.answer = RouteAnswer{Outcome: "routed", Model: "claude-not-in-the-catalog"}
+	cloud.mu.Unlock()
+	f.serve(t, body, warmHeaders)
+	sent := rt.count()
+	f.clock.advance(30 * time.Minute)
+	if rt.count() != sent || model(sent-1) != "claude-not-in-the-catalog/real" {
+		t.Fatalf("an unpriced routed model was warmed: %d -> %d, last real %s", sent, rt.count(), model(sent-1))
+	}
+}
