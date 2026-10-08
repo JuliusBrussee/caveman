@@ -479,7 +479,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		}
 	}
-	transformedHash := sha256.Sum256(transform.Body)
+	transformedHash := rawHash
+	if !bytes.Equal(transform.Body, body) {
+		transformedHash = sha256.Sum256(transform.Body)
+	}
 	evidence.acceptedBody = transform.Body
 	providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown := providerPrefixEvidence(adapter, transform.Body, meta)
 
@@ -510,7 +513,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !statsPricingOriginKnown(meta.Provider, upstreamURL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
 	}
-	authContext := providers.WithRequestPayloadHash(r.Context(), transform.Body)
+	authContext := providers.WithRequestPayloadSHA256(r.Context(), transformedHash)
 	upstreamHeaders, err := adapter.SanitizeAndMapHeaders(authContext, r, credential, upstreamURL)
 	if err != nil {
 		providerHeaderError(w, r, err)
@@ -638,7 +641,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
+		retryAuthContext := providers.WithRequestPayloadSHA256(r.Context(), rawHash)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
 			providerHeaderError(w, r, rerr)
