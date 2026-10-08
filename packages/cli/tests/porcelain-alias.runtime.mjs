@@ -31,8 +31,11 @@ const movedCases = [
   { argv: ["projects", "list"], line: "caveman projects moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm projects list" },
   { argv: ["traces", "show", "trace-7"], line: "caveman traces show moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm traces get" },
   { argv: ["agent", "factory", "show", "a-1"], line: "caveman agent factory show moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm workflows get_agent" },
-  { argv: ["keys", "revoke", "key-7"], line: "caveman keys moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm tools list" },
+  { argv: ["keys"], line: "caveman keys moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm human list_keys" },
+  { argv: ["keys", "revoke", "key-7"], line: "caveman keys revoke was removed. Use the Caveman Cloud dashboard instead." },
+  { argv: ["billing", "charges"], line: "caveman billing charges was removed. Use the Caveman Cloud dashboard instead." },
   { argv: ["mcp-serve"], line: "caveman mcp-serve moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm mcp" },
+  { argv: ["audit"], line: "caveman audit moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm human create_audit" },
   { argv: ["receipts", "export", "-o", "x.json"], line: "caveman receipts export moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm human metering_receipts" },
   { argv: ["audit", "report", "audit-7"], line: "caveman audit report moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm human audit" },
 ];
@@ -48,6 +51,28 @@ for (const item of movedCases) {
     }
   });
 }
+
+test("unknown cloud verbs point at cvm with the same argv", async () => {
+  for (const argv of [["sql", "--schema"], ["tools", "list"], ["scenarios", "list"], ["context", "show"], ["doctor"]]) {
+    const run = await runCliWithApi(argv, { prefix: "cloud", respond: genericApiResponse });
+    assert.equal(run.code, 2);
+    assert.equal(run.requests.length, 0);
+    assert.equal(run.stderr, `caveman cloud ${argv[0]} moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm ${argv.join(" ")}\n`);
+  }
+});
+
+test("a local tools verb under cloud keeps the wrong-namespace hint", async () => {
+  const run = await runCliWithApi(["compress"], { prefix: "cloud", respond: genericApiResponse });
+  assert.equal(run.code, 2);
+  assert.match(run.stderr, /did you mean `caveman tools compress`/);
+});
+
+test("audit typos keep the usage error instead of the moved line", async () => {
+  const run = await runCliWithApi(["audit", "imprt", "x.jsonl"], { respond: genericApiResponse });
+  assert.equal(run.code, 2);
+  assert.equal(run.requests.length, 0);
+  assert.match(run.stderr, /^usage: caveman audit import --format <fmt> <file> \| eval-import <evidence\.jsonl>\n$/);
+});
 
 test("legacy-only moved verbs print the cvm line", async () => {
   for (const [argv, cvm] of [[["opportunities", "list"], "fixes list_opportunities"], [["deploy", "status"], "context system_status"]]) {

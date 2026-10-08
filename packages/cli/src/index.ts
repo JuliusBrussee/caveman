@@ -274,28 +274,33 @@ const CLOUD_HANDLERS: Record<string, CommandHandler> = {
   audit: (argv) => {
     if (argv[0] === "import") return auditImport(argv);
     if (argv[0] === "eval-import") return auditEvalImport(argv);
-    return movedToCvm("audit", argv);
+    if (argv[0] === undefined || argv[0] === "report" || argv[0] === "--last" || argv[0].startsWith("--last=")) return movedToCvm("audit", argv);
+    return commandUsage("audit import --format <fmt> <file> | eval-import <evidence.jsonl>");
   },
   sync: () => sync(),
 };
 
 // Cloud commands that moved to the separate `cvm` CLI (@caveman-ai/cloud).
-// Key: old verb plus any subverbs; value: the `cvm <family> <verb>` to run.
-const MOVED_TO_CVM: Record<string, string> = {
+// Key: old verb plus any subverbs; value: the `cvm <family> <verb>` to run, or
+// null when cvm has no such operation and the command is simply gone.
+const MOVED_TO_CVM: Record<string, string | null> = {
   projects: "projects list",
   "projects create": "projects create",
-  keys: "tools list",
+  keys: "human list_keys",
+  "keys list": "human list_keys",
+  "keys create": null,
+  "keys revoke": null,
   providers: "providers list",
   "providers verify": "providers verify",
   billing: "human billing_account",
-  "billing charges": "tools list",
+  "billing charges": null,
   score: "plan score",
   costs: "reports costs",
   plan: "plan project_plan",
   traces: "traces list",
   "traces search": "traces search",
   "traces show": "traces get",
-  "traces export": "tools list",
+  "traces export": null,
   experiments: "experiments list",
   "experiments show": "experiments get",
   "experiments results": "experiments results",
@@ -305,25 +310,50 @@ const MOVED_TO_CVM: Record<string, string> = {
   "audit report": "human audit",
   agent: "proposals list",
   "agent show": "proposals get",
-  "agent run": "tools list",
+  "agent run": null,
   "agent factory": "workflows list_agents",
   "agent factory show": "workflows get_agent",
   opportunities: "fixes list_opportunities",
   "deploy status": "context system_status",
 };
 
-for (const verb of ["projects", "keys", "providers", "billing", "score", "costs", "plan", "traces", "experiments", "mcp-serve", "agent"]) {
+for (const verb of ["projects", "keys", "providers", "billing", "score", "costs", "plan", "traces", "experiments", "agent"]) {
   CLOUD_HANDLERS[verb] = (argv) => movedToCvm(verb, argv);
+}
+CLOUD_HANDLERS["mcp-serve"] = (argv) => forwardMcpServe(argv);
+
+function movedLine(command: string, cvm: string): never {
+  console.error(`${invokedAs()} ${command} moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm ${cvm}`);
+  process.exit(2);
 }
 
 function movedToCvm(verb: string, argv: string[]): never {
   let key = verb;
   for (const word of argv) {
-    if (!MOVED_TO_CVM[`${key} ${word}`]) break;
+    if (MOVED_TO_CVM[`${key} ${word}`] === undefined) break;
     key = `${key} ${word}`;
   }
-  console.error(`${invokedAs()} ${key} moved to cvm. Install: npm i -g @caveman-ai/cloud, then run: cvm ${MOVED_TO_CVM[key]}`);
-  process.exit(2);
+  const cvm = MOVED_TO_CVM[key];
+  if (!cvm) {
+    console.error(`${invokedAs()} ${key} was removed. Use the Caveman Cloud dashboard instead.`);
+    process.exit(2);
+  }
+  return movedLine(key, cvm);
+}
+
+// Agents registered before the move still launch `caveman cloud mcp-serve`.
+// Agents call it, not people, so this one verb forwards to `cvm mcp` when cvm
+// is installed instead of breaking the agent at startup.
+function forwardMcpServe(argv: string[]): void {
+  const cvm = resolveCloudMcpCommand();
+  if (!cvm) return movedToCvm("mcp-serve", argv);
+  const result = spawnSync(cvm.command, cvm.args, { stdio: "inherit" });
+  if (result.error) {
+    console.error(`caveman mcp-serve: ${result.error.message}`);
+    process.exitCode = 1;
+    return;
+  }
+  process.exitCode = result.status ?? 1;
 }
 
 const LEGACY_HANDLERS: Record<string, CommandHandler> = {
@@ -419,6 +449,8 @@ function resolveInvocation(raw: string[]): ResolvedInvocation {
     const handlers = group === "tools" ? TOOL_HANDLERS : CLOUD_HANDLERS;
     const handler = handlers[verb];
     if (handler) return { verb, argv: raw.slice(2), group, handler };
+    // A local tools verb typed under `cloud` keeps the wrong-namespace hint.
+    if (group === "cloud" && !TOOL_HANDLERS[verb]) return { verb, argv: raw.slice(2), group, handler: () => movedLine(`cloud ${verb}`, raw.slice(1).join(" ")) };
     return { verb, argv: raw.slice(2), group, handler: () => unknownInvocation(verb, group) };
   }
   const handler = LEGACY_HANDLERS[top];
@@ -3293,6 +3325,7 @@ async function setup(argv: string[] = []) {
       preflightAgentNativeSetup(agentNative);
       const existingBundle = readAgentNativeBundleJournal(agentNative);
       const cloudMcp = resolveCloudMcpCommand();
+      if (!cloudMcp) throw new Error(CVM_INSTALL_LINE);
       preflightAgentNativeBundleComponents(agentNative, existingBundle);
       const nativeWasInstalled = nativeIntegrationStatus(agentNative).installed;
       const rollbackCloudMcp = readMcpServerMarker(agentNative, "caveman-cloud");
@@ -11637,11 +11670,29 @@ function resolveMcpCommand(): { command: string; args: string[] } {
   return { command: "caveman-mcp", args: [] };
 }
 
-// The caveman-cloud MCP server is served by the separate `cvm` CLI.
-function resolveCloudMcpCommand(): { command: string; args: string[] } {
-  const cvm = which("cvm");
-  if (!cvm) throw new Error("caveman-cloud MCP moved to cvm. Install: npm i -g @caveman-ai/cloud, then rerun this command");
-  return { command: cvm, args: ["mcp"] };
+const CVM_INSTALL_LINE = "caveman-cloud MCP moved to cvm. Install: npm i -g @caveman-ai/cloud, then rerun this command";
+
+// The caveman-cloud MCP server is `cvm mcp` from @caveman-ai/cloud; null when
+// cvm is not installed. Agents spawn the command without a shell, so register
+// node plus the package's bin/cvm.mjs (a Windows `cvm.cmd` shim cannot be
+// spawned that way) and fall back to the shim only when the script is not found.
+function resolveCloudMcpCommand(): { command: string; args: string[] } | null {
+  const shim = which("cvm");
+  if (!shim) return null;
+  const script = join("@caveman-ai", "cloud", "bin", "cvm.mjs");
+  for (const candidate of [
+    shim,
+    join(dirname(shim), "node_modules", script),
+    join(dirname(shim), "..", "lib", "node_modules", script),
+  ]) {
+    try {
+      const real = realpathSync(candidate);
+      if (basename(real) === "cvm.mjs") return { command: process.execPath, args: [real, "mcp"] };
+    } catch {
+      /* try the next layout */
+    }
+  }
+  return { command: shim, args: ["mcp"] };
 }
 
 // resolveDelegateMcpCommand locates the dependency-free caveman-delegate stdio
@@ -13906,7 +13957,9 @@ function mcpInstall(target?: string, serverName = "caveman"): number {
     }
     mcp = resolved;
   } else {
-    mcp = resolveCloudMcpCommand();
+    const cloud = resolveCloudMcpCommand();
+    if (!cloud) throw new Error(CVM_INSTALL_LINE);
+    mcp = cloud;
   }
   let targets: AgentProfile[];
   if (target) {
@@ -19152,7 +19205,7 @@ function requireAuth(cfg: Config) {
 // `login` and no CAVE_API_URL (e.g. CI) used to fall back to a dead
 // localhost port here too.
 export function resolveConfigBaseUrl(savedBaseURL: string | undefined): string {
-  return savedBaseURL ?? process.env.CAVE_API_URL ?? PROD_API_URL;
+  return savedBaseURL || process.env.CAVE_API_URL || PROD_API_URL;
 }
 
 async function config(): Promise<Config> {

@@ -174,7 +174,8 @@ Hosted login remains unavailable during beta.
 Caveman Cloud commands (projects, keys, providers, billing, Cave Score, costs,
 Cave Plan, traces, experiments, agents and the Cloud MCP server) moved to the
 separate `cvm` CLI: `npm i -g @caveman-ai/cloud`, then `cvm tools list`. The old
-`caveman` verbs print the matching `cvm` command and exit 2. `caveman` keeps
+`caveman` verbs print the matching `cvm` command and exit 2; a few with no `cvm`
+operation say to use the dashboard. `caveman` keeps
 `login`, `logout`, `whoami`, `sync`, `receipts verify` and the file imports below.
 
 Connected telemetry imports stay under existing `cloud audit` governance verb:
@@ -205,7 +206,9 @@ caveman setup --agent-native claude
 This writes an MCP command, not an access token, into the agent config. The
 project-scoped read tools are served by `cvm mcp`, so agent-native setup needs
 `cvm` on PATH (`npm i -g @caveman-ai/cloud`); without it, setup stops before any
-write and prints the install line.
+write and prints the install line. Agents
+registered earlier with `caveman cloud mcp-serve` keep working: that one verb
+forwards to `cvm mcp` when `cvm` is installed.
 
 Core changes coding behavior but remains independently controllable. Compression,
 recovery, and telemetry continue when Core is off:

@@ -26,7 +26,9 @@ Printed porcelain is `run`, `learn`, `login`, `status`, plus the agent shortcut.
 Local capabilities live under `caveman tools`; `caveman cloud` keeps only
 `whoami`, `receipts verify`, `audit import|eval-import` and `sync`. Every other
 Cloud command moved to the separate `cvm` CLI (`@caveman-ai/cloud`); its old verb
-prints one `moved to cvm` line from `MOVED_TO_CVM` and exits 2. `dev` and `deploy`
+prints one `moved to cvm` line from `MOVED_TO_CVM` and exits 2 (unknown
+`cloud <verb>` points at `cvm <same argv>`). Only `mcp-serve` forwards to
+`cvm mcp`, because agents registered before the move still launch it. `dev` and `deploy`
 are undocumented maintainer aliases. `tools` is capped at 15 printed verbs and
 `cloud` at 15; current counts are 15 and 4. Internal/advanced `shrink-hook`, `practices`, and
 `check` remain callable through existing paths but are unprinted, including in
