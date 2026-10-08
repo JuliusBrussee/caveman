@@ -7,6 +7,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { connect as netConnect, createServer } from "node:net";
 import { createHmac } from "node:crypto";
+import { assertHidesChildWindows, assertHidesChildWindowsPython } from "./harness/hidden-window.mjs";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 const fastNativeHook = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "native-hook-fast.js");
@@ -865,6 +866,7 @@ test("hooks install opencode writes a plugin, uninstall removes it", async () =>
   const src = readFileSync(plugin, "utf8");
   assert.match(src, /tool\.execute\.before/, "the plugin must hook tool.execute.before");
   assert.match(src, /caveman:shrink-plugin/, "the plugin must carry our marker");
+  assertHidesChildWindows(src, "opencode shrink plugin");
   assert.ok(existsSync(join(caveDir, "hooks", "opencode.json")), "a marker must be written");
 
   await runCli(["hooks", "uninstall", "opencode"], env);
@@ -902,6 +904,7 @@ test("hooks install hermes writes marker-fenced plugin files, idempotent, and un
   assert.match(init, /# >>> caveman:shrink-plugin/, "plugin code must carry begin marker");
   assert.match(init, /# <<< caveman:shrink-plugin/, "plugin code must carry end marker");
   assert.match(init, /register_hook\("transform_terminal_output"/, "plugin must register Hermes terminal-output hook");
+  assertHidesChildWindowsPython(init, "hermes shrink plugin");
   assert.match(init, /"shrink", "--stdin"/, "plugin must pipe output through caveman shrink --stdin");
   assert.match(manifest, /# >>> caveman:shrink-plugin/, "manifest must carry marker");
   assert.match(manifest, /provides_hooks:\n  - transform_terminal_output/, "manifest must declare the hook");
@@ -944,6 +947,7 @@ test("hooks install openclaw writes plugin package and config; uninstall removes
   const source = readFileSync(join(pluginDir, "index.mjs"), "utf8");
   assert.match(source, /tool_result_persist/, "OpenClaw plugin must use the verified persist hook");
   assert.match(source, /caveman:openclaw-shrink-plugin/, "plugin source must carry the Caveman ownership marker");
+  assertHidesChildWindows(source, "openclaw shrink plugin");
 
   const cfg = JSON.parse(readFileSync(configPath, "utf8"));
   assert.equal(cfg.theme, "midnight", "unrelated config must be preserved");

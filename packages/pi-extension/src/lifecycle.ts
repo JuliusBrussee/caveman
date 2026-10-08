@@ -91,7 +91,7 @@ export class HookBridge {
       const child = execFile(
         portable.command,
         portable.args,
-        { timeout: event === "SessionStart" ? SESSION_START_TIMEOUT_MS : HOOK_TIMEOUT_MS, maxBuffer: HOOK_MAX_BUFFER, encoding: "utf8" },
+        { timeout: event === "SessionStart" ? SESSION_START_TIMEOUT_MS : HOOK_TIMEOUT_MS, maxBuffer: HOOK_MAX_BUFFER, encoding: "utf8", windowsHide: true },
         (error, stdout) => {
           // Any failure that produced NO output means this candidate did not run
           // the hook, whatever the errno: a missing binary (ENOENT), a stamped
