@@ -1699,18 +1699,18 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 	if evidence.statsPricingUnsupportedReason != "" {
 		statsMeta.PricingUnsupportedReason = evidence.statsPricingUnsupportedReason
 	}
-	requestAccounting(&row, statsMeta, usage, evidence.originalBody, evidence.acceptedBody, retrieved)
 	// The legacy inferred-dollar field now uses the whole-request net delta too.
 	// Marker/tool overhead and regressions must not disappear behind segment wins.
 	// Not when the tool-schema strip also ran: that delta spans both transforms,
 	// and the strip books a handle and nothing else — no tokens, no dollars.
-	if authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers) && row.RequestEstimatedInputDeltaUSD != nil {
-		row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
-	}
-	s.sink.Record(row)
-	if s.cloud != nil {
-		s.cloud.Observe(row)
-	}
+	bookDelta := authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers)
+	original, accepted := evidence.originalBody, evidence.acceptedBody
+	s.finishRecord(row, true, func(row *RequestRecord) {
+		requestAccounting(row, statsMeta, usage, original, accepted, retrieved)
+		if bookDelta && row.RequestEstimatedInputDeltaUSD != nil {
+			row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
+		}
+	})
 }
 
 // costBreakdown prices normalized provider usage. Cache and reasoning fields are

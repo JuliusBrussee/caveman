@@ -397,6 +397,8 @@ type Server struct {
 	cloud   CloudLink
 	// routes is what the route stage remembers per session (route.go).
 	routes routeSessions
+	// recorder finishes rows off the request path (Config.AsyncRecord).
+	recorder *recorder
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
@@ -517,6 +519,13 @@ type Config struct {
 	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender). Nil
 	// keeps the proxy local-only.
 	Cloud CloudLink
+	// AsyncRecord finishes each telemetry row off the request path: the
+	// request token count, the sink write (batched when the sink is a
+	// BatchSink) and the Cloud observe run after the handler returns, so
+	// neither the client's connection nor a stream's last chunk waits on them.
+	// Rows reach the sink in the order they were recorded; Close writes out the
+	// rest. Off, every row is in the sink before ServeHTTP returns.
+	AsyncRecord bool
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -572,7 +581,7 @@ func New(cfg Config) *Server {
 		// date that change to a config change rather than to the provider.
 		cfg.Logger.Info("cache-breakpoint planner enabled", "mode", breakpointPlanModeFrontier)
 	}
-	return &Server{
+	s := &Server{
 		adapters:             cfg.Adapters,
 		auth:                 cfg.Auth,
 		creds:                cfg.Creds,
@@ -599,6 +608,10 @@ func New(cfg Config) *Server {
 		capture:              newBodyCapture(os.Getenv("CAVE_CAPTURE_DIR"), cfg.Logger),
 		cloud:                cfg.Cloud,
 	}
+	if cfg.AsyncRecord && cfg.Sink != nil {
+		s.recorder = newRecorder(s.writeRecords, cfg.Logger)
+	}
+	return s
 }
 
 // Handler returns the standalone HTTP handler: health, metrics, and the proxy

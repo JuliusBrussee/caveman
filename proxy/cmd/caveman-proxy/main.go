@@ -46,6 +46,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativehook"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
 	"github.com/JuliusBrussee/caveman/proxy/internal/runstate"
+	"github.com/JuliusBrussee/caveman/proxy/internal/sessionusage"
 	"github.com/JuliusBrussee/caveman/proxy/internal/standalone"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
@@ -281,8 +282,10 @@ func runServe(logger *slog.Logger) {
 		opts.ObserveEstimate = true
 	}
 	var nativeRuntime *nativeruntime.Runtime
+	var flushRows func() // set once the server exists, before anything serves
 	if recovery != nil {
-		nativeRuntime = nativeruntime.NewWithReceiptsAndUsage(recovery, filepath.Join(home, "receipts"), spend)
+		usage := usageAfterFlush{flush: func() { flushRows() }, spend: spend}
+		nativeRuntime = nativeruntime.NewWithReceiptsAndUsage(recovery, filepath.Join(home, "receipts"), usage)
 		opts.SessionFallback = func(now time.Time, provider, model string) (string, string) {
 			return nativeRuntime.UniqueRecentSession(now, 5*time.Second, provider, model)
 		}
@@ -291,7 +294,11 @@ func runServe(logger *slog.Logger) {
 	// Routing asks and runtime/v1 events, only while the CLI is signed in with
 	// the routing module on; every Cloud failure keeps the asked model.
 	opts.Cloud = cloudlink.New(home, logger)
+	// Rows are finished and written off the request path; server.Close below
+	// writes the last of them before the deferred spend.Close.
+	opts.AsyncRecord = true
 	server := standalone.New(cfg, spend, opts)
+	flushRows = server.Flush
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
@@ -395,9 +402,23 @@ func runServe(logger *slog.Logger) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
+	_ = server.Close()
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)
 	}
+}
+
+// usageAfterFlush reads a session's usage once the rows still being finished
+// off the request path are written, so the session's receipt counts its last
+// request.
+type usageAfterFlush struct {
+	flush func()
+	spend *store.Store
+}
+
+func (u usageAfterFlush) SessionUsage(sessionID string) (sessionusage.Snapshot, error) {
+	u.flush()
+	return u.spend.SessionUsage(sessionID)
 }
 
 // middlewareDown stands in for a default middleware that failed to start: its
