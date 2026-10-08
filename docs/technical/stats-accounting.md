@@ -56,6 +56,13 @@ no savings. Repeated requests are repeated observations, not unique files.
   non-billable OAuth traffic. It illustrates the API value of that context;
   it does not reduce a subscription bill or prove additional quota.
 
+Prompt-cache warms the proxy sends on its own (`waste-fixes`) are real spend:
+their rows carry the `cache-warm` optimizer id, are priced like any request and
+book no savings. `stats` counts them separately as `cache_warm_requests` and
+`cache_warm_cost_usd`, inside the request and spend totals. Whether a warm
+avoided a cache write is never measured; the $0.05 threshold behind it is an
+inferred catalog estimate.
+
 OAuth is an authentication mechanism, not a billing plan. Paid cloud OAuth
 routes such as Vertex stay in the API category when their billing provenance
 supports it. Unknown billing modes stay separate. Unknown models never borrow

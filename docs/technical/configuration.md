@@ -130,6 +130,7 @@ These are read by the proxy process itself, not by feature configuration.
 | `CAVE_UPSTREAM_PROXY` | Outbound proxy; overrides `upstream_proxy` |
 | `CAVE_CA_BUNDLE` | Extra PEM roots; overrides `ca_bundle` |
 | `CAVE_SSRF_ALLOWLIST` | Exact private or loopback upstream hosts to permit |
+| `CAVEMAN_CACHE_WARM` | `off` (or `0`, `false`, `no`) stops prompt-cache warming for this process. Otherwise warming follows the `waste-fixes` module |
 
 With `CAVEMAN_AUTH_TOKEN` set, every request must present the token in
 `x-cave-api-key` or `Authorization: Bearer`. The proxy consumes that header
