@@ -898,6 +898,12 @@ func decodeAccountingBody(raw []byte, contentEncoding string, limit int) ([]byte
 // stream (where usage is emitted across one or more events). Values are merged
 // with a max rule so cumulative stream counters resolve to their final totals.
 func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
+	parseUsageBytes(provider, data, usage, mayCarryUsage)
+}
+
+// parseUsageBytes is ParseUsageBytes deciding per stream line, with decodeLine,
+// whether the line is worth decoding.
+func parseUsageBytes(provider string, data []byte, usage *UsageObservation, decodeLine func(line, eventType string) bool) {
 	if root, err := decodeUsageValue(data); err == nil {
 		mergeUsageValue(provider, root, usage)
 		if _, streamedArray := root.([]any); streamedArray && (provider == "gemini" || provider == "vertex") && !hasGeminiFinishReason(root) && !hasGeminiPromptBlock(root) {
@@ -937,7 +943,7 @@ func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
 			continue
 		}
 		line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if line == "" || line == "[DONE]" {
+		if line == "" || line == "[DONE]" || !decodeLine(line, eventType) {
 			continue
 		}
 		var obj map[string]any
@@ -983,6 +989,38 @@ func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
 		usage.ReasoningTokens = 0
 		MarkRawUsageIncomplete(usage)
 	}
+}
+
+// usageLineKeys are the quoted names a stream line must spell to change what
+// ParseUsageBytes observes: the keys mergeUsage, the Anthropic stream flags and
+// the Gemini terminal checks read, and the type values they switch on.
+var usageLineKeys = []string{
+	`"usage`, `"message`, `"response"`, `"error`, `"stop_reason`,
+	`"service_tier`, `"serviceTier`, `"trafficType`, `"traffic_type`, `"inference_geo`,
+	`"web_search_requests`, `"search_queries`, `"grounding_queries`,
+	`"promptFeedback`, `"finishReason`,
+}
+
+// mayCarryUsage reports whether decoding a stream data line can change the
+// usage observation. A line that spells none of usageLineKeys (a text or tool
+// delta, most of a stream) decodes to nothing ParseUsageBytes reads, so it is
+// skipped undecoded. A \u escape could spell any name, so such a line is
+// decoded, as is a line under an event name the parser copies in as its type
+// (an error event needs no decode: its event line already marks the error).
+func mayCarryUsage(line, eventType string) bool {
+	switch eventType {
+	case "message_start", "message_delta", "message_stop":
+		return true
+	}
+	if strings.Contains(line, `\u`) {
+		return true
+	}
+	for _, key := range usageLineKeys {
+		if strings.Contains(line, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasGeminiFinishReason(value any) bool {
