@@ -214,17 +214,25 @@ function runKiloAlias(
     JSON.stringify({ wrap: { proxy: options.proxy === true, shrink: false, mcp: false, browse: false } }),
   );
   writeFileSync(proxy, `#!/bin/sh\nprintf invoked > ${JSON.stringify(proxySentinel)}\nexit 1\n`, { mode: 0o755 });
-  writeFileSync(
-    join(binDir, installedBinary),
-    `#!/usr/bin/env node
+  // Shadow EVERY name the profile publishes, not just the invoked one. The CLI
+  // resolves a host by walking binary_names in profile order, so a fixture that
+  // stubs only "kilocode" lets the lookup fall through to a REAL "kilo" earlier
+  // in that list and the suite silently tests the installed host instead of the
+  // stub. That is not hypothetical: it is the state of the machine the
+  // conformance lane runs on, where the pinned binary is installed on purpose,
+  // and it failed as a kilo config-schema error rather than as a missing stub.
+  // Both names are bins of the same package, so the assertions below hold
+  // whichever one the CLI picks — the stub just has to be what answers.
+  const stub = `#!/usr/bin/env node
 process.stdout.write(JSON.stringify({
   argv: process.argv.slice(2),
   config: process.env.KILO_CONFIG_CONTENT || "",
   openaiKey: process.env.OPENAI_API_KEY || ""
 }));
-`,
-    { mode: 0o755 },
-  );
+`;
+  for (const name of new Set([installedBinary, ...kilo.binary_names])) {
+    writeFileSync(join(binDir, name), stub, { mode: 0o755 });
+  }
 
   const env = {
     ...process.env,
