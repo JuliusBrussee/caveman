@@ -414,3 +414,42 @@ func TestChatGPTAutoSniffReadsAWholeZstdBlock(t *testing.T) {
 		t.Fatal("the head read does not reach the end of the first zstd block")
 	}
 }
+
+// A login that refuses a configuration_update: one retry at Cloud's effort
+// top-level, then the session is latched and later requests go out once.
+func TestChatGPTAutoRefusedUpdateHealsAndLatches(t *testing.T) {
+	var bodies [][]byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		bodies = append(bodies, raw)
+		w.Header().Set("content-type", "application/json")
+		if bytes.Contains(raw, []byte(`"configuration_update"`)) {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"message":"The 'configuration_update' item type is not supported with pro or tournament models."}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"r","object":"response","model":"gpt-6.1-sol","output":[],"usage":{"input_tokens":10,"output_tokens":2}}`)
+	}))
+	defer upstream.Close()
+	srv, _, _ := chatgptTestServer(t, upstream.URL)
+	rejected := 0
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "kept", Effort: "low", EffortMode: "message", Reject: func() { rejected++ }}}
+	srv.cloud = cloud
+	turn := func(effort string, items ...string) string {
+		return strings.Replace(thread(effort, items...), "gpt-6-sol", "gpt-6.1-sol", 1)
+	}
+	send := func(items ...string) int {
+		before := len(bodies)
+		body := strings.Replace(turn("high", items...), "gpt-6.1-sol", AutoModel, 1)
+		if rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(body), map[string]string{"session_id": "codex-1"}); rec.Code != http.StatusOK {
+			t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+		}
+		return len(bodies) - before
+	}
+	if sends := send(rA, rB, rC); sends != 2 || string(bodies[0]) != turn("high", rA, rB, update("low"), rC) || string(bodies[1]) != turn("low", rA, rB, rC) {
+		t.Fatalf("heal: %d sends, %s", sends, bodies)
+	}
+	if sends := send(rA, rB, rC, rE, rF); sends != 1 || string(bodies[2]) != turn("low", rA, rB, rC, rE, rF) || !cloud.asks[len(cloud.asks)-1].PerMessageOff || rejected != 0 {
+		t.Fatalf("after the latch: %d sends, last %s, latched %v, rejected %d", sends, bodies[len(bodies)-1], cloud.asks[len(cloud.asks)-1].PerMessageOff, rejected)
+	}
+}

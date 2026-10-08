@@ -146,9 +146,10 @@ func sendChildren(t *testing.T, srv *Server, n int, agent func(i int) string) {
 	var wg sync.WaitGroup
 	for i := range n {
 		wg.Add(1)
+		body := auto(t, fmt.Sprintf(childBody, i))
 		go func() {
 			defer wg.Done()
-			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(fmt.Sprintf(childBody, i)))
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
 			req.Header.Set("x-api-key", "sk-ant-api-key")
 			req.Header.Set("x-claude-code-session-id", "parent-1")
 			req.Header.Set("x-claude-code-agent-id", agent(i))
@@ -245,7 +246,7 @@ func TestChildrenShareTheirParentsAffinity(t *testing.T) {
 		c := newPoolCaseMode(t, localTarget("api.openai.com"), "", mode)
 		poolSend(t, c.srv, poolBody)
 		parent, _ := c.stub.last("/chat/completions")
-		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(poolBody))
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, poolBody)))
 		req.Header.Set("x-api-key", "sk-ant-api-key")
 		req.Header.Set("x-claude-code-session-id", "sess-1")
 		req.Header.Set("x-claude-code-agent-id", "child-1")

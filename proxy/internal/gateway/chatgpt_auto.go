@@ -230,6 +230,22 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 		})
 	}
 	resp, err := send(sent)
+	// A 400 naming the configuration update retries once at top-level effort
+	// and, once served, latches the model for the session (route.go routeHeal),
+	// as on the API-key path: else every later request would be refused first.
+	if err == nil && resp.StatusCode == http.StatusBadRequest && run != nil && run.marked {
+		if retry, kind, _ := s.routeHeal(run, resp, sent, model, model == fallback); kind == healMarks {
+			if healed, herr := send(retry); herr == nil {
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				_ = resp.Body.Close()
+				resp, sent = healed, retry
+				if healed.StatusCode < 300 {
+					run.marked = false
+					s.routes.latch(run.key, model)
+				}
+			}
+		}
+	}
 	if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(sent, asked) {
 		// The login refused the routed model, its effort or the compressed
 		// bytes: the fallback model's own bytes, and the rest of this ask

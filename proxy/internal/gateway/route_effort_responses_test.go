@@ -51,7 +51,7 @@ func responsesServerMode(t *testing.T, mode string, cloud CloudLink, respond fun
 
 func postResponses(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(auto(t, body)))
 	req.Header.Set("authorization", "Bearer sk-proj-api-key")
 	req.Header.Set("x-cave-agent", "codex")
 	req.Header.Set("session_id", "codex-1")
@@ -356,8 +356,8 @@ func TestRecordModeAndRoutingOffAreNeverKeyed(t *testing.T) {
 }
 
 // A 429 on a compressed OpenAI request replays the original as it always
-// has, routing off (nothing the route stage did is in the bytes) or on with
-// only the session's key added (the replay carries the key too).
+// has, a named model (nothing the route stage did is in the bytes) or Auto
+// with only the session's key added (the replay carries the key too).
 func TestCompressed429ReplaysAsBefore(t *testing.T) {
 	for _, answer := range []RouteAnswer{{Outcome: "off"}, {Outcome: "kept"}} {
 		comp := &stubCompressor{out: []byte("X"), before: 100, after: 40, handle: "ccr_test"}
@@ -367,14 +367,14 @@ func TestCompressed429ReplaysAsBefore(t *testing.T) {
 			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, Compressor: comp, HTTPClient: &http.Client{Transport: rt},
 			Cloud: &fakeCloud{answer: answer},
 		})
-		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatReqBody))
+		in, original := chatReqBody, chatReqBody
+		if answer.Outcome == "kept" {
+			in, original = auto(t, chatReqBody), string(withCacheKey([]byte(chatReqBody), "codex-1"))
+		}
+		req := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(in))
 		req.Header.Set("authorization", "Bearer sk-proj-api-key")
 		req.Header.Set("session_id", "codex-1")
 		srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
-		original := chatReqBody
-		if answer.Outcome == "kept" {
-			original = string(withCacheKey([]byte(chatReqBody), "codex-1"))
-		}
 		if len(rt.bodies) != 2 || string(rt.bodies[0]) == original || string(rt.bodies[1]) != original {
 			t.Errorf("%s: %d sends, last %.120s", answer.Outcome, len(rt.bodies), rt.bodies[len(rt.bodies)-1])
 		}
@@ -402,7 +402,7 @@ func TestARefusedCacheKeyReplaysWithoutItAndLatches(t *testing.T) {
 	}
 
 	srv, log = responsesServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "off", Reason: "stateful_chain"}}, refuse)
-	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"gpt-6-sol","previous_response_id":"resp_1","input":[`+rC+`]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(auto(t, `{"model":"gpt-6-sol","previous_response_id":"resp_1","input":[`+rC+`]}`)))
 	req.Header.Set("authorization", "Bearer sk-proj-api-key")
 	req.Header.Set("session_id", "codex-1")
 	req.Header.Set("accept-encoding", "br, gzip")
