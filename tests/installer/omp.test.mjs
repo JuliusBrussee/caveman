@@ -11,14 +11,14 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 const OMP_PLUGIN_DIR = path.join('.omp', 'caveman-plugin');
 const OMP_ARGS_LOG = 'omp-args.log';
 const OMP_SHIM_NAME = process.platform === 'win32' ? 'omp.cmd' : 'omp';
 const OMP_SHIM_SCRIPT_NAME = 'omp-shim.js';
 // The fake `omp` binary lives in a Node script both platforms share; only the
 // launcher differs. On Windows the installer never executes a `.cmd` — it reads
-// it, extracts the Node entrypoint (bin/lib/portable-process.js) and spawns node
+// it, extracts the Node entrypoint (installer/lib/portable-process.js) and spawns node
 // directly — so the shim must be shaped like the npm-generated cmd-shim a real
 // `npm i -g oh-my-pi` produces. A plain batch script is rejected as a
 // "non-Node Windows command shim" and never runs.

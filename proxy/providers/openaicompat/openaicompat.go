@@ -17,7 +17,15 @@ import (
 var validName = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 
 func New(baseURL string) providers.Adapter {
-	return Adapter{Base: providers.Base{Provider: "openai_compatible", BaseURL: baseURL, Routes: []string{"/compat/"}}}
+	return Adapter{Base: providers.Base{
+		Provider: "openai_compatible",
+		BaseURL:  baseURL,
+		Routes:   []string{"/compat/"},
+		// Read-only model discovery on the default mount and on the two legacy
+		// mounts ResolveUpstreamURL still strips. Both wire dialects an
+		// OpenAI-compatible upstream can speak define GET /v1/models.
+		MetadataRoutes: []string{"/compat/v1/models", "/compat/stub/v1/models", "/compat/openai-compatible/v1/models"},
+	}}
 }
 
 type Adapter struct{ providers.Base }
@@ -31,6 +39,16 @@ func (a Adapter) MatchRoute(method, path string) bool {
 		return false
 	}
 	return a.Base.MatchRoute(method, path)
+}
+
+// MatchMetadataRoute applies the same decoded-path check as MatchRoute before
+// admitting a read-only metadata request, so the new GET surface cannot be used
+// to claim a different compatibility mount than the caller sent.
+func (a Adapter) MatchMetadataRoute(method, path string) bool {
+	if err := validateCompatPath(path, ""); err != nil {
+		return false
+	}
+	return a.Base.MatchMetadataRoute(method, path)
 }
 
 // ResolveUpstreamURL removes only the default public /compat mount before
@@ -210,6 +228,15 @@ func (a namedAdapter) MatchRoute(method, path string) bool {
 	return a.Base.MatchRoute(method, path)
 }
 
+// MatchMetadataRoute mirrors MatchRoute: validate the decoded path spelling
+// first, then consult the GET-only metadata allowlist.
+func (a namedAdapter) MatchMetadataRoute(method, path string) bool {
+	if err := validateCompatPath(path, ""); err != nil {
+		return false
+	}
+	return a.Base.MatchMetadataRoute(method, path)
+}
+
 func (a namedAdapter) InspectRequest(ctx context.Context, body providers.BodyReader, headers http.Header) (providers.RequestMetadata, error) {
 	return inspectOpenAICompatible(ctx, a.Base, body, headers)
 }
@@ -383,10 +410,11 @@ func NewNamedWithWireDialect(name, baseURL, wireDialect string, forwardHeaders .
 	prefix := "/compat/" + name
 	return namedAdapter{
 		Base: providers.Base{
-			Provider:      "openai_compatible",
-			BaseURL:       baseURL,
-			Routes:        []string{prefix + "/"},
-			UsageProvider: wireDialectUsageProvider[wireDialect],
+			Provider:       "openai_compatible",
+			BaseURL:        baseURL,
+			Routes:         []string{prefix + "/"},
+			MetadataRoutes: []string{prefix + "/v1/models"},
+			UsageProvider:  wireDialectUsageProvider[wireDialect],
 		},
 		prefix:         prefix,
 		forwardHeaders: append([]string(nil), forwardHeaders...),

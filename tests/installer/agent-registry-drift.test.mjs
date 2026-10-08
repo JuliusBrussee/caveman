@@ -46,7 +46,7 @@ function resultFor(artifact, id = profile.id) {
   return result;
 }
 
-function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${expectedId}.json`, includeExpectedId = true, registryOverride } = {}) {
+function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${expectedId}.json`, includeExpectedId = true, registryOverride, openIssues = [] } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "caveman-drift-report-"));
   t.after(() => rmSync(dir, { recursive: true, force: true }));
   // The reporter reads agents.json from its own directory. A test that needs a
@@ -63,11 +63,13 @@ function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${
   }
   const input = join(dir, inputBasename);
   const calls = join(dir, "gh-called");
+  const issues = join(dir, "gh-issues.json");
   const bin = join(dir, "bin");
   mkdirSync(bin);
   writeFileSync(input, JSON.stringify(artifact));
+  writeFileSync(issues, JSON.stringify(openIssues));
   const gh = join(bin, "gh");
-  writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$GH_CALLED_FILE"\nif [ "$1 $2" = "issue list" ]; then printf '[]'; fi\n`);
+  writeFileSync(gh, `#!/bin/sh\nprintf '%s\\n' "$*" >> "$GH_CALLED_FILE"\nif [ "$1 $2" = "issue list" ]; then cat "$GH_ISSUES_FILE"; fi\n`);
   chmodSync(gh, 0o755);
   const argv = [reporterPath, "--input", input];
   if (includeExpectedId) argv.push("--expected-id", expectedId);
@@ -77,6 +79,7 @@ function runReporter(t, artifact, { expectedId = profile.id, inputBasename = `${
       ...process.env,
       PATH: `${bin}${delimiter}${process.env.PATH || ""}`,
       GH_CALLED_FILE: calls,
+      GH_ISSUES_FILE: issues,
     },
   });
   return {
@@ -125,6 +128,71 @@ test("release version outranks matching prerelease", { skip: process.platform ==
   const result = runReporter(t, artifact, { expectedId: prereleaseProfile.id, registryOverride });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.ghCalls, /^issue create/m);
+});
+
+test("broken latest probe opens an issue without copying untrusted probe output", { skip: process.platform === "win32" && "gh stub is a sh script; the reporter runs on POSIX CI only" }, (t) => {
+  // #1054: hermes@main probed broken for weeks and nothing surfaced, because only
+  // `drift` reached gh. A broken @latest is the louder signal, not a quieter one.
+  const artifact = validDrift();
+  Object.assign(resultFor(artifact), {
+    status: "broken",
+    help_ok: false,
+    version_error: "",
+    help_error: "ModuleNotFoundError: No module named 'ruamel' @maintainer",
+  });
+  const result = runReporter(t, artifact);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.ghCalls, /^issue list/m);
+  assert.match(result.ghCalls, /^issue create --title agent-drift: kilo .*fails the latest probe/m);
+  assert.doesNotMatch(result.ghCalls, /ruamel|@maintainer/);
+});
+
+function brokenAtDriftVersion(artifact) {
+  Object.assign(resultFor(artifact), { status: "broken", help_ok: false, version_error: "", help_error: "" });
+  return artifact;
+}
+
+function openIssue(stateLine, eol = "\n") {
+  return {
+    number: 7,
+    title: `agent-drift: ${profile.id} — earlier report`,
+    body: [`<!-- caveman-agent-drift:${profile.id} -->`, "", "Earlier report.", "", stateLine, "- profile `tested_agent_version`: `x`"].join(eol),
+  };
+}
+
+// The existing-issue branch keys "already current" on the exact state line, so a
+// repeat run must not rewrite the issue (that would clobber maintainer edits nightly),
+// and a drift that turns broken at the same version must. Bodies written before broken
+// reports existed, and bodies GitHub hands back with CRLF after a web-UI edit, still count.
+for (const [name, artifact, stateLine, eol, edits] of [
+  ["old-format drift body, same version", () => validDrift(), (v) => `- installed (@latest): \`${v}\``, "\n", false],
+  ["CRLF drift body, same version", () => validDrift(), (v) => `- installed (@latest): \`${v}\``, "\r\n", false],
+  ["broken body, still broken at same version", () => brokenAtDriftVersion(validDrift()), (v) => `- installed (@latest): \`${v}\` (probe broken)`, "\n", false],
+  ["drift body, now broken at same version", () => brokenAtDriftVersion(validDrift()), (v) => `- installed (@latest): \`${v}\``, "\n", true],
+  ["broken body, now drifted at same version", () => validDrift(), (v) => `- installed (@latest): \`${v}\` (probe broken)`, "\n", true],
+]) {
+  test(`existing drift issue: ${name}`, { skip: process.platform === "win32" && "gh stub is a sh script; the reporter runs on POSIX CI only" }, (t) => {
+    const input = artifact();
+    const issue = openIssue(stateLine(resultFor(input).observed), eol);
+    const result = runReporter(t, input, { openIssues: [issue] });
+    assert.equal(result.status, 0, result.stderr);
+    assert.doesNotMatch(result.ghCalls, /^issue create/m);
+    if (edits) {
+      assert.match(result.ghCalls, /^issue edit 7 /m);
+    } else {
+      assert.doesNotMatch(result.ghCalls, /^issue edit/m);
+      assert.match(result.stdout, /issue #7 already current/);
+    }
+  });
+}
+
+test("hermes latest drift probe installs the latest release, not main", () => {
+  // #1054: hermes main moved its deps to Python 3.14-only markers, so @main probed
+  // broken on the runner's 3.12 while every tagged release installs cleanly.
+  const workflow = readFileSync(join(root, ".github", "workflows", "agent-conformance.yml"), "utf8");
+  const line = /- id: hermes\s*\n\s*install_latest:\s*([^\n]+)/.exec(workflow)?.[1] || "";
+  assert.match(line, /hermes-agent\/releases\/latest/);
+  assert.doesNotMatch(line, /@main\b/);
 });
 
 test("workflow passes trusted artifact basename as expected profile id", () => {

@@ -15,7 +15,8 @@ concurrency:
 jobs:
   build-sign-publish:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # The cgo cross-builds compile the tree-sitter grammars once per target.
+    timeout-minutes: 60
     environment: binary-release
     permissions:
       contents: write
@@ -49,8 +50,30 @@ jobs:
             echo "packages/cli/BINARY_RELEASE does not match $GITHUB_REF_NAME" >&2
             exit 1
           }
+      # caveman-proxy and caveman-engine cross-compile with cgo through zig cc so
+      # they carry the tree-sitter code compressor (scripts/build-release-binaries.mjs).
+      # Pinned by version and sha256 like rcodesign and cosign below; the build
+      # script refuses any zig but RELEASE_ZIG_VERSION.
+      - name: Install pinned zig (cgo cross-compiler)
+        run: |
+          set -euo pipefail
+          curl -fsSL -o "$RUNNER_TEMP/zig.tar.xz" https://ziglang.org/download/0.16.0/zig-x86_64-linux-0.16.0.tar.xz
+          echo "70e49664a74374b48b51e6f3fdfbf437f6395d42509050588bd49abe52ba3d00  $RUNNER_TEMP/zig.tar.xz" | sha256sum -c -
+          mkdir -p "$RUNNER_TEMP/zig"
+          tar -xJf "$RUNNER_TEMP/zig.tar.xz" -C "$RUNNER_TEMP/zig" --strip-components=1
+          echo "ZIG=$RUNNER_TEMP/zig/zig" >> "$GITHUB_ENV"
       - name: Build deterministic cross-platform artifacts
         run: node scripts/build-release-binaries.mjs --out dist/binaries
+      # The one artifact this runner can execute. Its embedded evals compress
+      # Python and TypeScript, which only the cgo build can do, and the Linux
+      # cgo binaries must stay static so they run on any glibc and on Alpine.
+      - name: Smoke-test the linux/amd64 cgo binaries
+        run: |
+          set -euo pipefail
+          dist/binaries/caveman-engine_linux_amd64 evals run > /dev/null
+          for f in dist/binaries/caveman-{proxy,engine}_linux_{amd64,arm64}; do
+            file "$f" | grep -q 'statically linked' || { file "$f"; echo "$f is not static" >&2; exit 1; }
+          done
       - name: Require complete 36-artifact matrix
         run: |
           set -euo pipefail
@@ -189,12 +212,14 @@ jobs:
           bundle="$RUNNER_TEMP/third-party-go"
           mkdir -p "$bundle/go.dev/go" dist/licenses
           cp "$(go env GOROOT)/LICENSE" "$bundle/go.dev/go/LICENSE"
-          # The binaries scripts/build-release-binaries.mjs builds, with its CGO_ENABLED=0.
+          # The binaries scripts/build-release-binaries.mjs builds. CGO_ENABLED=1
+          # brings in the tree-sitter grammars caveman-proxy and caveman-engine
+          # link; the pure-Go four link a subset of the same modules.
           packages=(./proxy/cmd/caveman-proxy ./engine/cmd/caveman-engine ./mcp/cmd/caveman-mcp
             ./mem/cmd/cavemem ./browse/cmd/caveman-browse ./shrink/cmd/caveman-shrink)
           for goos in darwin linux windows; do
             for goarch in amd64 arm64; do
-              CGO_ENABLED=0 GOOS="$goos" GOARCH="$goarch" "$RUNNER_TEMP/bin/go-licenses" save "${packages[@]}" \
+              CGO_ENABLED=1 GOOS="$goos" GOARCH="$goarch" "$RUNNER_TEMP/bin/go-licenses" save "${packages[@]}" \
                 --ignore github.com/JuliusBrussee/caveman --save_path "$RUNNER_TEMP/go-licenses-$goos-$goarch"
               # -f: go-licenses writes read-only files, and platforms share most of them.
               cp -Rf "$RUNNER_TEMP/go-licenses-$goos-$goarch/." "$bundle/"
@@ -212,6 +237,12 @@ jobs:
           cp engine/pixel/NOTICE dist/licenses/NOTICE.engine-pixel
           cp engine/pixel/assets/SPLEEN_LICENSE.txt engine/pixel/assets/UNIFONT_LICENSE.txt dist/licenses/
           cp browse/NOTICE dist/licenses/NOTICE.browse
+          # zig cc statically links its compiler runtime (MIT) into the cgo
+          # binaries, plus musl libc on Linux and the mingw-w64 runtime on Windows.
+          zig_dir="$(dirname "$ZIG")"
+          cp "$zig_dir/LICENSE" dist/licenses/LICENSE.zig
+          cp "$zig_dir/lib/libc/musl/COPYRIGHT" dist/licenses/COPYRIGHT.musl
+          cp "$zig_dir/lib/libc/mingw/COPYING" dist/licenses/COPYING.mingw-w64
           (cd dist/licenses && sha256sum -- *) >> dist/binaries/checksums.txt
       # The signed manifest names its release: a RELEASE asset holding the tag,
       # listed like any other file. The CLI (pins from bin-v2.0.0) refuses a
@@ -299,7 +330,7 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --latest=false \
             --title "$GITHUB_REF_NAME" \
-            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows. The binaries are licensed under the Apache License 2.0 (LICENSE, NOTICE); see LICENSING.md and the attached third-party notices."
+            --notes "Signed Caveman runtime companions for macOS, Linux, and Windows. The binaries are licensed under the Apache License 2.0 (LICENSE, NOTICE); see LICENSING.md and the attached third-party notices. The ghcr.io caveman-proxy image is still built without cgo, so its code compressor handles Go source only; the caveman-proxy and caveman-engine binaries here also compress TypeScript, JavaScript, Python, Rust, Java and C/C++."
       # Last: `latest` moves only to an image that is signed and whose release
       # exists. Same digest as the version tag; no rebuild. Only a stable tag
       # that is the highest stable bin-v* moves it, so an older-line patch or a

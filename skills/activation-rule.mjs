@@ -3,7 +3,7 @@
 // first sentence of its body.
 //
 // compile.mjs writes the result to src/rules/caveman-activate.md (IDE rules via
-// caveman-init.js, opencode AGENTS.md via bin/install.js) and into the
+// caveman-init.js, opencode AGENTS.md via installer/install.js) and into the
 // RULE_BODY fallback of src/tools/caveman-init.js. Edit the skill or the tail
 // below, never the copies; tests/installer/rule-copies.test.mjs fails on drift.
 
@@ -12,9 +12,9 @@ const SENTINEL = "Respond terse like smart caveman";
 const TAIL = `Switch: /caveman (default), /ultracave (fragments, each fact once), /megacave (Classical Chinese 文言文)
 Stop: "stop caveman" or "normal mode"
 
-Auto-Clarity: plain prose for security warnings, irreversible actions, step order a fragment could scramble, user confused. Resume after.
+Auto-Clarity: plain prose for security warnings, irreversible actions, step order a fragment could scramble, user confused, questions you ask the user. Resume after.
 
-Boundaries: code, comments, commits, PRs, docs written normal.
+Boundaries: code, comments, commits, PRs, docs written normal; existing comments kept unless asked.
 Floor: code, commands, paths, numbers and error strings verbatim; never drop not/never/no/only.
 `;
 

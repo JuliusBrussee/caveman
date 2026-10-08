@@ -367,6 +367,26 @@ type Adapter interface {
 	MapProviderError(status int, headers http.Header, body []byte) ProviderError
 }
 
+// MetadataRouter is an optional provider capability: read-only metadata
+// endpoints that forward unchanged. It is an optional interface rather than an
+// Adapter method so that an adapter which serves no such endpoint — or which
+// must validate its own path spellings first, as the compat mounts do — simply
+// declines by not implementing it. Base implements it for every embedder, and
+// an adapter with no MetadataRoutes declared matches nothing.
+type MetadataRouter interface {
+	MatchMetadataRoute(method string, path string) bool
+}
+
+// MetadataRequestMatcher refines MetadataRouter for adapters that share a
+// metadata spelling with another provider. Bare GET /v1/models is both
+// OpenAI's and Anthropic's catalog route, so the path cannot choose the
+// upstream, and choosing by registration order sent the caller's key to
+// whichever provider registered first (issue #1187). The gateway consults this
+// instead of MatchMetadataRoute when an adapter implements it.
+type MetadataRequestMatcher interface {
+	MatchMetadataRequest(r *http.Request) bool
+}
+
 // TokenCounter is an optional provider capability for projecting an original
 // inference request onto that provider's token-count endpoint. Implementations
 // only shape and parse bytes; the gateway owns all network I/O so credentials,
@@ -431,6 +451,20 @@ type Base struct {
 	// header mapping, and pricing keep following Provider; only the usage
 	// parser follows this override.
 	UsageProvider string
+	// MetadataRoutes lists this provider's READ-ONLY metadata mounts — model
+	// discovery (`GET /v1/models`). They are a separate, GET-only allowlist
+	// because MatchRoute is POST-only by design: every route it admits carries
+	// an inference body that gets inspected, compressed, priced and usage-parsed,
+	// and a catalog read has none of those. Leaving the gap meant that the one
+	// endpoint every OpenAI-compatible client reads model metadata from answered
+	// 404 cave_route_not_found, so clients that size their context window from
+	// `context_length` silently fell back to a built-in default (issue #1187).
+	//
+	// A declared route matches itself and ONE trailing id segment, so
+	// /v1/models and /v1/models/{id} both forward while /v1/models/{id}/anything
+	// stays fail-closed. The gateway forwards these unchanged: no request body,
+	// no transform, no usage accounting and no spend row.
+	MetadataRoutes []string
 }
 
 // usageParseProvider is the provider key usage accounting parses with.
@@ -453,6 +487,34 @@ func (b Base) MatchRoute(method, path string) bool {
 		// as prefixes made /v1/responses-anything and /v1/messages/unknown valid
 		// proxy surfaces, violating the gateway's closed route allowlist.
 		if path == route || strings.HasSuffix(route, "/") && strings.HasPrefix(path, route) {
+			return true
+		}
+	}
+	return false
+}
+
+// MatchMetadataRoute reports whether this is a read-only provider metadata
+// request (see Base.MetadataRoutes). GET only: a write verb on a metadata mount
+// is not a catalog read, and admitting one would hand the caller an unmetered
+// pass-through to a provider's model-management API.
+func (b Base) MatchMetadataRoute(method, path string) bool {
+	if method != http.MethodGet {
+		return false
+	}
+	for _, route := range b.MetadataRoutes {
+		if path == route {
+			return true
+		}
+		// Exactly one trailing id segment, and never a ':method' call. A bare
+		// prefix test would make /v1/models/{id}/anything a valid proxy surface,
+		// which is the same closed-allowlist violation MatchRoute documents for
+		// the POST routes. The colon matters because Gemini's INFERENCE routes
+		// live under this very shape — /v1/models/{model}:generateContent — so
+		// on a proxy serving both providers an OpenAI metadata route would
+		// otherwise claim a Gemini method call and forward it to the wrong
+		// upstream.
+		if rest, ok := strings.CutPrefix(path, route+"/"); ok && rest != "" &&
+			!strings.Contains(rest, "/") && !strings.Contains(rest, ":") {
 			return true
 		}
 	}

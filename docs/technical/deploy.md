@@ -67,6 +67,9 @@ non-root uid 65532, and exposes 8787. It is published multi-arch (amd64, arm64)
 by the signed `bin-v*` release workflow; in production pin it by digest,
 `ghcr.io/juliusbrussee/caveman-proxy:bin-vX.Y.Z@sha256:<digest>` (find the
 digest with `docker buildx imagetools inspect <image>`), never `:latest`.
+The image is built without cgo, so its code compressor handles Go source only:
+TypeScript, JavaScript, Python and other code in tool results passes through
+uncompressed. The `caveman-proxy` release binary carries the full compressor.
 `bin-v1.1.7` is the first tag that publishes the image; the middleware
 identity, TLS listener and Postgres store below need `bin-v2.0.0` or later,
 which every example here names. The Kubernetes and ECS manifests in `deploy/`

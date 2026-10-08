@@ -194,3 +194,19 @@ test("a synchronous editor rewrite during injection cannot authorize a different
   await page.clock.runFor(1000);
   expect(await page.evaluate(() => window.fixture.sent)).toEqual([]);
 });
+
+// Send control outside the editor's form (a sibling toolbar). When the send
+// lookup stopped at any ancestor form it never found the button, so Enter went
+// out natively without the directive: the symptom reported in #1150.
+for (const gesture of ["Enter", "click"]) {
+  test(`Claude: send control outside the editor's form still gets the primer (${gesture})`, async ({ page }) => {
+    await setup(page, "https://claude.ai/?detached");
+    await page.getByRole("textbox").fill("hi");
+    if (gesture === "Enter") await page.getByRole("textbox").press("Enter");
+    else await page.evaluate(() => window.fixture.send.click());
+    await page.clock.runFor(50);
+    const sent = await page.evaluate(() => window.fixture.sent);
+    expect(sent).toHaveLength(1);
+    expect(sent[0]).toMatch(/^\[Caveman mode is ON[^\n]*\]\n{2,}hi$/);
+  });
+}

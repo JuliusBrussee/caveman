@@ -7,6 +7,8 @@
 // Inside Claude:   /caveman-stats triggers this via the UserPromptSubmit hook.
 // Hook integration passes --session-file <transcript_path> so we always read
 // the active session, not whichever JSONL was modified most recently.
+// SessionEnd:      `--record` reads the hook payload on stdin and appends one
+//                  snapshot to the lifetime history, silently, always exit 0.
 
 const fs = require('fs');
 const path = require('path');
@@ -55,6 +57,9 @@ if (cavemanConfig && !(typeof cavemanConfig.readFlag === 'function'
   configFailure = 'caveman-config loaded but is missing expected exports — the install is inconsistent.';
 }
 if (configFailure) {
+  // As a SessionEnd recorder there is no report to fail into; stderr or a
+  // non-zero exit would surface as a hook error while the user quits.
+  if (process.argv.includes('--record')) process.exit(0);
   process.stderr.write('caveman-stats: ' + configFailure + '\n'
     + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks.\n');
   // Unlike the two style hooks, stats has no useful degraded output — every
@@ -81,6 +86,33 @@ const canonicalMode = cavemanConfig.canonicalMode
 
 function findRecentSession(claudeDir) {
   const projectsDir = path.join(claudeDir, 'projects');
+
+  // Session dirs are flat (UUID.jsonl files directly inside project slug dir).
+  // Try CWD-scoped project first so multi-project setups don't bleed across.
+  // Current Claude Code names the folder by replacing every non-alphanumeric
+  // character with '-' (/a/my.repo → -a-my-repo, C:\x → C--x); older
+  // versions replaced only the separators and kept dots. Try both.
+  function newestInDir(dir) {
+    let names;
+    try { names = fs.readdirSync(dir); } catch { return null; }
+    let best = null;
+    for (const name of names) {
+      if (!name.endsWith('.jsonl')) continue;
+      const p = path.join(dir, name);
+      let st;
+      try { st = fs.statSync(p); } catch { continue; }
+      if (!best || st.mtimeMs > best.mtime) best = { file: p, mtime: st.mtimeMs };
+    }
+    return best ? best.file : null;
+  }
+
+  const cwd = process.cwd();
+  for (const slug of new Set([cwd.replace(/[^A-Za-z0-9]/g, '-'), cwd.replace(/[\\/]/g, '-')])) {
+    const cwdResult = newestInDir(path.join(projectsDir, slug));
+    if (cwdResult) return cwdResult;
+  }
+
+  // Fall back: global walk (original behaviour, covers non-standard CWDs)
   let entries;
   try { entries = fs.readdirSync(projectsDir, { withFileTypes: true }); }
   catch { return null; }
@@ -355,7 +387,7 @@ function formatHistory({ sessions, outputTokens, outputAvailability, since }) {
   const sep = '──────────────────────────────────';
   const window = since ? ` (last ${since})` : '';
   if (sessions === 0) {
-    return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — run /caveman-stats inside any session to start tracking.\n${sep}\n`;
+    return `\nCaveman Stats — Lifetime${window}\n${sep}\nNo sessions logged yet — each session is recorded when it ends (or when you run /caveman-stats).\n${sep}\n`;
   }
   return `\nCaveman Stats — Lifetime${window}\n${sep}\n` +
     `Sessions:   ${fmt(sessions)}\n${sep}\n` +
@@ -434,6 +466,63 @@ function formatStats({ outputTokens, outputAvailability, cacheReadTokens, cacheR
     memoryLine;
 }
 
+// Resolve this session's mode and per-mode attribution, then append a snapshot
+// to the lifetime history. Shared by /caveman-stats and SessionEnd --record.
+function recordSnapshot({ claudeDir, historyPath, sessionFile, parsed, sessionIdArg }) {
+  // Session id: from the UserPromptSubmit (--session-id) or SessionEnd hook
+  // payload. Falling back to the transcript filename is not a guess — Claude
+  // Code names transcripts by session id, which is why the lifetime history has
+  // always keyed on it.
+  const sessionId = validateSessionId(sessionIdArg)
+    || validateSessionId(path.basename(sessionFile, '.jsonl'));
+
+  // Read whichever layer holds this session's state, and take the mtime from
+  // that same file so the 'flag-mtime' attribution fallback measures the right
+  // thing. resolveActiveMode collapses a durable 'off' to null, matching the
+  // pre-existing "no flag file means no mode" contract the formatters expect.
+  const sessionPath = sessionActivePath(claudeDir, sessionId);
+  const flagPath = (sessionPath && fs.existsSync(sessionPath))
+    ? sessionPath
+    : legacyFlagPath(claudeDir);
+  const mode = resolveActiveMode(claudeDir, sessionId);
+
+  // #601: attribute tokens to the mode active when each message happened,
+  // via the transition log the hooks maintain (fallbacks documented on
+  // attributeByMode). Never credit the whole session to the current flag.
+  let flagMtimeMs = null;
+  try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
+  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME), sessionId);
+  const attribution = attributeByMode({
+    messages: parsed.messages,
+    modeLog,
+    mode,
+    flagMtimeMs,
+    outputTokens: parsed.outputTokens,
+  });
+
+  // Append a snapshot of this session's totals to the lifetime log. Every
+  // /caveman-stats call and the SessionEnd --record hook emit a line for the
+  // same session_id; aggregateHistory keeps only the latest per session_id.
+  if (parsed.turns > 0) {
+    appendFlag(historyPath, JSON.stringify({
+      ts: Date.now(),
+      session_id: sessionId || path.basename(sessionFile, '.jsonl'),
+      mode: mode || null,
+      model: parsed.model || null,
+      output_tokens: parsed.outputTokens,
+      output_tokens_availability: parsed.outputAvailability,
+      turns: parsed.turns,
+      cache_read_input_tokens: parsed.cacheReadTokens,
+      cache_read_input_tokens_availability: parsed.cacheReadAvailability,
+      output_tokens_by_mode: attribution.byMode,
+      unattributed_output_tokens: attribution.unknownTokens,
+      mode_attribution: attribution.basis,
+    }));
+  }
+
+  return { mode, attribution };
+}
+
 function main() {
   const args = process.argv.slice(2);
   const hostIdx = args.indexOf('--host');
@@ -494,56 +583,7 @@ function main() {
     return;
   }
 
-  // Session id: the hook forwards --session-id from the UserPromptSubmit
-  // payload. Falling back to the transcript filename is not a guess — Claude
-  // Code names transcripts by session id, which is why the lifetime history has
-  // always keyed on it.
-  const sessionId = validateSessionId(sessionIdArg)
-    || validateSessionId(path.basename(sessionFile, '.jsonl'));
-
-  // Read whichever layer holds this session's state, and take the mtime from
-  // that same file so the 'flag-mtime' attribution fallback measures the right
-  // thing. resolveActiveMode collapses a durable 'off' to null, matching the
-  // pre-existing "no flag file means no mode" contract the formatters expect.
-  const sessionPath = sessionActivePath(claudeDir, sessionId);
-  const flagPath = (sessionPath && fs.existsSync(sessionPath))
-    ? sessionPath
-    : legacyFlagPath(claudeDir);
-  const mode = resolveActiveMode(claudeDir, sessionId);
-
-  // #601: attribute tokens to the mode active when each message happened,
-  // via the transition log the hooks maintain (fallbacks documented on
-  // attributeByMode). Never credit the whole session to the current flag.
-  let flagMtimeMs = null;
-  try { flagMtimeMs = fs.statSync(flagPath).mtimeMs; } catch (e) {}
-  const modeLog = readModeLog(path.join(claudeDir, MODE_LOG_BASENAME), sessionId);
-  const attribution = attributeByMode({
-    messages: parsed.messages,
-    modeLog,
-    mode,
-    flagMtimeMs,
-    outputTokens: parsed.outputTokens,
-  });
-
-  // Append a snapshot of this session's totals to the lifetime log. Multiple
-  // /caveman-stats calls in one session emit multiple lines for the same
-  // session_id; aggregateHistory keeps only the latest per session_id.
-  if (parsed.turns > 0) {
-    appendFlag(historyPath, JSON.stringify({
-      ts: Date.now(),
-      session_id: sessionId || path.basename(sessionFile, '.jsonl'),
-      mode: mode || null,
-      model: parsed.model || null,
-      output_tokens: parsed.outputTokens,
-      output_tokens_availability: parsed.outputAvailability,
-      turns: parsed.turns,
-      cache_read_input_tokens: parsed.cacheReadTokens,
-      cache_read_input_tokens_availability: parsed.cacheReadAvailability,
-      output_tokens_by_mode: attribution.byMode,
-      unattributed_output_tokens: attribution.unknownTokens,
-      mode_attribution: attribution.basis,
-    }));
-  }
+  const { mode, attribution } = recordSnapshot({ claudeDir, historyPath, sessionFile, parsed, sessionIdArg });
 
   if (share) {
     process.stdout.write(formatShare({ ...parsed, mode, attribution }) + '\n');
@@ -554,7 +594,63 @@ function main() {
   }
 }
 
-if (require.main === module) main();
+// SessionEnd payload: { session_id, transcript_path, reason, ... }. Only the
+// transcript the host names is read; never guess the newest one on disk.
+function recordFromHook(payload) {
+  let data;
+  try { data = JSON.parse(payload); } catch (e) { return; }
+  if (!data || typeof data.transcript_path !== 'string' || !data.transcript_path) return;
+  const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+  const sessionFile = data.transcript_path;
+  const parsed = parseSession(sessionFile);
+  recordSnapshot({
+    claudeDir,
+    historyPath: path.join(claudeDir, '.caveman-history.jsonl'),
+    sessionFile,
+    parsed,
+    sessionIdArg: data.session_id,
+  });
+}
+
+// Same contour as caveman-activate.js: act on the first complete JSON object,
+// never wait for EOF (the host's pipe close lags on Windows, #729/#833), and
+// give up without recording if no payload completes in time.
+const PAYLOAD_WATCHDOG_MS = 2000;
+
+function readHookPayload(onPayload) {
+  for (const stream of [process.stdout, process.stderr]) {
+    stream.on('error', () => process.exit(0));
+  }
+  if (process.stdin.isTTY) return;
+  let input = '';
+  let done = false;
+  const finish = (payload) => {
+    if (done) return;
+    done = true;
+    clearTimeout(watchdog);
+    // pause() alone leaves the handle referenced; unref() lets us exit while
+    // the host still holds the write end open.
+    try { process.stdin.pause(); } catch (e) {}
+    try { process.stdin.unref(); } catch (e) {}
+    if (payload) {
+      try { onPayload(payload); } catch (e) { /* silent: never fail session exit */ }
+    }
+  };
+  const watchdog = setTimeout(() => finish(null), PAYLOAD_WATCHDOG_MS);
+  process.stdin.setEncoding('utf8');
+  process.stdin.on('data', (chunk) => {
+    input += chunk;
+    try { JSON.parse(input); } catch (e) { return; }
+    finish(input);
+  });
+  process.stdin.on('error', () => finish(null));
+  process.stdin.on('end', () => finish(input));
+}
+
+if (require.main === module) {
+  if (process.argv.includes('--record')) readHookPayload(recordFromHook);
+  else main();
+}
 
 module.exports = {
   formatStats, formatShare, formatHistory, aggregateHistory, parseDuration,

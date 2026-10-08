@@ -20,7 +20,7 @@ import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
-const INSTALLER = path.join(REPO_ROOT, 'bin', 'install.js');
+const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 
 const SKILLS = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
 
@@ -170,3 +170,33 @@ test('hermes uninstall leaves modified installed content and retains ownership r
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
+
+// Hermes 0.21.5 reads HERMES_HOME as Path(expanduser(expandvars(value.strip()))).
+// A value from a dotenv file or service unit reaches us unexpanded; taken raw, the
+// skills landed in ./~/h/skills, a directory Hermes never reads.
+for (const [name, override] of [
+  ['tilde', '  ~/hermes-home  '],
+  ['env var', '$CAVE_TEST_HERMES_ROOT/hermes-home'],
+  ['braced env var', '${CAVE_TEST_HERMES_ROOT}/hermes-home'],
+]) {
+  test(`hermes install expands HERMES_HOME like Hermes does: ${name}`, () => {
+    const home = freshHome();
+    const cwd = freshHome();
+    try {
+      const r = spawnSync(process.execPath, [INSTALLER, '--only', 'hermes', '--config-dir', path.join(home, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
+        cwd,
+        env: { ...process.env, HOME: home, USERPROFILE: home, CAVE_TEST_HERMES_ROOT: home, HERMES_HOME: override, NO_COLOR: '1' },
+        encoding: 'utf8',
+      });
+      assert.equal(r.status, 0, r.stderr);
+      const prod = productivityDir(path.join(home, 'hermes-home'));
+      for (const skill of SKILLS) {
+        assert.ok(fs.existsSync(path.join(prod, skill, 'SKILL.md')), `skill ${skill}/SKILL.md missing under expanded HERMES_HOME`);
+      }
+      assert.deepEqual(fs.readdirSync(cwd), [], 'unexpanded HERMES_HOME wrote under the cwd');
+    } finally {
+      fs.rmSync(home, { recursive: true, force: true });
+      fs.rmSync(cwd, { recursive: true, force: true });
+    }
+  });
+}

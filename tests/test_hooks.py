@@ -18,6 +18,11 @@ POSIX_SHELL_ONLY = unittest.skipIf(
 REPO_ROOT = Path(__file__).resolve().parent.parent
 BASH = shutil.which("bash")
 
+# A headless runner (`claude -p`, the cloud triage routine) exports
+# CLAUDE_CODE_ENTRYPOINT=sdk-*, which starts SessionStart under the manual
+# policy (#377). Every subprocess here copies os.environ, so drop it once.
+os.environ.pop("CLAUDE_CODE_ENTRYPOINT", None)
+
 
 class HookScriptTests(unittest.TestCase):
     def run_cmd(self, cmd, home, extra_env=None):

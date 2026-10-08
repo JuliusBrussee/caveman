@@ -1,0 +1,11 @@
+{
+  "version": 1,
+  "hooks": {
+    "sessionStart": [
+      {
+        "command": "node \"${CURSOR_PLUGIN_ROOT}/src/hooks/caveman-host-session-start.js\" cursor",
+        "timeout": 10
+      }
+    ]
+  }
+}

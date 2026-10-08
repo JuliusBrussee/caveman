@@ -49,6 +49,8 @@ test("opencode wrap retains inline model, permission, MCP and provider account c
     assert.equal(routed.provider.openai.options.headers["OpenAI-Project"], "team-project");
     assert.deepEqual(routed.provider.team, original.provider.team);
     assert.equal(routed.provider.openai.options.baseURL, "http://127.0.0.1:8787/w/opencode/v1");
+    assert.equal(routed.provider["opencode-go"].options.baseURL, "http://127.0.0.1:8787/w/opencode/compat/opencode-go/v1");
+    assert.equal(routed.provider["opencode-go"].options.headers["X-Cave-Agent"], "opencode");
     assert.equal(process.env.OPENCODE_CONFIG_CONTENT, JSON.stringify(original));
   });
 });

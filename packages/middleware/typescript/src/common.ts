@@ -4,7 +4,7 @@ import { MIDDLEWARE_DEFAULTS, MiddlewareError, MiddlewareRuntime, manifestWindow
   type ManifestItem, type Optimization, type RecoveryBinding, type RetrieveArgs, type Scope, type Usage } from '@caveman-ai/sdk/middleware';
 
 /** This package's version, sent as `adapter.version`; a test pins it to package.json. */
-export const MIDDLEWARE_VERSION = '1.0.0';
+export const MIDDLEWARE_VERSION = '1.0.1';
 
 export interface Attempt {
   runtime: MiddlewareRuntime;

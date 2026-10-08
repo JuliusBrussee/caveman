@@ -84,6 +84,60 @@ class EvalSnapshotContractTests(unittest.TestCase):
         ):
             snapshot_contract.validate_snapshot(snapshot)
 
+    def with_usage(self) -> dict:
+        snapshot = copy.deepcopy(self.snapshot)
+        cell = {
+            "input_tokens": 10,
+            "cache_creation_input_tokens": 17000,
+            "cache_read_input_tokens": 0,
+            "output_tokens": 120,
+            "total_cost_usd": 0.02,
+        }
+        snapshot["usage"] = {
+            arm: [dict(cell) for _ in outputs]
+            for arm, outputs in snapshot["arms"].items()
+        }
+        return snapshot
+
+    # Proves Claude-reported usage parallel to the arms is accepted.
+    def test_usage_block_is_valid(self) -> None:
+        snapshot = self.with_usage()
+        self.assertIs(snapshot, snapshot_contract.validate_snapshot(snapshot))
+
+    # Proves usage cannot cover a different set of calls than the outputs.
+    def test_usage_arm_length_mismatch_is_rejected(self) -> None:
+        snapshot = self.with_usage()
+        snapshot["usage"]["caveman"].pop()
+
+        with self.assertRaisesRegex(
+            snapshot_contract.SnapshotContractError, "usage.caveman contains 9"
+        ):
+            snapshot_contract.validate_snapshot(snapshot)
+
+    # Proves usage arms must match the output arms exactly.
+    def test_usage_arm_keys_mismatch_is_rejected(self) -> None:
+        snapshot = self.with_usage()
+        del snapshot["usage"]["__terse__"]
+
+        with self.assertRaisesRegex(
+            snapshot_contract.SnapshotContractError, "usage arms must match"
+        ):
+            snapshot_contract.validate_snapshot(snapshot)
+
+    # Proves a failed (null) or negative usage cell is not evidence.
+    def test_bad_usage_cell_is_rejected(self) -> None:
+        for bad in (None, {"input_tokens": -1}, {"output_tokens": 1.5},
+                    {"output_tokens": True}, {"total_cost_usd": -0.1}):
+            snapshot = self.with_usage()
+            if bad is None:
+                snapshot["usage"]["caveman"][0] = None
+            else:
+                snapshot["usage"]["caveman"][0].update(bad)
+            with self.subTest(bad=bad), self.assertRaisesRegex(
+                snapshot_contract.SnapshotContractError, "usage.caveman cell 0"
+            ):
+                snapshot_contract.validate_snapshot(snapshot)
+
     # Proves the file-loading boundary rejects malformed evidence before reporting.
     def test_loader_rejects_malformed_json(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

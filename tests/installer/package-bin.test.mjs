@@ -24,7 +24,7 @@ test('installer bin does not collide with the bundled CLI', () => {
 
   assert.deepEqual(
     installerBins.map(([, target]) => target),
-    ['./bin/install.js'],
+    ['./installer/install.js'],
     'the GitHub package must expose only the unified installer',
   );
 

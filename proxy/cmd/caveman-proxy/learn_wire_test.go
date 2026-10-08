@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +25,7 @@ func learnWireEnv(t *testing.T) (home, claudeRoot string) {
 	t.Helper()
 	home, claudeRoot = t.TempDir(), t.TempDir()
 	t.Setenv("HOME", t.TempDir())
+	t.Setenv("USERPROFILE", os.Getenv("HOME"))
 	t.Setenv("CAVEMAN_HOME", home)
 	t.Setenv("CAVEMAN_DB", filepath.Join(home, "caveman.db"))
 	t.Setenv("CAVEMAN_CLAUDE_ROOT", claudeRoot)
@@ -191,7 +193,7 @@ func TestLearnExportWritesPrivacySafeDigest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm() != 0o600 {
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("digest mode = %v, want 0600", info.Mode().Perm())
 	}
 	raw, _ := os.ReadFile(out.Path)

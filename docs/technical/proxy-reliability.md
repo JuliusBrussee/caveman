@@ -88,8 +88,9 @@ There is no proxy session TTL. An idle HTTP keep-alive connection can still be
 closed and reopened normally; this is separate from listener or generation
 lifetime. TCP/TLS setup remains bounded, as do the wait for the first upstream
 response header, inbound headers/uploads, and request/response buffering. Default general request buffer is 32 MiB; default
-non-streaming response buffer is 64 MiB. The ChatGPT route streams larger
-request bodies instead of transforming them.
+non-streaming response buffer is 64 MiB. The ChatGPT route reads a
+compress-eligible request whole up to the same request limit (a zstd body
+decodes up to it too) and streams a larger one through untransformed.
 
 Provider outages, DNS/network loss, sleep-induced socket loss, invalid or expired
 provider credentials, provider context/rate limits, process termination, and

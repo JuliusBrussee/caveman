@@ -1,6 +1,6 @@
 #!/bin/bash
 # caveman — one-command hook installer for Claude Code
-# Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
+# Installs: SessionStart hook (auto-load rules) + SubagentStart hook (subagent mode) + UserPromptSubmit hook (mode tracking) + SessionEnd stats recorder
 # Usage: bash src/hooks/install.sh
 #   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/install.sh)
 #   or:  bash src/hooks/install.sh --force   (re-install over existing hooks)
@@ -48,8 +48,8 @@ fi
 # Clone installs share the unified installer's JSONC parser. A standalone copy
 # without that helper refuses unsupported settings before changing any files.
 SETTINGS_HELPER=""
-if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../../bin/lib/settings.js" ]; then
-  SETTINGS_HELPER="$SCRIPT_DIR/../../bin/lib/settings.js"
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../../installer/lib/settings.js" ]; then
+  SETTINGS_HELPER="$SCRIPT_DIR/../../installer/lib/settings.js"
 fi
 CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node --input-type=commonjs <<'NODE'
 const fs = require('fs');
@@ -69,7 +69,7 @@ try {
   }
 } catch (error) {
   console.error('Cannot install standalone hooks: ' + error.message);
-  console.error('Nothing was changed. For JSONC settings, use bin/install.js from a clone.');
+  console.error('Nothing was changed. For JSONC settings, use installer/install.js from a clone.');
   process.exit(1);
 }
 NODE
@@ -104,7 +104,9 @@ if [ "$FORCE" -eq 0 ]; then
         );
       process.exit(
         hasCavemanHook('SessionStart', 'caveman-activate.js') &&
+        hasCavemanHook('SubagentStart', 'caveman-activate.js') &&
         hasCavemanHook('UserPromptSubmit', 'caveman-mode-tracker.js') &&
+        hasCavemanHook('SessionEnd', 'caveman-stats.js') &&
         !!settings.statusLine
           ? 0
           : 1
@@ -162,7 +164,7 @@ fi
 # Back up existing settings.json before touching it. Back up ONCE: without the
 # guard a --force reinstall overwrites the only pre-caveman copy with the
 # already-merged file, destroying the user's recovery path. Same guard as
-# bin/install.js.
+# installer/install.js.
 if [ ! -f "$SETTINGS.bak" ]; then
   cp "$SETTINGS" "$SETTINGS.bak"
 fi
@@ -197,6 +199,22 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HEL
     });
   }
 
+  // SubagentStart — hand subagents this session's active mode (#621)
+  if (!settings.hooks.SubagentStart) settings.hooks.SubagentStart = [];
+  const hasSubagent = settings.hooks.SubagentStart.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
+  );
+  if (!hasSubagent) {
+    settings.hooks.SubagentStart.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-activate.js\" --subagent',
+        timeout: 30,
+        statusMessage: 'Loading caveman mode for subagent...'
+      }]
+    });
+  }
+
   // UserPromptSubmit — track mode changes when user types /caveman commands
   if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
   const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
@@ -209,6 +227,22 @@ CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HEL
         command: 'node \"' + hooksDir + '/caveman-mode-tracker.js\"',
         timeout: 30,
         statusMessage: 'Tracking caveman mode...'
+      }]
+    });
+  }
+
+  // SessionEnd — silently record a lifetime stats snapshot
+  if (!settings.hooks.SessionEnd) settings.hooks.SessionEnd = [];
+  const hasEnd = settings.hooks.SessionEnd.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-stats.js'))
+  );
+  if (!hasEnd) {
+    settings.hooks.SessionEnd.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-stats.js\" --record',
+        timeout: 5,
+        statusMessage: 'Recording caveman stats...'
       }]
     });
   }
@@ -242,6 +276,8 @@ echo "Done! Restart Claude Code to activate."
 echo ""
 echo "What's installed:"
 echo "  - SessionStart hook: auto-loads caveman rules every session"
+echo "  - SubagentStart hook: subagents inherit the session's active mode"
 echo "  - Mode tracker hook: updates statusline badge when you switch modes"
 echo "    (/caveman, /ultracave, /megacave, /caveman-commit, etc.)"
+echo "  - SessionEnd hook: records lifetime stats silently"
 echo "  - Statusline badge: shows [CAVEMAN], [ULTRACAVE] or [MEGACAVE]"

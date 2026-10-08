@@ -72,7 +72,7 @@ for (const [name, driver] of Object.entries(drivers)) {
 // Every framework out of range at once, in a child process whose application node_modules says so. `ai` is a
 // prerelease inside the numeric range: prereleases are deliberately unsupported (versions.ts).
 const fake = { ai: '7.1.0-canary.3', langchain: '2.0.0', '@langchain/core': '2.0.0', '@google/genai': '3.0.0', '@strands-agents/sdk': '2.0.0',
-  '@mastra/core': '2.0.0', '@modelcontextprotocol/sdk': '2.0.0', openai: '8.0.0', '@anthropic-ai/sdk': '0.129.0' };
+  '@mastra/core': '2.0.0', '@modelcontextprotocol/sdk': '2.0.0', openai: '8.0.0', '@anthropic-ai/sdk': '0.132.0' };
 let child;
 async function outOfRange(adapters) {
   child ??= (async () => {

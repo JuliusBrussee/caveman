@@ -112,3 +112,45 @@ func TestObserveSummaryOldDBTolerated(t *testing.T) {
 		t.Fatalf("observe summary after reopen: %v", err)
 	}
 }
+
+// TestCavemanCacheBustCountedOnOldDB: cache_bust_cause reaches a store created
+// before the column existed, and only caveman-caused busts are counted as
+// caveman's — a client editing its own history is not caveman's bug.
+func TestCavemanCacheBustCountedOnOldDB(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.db")
+	s1, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("open 1: %v", err)
+	}
+	if _, err := s1.db.Exec(`ALTER TABLE requests DROP COLUMN cache_bust_cause`); err != nil {
+		t.Fatalf("make legacy requests shape: %v", err)
+	}
+	_ = s1.Close()
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatalf("reopen: %v", err)
+	}
+	defer s.Close()
+	for i, cause := range []string{"", "client", "caveman", "raw_retry"} {
+		s.Record(gateway.RequestRecord{
+			Timestamp: "2026-10-05 10:0" + string(rune('0'+i)) + ":00.000", RequestID: "row-" + cause,
+			Provider: "anthropic", Model: "claude-sonnet-4-6", Endpoint: "/v1/messages",
+			StatusCode: 200, Basis: "inferred", RuntimeMode: "compress",
+			CacheBust: cause != "", CacheBustCause: cause, OptimizationIDs: []string{},
+		})
+	}
+	out, err := s.ObserveSummarySince("")
+	if err != nil {
+		t.Fatalf("observe summary: %v", err)
+	}
+	if out.CacheBustRequests != 3 || out.CavemanCacheBustRequests != 1 {
+		t.Errorf("observe summary cache_bust=%d caveman=%d, want 3 and 1", out.CacheBustRequests, out.CavemanCacheBustRequests)
+	}
+	stats, err := s.Summary()
+	if err != nil {
+		t.Fatalf("summary: %v", err)
+	}
+	if stats.CacheBustRequests != 3 || stats.CavemanCacheBustRequests != 1 {
+		t.Errorf("summary cache_bust=%d caveman=%d, want 3 and 1", stats.CacheBustRequests, stats.CavemanCacheBustRequests)
+	}
+}

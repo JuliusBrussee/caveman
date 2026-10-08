@@ -40,6 +40,26 @@ func TestCompressionRouteMatrixCoversEveryRegisteredRoute(t *testing.T) {
 		"openai_compatible": openaicompat.New("https://example.com").(openaicompat.Adapter).Routes,
 		"gemini":            append(gemini.New("https://example.com").(gemini.Adapter).Routes, gemini.CompressionRoutePatterns()...),
 	}
+	// Read-only metadata mounts are registered request surfaces too, so they
+	// need an explicit compression decision for the same reason the POST routes
+	// do: a new one must not be able to appear without one (issue #1187).
+	registeredMetadata := map[string][]string{
+		"openai":            openai.New("https://example.com").(openai.Adapter).MetadataRoutes,
+		"anthropic":         anthropic.New("https://example.com").(anthropic.Adapter).MetadataRoutes,
+		"azure_openai":      azureopenai.New("https://example.com").(azureopenai.Adapter).MetadataRoutes,
+		"bedrock":           bedrock.New("https://example.com").(bedrock.Adapter).MetadataRoutes,
+		"vertex":            vertex.New("https://example.com").(vertex.Adapter).MetadataRoutes,
+		"openai_compatible": openaicompat.New("https://example.com").(openaicompat.Adapter).MetadataRoutes,
+		"gemini":            gemini.New("https://example.com").(gemini.Adapter).MetadataRoutes,
+	}
+	for provider, routes := range registeredMetadata {
+		for _, route := range routes {
+			if !matrix[provider+" "+route] {
+				t.Errorf("registered metadata route missing compression decision: provider=%q route=%q", provider, route)
+			}
+		}
+	}
+
 	for provider, routes := range registered {
 		for _, route := range routes {
 			if !matrix[provider+" "+route] {
@@ -63,7 +83,10 @@ func TestCompressionRouteMatrixCoversEveryRegisteredRoute(t *testing.T) {
 			t.Errorf("named compat route is not registered: %q", route)
 		}
 	}
-	for _, family := range []string{"/compat/{name}/v1/chat/completions", "/compat/{name}/v1/responses"} {
+	if !namedCompat.(providers.MetadataRouter).MatchMetadataRoute(http.MethodGet, "/compat/matrix-test/v1/models") {
+		t.Error("named compat metadata route is not registered: /compat/{name}/v1/models")
+	}
+	for _, family := range []string{"/compat/{name}/v1/chat/completions", "/compat/{name}/v1/responses", "/compat/{name}/v1/models"} {
 		if !matrix["openai_compatible "+family] {
 			t.Errorf("named compat family missing compression decision: %q", family)
 		}

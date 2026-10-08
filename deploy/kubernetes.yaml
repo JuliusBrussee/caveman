@@ -65,8 +65,8 @@ spec:
           type: RuntimeDefault
       containers:
         - name: caveman-proxy
-          # Pinned by digest to the signed bin-v2.0.2 image.
-          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.2@sha256:9b8d29a6809e1acdc3fe52da2eb113913d2ab66e6f3d60a27a7fb27ab0e1af7f
+          # Pinned by digest to the signed bin-v2.1.0 image.
+          image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.1.0@sha256:da293df3c6929c7b31eba580f7af74da0448e83a55a973cca86e81041877d0bb
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8787

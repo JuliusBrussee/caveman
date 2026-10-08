@@ -58,8 +58,8 @@ test('framework peers are optional and unranged (Decision 2); tested releases, m
   // C11: each entry is gated only on the packages it imports; nothing is gated on @langchain/langgraph.
   assert.deepEqual(inspectFrameworkCompatibility('langchain').frameworks.map(check => check.package), ['langchain', '@langchain/core']);
   assert.deepEqual(inspectFrameworkCompatibility('langchain-core').frameworks.map(check => check.package), ['@langchain/core']);
-  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.128.0'), true, 'released 0.125-0.128 were tested');
-  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.129.0'), false, 'zero-major next minor may break APIs');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.131.0'), true, 'released 0.125-0.131 were tested');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.132.0'), false, 'zero-major next minor may break APIs');
   assert.equal(frameworkCompatible('openai', '7.12.0'), false, 'older patch than validated floor');
   assert.throws(() => inspectFrameworkCompatibility('typo'), /Unknown Caveman adapter/);
 });

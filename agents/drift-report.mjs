@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 // drift-report.mjs — turn a `probe-installed --allow-newer --json` result into one
-// GitHub issue per DRIFTED agent (the installed @latest binary is newer than the pinned
-// tested_agent_version). Idempotent: one open issue per agent id, updated in place rather
-// than duplicated. Non-blocking by design — the caller runs it with continue-on-error, and
-// this script never exits non-zero on a `gh` hiccup, only on bad input.
+// GitHub issue per agent whose @latest binary is DRIFTED (newer than the pinned
+// tested_agent_version) or BROKEN (failed to launch, or not newer than the pin).
+// Idempotent: one open issue per agent id, updated in place rather than duplicated.
+// Non-blocking by design — the caller runs it with continue-on-error, and this script
+// never exits non-zero on a `gh` hiccup, only on bad input.
 //
 // Usage: node agents/drift-report.mjs --input <probe.json>
 // Requires the `gh` CLI authenticated (GH_TOKEN) with `issues: write`.
@@ -150,11 +151,14 @@ if (!expectedResult || expectedResult.status === "not-installed") {
 
 // No issue-write-capable subprocess runs before every byte of the downloaded artifact
 // has passed the closed validation above.
-const drifted = expectedResult.status === "drift" ? [expectedResult] : [];
+const drifted = expectedResult.status === "drift" || expectedResult.status === "broken" ? [expectedResult] : [];
 if (drifted.length === 0) {
   process.stdout.write("drift-report: no drift observed\n");
   process.exit(0);
 }
+const runUrl = process.env.GITHUB_SERVER_URL && process.env.GITHUB_REPOSITORY && process.env.GITHUB_RUN_ID
+  ? `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`
+  : "";
 
 function gh(argv) {
   const result = spawnSync("gh", argv, { encoding: "utf8" });
@@ -162,18 +166,31 @@ function gh(argv) {
 }
 
 for (const r of drifted) {
-  const title = `agent-drift: ${r.id} — installed ${r.observed} exceeds pinned ${r.tested}`;
+  const broken = r.status === "broken";
+  const observed = r.observed || "unknown";
+  const title = broken
+    ? `agent-drift: ${r.id} — installed ${observed} fails the latest probe (pinned ${r.tested})`
+    : `agent-drift: ${r.id} — installed ${r.observed} exceeds pinned ${r.tested}`;
   const marker = `<!-- caveman-agent-drift:${r.id} -->`;
+  // The state line doubles as the "already current" key below, so drift and broken
+  // at the same version must not be the same line.
+  const stateLine = `- installed (@latest): \`${observed}\`${broken ? " (probe broken)" : ""}`;
+  // version_error/help_error stay out of the issue: they are untrusted upstream output.
   const body = [
     marker,
     "",
-    `The \`${r.id}\` upstream released a version newer than the pin the profile claims to test.`,
+    broken
+      ? `The \`${r.id}\` @latest binary installed but failed the probe: it did not launch (\`--version\` ok: ${r.version_ok}, \`--help\` ok: ${r.help_ok}) or it reported a version that is not newer than the pin.`
+      : `The \`${r.id}\` upstream released a version newer than the pin the profile claims to test.`,
     "",
-    `- installed (@latest): \`${r.observed}\``,
+    stateLine,
     `- profile \`tested_agent_version\`: \`${r.tested}\``,
+    ...(broken && runUrl ? [`- probe run (artifact \`agent-probe-${r.id}\`): ${runUrl}`] : []),
     "",
     "This is a non-blocking drift report from the nightly Agent conformance workflow. To clear it:",
-    `1. Verify \`${r.id}@${r.observed}\` wraps correctly.`,
+    broken
+      ? `1. Find why \`${r.id}@latest\` fails the probe; if the latest-drift install line tracks something other than a release, point it at one.`
+      : `1. Verify \`${r.id}@${r.observed}\` wraps correctly.`,
     `2. Bump \`tested_agent_version\` in \`agents/profiles/${r.id}.json\` (the conformance CI pin is derived from it and enforced by \`compile.mjs\`).`,
     `3. Update \`last_verified_at\`/\`verified_by\` if the profile carries them.`,
   ].join("\n");
@@ -199,7 +216,8 @@ for (const r of drifted) {
   }
 
   if (existing) {
-    if ((existing.body || "").includes(`installed (@latest): \`${r.observed}\``)) {
+    // GitHub returns CRLF bodies once an issue is edited in the web UI.
+    if ((existing.body || "").split(/\r?\n/).includes(stateLine)) {
       process.stdout.write(`drift-report: ${r.id} issue #${existing.number} already current\n`);
       continue;
     }

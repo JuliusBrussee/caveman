@@ -10,7 +10,7 @@ import { fileURLToPath } from 'node:url';
 import { nodeStub, stubEnv } from '../../packages/cli/tests/harness/stub-bin.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const INSTALLER = path.join(ROOT, 'bin/install.js');
+const INSTALLER = path.join(ROOT, 'installer/install.js');
 const profiles = [...fs.readFileSync(INSTALLER, 'utf8').matchAll(/id: '([^']+)'[^\n]+profile: '([^']+)'/g)]
   .map(([, id, profile]) => ({ id, profile }))
   .filter(({ id }) => !['continue', 'aider-desk', 'antigravity'].includes(id)); // Native copies: provider-skills-integration.test.mjs.
@@ -66,7 +66,7 @@ test('no detected agents must not install skills for every upstream profile', (t
   const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--non-interactive'], { encoding: 'utf8', cwd: dir, env });
   assert.equal(result.status, 0, result.stderr);
   assert.equal(fs.existsSync(log), false, 'upstream --all installs agents that were never detected');
-  assert.match(result.stdout, /nothing detected/);
+  assert.match(result.stdout, /no agents detected/);
 });
 
 test('current Kiro and Mistral executables trigger their own install profiles', (t) => {
@@ -87,5 +87,50 @@ test('current Kiro and Mistral executables trigger their own install profiles', 
   assert.match(result.stdout, /-a kiro-cli --yes -g/);
   assert.match(result.stdout, /Mistral Vibe detected/);
   assert.match(result.stdout, /-a mistral-vibe --yes -g/);
-  assert.doesNotMatch(result.stdout, /nothing detected/);
+  assert.doesNotMatch(result.stdout, /no agents detected/);
+});
+
+// #1189: the standalone GitHub Copilot CLI ships a `copilot` binary and reads
+// the github-copilot profile's global skills. Extension-only probes missed it.
+// AWS Copilot CLI ships a `copilot` binary too, so the binary counts only
+// beside GitHub Copilot CLI's ~/.copilot config dir.
+test('standalone Copilot CLI executable triggers the github-copilot profile', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman copilot cli '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'bin');
+  nodeStub(bin, 'copilot', 'process.exit(0);');
+  const preload = path.join(dir, 'hide-system-apps.cjs');
+  fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
+  const run = () => spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
+    encoding: 'utf8', cwd: dir, env,
+  });
+  const awsOnly = run();
+  assert.equal(awsOnly.status, 0, awsOnly.stdout + awsOnly.stderr);
+  assert.doesNotMatch(awsOnly.stdout, /GitHub Copilot detected/);
+  fs.mkdirSync(path.join(dir, '.copilot'));
+  const result = run();
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /GitHub Copilot detected/);
+  assert.match(result.stdout, /-a github-copilot --yes -g/);
+});
+
+// #408: CodeBuddy Code ships a `codebuddy` binary; upstream skills has a
+// `codebuddy` profile (~/.codebuddy/skills).
+test('CodeBuddy Code executable triggers the codebuddy profile', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman codebuddy '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'bin');
+  nodeStub(bin, 'codebuddy', 'process.exit(0);');
+  const preload = path.join(dir, 'hide-system-apps.cjs');
+  fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
+  const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
+    encoding: 'utf8', cwd: dir, env,
+  });
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+  assert.match(result.stdout, /CodeBuddy Code detected/);
+  assert.match(result.stdout, /-a codebuddy --yes -g/);
 });
