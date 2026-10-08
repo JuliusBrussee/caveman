@@ -7,6 +7,13 @@
 
 export type ModuleId = "output" | "input" | "waste-fixes" | "routing" | "scripts" | "browse";
 
+// Auto: the model the routing module adds to an agent's model picker.
+// caveman-proxy asks Caveman Cloud only about requests naming it
+// (proxy/internal/gateway/route.go AutoModel); every other model goes as sent.
+export const AUTO_MODEL = "caveman-auto";
+export const AUTO_NAME = "Auto";
+export const AUTO_DESCRIPTION = "Caveman pick model + effort each turn. Hard ask, big brain. Easy ask, save rocks.";
+
 // Capability config keys this module owns, with the value written when the
 // module is switched on and when it is switched off. Keys are the existing
 // CAPABILITY_KEYS in index.ts, or a top-level key of the same config file
@@ -75,11 +82,12 @@ export const MODULES: readonly ModuleDef[] = [
     title: "routing",
     // The onboarding picker cuts hints at the terminal width (62 characters at
     // 80 columns): what leaves the machine comes first.
-    summary: "asks go to Caveman Cloud to pick model + effort",
+    summary: "asks to Auto go to Cloud to pick model + effort",
     defaultOn: true,
-    // Decisions come from Cloud (POST /v1/route), so it acts only once signed
-    // in; caveman-proxy's route stage reads `modules.routing` itself, so no
-    // capability key carries it.
+    // Adds Auto (AUTO_MODEL) to each wired agent's model picker; only
+    // requests naming it are routed. Decisions come from Cloud (POST
+    // /v1/route), so it acts only once signed in; caveman-proxy's route stage
+    // reads `modules.routing` itself, so no capability key carries it.
     needsSignIn: true,
     wiresAgents: true,
     capabilities: [],

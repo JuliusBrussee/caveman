@@ -76,7 +76,7 @@ import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type St
 import { moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
 import { billingCommand, cloudMe, printSignInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
-import { findModule } from "./modules/registry.js";
+import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
 import { providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
@@ -3764,6 +3764,29 @@ function globalCapabilityDocument(): Record<string, unknown> {
     return {};
   }
 }
+
+// Auto (AUTO_MODEL) is in an agent's model picker while the routing module is
+// stored on, the switch caveman-proxy's route stage reads; signed out, the
+// proxy runs it on the provider's fallback model.
+function autoModelOffered(): boolean {
+  return objectValue(globalCapabilityDocument().modules).routing === true;
+}
+
+// Claude Code's one extra /model picker row. The capabilities are what Claude
+// Code 2.1.294 reads from ..._SUPPORTED_CAPABILITIES (a comma list; an unlisted
+// one is off), the ones Sonnet and Opus 5.5 have, so Auto keeps the effort and
+// thinking controls. temperature and mid_conversation_system stay off.
+const CLAUDE_AUTO_ENV: Readonly<Record<string, string>> = {
+  ANTHROPIC_CUSTOM_MODEL_OPTION: AUTO_MODEL,
+  ANTHROPIC_CUSTOM_MODEL_OPTION_NAME: AUTO_NAME,
+  ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION: AUTO_DESCRIPTION,
+  ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES: "effort,max_effort,xhigh_effort,thinking,adaptive_thinking,interleaved_thinking",
+};
+
+// OpenCode's Auto entry, under each provider caveman routes. OpenCode's model
+// config has no description field; the limits are ones every model Auto may
+// run on clears, so compaction starts in time.
+const OPENCODE_AUTO_MODEL = { name: AUTO_NAME, reasoning: true, tool_call: true, attachment: true, limit: { context: 200000, output: 32000 } };
 
 function capabilityInputValue(key: CapabilityKey, value: unknown): CapabilityValue | undefined {
   if (key === "think.mode") return wrapModeValue(value);
@@ -7722,6 +7745,10 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   // forwards tool_reference blocks byte-identically, which is the condition
   // Claude Code names for the override. Never clobber an explicit user value.
   if (env.ENABLE_TOOL_SEARCH === undefined) env.ENABLE_TOOL_SEARCH = TOOL_SEARCH_DEFAULT;
+  // Auto in the /model picker (and the IDE extension and desktop app, which
+  // read this env) while the routing module is on. A custom option the user
+  // already set is theirs and stays.
+  if (wrapMode(gw) === "local" && autoModelOffered() && env.ANTHROPIC_CUSTOM_MODEL_OPTION === undefined) Object.assign(env, CLAUDE_AUTO_ENV);
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
@@ -8243,6 +8270,12 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
     previousRoutes[providerID] = options.baseURL ?? null;
     options.baseURL = route;
     provider.options = options;
+    if (provider.models !== undefined && !isPlainObject(provider.models)) {
+      throw new Error(`${configPath} provider.${providerID}.models must be a JSON object; refusing to overwrite it`);
+    }
+    if (wrapMode(gw) === "local" && autoModelOffered() && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
+      provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: OPENCODE_AUTO_MODEL };
+    }
     providers[providerID] = provider;
   }
   root.provider = providers;
@@ -9207,6 +9240,10 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     if (beforeEnv.ENABLE_TOOL_SEARCH === undefined && currentEnv.ENABLE_TOOL_SEARCH === TOOL_SEARCH_DEFAULT) {
       delete currentEnv.ENABLE_TOOL_SEARCH;
     }
+    // Auto's picker row, only while it is still ours.
+    if (beforeEnv.ANTHROPIC_CUSTOM_MODEL_OPTION === undefined && currentEnv.ANTHROPIC_CUSTOM_MODEL_OPTION === AUTO_MODEL) {
+      for (const key of Object.keys(CLAUDE_AUTO_ENV)) delete currentEnv[key];
+    }
     if (Object.keys(currentEnv).length > 0) currentRoot.env = currentEnv;
     else delete currentRoot.env;
     return jsonBytes(removeNativeHookEntries(currentRoot, "claude"));
@@ -9283,6 +9320,11 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
       else options.baseURL = previousRoutes[providerID];
       if (Object.keys(options).length > 0) provider.options = options;
       else delete provider.options;
+      // Auto's entry, only while it is still ours.
+      if (isPlainObject(provider.models) && JSON.stringify(provider.models[AUTO_MODEL]) === JSON.stringify(OPENCODE_AUTO_MODEL)) {
+        delete provider.models[AUTO_MODEL];
+        if (Object.keys(provider.models).length === 0) delete provider.models;
+      }
       if (Object.keys(provider).length > 0) providers[providerID] = provider;
       else delete providers[providerID];
     }
@@ -10420,6 +10462,9 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
         rendered = deepMerge(rendered, { mcp: { caveman: kiloMcpEntry(ownedMcp) } });
       }
     }
+    if (agent.id === "opencode" && wrapMode(gw) === "local" && autoModelOffered()) {
+      rendered = deepMerge(rendered, { provider: Object.fromEntries(["openai", "anthropic"].map((id) => [id, { models: { [AUTO_MODEL]: OPENCODE_AUTO_MODEL } }])) });
+    }
     if (agent.id === "opencode" && process.env[inj.env_var]) {
       // OpenCode treats inline JSONC as its own configuration layer. Replacing
       // that layer loses the user's model, account, permissions and MCP servers.
@@ -10460,6 +10505,11 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
       ? ""
       : wrapWorkTags();
     if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
+  }
+  if (agent.id === "claude" && wrapMode(gw) === "local" && autoModelOffered() && env.ANTHROPIC_CUSTOM_MODEL_OPTION === undefined) {
+    // Auto in the /model picker, as the native settings carry it. A custom
+    // option already in the environment is the user's and wins.
+    Object.assign(env, CLAUDE_AUTO_ENV);
   }
   if (agent.id === "claude" && wrapMode(gw) === "local" && env[CLAUDE_ASSUME_FIRST_PARTY_ENV] === undefined && proxyAnthropicUpstreamIsFirstParty()) {
     // Keep Claude Code's first-party capability set (1M context window /
@@ -18822,8 +18872,6 @@ async function status(argv: string[]) {
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
   const lines = [...(routing.notice ? [routing.notice] : []), ...view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line)];
   lines.push(traffic.fix ? `${traffic.line} · ${traffic.fix}` : traffic.line);
-  // ADR 0083 §7: subscription (OAuth Pro/Max) turns cost no per-request dollars.
-  if (modules.some((state) => state.id === "routing" && state.active)) lines.push("routing has no effect on subscription turns");
   const step = nextStep(modules, { degraded: degraded[0], fallback: next });
   process.stdout.write(renderModuleGrid(modules, { notes, next: traffic.next && step !== "caveman setup --install" ? traffic.next : step, degraded, lines }));
 }

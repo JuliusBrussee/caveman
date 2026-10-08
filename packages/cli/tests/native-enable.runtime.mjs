@@ -1493,3 +1493,54 @@ test("doctor flags an opencode plugin whose baked invocation no longer exists an
   assert.equal(JSON.parse(fixed.stdout).state, "installed");
   assert.doesNotMatch(readFileSync(pluginPath, "utf8"), /v26\.9\.0/);
 });
+
+test("routing on puts Auto in Claude's and OpenCode's pickers; disable takes it out", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".caveman"), { recursive: true });
+  writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ modules: { routing: true } }) + "\n");
+  mkdirSync(join(fx.home, ".config", "opencode"), { recursive: true });
+  const opencodePath = join(fx.home, ".config", "opencode", "opencode.json");
+  writeFileSync(opencodePath, JSON.stringify({ provider: { anthropic: { models: { mine: { name: "Mine" } } } } }, null, 2) + "\n");
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  mkdirSync(join(fx.home, ".claude"), { recursive: true });
+  writeFileSync(settingsPath, JSON.stringify({ env: { KEEP: "yes" } }) + "\n");
+
+  for (const agent of ["claude", "opencode"]) {
+    const out = await run(["enable", agent], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+  }
+  const env = JSON.parse(readFileSync(settingsPath, "utf8")).env;
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto");
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME, "Auto");
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_DESCRIPTION, "Caveman pick model + effort each turn. Hard ask, big brain. Easy ask, save rocks.");
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_SUPPORTED_CAPABILITIES, "effort,max_effort,xhigh_effort,thinking,adaptive_thinking,interleaved_thinking");
+  const providers = JSON.parse(readFileSync(opencodePath, "utf8")).provider;
+  for (const id of ["openai", "anthropic"]) assert.equal(providers[id].models["caveman-auto"].name, "Auto", id);
+  assert.equal(providers.anthropic.models.mine.name, "Mine");
+
+  for (const agent of ["claude", "opencode"]) {
+    const out = await run(["disable", agent], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+  }
+  assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { env: { KEEP: "yes" } });
+  assert.deepEqual(JSON.parse(readFileSync(opencodePath, "utf8")), { provider: { anthropic: { models: { mine: { name: "Mine" } } } } });
+});
+
+test("routing off, or a custom option of the user's own, adds no Auto", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".claude"), { recursive: true });
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /CUSTOM_MODEL_OPTION/);
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+
+  mkdirSync(join(fx.home, ".caveman"), { recursive: true });
+  writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ modules: { routing: true } }) + "\n");
+  writeFileSync(settingsPath, JSON.stringify({ env: { ANTHROPIC_CUSTOM_MODEL_OPTION: "my-model" } }) + "\n");
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const env = JSON.parse(readFileSync(settingsPath, "utf8")).env;
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION, "my-model");
+  assert.equal(env.ANTHROPIC_CUSTOM_MODEL_OPTION_NAME, undefined);
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, "my-model");
+});
