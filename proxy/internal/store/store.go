@@ -466,8 +466,10 @@ func (s *Store) recordBatch(recs []gateway.RequestRecord) error {
 	}
 	for _, rec := range recs {
 		sanitizeRequestRecord(&rec)
-		if _, err := stmt.ExecContext(ctx, requestRecordArgs(&rec)...); err != nil && s.logger != nil {
-			s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)
+		// One failed insert fails the batch: it rolls back, and each row then
+		// gets its own Record, as it would have without batching.
+		if _, err := stmt.ExecContext(ctx, requestRecordArgs(&rec)...); err != nil {
+			return fmt.Errorf("insert request %s: %w", rec.RequestID, err)
 		}
 	}
 	_ = stmt.Close()
