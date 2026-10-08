@@ -183,21 +183,22 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID
 
-	// Cache warming (cache_warm.go): a real request quiesces its session's
-	// warm before anything is sent, and only an exact session counts (the
-	// route stage's key: x-cave-session or the agent's own session header, a
-	// Claude Code child its own). Side requests neither stop nor start one.
-	warmSession, warmModel, warmArm, warmStart := "", meta.Model, false, time.Time{}
+	// Cache warming (cache_warm.go): a real request stops its stream's warming
+	// (and, for a session, its subagents') before anything is sent. Only an
+	// exact stream counts: the route stage's key (x-cave-session or the
+	// agent's own session header; a Claude Code child its own, with its
+	// parent). Side requests neither stop nor start one.
+	warmKey, warmParent, warmArm, warmStart := "", "", false, time.Time{}
 	if s.warmer != nil && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
 		exact := ""
 		if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
 			exact = evidence.SessionID
 		}
 		if wr := newRouteRun(r.Header, exact, meta.Endpoint, body); wr.key != "" && !wr.auxiliary {
-			warmSession, warmArm = wr.key, !wr.perRequest
+			warmKey, warmParent, warmArm = wr.key, wr.parent, !wr.perRequest
 			// Before the send, so the provider's lifetime starts later still.
 			warmStart = s.warmer.clock.Now()
-			defer s.warmer.begin(warmSession, warmModel)()
+			defer s.warmer.begin(warmKey)()
 		}
 	}
 
@@ -812,6 +813,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if run != nil && !run.off {
 		scanned = io.MultiWriter(usageScanner, &served)
 	}
+	var toolStopped toolStop // the warm table's class: did the answer ask for a tool
+	if warmArm {
+		scanned = io.MultiWriter(scanned, &toolStopped)
+	}
 	src := io.Reader(io.TeeReader(resp.Body, scanned))
 	switch {
 	case shown != nil:
@@ -856,15 +861,28 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		activeLevers = append(activeLevers, leverBreakpointPlan)
 	}
 	s.observeSession(evidence.SessionID, activeLevers, finalUsage, requestID)
+	if s.warmer != nil && resp.StatusCode == http.StatusTooManyRequests {
+		// No warm on this credential while the provider is limiting it.
+		s.warmer.backoff(credentialKey(upstreamHeaders), backoffUntil(s.warmer.clock.Now(), resp.Header, authMode))
+	}
 	if warmArm && resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0 &&
 		s.warmer.enabled() && cacheWarmEligible(r, adapter, meta, s.warmOrigin, upstreamURL) {
-		// The exact bytes and headers that were answered, at zero output.
-		if warm, ttl := warmPlan(transform.Body, finalUsage, meta, authMode); warm != nil {
-			s.warmer.arm(warmSession, warmModel, &warmRequest{
-				url: upstreamURL.String(), header: upstreamHeaders.Clone(), body: warm, ttl: ttl,
-				adapter: adapter, meta: meta, authMode: authMode, mode: effectiveRuntimeMode,
-				label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID,
-			}, warmStart)
+		// The exact bytes and headers that were answered, at zero output; the
+		// table plans the chain for this stream's class and prices.
+		if warm, ttl := warmBody(transform.Body); warm != nil && !(ttl == time.Hour && finalUsage.CacheCreation5mTokens > 0) {
+			class := warmClassKey(warmParent != "", toolStopped.seen, ttl)
+			var req *warmRequest
+			if full, cost, ok := cacheWarmCosts(finalUsage, meta, authMode, ttl); ok {
+				if plan := s.warmer.table.plan(class, ttl, cacheWarmHorizon, full, cost); len(plan) > 1 && plan[1] {
+					req = &warmRequest{
+						url: upstreamURL.String(), header: upstreamHeaders.Clone(), body: warm, ttl: ttl,
+						adapter: adapter, meta: meta, authMode: authMode, mode: effectiveRuntimeMode,
+						label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID, basis: evidence.SessionCorrelationBasis,
+						cred: credentialKey(upstreamHeaders), plan: plan,
+					}
+				}
+			}
+			s.warmer.arm(warmKey, warmParent, class, req, warmStart)
 		}
 	}
 	if run != nil && !run.off && !run.auxiliary && run.key != "" && resp.StatusCode < 300 && errCode == "" {

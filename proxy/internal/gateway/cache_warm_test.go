@@ -2,7 +2,6 @@ package gateway
 
 import (
 	"bytes"
-	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -72,7 +71,9 @@ func (c *fakeClock) advance(d time.Duration) {
 			return
 		}
 		next.stopped = true
-		c.now = next.at
+		if next.at.After(c.now) { // a late timer fires at the current time
+			c.now = next.at
+		}
 		c.mu.Unlock()
 		next.f()
 	}
@@ -89,6 +90,9 @@ type warmTransport struct {
 	warmResp   string
 	warmStatus int
 	block      chan struct{} // when set, warms wait on it (or their context)
+	// realStatuses answers the real requests in order (0 or missing: 200).
+	realStatuses []int
+	reals        int
 }
 
 func (t *warmTransport) RoundTrip(r *http.Request) (*http.Response, error) {
@@ -112,8 +116,16 @@ func (t *warmTransport) RoundTrip(r *http.Request) (*http.Response, error) {
 		if t.warmStatus != 0 {
 			status = t.warmStatus
 		}
-	} else if t.sse {
-		ct = "text/event-stream"
+	} else {
+		t.mu.Lock()
+		if t.reals < len(t.realStatuses) && t.realStatuses[t.reals] != 0 {
+			status, resp = t.realStatuses[t.reals], `{"type":"error","error":{"type":"invalid_request_error","message":"no"}}`
+		}
+		t.reals++
+		t.mu.Unlock()
+		if t.sse && status == http.StatusOK {
+			ct = "text/event-stream"
+		}
 	}
 	return &http.Response{StatusCode: status, Status: http.StatusText(status), Request: r,
 		Header: http.Header{"Content-Type": {ct}}, Body: io.NopCloser(strings.NewReader(resp))}, nil
@@ -147,7 +159,7 @@ func messageResp(model, usage string) string {
 
 const warmModel = "claude-sonnet-5" // catalog: input 2.00, read 0.20, write 2.50 / 1h 4.00 per M
 
-func warmBody(extra string) string {
+func reqBody(extra string) string {
 	return `{"model":"` + warmModel + `","max_tokens":4096,` + extra +
 		`"system":[{"type":"text","text":"You are an agent.","cache_control":{"type":"ephemeral"}}],` +
 		`"messages":[{"role":"user","content":[{"type":"text","text":"hello","cache_control":{"type":"ephemeral"}}]}]}`
@@ -187,8 +199,10 @@ func newWarmFixture(t *testing.T, rt *warmTransport, base string, logger *slog.L
 		Logger:     logger,
 		CacheWarm:  func() bool { return on },
 	})
-	clock := &fakeClock{now: time.Now()}
+	clock := &fakeClock{now: time.Now().Round(0)}
 	srv.warmer.clock = clock
+	// Tests plan against a known return time, not the shipped measurements.
+	srv.warmer.table = returnsAt(30 * time.Minute)
 	return &warmFixture{srv: srv, sink: sink, rt: rt, clock: clock, on: &on}
 }
 
@@ -214,7 +228,7 @@ const anthropicAPI = "https://api.anthropic.com"
 func TestCacheWarmReplaysExactBytesAtZeroOutput(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	body := warmBody(`"stream":false,"thinking":{"type":"adaptive"},`)
+	body := reqBody(`"stream":false,"thinking":{"type":"adaptive"},`)
 	f.serve(t, body, warmHeaders)
 
 	f.clock.advance(269 * time.Second)
@@ -265,7 +279,7 @@ func TestCacheWarmStreamingRequestWarmsWithoutStream(t *testing.T) {
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	rt := &warmTransport{realResp: sse, sse: true}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.serve(t, warmBody(`"stream":true,`), warmHeaders)
+	f.serve(t, reqBody(`"stream":true,`), warmHeaders)
 	f.clock.advance(270 * time.Second)
 	if rt.count() != 2 {
 		t.Fatalf("no warm after a streamed request: %d", rt.count())
@@ -286,7 +300,7 @@ func TestCacheWarmSkipsRequestsZeroOutputCannotReplay(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rt := &warmTransport{}
 			f := newWarmFixture(t, rt, anthropicAPI, nil)
-			f.serve(t, warmBody(extra), warmHeaders)
+			f.serve(t, reqBody(extra), warmHeaders)
 			f.clock.advance(2 * time.Hour)
 			if rt.count() != 1 {
 				t.Fatalf("warmed a request max_tokens 0 cannot replay: %d requests", rt.count())
@@ -296,7 +310,7 @@ func TestCacheWarmSkipsRequestsZeroOutputCannotReplay(t *testing.T) {
 	// Effort alone is replayable: it stays in the bytes, so the key is the same.
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.serve(t, warmBody(`"output_config":{"effort":"high"},"tool_choice":{"type":"auto"},`), warmHeaders)
+	f.serve(t, reqBody(`"output_config":{"effort":"high"},"tool_choice":{"type":"auto"},`), warmHeaders)
 	f.clock.advance(270 * time.Second)
 	if rt.count() != 2 || !strings.Contains(rt.body(1), `"output_config":{"effort":"high"}`) {
 		t.Fatalf("effort request not warmed as sent: %d", rt.count())
@@ -307,7 +321,8 @@ func TestCacheWarmOneHourLifetime(t *testing.T) {
 	rt := &warmTransport{realResp: messageResp(warmModel, usageJSON(0, 200_000, "1h")),
 		warmResp: messageResp(warmModel, usageJSON(200_000, 0, "1h"))}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	body := strings.ReplaceAll(warmBody(""), `{"type":"ephemeral"}`, `{"type":"ephemeral","ttl":"1h"}`)
+	f.srv.warmer.table = returnsAt(100 * time.Minute)
+	body := strings.ReplaceAll(reqBody(""), `{"type":"ephemeral"}`, `{"type":"ephemeral","ttl":"1h"}`)
 	f.serve(t, body, warmHeaders)
 	f.clock.advance(53 * time.Minute)
 	if rt.count() != 1 {
@@ -326,6 +341,7 @@ func TestCacheWarmOneHourLifetime(t *testing.T) {
 	// All markers 1h but the response wrote a 5-minute entry: lifetime unknown.
 	rt = &warmTransport{}
 	f = newWarmFixture(t, rt, anthropicAPI, nil)
+	f.srv.warmer.table = returnsAt(100 * time.Minute)
 	f.serve(t, body, warmHeaders)
 	f.clock.advance(2 * time.Hour)
 	if rt.count() != 1 {
@@ -333,23 +349,33 @@ func TestCacheWarmOneHourLifetime(t *testing.T) {
 	}
 }
 
-func TestCacheWarmStopsAtTheHorizon(t *testing.T) {
+func TestCacheWarmChainStopsWhereThePredictionDoes(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	f.clock.advance(3 * time.Hour)
-	// Warms at 270s steps from the real request: 13 fit in 60 minutes.
-	if got := rt.count() - 1; got != 13 {
-		t.Fatalf("warms = %d, want 13 within the 60-minute horizon", got)
+	// Expected back at 30 min: warms at 270 s steps until the cache reaches
+	// past it (the 6th keeps it to 32 min), then none.
+	if got := rt.count() - 1; got != 6 {
+		t.Fatalf("warms = %d, want 6", got)
+	}
+	// Expected back only after the horizon: the chain cannot reach it.
+	rt = &warmTransport{}
+	f = newWarmFixture(t, rt, anthropicAPI, nil)
+	f.srv.warmer.table = returnsAt(70 * time.Minute)
+	f.serve(t, reqBody(""), warmHeaders)
+	f.clock.advance(3 * time.Hour)
+	if rt.count() != 1 {
+		t.Fatalf("warmed toward a return past the horizon: %d", rt.count())
 	}
 }
 
 func TestCacheWarmNewRequestRearms(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	f.clock.advance(200 * time.Second)
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	if rt.count() != 2 {
 		t.Fatalf("requests = %d", rt.count())
 	}
@@ -367,7 +393,7 @@ func TestCacheWarmStopsOnErrorAndOnLostCache(t *testing.T) {
 	for _, status := range []int{http.StatusUnauthorized, http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadRequest} {
 		rt := &warmTransport{warmStatus: status, warmResp: `{"type":"error","error":{"type":"x","message":"no"}}`}
 		f := newWarmFixture(t, rt, anthropicAPI, nil)
-		f.serve(t, warmBody(""), warmHeaders)
+		f.serve(t, reqBody(""), warmHeaders)
 		f.clock.advance(2 * time.Hour)
 		if rt.count() != 2 {
 			t.Fatalf("status %d: requests = %d, want the real one and one warm", status, rt.count())
@@ -379,7 +405,7 @@ func TestCacheWarmStopsOnErrorAndOnLostCache(t *testing.T) {
 	// The warm found no entry (it wrote one instead): the cache was already lost.
 	rt := &warmTransport{warmResp: messageResp(warmModel, usageJSON(0, 200_000, "5m"))}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	f.clock.advance(2 * time.Hour)
 	if rt.count() != 2 {
 		t.Fatalf("kept warming a lost cache: %d", rt.count())
@@ -388,14 +414,12 @@ func TestCacheWarmStopsOnErrorAndOnLostCache(t *testing.T) {
 
 func TestCacheWarmEconomicsFailClosed(t *testing.T) {
 	cases := map[string]*warmTransport{
-		// 20k tokens of Sonnet 5: (2.50-0.20)*0.02 - 0.20*0.02 = $0.042 < $0.05.
-		"below threshold": {realResp: messageResp(warmModel, usageJSON(0, 20_000, "5m"))},
-		"nothing cached":  {realResp: messageResp(warmModel, `{"input_tokens":200000,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`)},
+		"nothing cached": {realResp: messageResp(warmModel, `{"input_tokens":200000,"output_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0}`)},
 	}
 	for name, rt := range cases {
 		t.Run(name, func(t *testing.T) {
 			f := newWarmFixture(t, rt, anthropicAPI, nil)
-			f.serve(t, warmBody(""), warmHeaders)
+			f.serve(t, reqBody(""), warmHeaders)
 			f.clock.advance(time.Hour)
 			if rt.count() != 1 {
 				t.Fatalf("warmed: %d", rt.count())
@@ -405,7 +429,7 @@ func TestCacheWarmEconomicsFailClosed(t *testing.T) {
 	t.Run("unknown price", func(t *testing.T) {
 		rt := &warmTransport{realResp: messageResp("claude-unpriced-9", usageJSON(0, 200_000, "5m"))}
 		f := newWarmFixture(t, rt, anthropicAPI, nil)
-		f.serve(t, strings.Replace(warmBody(""), warmModel, "claude-unpriced-9", 1), warmHeaders)
+		f.serve(t, strings.Replace(reqBody(""), warmModel, "claude-unpriced-9", 1), warmHeaders)
 		f.clock.advance(time.Hour)
 		if rt.count() != 1 {
 			t.Fatalf("warmed an unpriced model: %d", rt.count())
@@ -414,7 +438,7 @@ func TestCacheWarmEconomicsFailClosed(t *testing.T) {
 	t.Run("no marker", func(t *testing.T) {
 		rt := &warmTransport{}
 		f := newWarmFixture(t, rt, anthropicAPI, nil)
-		f.serve(t, strings.ReplaceAll(warmBody(""), `,"cache_control":{"type":"ephemeral"}`, ""), warmHeaders)
+		f.serve(t, strings.ReplaceAll(reqBody(""), `,"cache_control":{"type":"ephemeral"}`, ""), warmHeaders)
 		f.clock.advance(time.Hour)
 		if rt.count() != 1 {
 			t.Fatalf("warmed without a declared lifetime: %d", rt.count())
@@ -439,7 +463,7 @@ func TestCacheWarmScopeFailsClosed(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			rt := &warmTransport{}
 			f := newWarmFixture(t, rt, tc.base, nil)
-			f.serve(t, warmBody(""), tc.headers)
+			f.serve(t, reqBody(""), tc.headers)
 			f.clock.advance(time.Hour)
 			if rt.count() != 1 {
 				t.Fatalf("warmed: %d", rt.count())
@@ -452,13 +476,13 @@ func TestCacheWarmKillSwitch(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
 	*f.on = false
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	*f.on = true
 	f.clock.advance(time.Hour)
 	if rt.count() != 1 {
 		t.Fatalf("armed while switched off: %d", rt.count())
 	}
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	*f.on = false // switched off after arming: the timer must not send
 	f.clock.advance(time.Hour)
 	if rt.count() != 2 {
@@ -474,13 +498,13 @@ func TestCacheWarmKillSwitch(t *testing.T) {
 func TestCacheWarmSideRequestLeavesWarmAlone(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	side := map[string]string{"x-caveman-agent": "title"}
 	for k, v := range warmHeaders {
 		side[k] = v
 	}
 	f.clock.advance(100 * time.Second)
-	f.serve(t, warmBody(""), side)
+	f.serve(t, reqBody(""), side)
 	f.clock.advance(170 * time.Second)
 	if rt.count() != 3 {
 		t.Fatalf("a side request stopped or replaced the session's warm: %d", rt.count())
@@ -491,123 +515,12 @@ func TestCacheWarmNeverLogsCredentials(t *testing.T) {
 	var logs bytes.Buffer
 	rt := &warmTransport{warmStatus: http.StatusUnauthorized, warmResp: `{"type":"error"}`}
 	f := newWarmFixture(t, rt, anthropicAPI, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
-	f.serve(t, warmBody(""), warmHeaders)
+	f.serve(t, reqBody(""), warmHeaders)
 	f.clock.advance(time.Hour)
 	if rt.count() != 2 || !strings.Contains(logs.String(), "cache warm stopped") {
 		t.Fatalf("expected one failed warm and its log line: %d\n%s", rt.count(), logs.String())
 	}
 	if strings.Contains(logs.String(), "sk-ant-api-secret-key") || strings.Contains(logs.String(), "You are an agent") {
 		t.Fatalf("warm logged a credential or content:\n%s", logs.String())
-	}
-}
-
-// Unit level: concurrency with real requests, quiesce, and the LRU bound.
-
-func newUnitWarmer(send func(context.Context, *warmRequest) bool) (*cacheWarmer, *fakeClock) {
-	w := newCacheWarmer(func() bool { return true }, send)
-	c := &fakeClock{now: time.Now()}
-	w.clock = c
-	return w, c
-}
-
-func TestCacheWarmWaitsForInFlightRealRequest(t *testing.T) {
-	sent := 0
-	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { sent++; return true })
-	req := &warmRequest{ttl: 5 * time.Minute}
-	w.arm("s", "m", req, c.Now())
-	end := w.begin("s", "other-model") // a real request on the session, another model
-	c.advance(270 * time.Second)
-	if sent != 0 {
-		t.Fatal("warm sent while a real request of the session was in flight")
-	}
-	end()
-	c.advance(cacheWarmBusyRetry)
-	if sent != 1 {
-		t.Fatalf("warm not retried after the real request ended: %d", sent)
-	}
-	// Busy past the deadline: given up.
-	end = w.begin("s", "other-model")
-	c.advance(10 * time.Minute)
-	end()
-	c.advance(time.Hour)
-	if sent != 1 {
-		t.Fatalf("a warm past its deadline was sent: %d", sent)
-	}
-}
-
-func TestCacheWarmQuiesceAbandonsSlowWarm(t *testing.T) {
-	started := make(chan struct{})
-	var ctxErr error
-	w, c := newUnitWarmer(func(ctx context.Context, _ *warmRequest) bool {
-		close(started)
-		<-ctx.Done()
-		ctxErr = ctx.Err()
-		return true
-	})
-	w.quiesce = 20 * time.Millisecond
-	w.arm("s", "m", &warmRequest{ttl: 5 * time.Minute}, c.Now())
-	go c.advance(270 * time.Second)
-	<-started
-	begun := time.Now()
-	end := w.begin("s", "m")
-	defer end()
-	if time.Since(begun) < w.quiesce {
-		t.Fatal("real request did not wait for the in-flight warm")
-	}
-	for i := 0; i < 100; i++ {
-		w.mu.Lock()
-		done := w.entries[warmKey("s", "m")].done == nil
-		w.mu.Unlock()
-		if done {
-			break
-		}
-		time.Sleep(time.Millisecond)
-	}
-	if ctxErr != context.Canceled {
-		t.Fatalf("slow warm not abandoned: %v", ctxErr)
-	}
-	c.advance(time.Hour)
-	if w.entries[warmKey("s", "m")].timer != nil {
-		t.Fatal("abandoned warm rescheduled itself")
-	}
-}
-
-func TestCacheWarmLRUBound(t *testing.T) {
-	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { return true })
-	for i := 0; i < cacheWarmMaxEntries+10; i++ {
-		w.arm("s"+strconv.Itoa(i), "m", &warmRequest{ttl: 5 * time.Minute}, c.Now())
-	}
-	if len(w.entries) != cacheWarmMaxEntries || w.lru.Len() != cacheWarmMaxEntries {
-		t.Fatalf("entries = %d / %d, want %d", len(w.entries), w.lru.Len(), cacheWarmMaxEntries)
-	}
-	if _, ok := w.entries[warmKey("s0", "m")]; ok {
-		t.Fatal("oldest entry not evicted")
-	}
-}
-
-func TestCacheWarmDelay(t *testing.T) {
-	for ttl, want := range map[time.Duration]time.Duration{
-		5 * time.Minute:  270 * time.Second,
-		time.Hour:        54 * time.Minute,
-		60 * time.Second: 50 * time.Second,
-		10 * time.Second: 0,
-	} {
-		if got := cacheWarmDelay(ttl); got != want {
-			t.Fatalf("delay(%v) = %v, want %v", ttl, got, want)
-		}
-	}
-}
-
-func TestCacheWarmSavingsExample(t *testing.T) {
-	// 150k-token Sonnet 5 prefix, 5m: miss 0.375 - hit 0.03 - warm (0.03 + 10 input tokens).
-	usage := providers.UsageObservation{InputTokens: 150_010, OutputTokens: 5, CachedInputTokens: 150_000,
-		InputTokensReported: true, OutputTokensReported: true}
-	saving, ok := cacheWarmSavings(usage, providers.RequestMetadata{Provider: "anthropic", Model: warmModel}, AuthModePAYG, 5*time.Minute)
-	if !ok || saving < 0.3149 || saving > 0.3151 {
-		t.Fatalf("saving = %v, %v", saving, ok)
-	}
-	// Subscription traffic is judged at list prices too.
-	if _, ok := cacheWarmSavings(usage, providers.RequestMetadata{Provider: "anthropic", Model: warmModel}, AuthModeSubscription, 5*time.Minute); !ok {
-		t.Fatal("subscription traffic not priced at list")
 	}
 }

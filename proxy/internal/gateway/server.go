@@ -525,6 +525,9 @@ type Config struct {
 	// CacheWarm switches prompt-cache warming (cache_warm.go); it is asked
 	// before every arm and every warm. Nil keeps warming off.
 	CacheWarm func() bool
+	// CacheWarmState is where the warm table keeps the return gaps this proxy
+	// has seen (counts per class only). Empty keeps them in memory.
+	CacheWarmState string
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -609,7 +612,7 @@ func New(cfg Config) *Server {
 		warmOrigin:           statsPricingOriginKnown,
 	}
 	if cfg.CacheWarm != nil {
-		s.warmer = newCacheWarmer(cfg.CacheWarm, s.sendCacheWarm)
+		s.warmer = newCacheWarmer(cfg.CacheWarm, s.sendCacheWarm, newWarmTable(cfg.CacheWarmState))
 	}
 	return s
 }

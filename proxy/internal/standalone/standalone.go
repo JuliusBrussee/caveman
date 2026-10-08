@@ -298,6 +298,8 @@ type Options struct {
 	// CacheWarm switches prompt-cache warming (the waste-fixes module plus the
 	// CAVEMAN_CACHE_WARM kill switch). Nil: warming off.
 	CacheWarm func() bool
+	// CacheWarmState is the warm table's learned-gap file. Empty: memory only.
+	CacheWarmState string
 }
 
 // New assembles a standalone gateway server from a config and a telemetry sink.
@@ -328,6 +330,7 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 		MetricsToken:         cfg.MetricsToken,
 		Cloud:                opts.Cloud,
 		CacheWarm:            opts.CacheWarm,
+		CacheWarmState:       opts.CacheWarmState,
 	})
 }
 
