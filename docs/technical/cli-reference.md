@@ -16,7 +16,10 @@ for accepted flags.
 | `caveman wrap <agent>` | Run one ephemeral wrapped session without persistent host config | No |
 | `caveman run -- <command>` | Run an arbitrary command through the local layer | No |
 | `caveman learn` | Rank locally observed improvements | No |
-| `caveman status` | Show local runtime, mode, and connection state | No |
+| `caveman status` | Show which modules are on, which agents they reach, and one next step | No |
+| `caveman on <module>` / `caveman off <module>` | Turn a module on or off, after showing what will change | No |
+| `caveman doctor` | Check this machine without the network: one problem per line, with its fix | No |
+| `caveman stop` | Stop the local runtime that `caveman start` or `caveman <agent>` started | No |
 | `caveman login` | Connect the installation to Caveman Cloud | Yes |
 | `caveman tools` | Open the local tool namespace | No |
 | `caveman cloud` | Open the connected-service namespace | Yes |
@@ -34,6 +37,51 @@ caveman run -- my-agent --project .
 
 Arguments after an agent name are passed to that agent. Arguments after `--`
 in `caveman run` are passed to the selected command.
+
+The first `caveman claude` runs setup (what it does, which modules, sign-in)
+before anything is written. Once setup has chosen Claude Code, later runs keep
+the same native wiring as `caveman enable claude` (`~/.claude/settings.json`,
+or `$CLAUDE_CONFIG_DIR`) in place without asking, so the Claude Code IDE
+extension and desktop app get the same routing and Auto model as the terminal.
+`caveman disable claude` removes it and sticks until `caveman enable claude`.
+A leading Caveman flag (`caveman claude --off …`) keeps a run session-only.
+
+Auto is offered only while you are signed in with routing on, and only for a
+provider the local runtime sends to its own API. Claude Code set to Bedrock,
+Vertex or Foundry (`CLAUDE_CODE_USE_*`) gets no Auto; if you turn one of those
+on after Auto was added, pick another model with `/model`.
+In Claude Code, Auto has a 1M context window (its id is `caveman-auto[1m]`),
+the window of the Claude models it runs on. In OpenCode it is 1M on Anthropic
+and 872K on OpenAI; in Codex it is the largest window the ChatGPT model list
+gives `gpt-6.1-sol` (872K, where that model's own default is 272K). On an
+OpenAI API key, input past 272K tokens is billed at twice the rate.
+A saved Codex `model = "caveman-auto"` (top level or under `[profiles.*]`) only
+works while Caveman is wired; `caveman disable codex` clears the top-level one,
+a profile's is yours to change.
+
+## Modules
+
+Caveman is six modules, each on unless you turn it off:
+
+| Module | What it does |
+|---|---|
+| `output` | the agent says less |
+| `input` | logs, JSON, code and diffs shrink before the model reads them |
+| `waste-fixes` | finds your agent's worst waste and fixes it. Also keeps Anthropic's prompt cache warm while your agent pauses: the local proxy re-sends the last request with zero output shortly before the cache expires, only when your own past sessions say the agent is likely back in time for it to pay, for up to an hour |
+| `routing` | adds Auto to your agent's model picker while signed in (Claude Code, OpenCode, Codex on a ChatGPT login): on Auto, the right model and effort each turn; any other model runs as picked. Needs a free account. Each request on Auto sends your latest ask (with whatever your agent attaches to it, such as CLAUDE.md, memory or @-mentioned files), the one before it, the end of the agent's last reply and request facts (tool names, effort settings, agent headers, the previous request's token counts) to Caveman Cloud; on the Free plan Caveman may keep it to improve routing |
+| `scripts` | reusable scripts your agent keeps (installs `caveman-blocks`) |
+| `browse` | compressed pages for browser tools |
+
+```bash
+caveman off browse        # shows the plan, asks once, then applies
+caveman on input --yes    # no question
+caveman on --all --dry-run
+```
+
+`on` and `off` change only the modules you name and what those need. Agents
+stay wired while any of `output`, `input`, `waste-fixes` or `routing` is on.
+Without a terminal, pass `--yes` or nothing changes. Choices live in
+`modules` inside the same config file as `caveman tools config`.
 
 ## Local tool namespace
 

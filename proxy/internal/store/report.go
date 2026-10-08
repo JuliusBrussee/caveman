@@ -155,7 +155,7 @@ func (s *Store) writeExportSpans(f *os.File, plan TrialPlan) error {
 		        COALESCE(reasoning_tokens, 0),
 		        COALESCE(total_cost_usd, 0), basis
 		   FROM requests
-		  WHERE (? = '' OR label = ?)
+		  WHERE (? = '' OR label = ?) AND NOT `+cacheWarmRow+`
 		  ORDER BY ts, id`,
 		label, label,
 	)

@@ -15,6 +15,7 @@
 //	caveman-engine pixel simulate  request JSON → pixel TransformInfo JSON
 //	caveman-engine evals run [--fixtures DIR]
 //	                               run embedded or caller-supplied eval fixtures
+//	caveman-engine version [--json] print the version; --json adds capabilities
 package main
 
 import (
@@ -39,6 +40,24 @@ import (
 
 const maxStdinBytes int64 = 64 << 20
 
+// version is the build version (go build -ldflags "-X main.version=...").
+var version = "dev"
+
+// runVersion prints the version, or with --json {version, schema, capabilities}: the
+// shape every caveman binary answers so the CLI can probe what a build supports.
+// The capabilities are its subcommands.
+func runVersion(args []string, stdout io.Writer) {
+	if len(args) > 0 && args[0] == "--json" {
+		_ = json.NewEncoder(stdout).Encode(map[string]any{
+			"version":      version,
+			"schema":       "caveman.engine.version.v1",
+			"capabilities": []string{"compress", "detect", "retrieve", "stats", "registry", "toon", "pixel", "evals"},
+		})
+		return
+	}
+	fmt.Fprintln(stdout, version)
+}
+
 func main() {
 	args := os.Args[1:]
 	cmd := "help"
@@ -62,8 +81,10 @@ func main() {
 		runPixel(args[1:])
 	case "evals":
 		runEvals(args[1:])
+	case "version":
+		runVersion(args[1:], os.Stdout)
 	case "help", "--help", "-h":
-		fmt.Fprintln(os.Stderr, "caveman-engine compress | detect | retrieve <handle> | stats | registry | toon encode|decode | pixel render|simulate | evals run [--fixtures DIR]")
+		fmt.Fprintln(os.Stderr, "caveman-engine compress | detect | retrieve <handle> | stats | registry | toon encode|decode | pixel render|simulate | evals run [--fixtures DIR] | version [--json]")
 	default:
 		fmt.Fprintf(os.Stderr, "unknown caveman-engine subcommand: %s\n", cmd)
 		os.Exit(2)

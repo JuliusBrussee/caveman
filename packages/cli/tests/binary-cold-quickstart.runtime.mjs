@@ -69,9 +69,9 @@ test("cold package completes seeded six-beat quickstart", { skip: !enabled }, as
       PATH: `${agent.dir}${delimiter}${process.env.PATH}`,
     };
 
-    const setup = await runCli(cli, ["setup"], { env, cwd: work });
+    const setup = await runCli(cli, ["setup", "--json"], { env, cwd: work });
     assert.equal(setup.code, 0, setup.stderr);
-    assert.match(setup.stdout, /All required binaries found/);
+    assert.equal(JSON.parse(setup.stdout).ready, true);
 
     const firstRun = await runCli(cli, ["claude"], { env, cwd: work, timeoutMs: 30_000 });
     assert.equal(firstRun.code, 0, firstRun.stderr);

@@ -19,13 +19,11 @@ function makeToken({ org = "org-1", exp = Math.floor(Date.now() / 1000) + 3600 }
 function isolatedEnv() {
   const home = mkdtempSync(join(tmpdir(), "cave-credentials-home-"));
   const caveHome = mkdtempSync(join(tmpdir(), "cave-credentials-store-"));
-  const configDir = join(home, ".caveman-cloud");
-  mkdirSync(configDir, { recursive: true });
   const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveHome, CAVE_NO_KEYCHAIN: "1", NO_COLOR: "1" };
   delete env.CAVE_TOKEN;
   delete env.CAVE_API_KEY;
   delete env.CAVE_GATEWAY_URL;
-  return { env, home, caveHome, configPath: join(configDir, "config.json"), credentialsPath: join(caveHome, "credentials") };
+  return { env, home, caveHome, configPath: join(caveHome, "cloud.json"), credentialsPath: join(caveHome, "credentials") };
 }
 
 function installFakeSecurity(paths, secret, deleteExit = 0) {
@@ -179,7 +177,7 @@ test("stored gateway key reaches every managed-agent injection without entering 
   }
 });
 
-test("device login stores the complete grant only in a mode-0600 credential envelope", { skip: "Cloud login disabled during beta" }, async () => {
+test("device login stores the complete grant only in a mode-0600 credential envelope", async () => {
   const paths = isolatedEnv();
   const accessToken = makeToken({ org: "org-device" });
   mkdirSync(dirname(paths.credentialsPath), { recursive: true });
@@ -249,7 +247,7 @@ test("device login stores the complete grant only in a mode-0600 credential enve
   }
 });
 
-test("device login does not acknowledge until config persistence succeeds", { skip: "Cloud login disabled during beta" }, async () => {
+test("device login does not acknowledge until config persistence succeeds", async () => {
   const paths = isolatedEnv();
   const accessToken = makeToken({ org: "org-device-config-failure" });
   mkdirSync(dirname(paths.credentialsPath), { recursive: true });
@@ -287,7 +285,7 @@ test("device login does not acknowledge until config persistence succeeds", { sk
   }
 });
 
-test("device login keeps credentials but prints no success when ACK is rejected", { skip: "Cloud login disabled during beta" }, async () => {
+test("device login keeps credentials but prints no success when ACK is rejected", async () => {
   const paths = isolatedEnv();
   const accessToken = makeToken({ org: "org-device-ack-failure" });
   mkdirSync(dirname(paths.credentialsPath), { recursive: true });

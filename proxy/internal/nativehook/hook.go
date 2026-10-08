@@ -300,12 +300,17 @@ func nativePolicy(home string) (string, string) {
 	}
 }
 
+// configuredMode reads the CLI's config: $CAVEMAN_HOME/cloud.json, then the
+// pre-v4 ~/.caveman-cloud/config.json it is copied from on first use.
 func configuredMode(home string) string {
 	userHome := os.Getenv("HOME")
 	if userHome == "" {
 		userHome = filepath.Dir(home)
 	}
-	raw, err := os.ReadFile(filepath.Join(userHome, ".caveman-cloud", "config.json"))
+	raw, err := os.ReadFile(filepath.Join(home, "cloud.json"))
+	if home == "" || os.IsNotExist(err) {
+		raw, err = os.ReadFile(filepath.Join(userHome, ".caveman-cloud", "config.json"))
+	}
 	if err != nil {
 		return "compress"
 	}

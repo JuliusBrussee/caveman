@@ -43,7 +43,7 @@ async function fixture({ holdResponse = false } = {}) {
   const dir = mkdtempSync(join(tmpdir(), "cave-weekly-refresh-"));
   const userHome = join(dir, "user");
   const caveHome = join(userHome, ".caveman");
-  const configDir = join(userHome, ".caveman-cloud");
+  const configDir = caveHome;
   const binDir = join(dir, "bin");
   mkdirSync(configDir, { recursive: true });
   mkdirSync(binDir, { recursive: true });
@@ -93,7 +93,7 @@ process.exit(0);
   const agent = join(binDir, "agent");
   writeFileSync(agent, "#!/usr/bin/env node\nsetTimeout(() => process.exit(0), 250);\n", { mode: 0o755 });
 
-  const configPath = join(configDir, "config.json");
+  const configPath = join(configDir, "cloud.json");
   writeFileSync(configPath, JSON.stringify({
     baseURL: `http://127.0.0.1:${apiPort}`,
     token: "connected-token",

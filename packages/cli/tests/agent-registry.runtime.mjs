@@ -233,10 +233,10 @@ test("reserved command source covers every dispatched and namespace token", () =
   const expected = [
     "--help", "agent", "audit", "billing", "browse", "cloud", "compress", "config",
     "convert", "costs", "deploy", "disable", "dev", "doctor", "enable", "evals", "experiments", "explore",
-    "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem",
+    "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem", "off", "on",
     "opportunities", "plan", "practices", "projects", "providers", "receipts", "retrieve", "run",
     "score", "sdk", "setup", "shrink", "shrink-hook", "skills", "snippets", "start",
-    "stats", "status", "sync", "telemetry", "tools", "toon", "traces", "trial",
+    "stats", "status", "stop", "sync", "telemetry", "tools", "toon", "traces", "trial",
     "usage", "verify", "version", "whoami", "wrap",
   ];
   assert.deepEqual(actual, expected);

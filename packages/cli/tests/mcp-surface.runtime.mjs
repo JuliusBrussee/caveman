@@ -23,11 +23,12 @@ const cli = join(here, "..", "dist", "index.js");
 const { buildWrapEnv } = await import(`${pathToFileURL(cli).href}?mcp-surface`);
 const { PROFILES } = await import(pathToFileURL(join(here, "..", "dist", "agents.generated.js")).href);
 
+// The global config lives at $CAVEMAN_HOME/cloud.json; pass the CAVEMAN_HOME
+// (isolatedCliEnv uses the temp home itself).
 function writeGlobal(home, value) {
-  const dir = join(home, ".caveman-cloud");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "config.json"), JSON.stringify(value, null, 2), { mode: 0o600 });
-  return join(dir, "config.json");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "cloud.json"), JSON.stringify(value, null, 2), { mode: 0o600 });
+  return join(home, "cloud.json");
 }
 
 // ── config parsing: the four accepted values, and everything else refused ──────
@@ -114,7 +115,7 @@ async function wrapCodex({ mcp, preinstalled = false }) {
   const binDir = join(home, "bin");
   mkdirSync(binDir, { recursive: true });
   mkdirSync(join(home, ".caveman", "mcp"), { recursive: true });
-  writeGlobal(home, { execute: { mcp, browse_tool: false }, think: { shrink: false } });
+  writeGlobal(join(home, ".caveman"), { execute: { mcp, browse_tool: false }, think: { shrink: false } });
   if (preinstalled) writeFileSync(join(home, ".caveman", "mcp", "codex.json"), "{}");
 
   writeFileSync(join(binDir, "codex"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
@@ -339,7 +340,7 @@ test("a config-file agent's recovery signal follows what this launch actually in
     const binDir = join(home, "bin");
     mkdirSync(binDir, { recursive: true });
     mkdirSync(join(home, ".caveman", "mcp"), { recursive: true });
-    writeGlobal(home, { execute: { mcp: mode, browse_tool: false }, think: { shrink: false } });
+    writeGlobal(join(home, ".caveman"), { execute: { mcp: mode, browse_tool: false }, think: { shrink: false } });
     const { base } = openclawBase();
     writeFileSync(join(binDir, "openclaw"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(join(binDir, "caveman-mcp"), `#!/bin/sh

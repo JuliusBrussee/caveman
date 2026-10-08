@@ -73,7 +73,7 @@ function listen(server) {
 // flag), the device-flow token was minted against CAVE_API_URL but init would
 // persist config.json/.env.cave pointing at localhost:8080 instead — a prod
 // token stored against a dead local base URL. Both must now agree.
-test("caveman init persists the SAME base URL login resolved (CAVE_API_URL, no flag)", { skip: "Cloud login disabled during beta" }, async () => {
+test("caveman init persists the SAME base URL login resolved (CAVE_API_URL, no flag)", async () => {
   const server = startStub();
   const port = await listen(server);
   const stubURL = `http://127.0.0.1:${port}`;
@@ -90,7 +90,7 @@ test("caveman init persists the SAME base URL login resolved (CAVE_API_URL, no f
   const envCave = readFileSync(join(workDir, ".env.cave"), "utf8");
   assert.match(envCave, new RegExp(`CAVE_API_URL=${stubURL}(\\n|$)`), `.env.cave must persist CAVE_API_URL (${stubURL}), got: ${envCave}`);
 
-  const cfg = JSON.parse(readFileSync(join(home, ".caveman-cloud", "config.json"), "utf8"));
+  const cfg = JSON.parse(readFileSync(join(caveDir, "cloud.json"), "utf8"));
   assert.equal(cfg.baseURL, stubURL, "config.json baseURL must match what login resolved, not a localhost:8080 literal");
 
   server.close();

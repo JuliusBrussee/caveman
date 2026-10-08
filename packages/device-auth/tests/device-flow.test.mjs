@@ -47,3 +47,18 @@ test("missing durable ACK token fails closed", async () => {
   });
   await assert.rejects(grant.acknowledge(), /did not provide a delivery acknowledgement token/);
 });
+
+test("a refused device code carries the HTTP status and the server error code", async () => {
+  const flow = runCavemanDeviceFlow({
+    baseURL: "https://control.example",
+    client: "test",
+    fetch: async () => Response.json({ error: { code: "cave_device_login_disabled" } }, { status: 403 }),
+  });
+  await assert.rejects(flow, (error) => {
+    assert.equal(error.name, "DeviceAuthError");
+    assert.equal(error.status, 403);
+    assert.equal(error.code, "cave_device_login_disabled");
+    assert.match(error.message, /device authorization failed: HTTP 403/);
+    return true;
+  });
+});

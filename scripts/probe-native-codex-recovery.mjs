@@ -53,7 +53,6 @@ for (const p of [
   cwd,
   bin,
   join(root, "tmp"),
-  join(home, ".caveman-cloud"),
 ])
   mkdirSync(p, { recursive: true });
 const recoveryDb = explicitDb
@@ -369,7 +368,7 @@ try {
     `mode: compress\nlisten: 127.0.0.1:${port}\nproviders:\n  openai:\n    base_url: http://127.0.0.1:${upPort}\n  anthropic:\n    base_url: http://127.0.0.1:${upPort}\n  gemini:\n    base_url: http://127.0.0.1:${upPort}\n`,
   );
   writeFileSync(
-    join(home, ".caveman-cloud/config.json"),
+    join(caveHome, "cloud.json"),
     JSON.stringify({
       think: { mode: "compress", toon: false, shrink: false },
       execute: {

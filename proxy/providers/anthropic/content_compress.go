@@ -35,7 +35,8 @@ func (a Adapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetad
 	}
 	rawMessages := make([]json.RawMessage, len(messages))
 	for i, span := range messages {
-		rawMessages[i] = append(json.RawMessage(nil), body[span.start:span.end]...)
+		// A read-only view: ComputeFrozenCount only reads, so no copy.
+		rawMessages[i] = body[span.start:span.end:span.end]
 	}
 	floor := ComputeFrozenCount(rawMessages)
 	if floor < 0 || floor > len(messages) {

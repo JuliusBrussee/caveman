@@ -17,7 +17,7 @@ function environment(t) {
   t.after(() => rmSync(home, { recursive: true, force: true }));
   const env = { ...process.env, HOME: home, CAVEMAN_HOME: join(home, ".caveman"), CAVE_NO_KEYCHAIN: "1", CAVE_API_URL: "https://must-not-contact.invalid", CAVE_GATEWAY_URL: "https://must-not-inherit.invalid" };
   delete env.CAVE_TOKEN;
-  return { env, credentials: join(home, ".caveman", "credentials"), config: join(home, ".caveman-cloud", "config.json") };
+  return { env, credentials: join(home, ".caveman", "credentials"), config: join(home, ".caveman", "cloud.json") };
 }
 
 function run(argv, env) {
@@ -83,18 +83,20 @@ test("private login persists keyless grant before ACK, refreshes, authenticates 
   const config = readFileSync(files.config, "utf8");
   assert.equal(JSON.parse(config).organizationId, "org-1");
   assert.equal(JSON.parse(config).gatewayUrl, undefined);
-  for (const secret of [access, "refresh-1", "ack-1"]) {
+  for (const secret of [access, "refresh-1", "ack-1", renewed, "refresh-2"]) {
     assert.ok(!config.includes(secret));
     assert.ok(!(login.stdout + login.stderr).includes(secret));
   }
   assert.equal(statSync(files.credentials).mode & 0o777, 0o600);
   assert.equal((await run(["whoami"], files.env)).code, 0);
   assert.deepEqual(f.requests.find((r) => r.path.endsWith("/refresh")).body, { refresh_token: "refresh-1" });
-  assert.equal(f.requests.find((r) => r.path.endsWith("/me")).auth, `Bearer ${renewed}`);
+  // Login reads /me once after the ACK for its sign-in lines (refreshing the
+  // 30-second token first); whoami reads it again. Both use the renewed token.
+  assert.deepEqual(f.requests.filter((r) => r.path.endsWith("/me")).map((r) => r.auth), [`Bearer ${renewed}`, `Bearer ${renewed}`]);
   assert.equal((await run(["logout"], files.env)).code, 0);
   assert.deepEqual(f.requests.at(-1).body, { refresh_token: "refresh-2" });
   assert.equal(existsSync(files.credentials), false);
-  assert.deepEqual(f.requests.map((r) => r.path), ["code", "token", "ack", "refresh", "me", "logout"].map((part) => `/api/v1/auth/${["code", "token", "ack"].includes(part) ? "device/" : ""}${part}`));
+  assert.deepEqual(f.requests.map((r) => r.path), ["code", "token", "ack", "refresh", "me", "me", "logout"].map((part) => `/api/v1/auth/${["code", "token", "ack"].includes(part) ? "device/" : ""}${part}`));
 });
 
 test("private login rejects origins and conflicting flags before local writes", async (t) => {

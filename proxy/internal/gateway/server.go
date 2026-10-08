@@ -250,11 +250,26 @@ type RequestRecord struct {
 	CompressionEligible bool
 	// AgentSlug is the wrapped agent that produced the call (from x-cave-agent;
 	// "unlabeled-agent" when absent) — the per-agent attribution dimension.
-	AgentSlug                string
-	Provider                 string
-	Model                    string
-	RouteFrom                string
-	RouteTo                  string
+	AgentSlug string
+	Provider  string
+	Model     string
+	RouteFrom string
+	RouteTo   string
+	// The route stage's outcome for the runtime/v1 sender (see route.go); the
+	// reason is stored too. Empty when no route stage ran.
+	RouteOutcome    string
+	RouteReason     string
+	RouteDecisionID string
+	// RoutePoolID is the pool entry the route stage sent the request to (on
+	// a fallback row too, with RouteReason saying why it failed);
+	// UpstreamResponseID the pool host's own id for its answer (OpenRouter's
+	// gen-…), to look the call up there: on a fallback row it is the failed
+	// pool host's id, not the harness's. Stored, with RouteReason.
+	RoutePoolID        string
+	UpstreamResponseID string
+	// ProviderOriginKnown: the request went to the provider's own API, so its
+	// model ids are catalog names rather than local paths. Not stored.
+	ProviderOriginKnown      bool
 	Endpoint                 string
 	Stream                   bool
 	StatusCode               int
@@ -401,6 +416,18 @@ type Server struct {
 	// unless CAVE_CAPTURE_DIR names a writable directory, and it never affects
 	// what is sent, recorded, or claimed.
 	capture *bodyCapture
+	cloud   CloudLink
+	// routes is what the route stage remembers per session (route.go).
+	routes routeSessions
+	// recorder finishes rows off the request path (Config.AsyncRecord).
+	recorder *recorder
+	// fanout staggers sibling children on one new prefix (route_cache.go).
+	fanout fanout
+	// warmer keeps Anthropic prompt-cache entries warm while a session pauses
+	// (cache_warm.go); nil when warming is off. warmOrigin tells the
+	// provider's own API from any other origin (tests swap it for loopback).
+	warmer     *cacheWarmer
+	warmOrigin func(string, *url.URL) bool
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
@@ -521,6 +548,22 @@ type Config struct {
 	// <token>`. Empty falls back to CAVEMAN_METRICS_TOKEN; unset keeps /metrics
 	// open like the health probes.
 	MetricsToken string
+	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender). Nil
+	// keeps the proxy local-only.
+	Cloud CloudLink
+	// AsyncRecord finishes each telemetry row off the request path: the
+	// request token count, the sink write (batched when the sink is a
+	// BatchSink) and the Cloud observe run after the handler returns, so
+	// neither the client's connection nor a stream's last chunk waits on them.
+	// Rows reach the sink in the order they were recorded; Close writes out the
+	// rest. Off, every row is in the sink before ServeHTTP returns.
+	AsyncRecord bool
+	// CacheWarm switches prompt-cache warming (cache_warm.go); it is asked
+	// before every arm and every warm. Nil keeps warming off.
+	CacheWarm func() bool
+	// CacheWarmState is where the warm table keeps the return gaps this proxy
+	// has seen (counts per class only). Empty keeps them in memory.
+	CacheWarmState string
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -537,6 +580,13 @@ func BoundUpstreamTransport(t *http.Transport) {
 	// left on http.DefaultTransport, and an idle keep-alive socket to a provider
 	// must not be held open indefinitely.
 	t.IdleConnTimeout = 90 * time.Second
+	// Go keeps only 2 idle connections per host by default, so a third
+	// concurrent caller (agent fan-out, a team behind one proxy) closes its
+	// connection after each response and the next request to that provider pays
+	// a new TCP and TLS handshake. Keep a pool sized for that concurrency; the
+	// idle timeout above still retires what goes quiet.
+	t.MaxIdleConns = 1024
+	t.MaxIdleConnsPerHost = 256
 }
 
 // New constructs a standalone proxy Server.
@@ -576,7 +626,7 @@ func New(cfg Config) *Server {
 		// date that change to a config change rather than to the provider.
 		cfg.Logger.Info("cache-breakpoint planner enabled", "mode", breakpointPlanModeFrontier)
 	}
-	return &Server{
+	s := &Server{
 		adapters:             cfg.Adapters,
 		auth:                 cfg.Auth,
 		creds:                cfg.Creds,
@@ -600,7 +650,16 @@ func New(cfg Config) *Server {
 		metricsToken:         strings.TrimSpace(cmp.Or(cfg.MetricsToken, env.String("CAVEMAN_METRICS_TOKEN", ""))),
 		logger:               cfg.Logger,
 		capture:              newBodyCapture(os.Getenv("CAVE_CAPTURE_DIR"), cfg.Logger),
+		cloud:                cfg.Cloud,
+		warmOrigin:           statsPricingOriginKnown,
 	}
+	if cfg.AsyncRecord && cfg.Sink != nil {
+		s.recorder = newRecorder(s.writeRecords, cfg.Logger)
+	}
+	if cfg.CacheWarm != nil {
+		s.warmer = newCacheWarmer(cfg.CacheWarm, s.sendCacheWarm, newWarmTable(cfg.CacheWarmState))
+	}
+	return s
 }
 
 // Handler returns the standalone HTTP handler: health, metrics, and the proxy

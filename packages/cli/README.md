@@ -175,7 +175,9 @@ grant its access scopes. This connection creates no inference key and does not
 sync local request history. The CLI's usage telemetry setting remains in effect;
 `caveman telemetry off` disables it. Credentials use the existing secure store;
 `caveman logout` revokes the session. HTTPS is required except for HTTP loopback development.
-Hosted login remains unavailable during beta.
+For hosted Caveman Cloud, run `caveman login` with no flags. The server decides
+whether sign-in is open; when it is not, the CLI prints
+`Sign-in is not open on <host> yet.`
 
 Read agents in the connected project with `caveman cloud agent factory list`
 and `caveman cloud agent factory show <id>`. These commands need

@@ -31,7 +31,7 @@ if (ARGV[0] === "version") process.stdout.write(JSON.stringify({version:"test",c
     CAVEMAN_HOME: home, CAVE_NO_KEYCHAIN: "1", NO_COLOR: "1", CI: "1",
     CAVEMAN_TELEMETRY: "0", CAVEMAN_OFFLINE: "1", CAVE_GATEWAY_URL: "http://127.0.0.1:9",
     CAVEMAN_PROXY_BIN: noop, CAVEMAN_ENGINE_BIN: noop, CAVEMAN_MCP_BIN: noop,
-    CAVEMAN_BROWSE_BIN: noop, CAVEMEM_BIN: noop,
+    CAVEMAN_BROWSE_BIN: noop, CAVEMEM_BIN: noop, CAVEMAN_SHRINK_BIN: noop,
     ...extra,
   }, bin);
   return isolated;
@@ -47,7 +47,7 @@ test("status observe block carries today-scoped basis, config, telemetry, and fo
     owner: "wrap",
     off_states: [{
       id: "observe",
-      line: "observe mode — compression off until you sign in (free · 1 seat · no card)",
+      line: "observe mode — compression off until you sign in (free account)",
       fix: "caveman login",
     }],
     today: {
@@ -63,7 +63,7 @@ test("status observe block carries today-scoped basis, config, telemetry, and fo
     plan: null,
     config_sources: sources,
     telemetry,
-    next: "caveman login   (free · 1 seat · no card)",
+    next: "caveman login   (free account)",
   });
   assert.match(text, /^caveman  ·  observe/m);
   assert.match(text, /41k tokens observed on the layer/);
@@ -107,7 +107,7 @@ test("status compress block omits honest unknowns instead of zeroing them", () =
 test("half-installed status lists every supplied reason and never invents local numbers", () => {
   const reasons = [
     "caveman-proxy not installed — agents still launch, traffic is NOT compressed or metered",
-    "observe mode — compression off until you sign in (free · 1 seat · no card)",
+    "observe mode — compression off until you sign in (free account)",
     "MCP recovery missing — streaming turns and Claude Pro/Max sessions pass through uncompressed (non-streaming API-key traffic still compresses)",
     "cavemem not installed — memory and auto-recall are off",
   ];
@@ -164,7 +164,9 @@ if (cmd === "version") {
       "config_sources",
       "telemetry",
       "next",
+      "agent_traffic",
       "native_integrations",
+      "modules",
     ]);
     assert.deepEqual(parsed.native_integrations.map((item) => item.agent), [
       "claude", "codex", "hermes", "gemini", "opencode", "pi", "aider", "generic",
@@ -176,7 +178,7 @@ if (cmd === "version") {
   }
 });
 
-test("status with missing proxy emits half-installed block and no local zero rows", async () => {
+test("status with missing proxy names the missing binaries and no local zero rows", async () => {
   const isolated = statusEnv({
     CAVEMAN_PROXY_BIN: join("/definitely", "missing", "caveman-proxy"),
     CAVEMEM_BIN: join("/definitely", "missing", "cavemem"),
@@ -184,10 +186,9 @@ test("status with missing proxy emits half-installed block and no local zero row
   try {
     const out = await runCli(["status"], { env: isolated.env, cwd: isolated.home });
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /caveman-proxy not installed/);
-    assert.match(out.stdout, /cavemem not installed/);
-    assert.match(out.stdout, /MCP recovery missing/);
-    assert.match(out.stdout, /next:  caveman setup --install/);
+    assert.match(out.stdout, /on  input .* caveman-proxy, cavemem not installed · caveman setup --install/);
+    assert.match(out.stdout, /on  waste-fixes .* caveman-proxy not installed/);
+    assert.match(out.stdout, /next: caveman setup --install/);
     assert.doesNotMatch(out.stdout, /tokens observed/);
     assert.doesNotMatch(out.stdout, /\bmem\s+0\b/);
   } finally {
@@ -195,7 +196,7 @@ test("status with missing proxy emits half-installed block and no local zero row
   }
 });
 
-test("status makes permanent native activation discoverable without expanding porcelain", async () => {
+test("status makes native activation discoverable through its next line", async () => {
   const isolated = statusEnv();
   const bin = join(isolated.home, "bin");
   nodeStub(bin, "claude", 'console.log("claude 2.1.226");');
@@ -208,14 +209,15 @@ else if (ARGV[0] === "stats") console.log(JSON.stringify({spans:0,tokens_in:0,to
   try {
     const out = await runCli(["status"], { env: isolated.env, cwd: isolated.home });
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /native integrations/);
-    assert.match(out.stdout, /next native:  caveman enable claude/);
+    assert.match(out.stdout, /^ +claude$/m);
+    assert.match(out.stdout, /on  output +not wired/);
+    assert.match(out.stdout, /next: caveman enable claude/);
   } finally {
     isolated.cleanup();
   }
 });
 
-test("status gives cold native setup then enable path when runtime is missing", async () => {
+test("status points at the runtime install first when the proxy is missing", async () => {
   const isolated = statusEnv();
   const bin = join(isolated.home, "bin");
   nodeStub(bin, "claude", 'console.log("claude 2.1.226");');
@@ -223,8 +225,9 @@ test("status gives cold native setup then enable path when runtime is missing", 
   try {
     const out = await runCli(["status"], { env: isolated.env, cwd: isolated.home });
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /next native:  caveman setup --install/);
-    assert.match(out.stdout, /then:\s+caveman enable claude/);
+    assert.match(out.stdout, /on  output .* caveman-proxy not installed · caveman setup --install/);
+    assert.match(out.stdout, /^ +claude$/m);
+    assert.match(out.stdout, /next: caveman setup --install/);
   } finally {
     isolated.cleanup();
   }

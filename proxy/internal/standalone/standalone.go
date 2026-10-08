@@ -292,6 +292,17 @@ type Options struct {
 	// SessionFallback is conservative removed-marker correlation. It must return
 	// empty when more than one recent native session could own request.
 	SessionFallback func(time.Time, string, string) (string, string)
+	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender); it
+	// gates itself on the CLI's login and routing module. Nil: local only.
+	Cloud gateway.CloudLink
+	// AsyncRecord finishes telemetry rows off the request path (see
+	// gateway.Config.AsyncRecord); the caller closes the server before the sink.
+	AsyncRecord bool
+	// CacheWarm switches prompt-cache warming (the waste-fixes module plus the
+	// CAVEMAN_CACHE_WARM kill switch). Nil: warming off.
+	CacheWarm func() bool
+	// CacheWarmState is the warm table's learned-gap file. Empty: memory only.
+	CacheWarmState string
 }
 
 // New assembles a standalone gateway server from a config and a telemetry sink.
@@ -320,6 +331,10 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 		HTTPClient:           client,
 		Logger:               opts.Logger,
 		MetricsToken:         cfg.MetricsToken,
+		Cloud:                opts.Cloud,
+		AsyncRecord:          opts.AsyncRecord,
+		CacheWarm:            opts.CacheWarm,
+		CacheWarmState:       opts.CacheWarmState,
 	})
 }
 

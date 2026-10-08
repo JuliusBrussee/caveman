@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
+	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/bedrock"
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
@@ -162,6 +163,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusRequestEntityTooLarge, "cave_request_too_large", "Request body exceeds the proxy limit.")
 		return
 	}
+	// Auto in an encoded body is decoded so it can run on a real model.
+	if encoding := strings.TrimSpace(r.Header.Get("Content-Encoding")); encoding != "" && !strings.EqualFold(encoding, "identity") {
+		if decoded, ok := providers.DecodeBody(body, encoding, int(maxBytes)); ok && namesAuto(decoded) {
+			body = decoded
+			r.Header.Del("Content-Encoding")
+		}
+	}
 	body, correlatedSessionID, _ := nativeruntime.StripSessionMarkers(body, s.sessionMarkerKey)
 	if strings.HasPrefix(labelOrDefault(rc.Label, "local"), "trial:") {
 		if payloads, ok := s.sink.(PayloadSink); ok {
@@ -201,6 +209,40 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// The caller's session identity, already shape-bounded by requestEvidenceFromHeaders.
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID
+	// Auto goes upstream as the provider's fallback model (the route stage may
+	// still move it); agentModel is what the agent's copy of the answer names
+	// (the Auto id as it sent it, [1m] or not).
+	agentModel := meta.Model
+	if fallback := autoFallback[meta.Provider]; isAuto(meta.Model) && fallback != "" {
+		if out, ok := setModel(body, fallback); ok {
+			body, meta.Model = out, fallback
+			evidence.originalBody, rawHash = body, sha256.Sum256(body)
+		}
+	}
+	if isAuto(meta.Model) {
+		// No provider here serves Auto: the literal id never goes upstream.
+		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto runs only on Claude and OpenAI models through Caveman, and this request goes to another provider (Bedrock, Vertex or a custom endpoint): pick another model with /model.")
+		return
+	}
+
+	// Cache warming (cache_warm.go): a real request stops its stream's warming
+	// before anything is sent. Only an
+	// exact stream counts: the route stage's key (x-cave-session or the
+	// agent's own session header; a Claude Code child its own, with its
+	// parent). Side requests neither stop nor start one.
+	warmKey, warmParent, warmArm, warmStart := "", "", false, time.Time{}
+	if s.warmer != nil && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
+		exact := ""
+		if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+			exact = evidence.SessionID
+		}
+		if wr := newRouteRun(r.Header, exact, meta.Endpoint, body); wr.key != "" && !wr.auxiliary {
+			warmKey, warmParent, warmArm = wr.key, wr.parent, !wr.perRequest
+			// Before the send, so the provider's lifetime starts later still.
+			warmStart = s.warmer.clock.Now()
+			defer s.warmer.begin(warmKey)()
+		}
+	}
 
 	// byte-safe transform. record mode never transforms. On ANY transform error we
 	// forward the ORIGINAL bytes unchanged (fail-open) rather than failing the
@@ -233,6 +275,63 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// pixel, and provider-native transforms while preserving configured mode in
 		// response/telemetry. Record behavior may still simulate an estimate on copies.
 		effectiveRuntimeMode = "record"
+	}
+	// Ask (ADR 0083 §4): the Cloud round trip runs while compression does. The
+	// request-wide opt-out and an encoded body keep the model untouched too.
+	var awaitRoute func() RouteAnswer
+	var run *routeRun
+	var last *RouteLast // what the session's previous request ran, for the ask
+	held := false       // the request runs the session's held model (heldModel)
+	modelRequested := meta.Model
+	evidence.modelRequested = agentModel
+	if isAuto(agentModel) {
+		evidence.modelRequested = AutoModel // an Auto row says caveman-auto, suffix or not
+	}
+	// count_tokens runs the same thinking-binding check as Messages
+	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
+	// and drop_block, is never asked about and gets no heal retry.
+	countTokens := meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages/count_tokens")
+	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
+		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
+		(routable(meta.Provider, meta.Endpoint) || countTokens) {
+		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
+		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
+		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
+		// Subscription and OAuth traffic routes too: a moved request stays on
+		// the provider's own API and the agent's own credential, and a pool
+		// entry goes out on its own login or the Cloud gateway key, never on it.
+		switch {
+		case uerr != nil || !statsPricingOriginKnown(meta.Provider, upstream):
+			evidence.route = RouteAnswer{Outcome: "off", Reason: "custom_provider_origin"}
+		default:
+			// A session id guessed from timing (sessionFallback) is not exact
+			// enough to carry another session's marks: the agent's own wins.
+			exact := ""
+			if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+				exact = evidence.SessionID
+			}
+			run = newRouteRun(r.Header, exact, meta.Endpoint, body)
+			run.asked, run.record = meta.Model, effectiveRuntimeMode == "record"
+			if countTokens {
+				run.perRequest, run.replay = true, true
+				break
+			}
+			if !isAuto(agentModel) {
+				// A model the agent named itself is never asked about; the
+				// session's marks and heal still apply, as with routing off.
+				evidence.route = RouteAnswer{Outcome: "off", Reason: "named_model"}
+				break
+			}
+			var perMessageOff bool
+			last, perMessageOff = s.routes.facts(run.key, time.Now())
+			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
+				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
+				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
+				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
+				ContextTokens: int(float64(len(body)) * s.routes.tokensPerByte(run.key, run.parent)),
+				Models:        autoModelsFor(meta.Provider),
+			})
+		}
 	}
 	// The cache tripwire holds this request only to prefixes accepted before
 	// its forwarding was decided: one still in flight then (a fork's raw retry,
@@ -390,7 +489,103 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
-	transformedHash := sha256.Sum256(transform.Body)
+	// Route: the answer moves the compressed request to another model of the
+	// same provider and sets its effort, or sends it to a pool entry on another
+	// login or the Cloud gateway. Anything else keeps the asked model.
+	if awaitRoute != nil {
+		answer := awaitRoute()
+		if meta.Provider == "openai" {
+			answer = autoOpenAIAnswer(answer, meta.Endpoint, modelRequested, transform.Body, false)
+		}
+		if model := heldModel(answer, meta.Provider, last); model != "" && !run.auxiliary {
+			// Cloud failed: the session's cache is on this model, not the
+			// fallback. A side request has a prefix of its own.
+			answer.Model, held = model, true
+		}
+		if target := answer.Target; target != nil {
+			// The bytes compression produced go, unless they lean on the
+			// retrieve tool loop, which only runs on the harness's own path.
+			// Unstripped: the translator hands each host its own reasoning.
+			sent := transform.Body
+			if retrieveInjected {
+				sent = body
+			}
+			w.Header().Set("x-caveman-routed-from", agentModel)
+			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, agentModel)
+			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
+			if result.errMsg != "" && s.logger != nil {
+				s.logger.Warn("pool target failed", "pool_id", target.PoolID, "via", target.Via, "reason", result.errMsg, "served", result.served, "request_id", requestID)
+			}
+			if result.served {
+				evidence.route = answer
+				evidence.acceptedBody = sent
+				routed := meta
+				routed.Provider, routed.Model = target.Host, target.Model
+				if target.Host != "anthropic" && target.Host != "openai" {
+					// A plan, Caveman Cloud or a host without list prices here: honest zero dollars.
+					evidence.statsPricingUnsupportedReason = "custom_provider_origin"
+				}
+				if run != nil && run.key != "" {
+					// last stays the harness's own previous request (contracts: a
+					// model outside models is skipped); Cloud's state carries the move.
+					s.routes.markMoved(run.key)
+				}
+				estimateWG.Wait()
+				s.record(start, time.Since(start).Milliseconds(), requestID, traceID, rc, routed, authMode, http.StatusOK, result.bytes, len(body), rawHash, sha256.Sum256(sent), result.errMsg, []string{}, result.usage, nil, "", false, estimate, evidence, "", "", false, "", compressionEligible)
+				if result.errMsg != "" && result.errMsg != "pool_upstream_failed" && result.stream {
+					panic(http.ErrAbortHandler) // a cut stream never ends as a clean EOF
+				}
+				return
+			}
+			w.Header().Del("x-caveman-routed-from")
+			if answer.Reject != nil {
+				answer.Reject() // the rest of this ask stays on the asked model
+			}
+			// The asked model runs at the answered effort, as a non-pool answer
+			// would, fitted to that model's levels (the word was chosen for the target).
+			answer = RouteAnswer{Outcome: "degraded", Reason: result.errMsg, DecisionID: answer.DecisionID,
+				Effort: translate.FitEffort(grammarOf(meta.Endpoint), meta.Model, answer.Effort, transform.Body), EffortMode: answer.EffortMode, DefaultEffort: answer.DefaultEffort}
+		}
+		// The harness's own path: reasoning another host wrote earlier in the
+		// conversation goes no further than that host; a body without any goes
+		// byte for byte.
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		if answer.Model != "" && answer.Model != meta.Model {
+			if routed, ok := setModel(transform.Body, answer.Model); ok {
+				transform.Body = routed
+				meta.Model = answer.Model
+				w.Header().Set("x-caveman-routed-from", agentModel)
+			} else {
+				answer = RouteAnswer{Outcome: "degraded", Reason: "model_field_unreadable"}
+			}
+		}
+		// Routing off or signed out stays byte for byte, and so does a session
+		// whose key a provider refused.
+		if (answer.Outcome != "off" || answer.Reason != "") && !s.routes.keyRefused(run.key) {
+			transform.Body = run.withCacheKey(meta.Provider, transform.Body)
+		}
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
+		evidence.route = answer
+	} else if run != nil {
+		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
+	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
+		// Every other request to Anthropic's or OpenAI's own API too (encoded,
+		// subscription, routing off), and every chat request whatever its
+		// origin (the reasoning envelopes are this runtime's own: DeepSeek or
+		// OpenRouter would get another host's reasoning): byte for byte when
+		// it carries nothing another host wrote. Pass-through and other
+		// origins are left alone: only the provider's own API refuses another
+		// host's reasoning.
+		chat := strings.HasSuffix(meta.Endpoint, "/chat/completions")
+		if upstream, err := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{}); chat || err == nil && statsPricingOriginKnown(meta.Provider, upstream) {
+			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
+		}
+	}
+	transformedHash := rawHash
+	if !bytes.Equal(transform.Body, body) {
+		transformedHash = sha256.Sum256(transform.Body)
+	}
 	evidence.acceptedBody = transform.Body
 	providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown := providerPrefixEvidence(adapter, transform.Body, meta)
 	cacheBustCause := ""
@@ -409,7 +604,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !statsPricingOriginKnown(meta.Provider, upstreamURL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
 	}
-	authContext := providers.WithRequestPayloadHash(r.Context(), transform.Body)
+	authContext := providers.WithRequestPayloadSHA256(r.Context(), transformedHash)
 	upstreamHeaders, err := adapter.SanitizeAndMapHeaders(authContext, r, credential, upstreamURL)
 	if err != nil {
 		providerHeaderError(w, r, err)
@@ -419,6 +614,20 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
+	switch {
+	case meta.Model != agentModel:
+		// An identity answer, so the agent's copy can name the model it asked for.
+		upstreamHeaders.Del("accept-encoding")
+	case run != nil && (!run.off || run.heal || run.keyed): // a refused key is read from the error too
+		withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
+	}
+	if run != nil && run.dropBlocks {
+		upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
+	}
+	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
+	if run != nil && run.marked && !run.wire.responses {
+		upstreamHeaders = withPerMessageBeta(upstreamHeaders)
+	}
 	// Each retry attempt needs a fresh body reader, so the request is built per
 	// attempt from the buffered payload rather than once up front.
 	buildUpstream := func(payload []byte, header http.Header) func() (*http.Request, error) {
@@ -444,6 +653,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		Optimizers:  strings.Join(transform.OptimizerIDs, ","),
 	}, wholeBody(body), wholeBody(transform.Body))
 
+	// A fresh child on its siblings' new prefix waits for the first of them
+	// to have its first content (route_cache.go fanout).
+	release := func(bool) {}
+	if run != nil && !run.off && !run.record {
+		if key, ok := fanoutKey(run.parent, meta.Provider, meta.Model, grammarOf(meta.Endpoint), transform.Body); ok {
+			release = s.fanout.enter(r.Context(), key)
+			defer release(false)
+		}
+	}
 	resp, err := s.doUpstream(r.Context(), buildUpstream(transform.Body, upstreamHeaders))
 	s.inflight.Add(-1)
 	if err != nil {
@@ -451,6 +669,59 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		estimateWG.Wait() // join the observe estimate before record() reads it
 		s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_unavailable", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 		return
+	}
+	// A 400 naming the thinking binding or the per-message marks earns one heal
+	// retry (route.go routeHeal); if that is refused too, the original-bytes
+	// retry below still runs. On Responses only marks (configuration_update) heal.
+	if run != nil && resp.StatusCode == http.StatusBadRequest && (meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") ||
+		meta.Provider == "openai" && strings.HasSuffix(meta.Endpoint, "/responses") && run.marked) {
+		if retry, kind, from := s.routeHeal(run, resp, transform.Body, meta.Model, meta.Model == modelRequested); retry != nil {
+			headers := healHeaders
+			switch kind {
+			case healDropBlock:
+				headers = withBeta(upstreamHeaders, bindingBeta)
+			case healStrip:
+				headers = upstreamHeaders
+			}
+			s.capture.record(captureMeta{
+				RequestID:   requestID,
+				Provider:    meta.Provider,
+				Endpoint:    meta.Endpoint,
+				RuntimeMode: effectiveRuntimeMode,
+				Optimizers:  strings.Join(append(slices.Clone(transform.OptimizerIDs), "route-heal"), ","),
+			}, wholeBody(body), wholeBody(retry))
+			s.inflight.Add(1)
+			healed, herr := s.doUpstream(r.Context(), buildUpstream(retry, headers))
+			s.inflight.Add(-1)
+			if herr == nil {
+				run.dropBlocks = run.dropBlocks || kind == healDropBlock
+				run.stripped = run.stripped || kind == healStrip
+				_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+				_ = resp.Body.Close()
+				agent := transform.Body // the agent's own messages, for a remembered strip
+				if run.marked {
+					agent = run.unmarked
+				}
+				resp, upstreamHeaders = healed, headers
+				transform.Body, transformedHash, evidence.acceptedBody = retry, sha256.Sum256(retry), retry
+				transform.OptimizerIDs = append(slices.Clone(transform.OptimizerIDs), "route-heal")
+				providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, retry, meta)
+				// Later requests keep the history that was served; a compaction or
+				// side request does not change the session.
+				switch {
+				case healed.StatusCode >= 300:
+					if kind != healMarks && !run.perRequest && healRefused(healed) {
+						s.routes.healFailed(run.key, kind == healDropBlock) // the next request tries the next path
+					}
+				case kind == healMarks:
+					run.marked = false
+					s.routes.latch(run.key, meta.Model) // top-level effort served where the marks were not
+				case run.perRequest:
+				default:
+					s.routes.healed(run.key, kind == healDropBlock, agent, from)
+				}
+			}
+		}
 	}
 	// byte-safe fail-open: if the upstream rejects a request whose bytes we
 	// modified, retry ONCE with the original bytes before surfacing the error —
@@ -462,13 +733,30 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// beat the limit, and the client's own retry reproduces this request. An
 	// accepted retry pins the conversation raw (pinRaw), because the original
 	// bytes are what the provider cached.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, body) && !rateLimited(resp) {
+	// A 429 on the asked model of a request whose bytes the route stage changed
+	// (effort, marks, strip, drop_block) is the provider's rate limit, not its
+	// bytes: retrying the original (without the session's marks) cannot help.
+	// On a moved model it falls back to the asked one as before. The original
+	// keeps the session's prompt_cache_key (route_cache.go), so a request the
+	// route stage only keyed is not sent again, unless the 4xx names the key:
+	// then the agent's own bytes go.
+	original, originalHash := body, rawHash
+	if run != nil && run.keyed && resp.StatusCode >= 400 && resp.StatusCode < 500 {
+		if head, _ := peekError(resp); !bytes.Contains(bytes.ToLower(head), []byte("prompt_cache_key")) {
+			original = withCacheKey(body, run.key)
+			originalHash = sha256.Sum256(original)
+		} else {
+			s.routes.refuseKey(run.key) // later requests of the session go without it
+		}
+	}
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) && !rateLimited(resp) &&
+		!(run != nil && (run.applied || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
+		retryAuthContext := providers.WithRequestPayloadSHA256(r.Context(), originalHash)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
 			providerHeaderError(w, r, rerr)
@@ -478,26 +766,48 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			retryHeaders.Set("user-agent", r.UserAgent())
 		}
 		s.applyUpstreamAuthFallback(adapter.Name(), credential, retryHeaders)
+		if modelRequested != agentModel {
+			// An identity answer, as above: the agent's copy names Auto.
+			retryHeaders.Del("accept-encoding")
+		}
 		s.inflight.Add(1)
-		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(body, retryHeaders))
+		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(original, retryHeaders))
 		s.inflight.Add(-1)
 		if derr != nil {
 			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
 			estimateWG.Wait() // join the observe estimate; passed uniformly (zeroed at Record on this failed status)
-			evidence.acceptedBody = body
-			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, rawHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
+			evidence.acceptedBody = original
+			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 			return
 		}
-		if retryResp.StatusCode >= 200 && retryResp.StatusCode < 300 {
+		retryServed := retryResp.StatusCode >= 200 && retryResp.StatusCode < 300
+		if retryServed {
 			s.pinRaw(adapter, meta, body, transform.Body)
+		}
+		// A served retry shows the routed bytes were the cause; an error the
+		// original bytes get too (an expired login, a prompt too long) leaves
+		// the ask its decision. A 429 there rejects it all the same: else each
+		// of the agent's own retries would send both requests again.
+		if retryServed || retryResp.StatusCode == http.StatusTooManyRequests {
+			if reject := evidence.route.Reject; reject != nil && (meta.Model != modelRequested || run != nil && run.applied) {
+				reject() // the rest of this ask stays on the asked model and the request's own effort
+			}
 		}
 		rawRetried = true
 		resp = retryResp
 		upstreamHeaders = retryHeaders
-		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
-		evidence.acceptedBody = body
-		transformedHash = rawHash
-		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, body, meta)
+		if run != nil {
+			run.effort = "" // the original bytes: read back from them
+		}
+		if meta.Model != modelRequested {
+			meta.Model = modelRequested
+			w.Header().Del("x-caveman-routed-from")
+			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
+		}
+		transform = providers.TransformResult{Body: original, OptimizerIDs: []string{}}
+		evidence.acceptedBody = original
+		transformedHash = originalHash
+		providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown = providerPrefixEvidence(adapter, original, meta)
 		comp = nil
 		toolSchemaHandle = ""
 		breakpointPlanned = false
@@ -513,7 +823,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			Endpoint:      meta.Endpoint,
 			RuntimeMode:   effectiveRuntimeMode,
 			RetryOriginal: true,
-		}, wholeBody(body), wholeBody(body))
+		}, wholeBody(body), wholeBody(original))
 	}
 	// The cache tripwire (prefix_monitor.go) compares what this request repeats
 	// of its session's cached prefixes, client bytes and forwarded bytes both.
@@ -540,6 +850,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		resp, retrieveCalls, retrieved, replayedOriginal = s.runRetrieveLoop(r.Context(), s.httpClient, upstreamURL, upstreamHeaders, transform.Body, body, comp.recoveryHandles(), resp, adapter, meta.Provider, meta.Endpoint, requestID)
 	}
 	if replayedOriginal {
+		if run != nil {
+			run.effort = ""
+		}
+		if meta.Model != modelRequested {
+			meta.Model = modelRequested
+			w.Header().Del("x-caveman-routed-from")
+			evidence.route = RouteAnswer{Outcome: "degraded", Reason: "replayed_original"}
+		}
 		transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
 		evidence.acceptedBody = body
 		transformedHash = rawHash
@@ -558,9 +876,16 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// The response protocol is authoritative: Vertex and compressed requests may
 	// stream without a readable JSON stream flag. Never buffer their SSE/events.
+	resp.Body = &releaseOnRead{ReadCloser: resp.Body, release: release, ok: resp.StatusCode < 300, stream: sseEvents(resp.Header)}
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
+	// The agent reads the model it asked for when the request went to another
+	// one (Auto, or the route stage moved it; route.go shownModel); a
+	// compressed answer is left as it is.
+	encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
+	moved := meta.Model != agentModel && (encoding == "" || strings.EqualFold(encoding, "identity"))
+	var shown []byte
 	if !meta.Stream {
 		data, rerr := readUpstreamBody(resp)
 		if rerr != nil {
@@ -571,9 +896,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
+		if moved {
+			if out, ok := setModel(data, agentModel); ok {
+				shown = out
+				resp.Header.Set("Content-Length", strconv.Itoa(len(shown)))
+			}
+		}
 	}
 	defer resp.Body.Close()
 
+	if moved && meta.Stream {
+		resp.Header.Del("Content-Length") // the agent's copy may be another length
+	}
 	copySafeResponseHeaders(w.Header(), resp.Header)
 	w.Header().Set("x-cave-project", rc.Label)
 	w.Header().Set("x-cave-mode", rc.RuntimeMode)
@@ -608,7 +942,24 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(resp.StatusCode)
 
 	usageScanner := adapter.NewUsageScanner(resp.Header)
-	counter, copyErrCode := s.streamResponse(w, r, io.TeeReader(resp.Body, usageScanner), meta.Stream, requestID, nil)
+	var served servedModel
+	scanned := io.Writer(usageScanner)
+	if run != nil && !run.off {
+		scanned = io.MultiWriter(usageScanner, &served)
+	}
+	var toolStopped toolStop // the warm table's class: did the answer ask for a tool
+	if warmArm {
+		scanned = io.MultiWriter(scanned, &toolStopped)
+	}
+	src := io.Reader(io.TeeReader(resp.Body, scanned))
+	switch {
+	case shown != nil:
+		_, _ = io.Copy(scanned, resp.Body) // the provider's bytes still feed usage and last
+		src = bytes.NewReader(shown)
+	case moved && meta.Stream:
+		src = newShownModel(src, meta.Model, agentModel)
+	}
+	counter, copyErrCode := s.streamResponse(w, r, src, meta.Stream, requestID, nil)
 	ttfb := time.Since(start).Milliseconds()
 	if !counter.firstByteAt.IsZero() {
 		ttfb = counter.firstByteAt.Sub(start).Milliseconds()
@@ -644,6 +995,34 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		activeLevers = append(activeLevers, leverBreakpointPlan)
 	}
 	s.observeSession(evidence.SessionID, activeLevers, finalUsage, requestID)
+	if s.warmer != nil && resp.StatusCode == http.StatusTooManyRequests {
+		// No warm on this credential while the provider is limiting it.
+		s.warmer.backoff(credentialKey(upstreamHeaders), backoffUntil(s.warmer.clock.Now(), resp.Header, authMode))
+	}
+	if warmArm {
+		s.armCacheWarm(r, warmAnswer{
+			key: warmKey, subagent: warmParent != "", start: warmStart,
+			ok:      resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0,
+			adapter: adapter, meta: meta, authMode: authMode, upstream: upstreamURL, header: upstreamHeaders, body: transform.Body,
+			usage: finalUsage, tool: toolStopped.seen, encoded: encoding != "" && !strings.EqualFold(encoding, "identity"),
+			mode: effectiveRuntimeMode, label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID, basis: evidence.SessionCorrelationBasis,
+		})
+	}
+	if run != nil && !run.off && !run.auxiliary && run.key != "" && resp.StatusCode < 300 && errCode == "" {
+		// What this session's next ask reports as its previous request (route-ask-v1
+		// last). One the route stage was off for (another model, signed out) or a
+		// side request with its own history is not it.
+		if run.effort == "" {
+			run.effort = effortInForce(meta.Endpoint, transform.Body)
+		}
+		s.routes.served(run.key, RouteLast{
+			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
+			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
+			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted, sent: meta.Model, provider: meta.Provider,
+		}, time.Now(), meta.Model != modelRequested && !run.perRequest, len(body))
+	} else if held {
+		s.routes.unhold(run.key) // the held model did not serve: the fallback next
+	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
@@ -720,6 +1099,12 @@ type requestEvidence struct {
 	TransformLocation             string
 	CacheEpoch                    string
 	CachePrefixSHA256             string
+	// route is the route stage's answer; modelRequested what the agent asked for.
+	route          RouteAnswer
+	modelRequested string
+	// poolID is the pool entry the request went to first; upstreamID the
+	// host's own answer id (translate.Reply.UpstreamID).
+	poolID, upstreamID string
 }
 
 func requestEvidenceFromHeaders(headers http.Header) requestEvidence {
@@ -1548,8 +1933,14 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 		AgentSlug:                    labelOrDefault(rc.AgentSlug, "unlabeled-agent"),
 		Provider:                     meta.Provider,
 		Model:                        meta.Model,
-		RouteFrom:                    meta.Model,
+		RouteFrom:                    labelOrDefault(evidence.modelRequested, meta.Model),
 		RouteTo:                      meta.Model,
+		RouteOutcome:                 evidence.route.Outcome,
+		RouteReason:                  evidence.route.Reason,
+		RouteDecisionID:              evidence.route.DecisionID,
+		RoutePoolID:                  evidence.poolID,
+		UpstreamResponseID:           evidence.upstreamID,
+		ProviderOriginKnown:          evidence.statsPricingUnsupportedReason != "custom_provider_origin",
 		Endpoint:                     meta.Endpoint,
 		Stream:                       meta.Stream,
 		StatusCode:                   status,
@@ -1590,15 +1981,18 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 	if evidence.statsPricingUnsupportedReason != "" {
 		statsMeta.PricingUnsupportedReason = evidence.statsPricingUnsupportedReason
 	}
-	requestAccounting(&row, statsMeta, usage, evidence.originalBody, evidence.acceptedBody, retrieved)
 	// The legacy inferred-dollar field now uses the whole-request net delta too.
 	// Marker/tool overhead and regressions must not disappear behind segment wins.
 	// Not when the tool-schema strip also ran: that delta spans both transforms,
 	// and the strip books a handle and nothing else — no tokens, no dollars.
-	if authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers) && row.RequestEstimatedInputDeltaUSD != nil {
-		row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
-	}
-	s.sink.Record(row)
+	bookDelta := authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers)
+	original, accepted := evidence.originalBody, evidence.acceptedBody
+	s.finishRecord(row, true, func(row *RequestRecord) {
+		requestAccounting(row, statsMeta, usage, original, accepted, retrieved)
+		if bookDelta && row.RequestEstimatedInputDeltaUSD != nil {
+			row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
+		}
+	})
 }
 
 // costBreakdown prices normalized provider usage. Cache and reasoning fields are

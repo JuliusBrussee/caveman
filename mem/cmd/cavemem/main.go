@@ -7,6 +7,7 @@
 //	cavemem history <id>      print oldest-to-newest memory versions
 //	cavemem forget <id>       delete a memory; print {forgotten:bool} JSON
 //	cavemem recover <handle>  write the byte-exact original for a recall hit to stdout
+//	cavemem version [--json]  print the version; --json adds capabilities
 //
 // The MCP server exposes cavemem_remember / cavemem_recall / cavemem_supersede /
 // cavemem_history / cavemem_forget. The CLI subcommands are the surface the thin
@@ -27,10 +28,28 @@ import (
 	"github.com/JuliusBrussee/caveman/mem"
 )
 
-const usage = "cavemem [mcp] | remember <text>|--stdin | recall <query> [limit] [token_budget] | supersede <id> <text> | history <id> | forget <id> | recover <handle>"
+const usage = "cavemem [mcp] | remember <text>|--stdin | recall <query> [limit] [token_budget] | supersede <id> <text> | history <id> | forget <id> | recover <handle> | version [--json]"
 
 // EX_DATAERR: wrappers can branch on size refusal without parsing stderr.
 const memoryTooLargeExitCode = 65
+
+// version is the build version (go build -ldflags "-X main.version=...").
+var version = "dev"
+
+// runVersion prints the version, or with --json {version, schema, capabilities}: the
+// shape every caveman binary answers so the CLI can probe what a build supports.
+// The capabilities are its subcommands.
+func runVersion(args []string, stdout io.Writer) {
+	if len(args) > 0 && args[0] == "--json" {
+		_ = json.NewEncoder(stdout).Encode(map[string]any{
+			"version":      version,
+			"schema":       "caveman.mem.version.v1",
+			"capabilities": []string{"mcp", "remember", "recall", "supersede", "history", "forget", "recover"},
+		})
+		return
+	}
+	fmt.Fprintln(stdout, version)
+}
 
 func main() {
 	args := os.Args[1:]
@@ -77,6 +96,9 @@ func handleArgs(store *mem.Store, args []string, stdin io.Reader, stdout, stderr
 		return cmdForget(store, args[1:], stdout, stderr)
 	case "recover":
 		return cmdRecover(store, args[1:], stdout, stderr)
+	case "version":
+		runVersion(args[1:], stdout)
+		return 0
 	case "help", "--help", "-h":
 		fmt.Fprintln(stderr, usage)
 		return 0

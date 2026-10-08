@@ -71,5 +71,5 @@ Plugin hooks and standalone hooks can both be registered. A standalone
 `compact`/`resume` it re-derives the default and writes `full`, undoing an
 `/ultracave` or `/megacave` roughly every other continuation while the plugin
 hook writes the new id back. The release notes tell standalone users to re-run
-the installer (`npx caveman`) or remove the standalone hooks. New code never
-writes legacy ids, so there is no in-code mitigation.
+the installer (`npx -y github:JuliusBrussee/caveman`) or remove the standalone
+hooks. New code never writes legacy ids, so there is no in-code mitigation.

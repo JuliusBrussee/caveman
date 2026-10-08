@@ -127,6 +127,10 @@ jobs:
       - name: Prebuild caveman-proxy for conformance tests
         run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
       - run: pnpm install --frozen-lockfile
+      # The build regenerates the CLI's compiled-in device-auth copy, so check
+      # the committed one against packages/device-auth before it does.
+      - name: CLI device-auth copy matches packages/device-auth
+        run: node packages/cli/scripts/gen-device-auth.mjs --check
       - run: pnpm -r build
       # The SDK and middleware suites run in middleware-typescript below, so a
       # failure elsewhere in the workspace cannot skip them.
@@ -134,6 +138,24 @@ jobs:
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+
+  # The CLI's fast suite on macOS, where most of its users are. test:fast builds
+  # the CLI from source and stubs every Go binary, so no Go toolchain, proxy
+  # prebuild or workspace build is needed here.
+  cli-macos:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --filter @caveman-ai/cli run test:fast
 
   # Its own job: `pnpm -r test` stops at the first failing package, so a red
   # suite elsewhere in the workspace must not keep these from running.

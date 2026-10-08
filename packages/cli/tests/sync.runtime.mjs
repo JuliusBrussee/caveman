@@ -208,6 +208,26 @@ test("sync uploads local spans, advances the watermark, and stays idempotent", a
   server.close();
 });
 
+// The proxy's own prompt-cache warms stay local: they are not agent spans.
+test("sync never uploads cache-warm rows", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  insert("warm-1", 0, 0);
+  db.prepare("UPDATE requests SET optimization_ids = 'cache-warm' WHERE request_id = 'warm-1'").run();
+  db.close();
+  const out = await runCli(["sync"], env);
+  assert.equal(out.code, 0, `sync failed: ${out.stderr}`);
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].rowCount, 1, "only the agent's own request is a span");
+  assert.doesNotMatch(imports[0].body, /warm-1/);
+  server.close();
+});
+
 // No local spend store at all: a clean no-op, exit 0, no POST, no crash.
 test("sync with no local spend store is a safe no-op", async () => {
   const { server, imports } = startImportStub();
@@ -411,7 +431,7 @@ test("sync does not advance the watermark when the server rejects the import", a
 
 // After a successful login, the CLI runs the same sync once automatically and
 // tells the user what happened (the funnel bridge).
-test("login auto-syncs local inferred savings once", { skip: "Cloud login disabled during beta" }, async () => {
+test("login auto-syncs local inferred savings once", async () => {
   const TOKEN = `${Buffer.from(JSON.stringify({ uid: "u1", oid: "org-test" })).toString("base64url")}.sig`;
   const imports = [];
   const localScans = [];
@@ -492,7 +512,7 @@ test("login auto-syncs local inferred savings once", { skip: "Cloud login disabl
   server.close();
 });
 
-test("login still uploads pending local scan when local spend DB is corrupt", { skip: "Cloud login disabled during beta" }, async () => {
+test("login still uploads pending local scan when local spend DB is corrupt", async () => {
   const TOKEN = `${Buffer.from(JSON.stringify({ uid: "u1", oid: "org-test" })).toString("base64url")}.sig`;
   const localScans = [];
   const server = createServer((req, res) => {
@@ -768,6 +788,41 @@ test("two sync processes racing the same watermark upload each local row once", 
   assert.equal(Object.values(state.watermarks)[0], 2, "the watermark still advances to the last confirmed rowid");
 
   server.close();
+});
+
+// Under load the race above failed as "database is locked": the sync holding
+// the claim read the store while the other was still committing its
+// fingerprint marker, on a handle with no busy timeout. Pinned here: the claim
+// is held until this sync's marker lands, then a write lock is taken before
+// the claim is let go, so the sync's read meets it.
+test("a sync whose read meets another process's commit waits for it", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+  const { db, insert } = makeSpendDb(caveDir);
+  try {
+    insert("req-1", 1000, 400);
+    db.exec("PRAGMA busy_timeout = 3000");
+    const lockPath = join(home, ".caveman-cloud", "sync.json.lock");
+    mkdirSync(dirname(lockPath), { recursive: true });
+    writeFileSync(lockPath, "held by the test");
+
+    const run = runCli(["sync"], env);
+    const marker = () => { try { return Boolean(db.prepare("SELECT value FROM cave_cli_meta").get()); } catch { return false; } };
+    for (let i = 0; i < 400 && !marker(); i++) await new Promise((resolve) => setTimeout(resolve, 10));
+    assert.ok(marker(), "the sync never wrote its fingerprint marker");
+    db.exec("BEGIN EXCLUSIVE");
+    unlinkSync(lockPath);
+    setTimeout(() => db.exec("COMMIT"), 300);
+    const out = await run;
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(imports.length, 1);
+  } finally {
+    try { db.close(); } catch { /* already closed */ }
+    server.close();
+  }
 });
 
 // A lock left behind by a killed holder must not wedge sync off forever: the

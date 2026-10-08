@@ -9,6 +9,10 @@
 # Local clone:
 #   pwsh install.ps1 [flags]
 #
+# After the installer it hands over to the CLI's first run (`caveman setup`:
+# modules, agents, one Continue) in an interactive console, and prints that
+# one command otherwise.
+#
 # Why a Node installer? install.sh + install.ps1 used to be parallel sources of
 # truth and constantly drifted (issue #249 was a `node -e "..."` quoting bug
 # that silently dropped the JSON merge step on every Windows install). One
@@ -29,6 +33,9 @@ function Install-Caveman {
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
   $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v3.2.0" }
+  # The CLI release the first run comes from when caveman is not installed;
+  # kept equal to packages/cli/package.json (tests/installer/shim-security).
+  $CliVersion = "2.1.0"
 
   # Require Node ≥18.
   $node = Get-Command node -ErrorAction SilentlyContinue
@@ -51,42 +58,55 @@ caveman: Node.js (>=18) required. Install:
   # $PSCommandPath is $null when piped to iex (#565) — the old unguarded
   # Split-Path on it was the "Cannot bind argument to parameter 'Path'
   # because it is null" crash.
+  $local = $null
   if ($PSCommandPath) {
     $here = Split-Path -Parent $PSCommandPath
     $local = Join-Path $here "installer/install.js"
-    if (Test-Path $local) {
-      & node $local @InstallerArgs
-      exit $LASTEXITCODE
+    if (-not (Test-Path $local)) { $local = $null }
+  }
+
+  if ($local) {
+    & node $local @InstallerArgs
+  } else {
+    # Curl-pipe path: delegate to npx.
+    $npx = Get-Command npx -ErrorAction SilentlyContinue
+    if (-not $npx) {
+      Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
+      exit 1
+    }
+
+    # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
+    # package, and a literal `--` was tripping installer/install.js's parseArgs as an
+    # unknown flag.
+    # npm 12 disables git package fetches by default (EALLOWGIT). Allow only the
+    # root package requested here; older npm versions do not understand this
+    # config flag.
+    # 2>$null mirrors install.sh's `2>/dev/null`: npm writes its "does not support
+    # Node.js" notice to stderr, and a contaminated value would floor the major to 0.
+    $npxVersion = [string](& npx --version 2>$null)
+    $npxMajor = 0
+    if ($npxVersion -match '^(\d+)') {
+      $npxMajor = [int]$Matches[1]
+    }
+
+    if ($npxMajor -ge 12) {
+      & npx --allow-git=root -y "github:$Repo#$PinnedRef" @InstallerArgs
+    } else {
+      & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
     }
   }
+  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-  # Curl-pipe path: delegate to npx.
-  $npx = Get-Command npx -ErrorAction SilentlyContinue
-  if (-not $npx) {
-    Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
-    exit 1
+  # End in the CLI's first run: modules, agents, one Continue.
+  $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
+  if ($skip.Count -gt 0) { exit 0 }
+  $setup = if (Get-Command caveman -ErrorAction SilentlyContinue) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup") }
+  if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+    & $setup[0] $setup[1..($setup.Length - 1)]
+    exit $LASTEXITCODE
   }
-
-  # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
-  # package, and a literal `--` was tripping installer/install.js's parseArgs as an
-  # unknown flag.
-  # npm 12 disables git package fetches by default (EALLOWGIT). Allow only the
-  # root package requested here; older npm versions do not understand this
-  # config flag.
-  # 2>$null mirrors install.sh's `2>/dev/null`: npm writes its "does not support
-  # Node.js" notice to stderr, and a contaminated value would floor the major to 0.
-  $npxVersion = [string](& npx --version 2>$null)
-  $npxMajor = 0
-  if ($npxVersion -match '^(\d+)') {
-    $npxMajor = [int]$Matches[1]
-  }
-
-  if ($npxMajor -ge 12) {
-    & npx --allow-git=root -y "github:$Repo#$PinnedRef" @InstallerArgs
-  } else {
-    & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
-  }
-  exit $LASTEXITCODE
+  Write-Host "Next: $($setup -join ' ')"
+  exit 0
 }
 
 # $args is the automatic variable: populated when run as a file

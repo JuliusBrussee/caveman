@@ -11,6 +11,10 @@
 # Local clone:
 #   bash install.sh [flags]
 #
+# After the installer it hands over to the CLI's first run (`caveman setup`:
+# modules, agents, one Continue) when a terminal is attached, and prints that
+# one command otherwise.
+#
 # Why a Node installer? install.sh + install.ps1 used to be parallel sources
 # of truth and constantly drifted (issue #249, etc.). One Node script works
 # everywhere without bash/PowerShell quoting bugs.
@@ -19,6 +23,9 @@ set -euo pipefail
 
 REPO="JuliusBrussee/caveman"
 PINNED_REF="${CAVEMAN_REF:-v3.2.0}"
+# The CLI release the first run comes from when caveman is not installed;
+# kept equal to packages/cli/package.json (tests/installer/shim-security).
+CLI_VERSION="2.1.0"
 
 # Require Node ≥18. nvm is a common path; print a hint if missing.
 if ! command -v node >/dev/null 2>&1; then
@@ -35,6 +42,25 @@ if [ "$NODE_MAJOR" -lt 18 ]; then
   exit 1
 fi
 
+# first_run ends the install in the CLI's first run. The terminal comes from
+# /dev/tty because under curl | bash stdin is the script itself.
+first_run() {
+  for arg in "$@"; do
+    case "$arg" in -h|--help|--list|-u|--uninstall|--dry-run) return 0 ;; esac
+  done
+  if command -v caveman >/dev/null 2>&1; then
+    set -- caveman setup
+  else
+    set -- npx -y "@caveman-ai/cli@$CLI_VERSION" setup
+  fi
+  if [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then
+    echo
+    "$@" </dev/tty
+  else
+    echo "Next: $*"
+  fi
+}
+
 # If we're inside the repo clone, run the local installer directly — saves
 # the npx round-trip and keeps offline installs working. BASH_SOURCE is unset
 # when bash is invoked from stdin (curl | bash). Do not feed an empty value to
@@ -46,7 +72,9 @@ if [ -n "$source_path" ]; then
   here="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd)" || here=""
 fi
 if [ -n "$here" ] && [ -f "$here/installer/install.js" ]; then
-  exec node "$here/installer/install.js" "$@"
+  node "$here/installer/install.js" "$@"
+  first_run "$@"
+  exit 0
 fi
 
 # Curl-pipe path: delegate to npx. We do NOT pass `--` here — npm 7+ npx
@@ -68,7 +96,8 @@ case "$NPX_MAJOR" in
 esac
 
 if [ "$NPX_MAJOR" -ge 12 ]; then
-  exec npx --allow-git=root -y "github:$REPO#$PINNED_REF" "$@"
+  npx --allow-git=root -y "github:$REPO#$PINNED_REF" "$@"
+else
+  npx -y "github:$REPO#$PINNED_REF" "$@"
 fi
-
-exec npx -y "github:$REPO#$PINNED_REF" "$@"
+first_run "$@"

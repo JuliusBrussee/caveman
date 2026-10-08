@@ -200,8 +200,9 @@ trust boundaries.
 
 ## Troubleshooting
 
-1. Run `caveman status` and confirm selected mode.
-2. Run `caveman setup` and confirm runtime binaries.
+1. Run `caveman doctor`. It checks modules, binaries, the runtime port and
+   agent wiring without the network, one problem per line with its fix.
+2. Run `caveman status` and confirm the modules you expect are on.
 3. Start in `--off` mode. If failure remains, problem is outside request
    transformation.
 4. Inspect provider credential variables without printing secret values.

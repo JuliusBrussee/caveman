@@ -19,11 +19,12 @@ function validEntitlement() {
   };
 }
 
+// The global config lives at $CAVEMAN_HOME/cloud.json (isolatedCliEnv sets
+// CAVEMAN_HOME to the temp home).
 function writeGlobal(home, value) {
-  const dir = join(home, ".caveman-cloud");
-  mkdirSync(dir, { recursive: true });
-  writeFileSync(join(dir, "config.json"), JSON.stringify(value, null, 2), { mode: 0o600 });
-  return join(dir, "config.json");
+  mkdirSync(home, { recursive: true });
+  writeFileSync(join(home, "cloud.json"), JSON.stringify(value, null, 2), { mode: 0o600 });
+  return join(home, "cloud.json");
 }
 
 function startEnvHarness(config, { yaml, overlay, extraEnv = {} } = {}) {

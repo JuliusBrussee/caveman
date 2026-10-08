@@ -148,17 +148,29 @@ func scanJSONValue(body []byte, start int) (int, bool) {
 	}
 }
 
+// scanJSONString returns the end of the string starting at start: the byte
+// after the first quote no backslash escapes. It jumps between quotes with
+// bytes.IndexByte rather than stepping through every byte, because string
+// content is nearly all of an agent request and this scan runs several times
+// per request.
 func scanJSONString(body []byte, start int) (int, bool) {
 	if start >= len(body) || body[start] != '"' {
 		return 0, false
 	}
-	for i := start + 1; i < len(body); i++ {
-		switch body[i] {
-		case '\\':
-			i++
-		case '"':
-			return i + 1, true
+	quote := -1 // the next quote at or after i, found once and reused
+	for i := start + 1; i < len(body); {
+		if quote < i {
+			next := bytes.IndexByte(body[i:], '"')
+			if next < 0 {
+				return 0, false
+			}
+			quote = i + next
 		}
+		escape := bytes.IndexByte(body[i:quote], '\\')
+		if escape < 0 {
+			return quote + 1, true
+		}
+		i += escape + 2 // the backslash and the byte it escapes
 	}
 	return 0, false
 }

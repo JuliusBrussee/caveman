@@ -1,5 +1,44 @@
 # Changelog
 
+## 2.1.0 — 2026-10-06
+
+- `route-ask-v1` (additive): optional, strict `request` (`endpoint`, `labels`
+  of eleven allowlisted headers, each value at most 256 bytes or 16 KiB for
+  `x-codex-turn-metadata` and never cut, `tool_names`, `effort` and
+  `thinking` from fixed value sets, `per_message_off`), `last` (the session's previous request: `model`,
+  `effort` from the same set, `age_s`, `input_tokens`, `cache_read_tokens`,
+  `cache_write_tokens`, `compacted`), and opaque `state` / `parent_state`
+  (at most 4096 bytes). The runtime now asks for every routable request:
+  `ask` goes only on a turn's first ask and is left out for compaction and
+  side requests, which are answered per request. The description names the
+  answer's new fields: `effort`, `effort_mode` (`message` | `top` | `""`),
+  `default_effort` (optional, the asked model's catalog default effort) and
+  `state`; `model` may cost more than the asked one.
+- `route-ask-v1` (additive): optional, strict `ask`
+  object next to `signals` — `text` (required, non-blank, at most 131072 bytes),
+  `prev_text` and `reply_tail` (at most 16384 bytes each) and `turn`
+  (0..1000000). Every field keeps its end. The description now says the ask
+  carries raw conversation text.
+- `route-ask-v1` (additive, hub route-ask-v2): optional, strict `pool` next to
+  `models`, at most 64 entries of `{ id, model, host, via: "local" }`: the
+  harness's own models (`harness/<model>`) then every provider login the
+  person added (`caveman providers add|login`) times the catalog models its
+  host serves. Left out when no login adds an entry. The answer may carry
+  `pool_id` and `via` (`local` | `cloud`; Cloud may add `via: "cloud"`
+  entries on its side, which the runtime sends to the Cloud gateway with
+  `x-caveman-route: <pool_id>`, pool_id `cloud:<provider>:<model>`, on the
+  project gateway key only). A Cloud whose 400 names `pool` is asked once
+  more without it.
+- `route-ask-v1` (additive): optional `request.cache_ttl` (`5m` | `30m` |
+  `1h` | `24h`), the TTL the request writes its provider cache entries at,
+  read from the body: the longest Anthropic `cache_control` ttl (none is
+  `5m`), else OpenAI `prompt_cache_options.ttl` or `prompt_cache_retention`
+  (`24h`; `in_memory` is `5m`). A Cloud that refuses it with a 400 (by name
+  or with its generic `cave_router_request_invalid`) is asked again without
+  it, and the same now holds for `pool`. `effort_mode` `message` also covers
+  GPT-6 on OpenAI Responses, applied as a `configuration_update` input item.
+- Schema `$id`s name `contracts-v2.1.0`.
+
 ## 2.0.0 — 2026-09-24
 
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of

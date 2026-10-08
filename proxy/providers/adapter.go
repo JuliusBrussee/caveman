@@ -30,7 +30,12 @@ type requestPayloadHashKey struct{}
 // the auth-mapping call. Signing adapters use it so credentials cover the bytes
 // that will actually be sent upstream, without rereading or retaining the body.
 func WithRequestPayloadHash(ctx context.Context, body []byte) context.Context {
-	sum := sha256.Sum256(body)
+	return WithRequestPayloadSHA256(ctx, sha256.Sum256(body))
+}
+
+// WithRequestPayloadSHA256 is WithRequestPayloadHash for a caller that already
+// holds the body's SHA-256.
+func WithRequestPayloadSHA256(ctx context.Context, sum [sha256.Size]byte) context.Context {
 	return context.WithValue(ctx, requestPayloadHashKey{}, hex.EncodeToString(sum[:]))
 }
 
@@ -687,43 +692,56 @@ func validGoogleQuotaProject(value string) bool {
 }
 
 func (b Base) InspectRequest(ctx context.Context, body BodyReader, headers http.Header) (RequestMetadata, error) {
-	data, _ := io.ReadAll(body)
+	var data []byte
+	if sized, ok := body.(*bytes.Reader); ok {
+		data = make([]byte, sized.Len()) // one copy, not ReadAll's growing ones
+		n, _ := io.ReadFull(sized, data)
+		data = data[:n]
+	} else {
+		data, _ = io.ReadAll(body)
+	}
 	meta := RequestMetadata{Provider: b.Provider, InputBytes: len(data), Endpoint: b.Provider}
-	var decoded map[string]any
-	if json.Unmarshal(data, &decoded) == nil {
-		if model, ok := decoded["model"].(string); ok {
-			meta.Model = model
-		}
-		if stream, ok := decoded["stream"].(bool); ok {
-			meta.Stream = stream
-		}
-		if tier, present, valid := serviceTierFromObject(decoded); present {
-			if valid {
-				meta.ServiceTier = tier
-			} else {
-				meta.PricingUnsupportedReason = "unsupported_service_tier_shape"
-			}
-		}
-		if geo, ok := decoded["inference_geo"].(string); ok {
-			meta.InferenceGeo = strings.TrimSpace(geo)
-		}
-		if reason := requestPricingUnsupportedReason(b.Provider, decoded); reason != "" {
-			meta.PricingUnsupportedReason = reason
-		}
-		if messages, ok := decoded["messages"].([]any); ok {
-			meta.MessageCount = len(messages)
-		}
-		if input, ok := decoded["input"].([]any); ok {
-			meta.MessageCount = len(input)
-		}
-		if tools, ok := decoded["tools"].([]any); ok {
-			meta.ToolsCount = len(tools)
-		}
+	if decoded, ok := inspectObject(data); ok {
+		b.inspectDecoded(&meta, decoded)
 	}
 	if meta.Model == "" {
 		meta.Model = modelFromPath(headers.Get("x-cave-route-path"))
 	}
 	return meta, nil
+}
+
+// inspectDecoded reads the request metadata out of the decoded request. It
+// gets the map inspectObject builds, which carries messages and input only as
+// their length: read nothing else of them here.
+func (b Base) inspectDecoded(meta *RequestMetadata, decoded map[string]any) {
+	if model, ok := decoded["model"].(string); ok {
+		meta.Model = model
+	}
+	if stream, ok := decoded["stream"].(bool); ok {
+		meta.Stream = stream
+	}
+	if tier, present, valid := serviceTierFromObject(decoded); present {
+		if valid {
+			meta.ServiceTier = tier
+		} else {
+			meta.PricingUnsupportedReason = "unsupported_service_tier_shape"
+		}
+	}
+	if geo, ok := decoded["inference_geo"].(string); ok {
+		meta.InferenceGeo = strings.TrimSpace(geo)
+	}
+	if reason := requestPricingUnsupportedReason(b.Provider, decoded); reason != "" {
+		meta.PricingUnsupportedReason = reason
+	}
+	if messages, ok := decoded["messages"].([]any); ok {
+		meta.MessageCount = len(messages)
+	}
+	if input, ok := decoded["input"].([]any); ok {
+		meta.MessageCount = len(input)
+	}
+	if tools, ok := decoded["tools"].([]any); ok {
+		meta.ToolsCount = len(tools)
+	}
 }
 
 func (b Base) ApplyProviderNativeTransforms(ctx context.Context, body BodyReader, meta RequestMetadata, transformPolicy TransformPolicy) (TransformResult, error) {
@@ -891,6 +909,14 @@ func normalizedContentEncoding(value string) string {
 	return value
 }
 
+// DecodeBody decodes a bounded side-copy of a provider body by its
+// Content-Encoding (identity, gzip, deflate, zstd), both sides capped at
+// limit; ok is false when it cannot. The bytes the client gets are not touched.
+func DecodeBody(raw []byte, contentEncoding string, limit int) ([]byte, bool) {
+	decoded, reason := decodeAccountingBody(raw, contentEncoding, limit)
+	return decoded, reason == ""
+}
+
 // decodeAccountingBody decodes only the scanner's bounded side-copy. The raw
 // provider bytes continue to the client unchanged. Both compressed and decoded
 // representations are capped, preventing response compression from becoming an
@@ -952,6 +978,12 @@ func decodeAccountingBody(raw []byte, contentEncoding string, limit int) ([]byte
 // stream (where usage is emitted across one or more events). Values are merged
 // with a max rule so cumulative stream counters resolve to their final totals.
 func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
+	parseUsageBytes(provider, data, usage, mayCarryUsage)
+}
+
+// parseUsageBytes is ParseUsageBytes deciding per stream line, with decodeLine,
+// whether the line is worth decoding.
+func parseUsageBytes(provider string, data []byte, usage *UsageObservation, decodeLine func(line, eventType string) bool) {
 	if root, err := decodeUsageValue(data); err == nil {
 		mergeUsageValue(provider, root, usage)
 		if _, streamedArray := root.([]any); streamedArray && (provider == "gemini" || provider == "vertex") && !hasGeminiFinishReason(root) && !hasGeminiPromptBlock(root) {
@@ -991,7 +1023,7 @@ func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
 			continue
 		}
 		line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
-		if line == "" || line == "[DONE]" {
+		if line == "" || line == "[DONE]" || !decodeLine(line, eventType) {
 			continue
 		}
 		var obj map[string]any
@@ -1037,6 +1069,38 @@ func ParseUsageBytes(provider string, data []byte, usage *UsageObservation) {
 		usage.ReasoningTokens = 0
 		MarkRawUsageIncomplete(usage)
 	}
+}
+
+// usageLineKeys are the quoted names a stream line must spell to change what
+// ParseUsageBytes observes: the keys mergeUsage, the Anthropic stream flags and
+// the Gemini terminal checks read, and the type values they switch on.
+var usageLineKeys = []string{
+	`"usage`, `"message`, `"response"`, `"error`, `"stop_reason`,
+	`"service_tier`, `"serviceTier`, `"trafficType`, `"traffic_type`, `"inference_geo`,
+	`"web_search_requests`, `"search_queries`, `"grounding_queries`,
+	`"promptFeedback`, `"finishReason`,
+}
+
+// mayCarryUsage reports whether decoding a stream data line can change the
+// usage observation. A line that spells none of usageLineKeys (a text or tool
+// delta, most of a stream) decodes to nothing ParseUsageBytes reads, so it is
+// skipped undecoded. A \u escape could spell any name, so such a line is
+// decoded, as is a line under an event name the parser copies in as its type
+// (an error event needs no decode: its event line already marks the error).
+func mayCarryUsage(line, eventType string) bool {
+	switch eventType {
+	case "message_start", "message_delta", "message_stop":
+		return true
+	}
+	if strings.Contains(line, `\u`) {
+		return true
+	}
+	for _, key := range usageLineKeys {
+		if strings.Contains(line, key) {
+			return true
+		}
+	}
+	return false
 }
 
 func hasGeminiFinishReason(value any) bool {
@@ -1828,7 +1892,9 @@ func mergePricingQualifiers(obj map[string]any, usage *UsageObservation) {
 			usage.ServiceTier = "traffic_type_" + strings.ToLower(strings.TrimSpace(traffic))
 		}
 	}
-	if geo, ok := obj["inference_geo"].(string); ok {
+	// Anthropic answers "not_available" when it does not say where inference
+	// ran: that is no geography, and the request's own (or global) pricing holds.
+	if geo, ok := obj["inference_geo"].(string); ok && !strings.EqualFold(strings.TrimSpace(geo), "not_available") {
 		usage.InferenceGeo = strings.TrimSpace(geo)
 	}
 	// Server-side tools and grounding are billed outside the token rates in the
@@ -1873,7 +1939,16 @@ func mergeProviderOutcomeQualifiers(provider string, obj map[string]any, usage *
 	}
 	if rawUsage, ok := obj["usage"].(map[string]any); ok {
 		if iterations, present := rawUsage["iterations"]; present {
-			if values, ok := iterations.([]any); !ok || len(values) > 0 {
+			// Anthropic lists the request's own sampling as "message" iterations
+			// on every response. Only another kind (compaction, an advisor's
+			// model) is billed apart from the top-level counts.
+			values, ok := iterations.([]any)
+			for _, value := range values {
+				if entry, _ := value.(map[string]any); entry["type"] != "message" {
+					ok = false
+				}
+			}
+			if !ok {
 				usage.PricingUnsupportedReason = "unsupported_model_fallback_pricing"
 			}
 		}
