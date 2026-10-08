@@ -257,3 +257,31 @@ func TestRejectFitsTheEffortToTheAskedModel(t *testing.T) {
 		cloud.Close()
 	}
 }
+
+// OpenAI Auto offers Cloud its three models alone, in models and in the pool.
+func TestOpenAIAutoOffersOnlyItsThreeModels(t *testing.T) {
+	fake := &poolCloud{answer: func(map[string]any) (int, string) { return 200, `{"model":"gpt-6-luna"}` }}
+	cloud := httptest.NewServer(http.HandlerFunc(fake.handler))
+	defer cloud.Close()
+	home := signedIn(t, cloud.URL)
+	addLogin(t, home, "chatgpt", `{"access_token":"a","refresh_token":"r","expires_at":"2999-01-01T00:00:00Z"}`)
+	raw, _ := json.Marshal(map[string]any{"version": 1, "logins": []any{map[string]any{"id": "chatgpt", "kind": "oauth", "store": "file"}}})
+	if err := os.WriteFile(filepath.Join(home, "provider-logins.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	body := `{"model":"gpt-6.1-sol","input":[{"role":"user","content":[{"type":"input_text","text":"` + promptText + `"}]}]}`
+	newLink(home).Ask(t.Context(), gateway.RouteAsk{Provider: "openai", Endpoint: "/v1/responses", Model: "gpt-6.1-sol", Agent: "codex",
+		SessionID: "s1", InputBytes: len(body), Body: []byte(body), Models: gateway.AutoOpenAIModels})()
+	models, _ := json.Marshal(fake.bodies[0]["models"])
+	if string(models) != `["gpt-6.1-sol","gpt-6-astra","gpt-6-luna"]` {
+		t.Fatalf("models = %s", models)
+	}
+	var ids []string
+	pool, _ := fake.bodies[0]["pool"].([]any)
+	for _, item := range pool {
+		ids = append(ids, item.(map[string]any)["id"].(string))
+	}
+	if got := strings.Join(ids, " "); strings.Contains(got, "gpt-6-sol") || !strings.Contains(got, "chatgpt/gpt-6-astra") || !strings.Contains(got, "harness/gpt-6-luna") {
+		t.Fatalf("pool = %s", got)
+	}
+}

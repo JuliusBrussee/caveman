@@ -200,7 +200,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	if meta.Model == AutoModel {
 		// No provider here serves Auto: the literal id never goes upstream.
-		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto runs only on Anthropic and OpenAI (API key or subscription); pick a model for this provider.")
+		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto runs only on Claude and OpenAI models through Caveman, and this request goes to another provider (Bedrock, Vertex or a custom endpoint): pick another model with /model.")
 		return
 	}
 
@@ -278,6 +278,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
 				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
 				Labels: run.labels, PerRequest: run.perRequest, Last: last, PerMessageOff: perMessageOff,
+				Models: autoModelsFor(meta.Provider),
 			})
 		}
 	}
@@ -431,6 +432,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// login or the Cloud gateway. Anything else keeps the asked model.
 	if awaitRoute != nil {
 		answer := awaitRoute()
+		if meta.Provider == "openai" {
+			answer = autoOpenAIAnswer(answer, meta.Endpoint, modelRequested, transform.Body, false)
+		}
 		if target := answer.Target; target != nil {
 			// The bytes compression produced go, unless they lean on the
 			// retrieve tool loop, which only runs on the harness's own path.

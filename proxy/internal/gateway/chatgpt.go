@@ -70,23 +70,20 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		s.chatGPTAutoModels(w, r, upstreamURL)
 		return
 	}
-	if r.Method == http.MethodPost && suffix == "/responses" {
-		// Auto runs through chatgpt_auto.go; anything else continues here
-		// with the bytes already read put back in front.
-		captured, readErr := io.ReadAll(io.LimitReader(r.Body, chatGPTCaptureLimit+1))
-		if readErr == nil && len(captured) <= chatGPTCaptureLimit {
-			if body, ok := chatGPTAutoBody(captured, r.Header.Get("Content-Encoding")); ok {
-				s.chatGPTAuto(w, r, rc, requestID, traceID, upstreamURL, start, evidence, body)
-				return
-			}
-		} else if bytes.Contains(captured[:min(len(captured), 4096)], []byte(`"model":"`+AutoModel+`"`)) {
-			httpx.Error(w, r, http.StatusRequestEntityTooLarge, "cave_auto_unavailable", "Auto takes requests up to 4 MiB on this route; pick a model for this one.")
-			return
-		}
+	if r.Method == http.MethodPost {
+		// A POST whose head names Auto goes to chatgpt_auto.go, whatever its
+		// path (Codex compaction too); any other streams on as before, with
+		// the head put back in front.
+		original := r.Body
+		head, _ := io.ReadAll(io.LimitReader(original, autoSniffBytes))
 		r.Body = struct {
 			io.Reader
 			io.Closer
-		}{io.MultiReader(bytes.NewReader(captured), r.Body), r.Body}
+		}{io.MultiReader(bytes.NewReader(head), original), original}
+		if namesAutoHead(head, r.Header.Get("Content-Encoding")) {
+			s.chatGPTAutoDoor(w, r, rc, requestID, traceID, upstreamURL, suffix, start, evidence)
+			return
+		}
 	}
 
 	// Compression needs a complete request. Keep the existing bounded behavior:

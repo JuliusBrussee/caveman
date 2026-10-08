@@ -1006,7 +1006,7 @@ func TestRoutedOpenAIAnswerShowsTheAskedModel(t *testing.T) {
 			Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
 			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
 		})
-		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(auto(t, `{"model":"gpt-6-sol","input":"go","messages":[]}`)))
+		req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"caveman-auto","input":"go","messages":[]}`))
 		req.Header.Set("authorization", "Bearer sk-proj-api-key")
 		rec := httptest.NewRecorder()
 		srv.Handler().ServeHTTP(rec, req)
@@ -1886,5 +1886,35 @@ func TestCleaningKeepsPerMessageMarks(t *testing.T) {
 		if cut < 0 || !bytes.HasPrefix(pair[1], pair[0][:cut]) {
 			t.Fatalf("the prefix changed between requests %d and %d:\n%s\n%s", i+1, i+2, pair[0], pair[1])
 		}
+	}
+}
+
+// OpenAI Auto runs gpt-6.1-sol, gpt-6-astra or gpt-6-luna only: the ask offers
+// those, and an answer naming another model runs gpt-6.1-sol at its effort.
+func TestOpenAIAutoRunsOnlyItsThreeModels(t *testing.T) {
+	var sent []byte
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sent, _ = io.ReadAll(r.Body)
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"r","object":"response","model":"gpt-6.1-sol","output":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-sol", Effort: "high", Outcome: "routed"}}
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	})
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"caveman-auto","input":"go"}`))
+	req.Header.Set("authorization", "Bearer sk-proj-api-key")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if string(sent) != `{"model":"gpt-6.1-sol","input":"go","reasoning":{"effort":"high"}}` || !strings.Contains(rec.Body.String(), AutoModel) {
+		t.Fatalf("upstream got %s; agent read %s", sent, rec.Body.String())
+	}
+	if ask := cloud.asks[0]; ask.Model != "gpt-6.1-sol" || strings.Join(ask.Models, ",") != "gpt-6.1-sol,gpt-6-astra,gpt-6-luna" {
+		t.Errorf("ask model %q, models %v", ask.Model, ask.Models)
+	}
+	if row := cloud.observed[0]; row.RouteOutcome != "degraded" || row.RouteReason != "auto_model_refused" {
+		t.Errorf("row %q %q", row.RouteOutcome, row.RouteReason)
 	}
 }
