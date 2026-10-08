@@ -217,10 +217,11 @@ function searchQueryKey(toolKind, ti, cwd) {
   return `${toolKind}:${pattern}:${root}:${glob}`;
 }
 
-function newestMtimeUnder(rootPath, options = {}) {
+function searchTreeSnapshot(rootPath, options = {}) {
   const maxFiles = options.maxFiles || TREE_MTIME_MAX_FILES;
   if (!rootPath || !fs.existsSync(rootPath)) return null;
   let newest;
+  let sizeSum = 0;
   let count = 0;
   const visit = (p) => {
     if (count >= maxFiles) return;
@@ -231,22 +232,30 @@ function newestMtimeUnder(rootPath, options = {}) {
       return;
     }
     count++;
-    if (newest === undefined || st.mtimeMs > newest) newest = st.mtimeMs;
-    if (!st.isDirectory()) return;
-    let entries;
-    try {
-      entries = fs.readdirSync(p, { withFileTypes: true });
-    } catch {
+    if (st.isDirectory()) {
+      let entries;
+      try {
+        entries = fs.readdirSync(p, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const ent of entries) {
+        if (count >= maxFiles) return;
+        if (ent.name === 'node_modules' || ent.name === '.git') continue;
+        visit(path.join(p, ent.name));
+      }
       return;
     }
-    for (const ent of entries) {
-      if (count >= maxFiles) return;
-      if (ent.name === 'node_modules' || ent.name === '.git') continue;
-      visit(path.join(p, ent.name));
-    }
+    sizeSum += st.size;
+    if (newest === undefined || st.mtimeMs > newest) newest = st.mtimeMs;
   };
   visit(rootPath);
-  return newest ?? null;
+  return newest === undefined ? null : { mtimeMs: newest, sizeSum };
+}
+
+function newestMtimeUnder(rootPath, options = {}) {
+  const snapshot = searchTreeSnapshot(rootPath, options);
+  return snapshot ? snapshot.mtimeMs : null;
 }
 
 function decideSearch(input, toolKind, options = {}) {
@@ -258,17 +267,17 @@ function decideSearch(input, toolKind, options = {}) {
   const key = searchQueryKey(toolKind, ti, cwd);
   const root = searchRoot(ti, cwd);
 
-  let treeMtime;
+  let snapshot;
   try {
-    treeMtime = newestMtimeUnder(fs.existsSync(root) ? root : cwd, options);
+    snapshot = searchTreeSnapshot(fs.existsSync(root) ? root : cwd, options);
   } catch {
     return { permission: 'allow', state };
   }
-  if (treeMtime === null) return { permission: 'allow', state };
+  if (snapshot === null) return { permission: 'allow', state };
 
   const c = convState(state, convId);
   const seen = c.searches[key];
-  if (seen && seen.treeMtime === treeMtime) {
+  if (seen && seen.treeMtime === snapshot.mtimeMs && seen.treeSize === snapshot.sizeSum) {
     return {
       permission: 'deny',
       agent_message: `Already ran this ${toolKind} on an unchanged tree in this chat. Use the earlier tool result or change the pattern/path.`,
@@ -276,7 +285,7 @@ function decideSearch(input, toolKind, options = {}) {
     };
   }
 
-  c.searches[key] = { treeMtime };
+  c.searches[key] = { treeMtime: snapshot.mtimeMs, treeSize: snapshot.sizeSum };
   return { permission: 'allow', state };
 }
 
@@ -411,5 +420,6 @@ module.exports = {
   shellKey,
   gitWorktreeFingerprint,
   newestMtimeUnder,
+  searchTreeSnapshot,
   searchQueryKey,
 };
