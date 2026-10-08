@@ -38,11 +38,18 @@ caveman run -- my-agent --project .
 Arguments after an agent name are passed to that agent. Arguments after `--`
 in `caveman run` are passed to the selected command.
 
-`caveman claude` sets up the same native wiring as `caveman enable claude`
-(`~/.claude/settings.json`, or `$CLAUDE_CONFIG_DIR`) without asking, so the
-Claude Code IDE extension and desktop app get the same routing and Auto model
-as the terminal; `caveman disable claude` removes it. A leading Caveman flag
-(`caveman claude --off …`) keeps a run session-only.
+The first `caveman claude` runs setup (what it does, which modules, sign-in)
+before anything is written. Once setup has chosen Claude Code, later runs keep
+the same native wiring as `caveman enable claude` (`~/.claude/settings.json`,
+or `$CLAUDE_CONFIG_DIR`) in place without asking, so the Claude Code IDE
+extension and desktop app get the same routing and Auto model as the terminal.
+`caveman disable claude` removes it and sticks until `caveman enable claude`.
+A leading Caveman flag (`caveman claude --off …`) keeps a run session-only.
+
+Auto is offered only while you are signed in with routing on, and only for a
+provider the local runtime sends to its own API. Claude Code set to Bedrock,
+Vertex or Foundry (`CLAUDE_CODE_USE_*`) gets no Auto; if you turn one of those
+on after Auto was added, pick another model with `/model`.
 
 ## Modules
 

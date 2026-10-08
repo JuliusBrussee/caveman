@@ -99,19 +99,24 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   CLI is signed in with that switch on, for Anthropic Messages / OpenAI chat or responses requests on
   an API key or a subscription alike; any other model goes as sent (`route.outcome: off`), the
   session's marks and heal still applied. Auto goes upstream as the provider's `autoFallback` model
-  (Anthropic `claude-sonnet-5-5`, OpenAI `gpt-6-sol`; count_tokens too, and with no Cloud link),
+  (Anthropic `claude-sonnet-5-5`, OpenAI `gpt-6.1-sol`; count_tokens too, and with no Cloud link),
   which is also the asked model the ask carries and what every failure runs; Auto on any other
   provider is a 400 (`cave_auto_unavailable`), and an encoded body naming Auto is decoded first. A
-  named model records `route.outcome: off`, reason `named_model`; an Auto row's `RouteFrom` and
+  named model records `route.outcome: off`, reason `named_model`. OpenAI Auto (API key and ChatGPT
+  login) runs only `AutoOpenAIModels` (`gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`): the ask's
+  `Models` lists those alone and the pool drops other OpenAI models, and an answer naming any other
+  runs `gpt-6.1-sol` at its effort (`auto_model_refused`, `translate.FitEffort`); an Auto row's `RouteFrom` and
   `x-caveman-routed-from` say `caveman-auto`. A move on a subscription stays on the provider's own
   API on that subscription's credential; pool entries go out on their own login or the Cloud
   gateway key, never on it, and never with the agent's `oauth-*` betas. On a ChatGPT login
   (`/chatgpt`, `chatgpt_auto.go`; OpenCode's ChatGPT login lands there too) `/models` gains an Auto
-  entry (a copy of `gpt-6-sol`'s, listed last, fetched without `If-None-Match`, served without
-  `ETag`) while the link reports `AutoOffered` (signed in, routing on), and `/responses` naming Auto
-  (zstd decoded) asks with `NoPool`, moves only between the backend's own models on the same
-  login, keeps live-zone compression, replays `gpt-6-sol`'s bytes on a 4xx and shows
-  `caveman-auto`. The
+  entry (a copy of `gpt-6.1-sol`'s, listed last, fetched without `If-None-Match`, served without
+  `ETag`) while the link reports `AutoOffered` (signed in, routing on). Every POST there has its
+  first 64 KiB read (decoded when gzip, deflate or zstd; a br body is never looked into) for a
+  top-level `"model":"caveman-auto"`; any other streams on unchanged. `/responses` naming Auto asks
+  with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx; any other
+  path (Codex compaction) runs `gpt-6.1-sol` unasked; a body over `CAVE_MAX_REQUEST_BYTES` streams
+  with only its model changed. The agent reads `caveman-auto`. The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
   caller's models, counts, what the request declares (the raw values of eleven allowlisted agent
   headers, never cut: a value over 256 bytes, 16 KiB for Codex's turn metadata, which also comes
