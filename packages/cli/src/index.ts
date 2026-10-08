@@ -11586,7 +11586,9 @@ async function syncLocalSavings(cfg: Config): Promise<SyncOutcome> {
                   ${optional("auth_mode", "'unknown'")}, runtime_mode, optimization_ids,
                   compression_tokens_before, compression_tokens_after,
                   ${optional("compression_token_count_basis", "'unavailable'")}
-             FROM requests WHERE id > ? ORDER BY id`,
+             FROM requests
+            -- The proxy's own prompt-cache warms are local accounting, not agent spans.
+            WHERE id > ? AND COALESCE(optimization_ids, '') <> 'cache-warm' ORDER BY id`,
         )
         .all(since) as Record<string, unknown>[];
     } finally {

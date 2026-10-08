@@ -208,6 +208,26 @@ test("sync uploads local spans, advances the watermark, and stays idempotent", a
   server.close();
 });
 
+// The proxy's own prompt-cache warms stay local: they are not agent spans.
+test("sync never uploads cache-warm rows", async () => {
+  const { server, imports } = startImportStub();
+  const port = await listen(server);
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
+  const env = { ...process.env, HOME: home, CAVEMAN_HOME: caveDir, CAVE_TOKEN: "ci-token", CAVE_API_URL: `http://127.0.0.1:${port}` };
+  const { db, insert } = makeSpendDb(caveDir);
+  insert("req-1", 1000, 400);
+  insert("warm-1", 0, 0);
+  db.prepare("UPDATE requests SET optimization_ids = 'cache-warm' WHERE request_id = 'warm-1'").run();
+  db.close();
+  const out = await runCli(["sync"], env);
+  assert.equal(out.code, 0, `sync failed: ${out.stderr}`);
+  assert.equal(imports.length, 1);
+  assert.equal(imports[0].rowCount, 1, "only the agent's own request is a span");
+  assert.doesNotMatch(imports[0].body, /warm-1/);
+  server.close();
+});
+
 // No local spend store at all: a clean no-op, exit 0, no POST, no crash.
 test("sync with no local spend store is a safe no-op", async () => {
   const { server, imports } = startImportStub();

@@ -59,6 +59,8 @@ export function parseStatsOptions(argv: string[]): StatsCLIOptions {
 
 type StatsMetrics = {
   requests: number;
+  // The proxy's own prompt-cache warms: in no other count, their tokens and spend in the totals.
+  cache_warm_requests?: number;
   successful_requests: number;
   failed_requests: number;
   input_tokens: number;
@@ -132,6 +134,7 @@ export function renderStatsSummary(report: StatsCLIReport): string {
     );
     if (m.expanded_requests > 0) lines.push(`Overhead regressions        ${count(m.expanded_requests)} requests (included in net delta)`);
     if (m.legacy_requests > 0) lines.push(`Legacy segment reductions  ${count(m.legacy_saved_tokens)} tokens / ${count(m.legacy_requests)} requests (separate)`);
+    if ((m.cache_warm_requests ?? 0) > 0) lines.push(`Cache warms                ${count(m.cache_warm_requests ?? 0)} sent by Caveman (tokens and spend included above)`);
     if (m.unknown_auth_requests > 0) lines.push(`Unknown billing            ${count(m.unknown_auth_requests)} requests (excluded from money totals)`);
     if (report.providers?.length) {
       lines.push("", "By provider");

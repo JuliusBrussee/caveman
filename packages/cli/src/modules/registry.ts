@@ -73,7 +73,9 @@ export const MODULES: readonly ModuleDef[] = [
     defaultOn: true,
     needsSignIn: false,
     wiresAgents: true,
-    // The learn autopilot the native SessionEnd hook starts.
+    // The learn autopilot the native SessionEnd hook starts. caveman-proxy's
+    // prompt-cache warming reads `modules["waste-fixes"]` itself (off only
+    // when false), so no capability key carries it.
     capabilities: [{ key: "learnAutopilot", on: true, off: false }],
     binaries: ["caveman-proxy", "caveman-mcp"],
   },

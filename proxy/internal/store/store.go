@@ -577,6 +577,11 @@ type Stats struct {
 	// requests that reached the compression path as candidates (issue #133).
 	CacheBustRequests              int64 `json:"cache_bust_requests"`
 	RequestsEligibleForCompression int64 `json:"requests_eligible_for_compression"`
+	// CacheWarmRequests counts the proxy's own prompt-cache warms (rows tagged
+	// cache-warm) inside Requests, and CacheWarmCostUSD their list-price spend
+	// inside TotalCost. A warm is never a user request and never a saving.
+	CacheWarmRequests int64   `json:"cache_warm_requests"`
+	CacheWarmCostUSD  float64 `json:"cache_warm_cost_usd"`
 	// WouldSaveTokens is the observe-only would-have-saved token total across all
 	// rows; WouldSaveUSD is its inferred dollar total (nil when no row was
 	// list-price eligible — never a guessed price). Neither is ever a booked saving.
@@ -745,8 +750,8 @@ func (s *Store) SessionUsage(sessionID string) (sessionusage.Snapshot, error) {
 	}
 	var compressionBases, correlationBases string
 	err := s.db.QueryRow(
-		`SELECT COUNT(*),
-		        COALESCE(SUM(CASE WHEN token_usage_basis = 'provider_complete' THEN 1 ELSE 0 END),0),
+		`SELECT COALESCE(SUM(CASE WHEN `+cacheWarmRow+` THEN 0 ELSE 1 END),0),
+		        COALESCE(SUM(CASE WHEN token_usage_basis = 'provider_complete' AND NOT `+cacheWarmRow+` THEN 1 ELSE 0 END),0),
 		        COALESCE(SUM(input_tokens),0), COALESCE(SUM(output_tokens),0),
 		        COALESCE(SUM(cached_input_tokens),0), COALESCE(SUM(cache_creation_input_tokens),0),
 		        COALESCE(SUM(reasoning_tokens),0), COALESCE(SUM(total_cost_usd),0),
@@ -789,6 +794,10 @@ func (s *Store) SessionUsage(sessionID string) (sessionusage.Snapshot, error) {
 	return out, nil
 }
 
+// cacheWarmRow matches the proxy's own prompt-cache warms: spend, but never an
+// agent request (no turn, no last request, no span).
+const cacheWarmRow = "COALESCE(optimization_ids,'') = 'cache-warm'"
+
 // Summary returns aggregate spend across all recorded requests. The savings
 // basis is "inferred" whenever any row carries a non-`verified` basis, which in
 // standalone is always — the value is never re-projected to a monthly figure.
@@ -800,13 +809,17 @@ func (s *Store) Summary() (Stats, error) {
 		COALESCE(SUM(compression_tokens_before),0), COALESCE(SUM(compression_tokens_after),0),
 		COALESCE(SUM(would_save_tokens),0), COUNT(would_save_usd), COALESCE(SUM(would_save_usd),0),
 		COALESCE(SUM(CASE WHEN cache_bust <> 0 THEN 1 ELSE 0 END),0),
-		COALESCE(SUM(CASE WHEN compression_eligible <> 0 THEN 1 ELSE 0 END),0)
+		COALESCE(SUM(CASE WHEN compression_eligible <> 0 THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ` + cacheWarmRow + ` THEN 1 ELSE 0 END),0),
+		COALESCE(SUM(CASE WHEN ` + cacheWarmRow + ` THEN total_cost_usd ELSE 0 END),0)
 		FROM requests`)
 	if err := row.Scan(&out.Requests, &out.TotalCost, &out.TotalSaved, &out.CompressionTokensBefore, &out.CompressionTokensAfter,
 		&out.WouldSaveTokens, &wouldSaveUSDCount, &wouldSaveUSDSum,
-		&out.CacheBustRequests, &out.RequestsEligibleForCompression); err != nil {
+		&out.CacheBustRequests, &out.RequestsEligibleForCompression,
+		&out.CacheWarmRequests, &out.CacheWarmCostUSD); err != nil {
 		return out, err
 	}
+	out.CacheWarmCostUSD = roundUSD(out.CacheWarmCostUSD)
 	out.CompressionTokensSaved = out.CompressionTokensBefore - out.CompressionTokensAfter
 	if out.CompressionTokensSaved < 0 {
 		out.CompressionTokensSaved = 0

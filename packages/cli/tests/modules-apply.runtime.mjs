@@ -188,6 +188,8 @@ test("off keeps agent wiring while another module needs it", async () => {
 
     assert.equal((await runCli(["off", "output", "waste-fixes", "--yes"], fx.env)).code, 0);
     assert.ok(journal(), "wiring must stay while routing is on");
+    // caveman-proxy's cache warming reads this module state itself.
+    assert.equal(JSON.parse(readFileSync(join(fx.home, ".caveman", "cloud.json"), "utf8")).modules["waste-fixes"], false);
 
     const before = snapshot(fx.home);
     const dry = await runCli(["off", "routing", "--dry-run"], fx.env);
