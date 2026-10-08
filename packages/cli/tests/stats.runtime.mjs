@@ -76,6 +76,11 @@ test("stats terminal preserves reported zero usage and measured zero comparisons
   assert.match(text, /Compared request tokens\s+0 original \/ 0 delivered/);
 });
 
+test("stats terminal shows the proxy's cache warms on one line", () => {
+  assert.doesNotMatch(renderStatsSummary(usageReport()), /Cache warms/);
+  assert.match(renderStatsSummary(usageReport({ cache_warm_requests: 3 })), /^Cache warms\s+3 sent by Caveman \(tokens and spend included above\)$/m);
+});
+
 test("stats validates filters and incompatible modes before touching the store", () => {
   assert.deepEqual(parseStatsOptions(["--days", "7", "--provider", "openai", "--json"]).filters,
     ["--days", "7", "--provider", "openai"]);
