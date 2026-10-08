@@ -3937,9 +3937,10 @@ const CLAUDE_AUTO_ENV: Readonly<Record<string, string>> = {
 // OpenCode's Auto entry, under each provider caveman routes. OpenCode's model
 // config has no description field; the context limit is one every model Auto
 // may run on clears, so compaction starts in time: 1M on Anthropic (Opus and
-// Sonnet 5.5), 272K on OpenAI, where a ChatGPT login serves no more.
+// Sonnet 5.5), 872K on OpenAI, the most a ChatGPT login serves (an API key
+// serves 1.05M).
 function opencodeAutoModel(provider: "openai" | "anthropic") {
-  return { name: AUTO_NAME, reasoning: true, tool_call: true, attachment: true, limit: { context: provider === "anthropic" ? 1000000 : 272000, output: 32000 } };
+  return { name: AUTO_NAME, reasoning: true, tool_call: true, attachment: true, limit: { context: provider === "anthropic" ? 1000000 : 872000, output: 32000 } };
 }
 
 function capabilityInputValue(key: CapabilityKey, value: unknown): CapabilityValue | undefined {

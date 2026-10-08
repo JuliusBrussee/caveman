@@ -111,6 +111,14 @@ func withAutoModel(catalog []byte, fallback string) ([]byte, bool) {
 	auto["slug"], auto["display_name"], auto["description"], auto["priority"] = AutoModel, autoName, autoDescription, priority+1
 	delete(auto, "upgrade")
 	delete(auto, "availability_nux")
+	// Auto starts at the largest window the backend lists for the model, not
+	// its default (272K of 872K on a ChatGPT login), so a long session is not
+	// compacted early. A list without the field keeps its default.
+	if largest, ok := auto["max_context_window"].(float64); ok {
+		if window, _ := auto["context_window"].(float64); largest > window {
+			auto["context_window"] = largest
+		}
+	}
 	entry, err := json.Marshal(auto)
 	if err != nil {
 		return nil, false

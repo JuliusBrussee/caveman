@@ -1518,7 +1518,7 @@ test("routing on puts Auto in Claude's and OpenCode's pickers; disable takes it 
   const providers = JSON.parse(readFileSync(opencodePath, "utf8")).provider;
   for (const id of ["openai", "anthropic"]) assert.equal(providers[id].models["caveman-auto"].name, "Auto", id);
   assert.equal(providers.anthropic.models["caveman-auto"].limit.context, 1000000, "Opus and Sonnet 5.5 run at 1M");
-  assert.equal(providers.openai.models["caveman-auto"].limit.context, 272000, "what a ChatGPT login serves");
+  assert.equal(providers.openai.models["caveman-auto"].limit.context, 872000, "the most a ChatGPT login serves");
   assert.equal(providers.anthropic.models.mine.name, "Mine");
   // Ownership is the journal, not byte-equality: an entry the user tuned still goes.
   const tuned = JSON.parse(readFileSync(opencodePath, "utf8"));

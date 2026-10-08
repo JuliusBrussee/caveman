@@ -72,7 +72,7 @@ func TestChatGPTCatalogListsAutoWhileOffered(t *testing.T) {
 		}
 		auto := catalog.Models[2]
 		if auto["slug"] != AutoModel || auto["display_name"] != "Auto" || auto["description"] != autoDescription ||
-			auto["priority"] != 4.0 || auto["context_window"] != 272000.0 || auto["default_reasoning_level"] != "medium" ||
+			auto["priority"] != 4.0 || auto["context_window"] != 872000.0 || auto["max_context_window"] != 872000.0 || auto["default_reasoning_level"] != "medium" ||
 			auto["upgrade"] != nil || auto["availability_nux"] != nil {
 			t.Errorf("Auto entry = %v", auto)
 		}
