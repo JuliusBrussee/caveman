@@ -203,7 +203,10 @@ func TestCacheWarmReplaysTheRoutedRequest(t *testing.T) {
 	}
 }
 
-func TestCacheWarmParentRequestStopsSubagentWarms(t *testing.T) {
+// A subagent can still be running when its parent talks: the parent's request
+// stops the parent's own warms, never its children's (on the measured
+// sessions stopping them lost more misses than the warms it spared).
+func TestCacheWarmParentRequestLeavesSubagentWarms(t *testing.T) {
 	rt := &warmTransport{}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
 	child := map[string]string{"x-claude-code-agent-id": "agent-7"}
@@ -213,12 +216,12 @@ func TestCacheWarmParentRequestStopsSubagentWarms(t *testing.T) {
 	f.serve(t, reqBody(""), child)
 	f.clock.advance(100 * time.Second)
 	f.serve(t, reqBody(""), warmHeaders) // the parent talks again
-	f.clock.advance(170 * time.Second)   // the child's warm was due now
-	if rt.count() != 2 {
-		t.Fatalf("a finished subagent was warmed after its parent moved on: %d", rt.count())
+	f.clock.advance(170 * time.Second)   // the child's warm is due
+	if rows := f.warmRows(); rt.count() != 3 || len(rows) != 1 {
+		t.Fatalf("the subagent's warm did not survive its parent's request: %d requests, %d warms", rt.count(), len(rows))
 	}
 	f.clock.advance(100 * time.Second) // the parent's own warm
-	if rt.count() != 3 {
+	if rt.count() != 4 {
 		t.Fatalf("the parent was not warmed: %d", rt.count())
 	}
 }
@@ -236,11 +239,11 @@ func TestCacheWarmModelSwitchStopsTheOldModel(t *testing.T) {
 	}
 }
 
-func TestCacheWarmSubscription429PausesTheLoginForTheDay(t *testing.T) {
+func TestCacheWarmSubscription429PausesTheLogin(t *testing.T) {
 	sub := map[string]string{"authorization": "Bearer sk-ant-oat01-login", "anthropic-version": "2023-06-01", "x-cave-session": "s1"}
 	rt := &warmTransport{warmStatus: http.StatusTooManyRequests, warmResp: `{"type":"error","error":{"type":"rate_limit_error","message":"no"}}`}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
-	f.clock.now = time.Date(2026, 10, 8, 9, 0, 0, 0, time.Local)
+	f.clock.now = time.Date(2026, 10, 8, 23, 30, 0, 0, time.Local)
 	f.serve(t, reqBody(""), sub)
 	f.clock.advance(270 * time.Second)
 	if rt.count() != 2 {
@@ -249,21 +252,41 @@ func TestCacheWarmSubscription429PausesTheLoginForTheDay(t *testing.T) {
 	if rows := f.warmRows(); len(rows) != 1 || rows[0].AuthMode != string(AuthModeSubscription) {
 		t.Fatalf("warm rows = %+v", rows)
 	}
-	// Another session on the same login, hours later the same day: no warm.
+	// The 429 named no reset: another session on the login is not warmed for
+	// an hour, midnight or not.
 	sub["x-cave-session"] = "s2"
 	rt.warmStatus = 0
-	f.clock.advance(5 * time.Hour)
+	f.clock.advance(20 * time.Minute)
 	f.serve(t, reqBody(""), sub)
-	f.clock.advance(time.Hour)
+	f.clock.advance(30 * time.Minute)
 	if rt.count() != 3 {
-		t.Fatalf("warmed a rate-limited login the same day: %d", rt.count())
+		t.Fatalf("warmed a rate-limited login within the hour: %d", rt.count())
 	}
-	// The next day it warms again.
-	f.clock.advance(12 * time.Hour)
+	f.clock.advance(15 * time.Minute)
 	f.serve(t, reqBody(""), sub)
 	f.clock.advance(270 * time.Second)
 	if rt.count() != 5 {
-		t.Fatalf("pause outlived the day: %d", rt.count())
+		t.Fatalf("pause outlived the hour: %d", rt.count())
+	}
+	// The response's own reset wins: epoch seconds or RFC 3339, the later of it
+	// and Retry-After; one in the past or absurdly far is not believed.
+	now := time.Unix(1_800_000_000, 0)
+	for name, tc := range map[string]struct {
+		h    http.Header
+		want time.Duration
+	}{
+		"unified reset":     {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"1800010800"}}, 3 * time.Hour},
+		"rfc 3339":          {http.Header{"Anthropic-Ratelimit-Unified-Reset": {now.Add(2 * time.Hour).UTC().Format(time.RFC3339)}}, 2 * time.Hour},
+		"retry-after":       {http.Header{"Retry-After": {"120"}}, 2 * time.Minute},
+		"the later of both": {http.Header{"Retry-After": {"120"}, "Anthropic-Ratelimit-Unified-Reset": {"1800010800"}}, 3 * time.Hour},
+		"reset in the past": {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"1700000000"}}, time.Hour},
+		"reset next year":   {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"1900000000"}}, time.Hour},
+		"nothing":           {http.Header{}, time.Hour},
+		"garbage":           {http.Header{"Anthropic-Ratelimit-Unified-Reset": {"soon"}, "Retry-After": {"-4"}}, time.Hour},
+	} {
+		if got := backoffUntil(now, tc.h, AuthModeSubscription).Sub(now); got != tc.want {
+			t.Errorf("%s: paused %v, want %v", name, got, tc.want)
+		}
 	}
 }
 
@@ -285,7 +308,7 @@ func TestCacheWarmRealRequest429BacksOff(t *testing.T) {
 	}
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { t.Fatal("sent during a backoff"); return false })
 	w.backoff("k", c.Now().Add(10*time.Minute))
-	w.arm("s", "", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, cred: "k", plan: []bool{false, true, true}}, c.Now())
+	w.arm("s", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, cred: "k", plan: []bool{false, true, true}}, c.Now())
 	c.advance(time.Hour)
 }
 
@@ -298,7 +321,7 @@ func TestCacheWarmBeginNeverBlocks(t *testing.T) {
 		<-release
 		return true
 	})
-	w.arm("s", "", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true, true}}, c.Now())
+	w.arm("s", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true, true}}, c.Now())
 	go c.advance(270 * time.Second)
 	time.Sleep(10 * time.Millisecond)
 	done := make(chan struct{})
@@ -318,7 +341,7 @@ func TestCacheWarmBeginNeverBlocks(t *testing.T) {
 func TestCacheWarmWaitsForInFlightRealRequest(t *testing.T) {
 	sent := 0
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { sent++; return true })
-	w.arm("s", "", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true, true, true}}, c.Now())
+	w.arm("s", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true, true, true}}, c.Now())
 	w.mu.Lock()
 	w.real["s"]++ // a real request of the stream is in flight
 	w.mu.Unlock()
@@ -341,7 +364,7 @@ func TestCacheWarmWallClockDeadline(t *testing.T) {
 	}
 	sent := 0
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { sent++; return true })
-	w.arm("s", "", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true}}, c.Now())
+	w.arm("s", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true}}, c.Now())
 	// The laptop slept: the timer fires an hour late, the entry is long gone.
 	c.mu.Lock()
 	c.now = c.now.Add(time.Hour)
@@ -355,7 +378,7 @@ func TestCacheWarmWallClockDeadline(t *testing.T) {
 func TestCacheWarmBounds(t *testing.T) {
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { return true })
 	for i := 0; i < cacheWarmMaxEntries+10; i++ {
-		w.arm("s"+itoa(int64(i)), "", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true}}, c.Now())
+		w.arm("s"+itoa(int64(i)), "main/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true}}, c.Now())
 	}
 	if len(w.entries) != cacheWarmMaxEntries || w.lru.Len() != cacheWarmMaxEntries {
 		t.Fatalf("entries = %d / %d", len(w.entries), w.lru.Len())
@@ -364,7 +387,7 @@ func TestCacheWarmBounds(t *testing.T) {
 	w, c = newUnitWarmer(func(context.Context, *warmRequest) bool { return true })
 	big := make([]byte, 64<<20)
 	for i := 0; i < 5; i++ {
-		w.arm("b"+itoa(int64(i)), "", "main/end/5m", &warmRequest{ttl: 5 * time.Minute, body: big, plan: []bool{false, true}}, c.Now())
+		w.arm("b"+itoa(int64(i)), "main/end/5m", &warmRequest{ttl: 5 * time.Minute, body: big, plan: []bool{false, true}}, c.Now())
 	}
 	if w.bytes > cacheWarmMaxBytes || len(w.entries) != 4 {
 		t.Fatalf("held %d bytes in %d entries", w.bytes, len(w.entries))

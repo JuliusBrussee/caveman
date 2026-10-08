@@ -24,6 +24,9 @@ var cacheWarmTableJSON []byte
 // a user's own gaps start arriving.
 const cacheWarmLearnWeight = 100
 
+// A saved count above this is not a count this proxy made.
+const cacheWarmMaxCount = 1e9
+
 type warmClass struct {
 	N        int       `json:"n"`
 	Realized float64   `json:"realized"`
@@ -40,6 +43,16 @@ type warmTable struct {
 	counts  map[string][]float64
 	path    string
 	pending int
+	// saveMu orders the file writes, which happen outside mu.
+	saveMu sync.Mutex
+}
+
+// warmGap is one observed gap of a stream class: the stream came back after
+// d, or (silent) was last seen still silent d after its request.
+type warmGap struct {
+	class  string
+	d      time.Duration
+	silent bool
 }
 
 func newWarmTable(path string) *warmTable {
@@ -53,21 +66,57 @@ func newWarmTable(path string) *warmTable {
 	}
 	t := &warmTable{bin: time.Duration(doc.BinSeconds) * time.Second, bins: doc.Bins, prior: doc.Classes,
 		counts: map[string][]float64{}, path: path}
-	if path != "" {
-		if raw, err := os.ReadFile(path); err == nil {
-			var saved struct {
-				Classes map[string][]float64 `json:"classes"`
-			}
-			if json.Unmarshal(raw, &saved) == nil {
-				for c, v := range saved.Classes {
-					if len(v) == t.bins+1 && t.lookup(c) != nil {
-						t.counts[c] = v
-					}
-				}
+	if counts := t.load(); counts != nil {
+		t.counts = counts
+	}
+	return t
+}
+
+// load reads the saved counts, or nil: a file that is missing, a symlink, too
+// large, of another shape, or holding one count that is not a plausible count
+// is dropped whole, and the table starts from the defaults.
+func (t *warmTable) load() map[string][]float64 {
+	if t.path == "" {
+		return nil
+	}
+	info, err := os.Lstat(t.path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
+		return nil
+	}
+	raw, err := os.ReadFile(t.path)
+	if err != nil {
+		return nil
+	}
+	var saved struct {
+		BinSeconds int                  `json:"bin_seconds"`
+		Classes    map[string][]float64 `json:"classes"`
+	}
+	if json.Unmarshal(raw, &saved) != nil || time.Duration(saved.BinSeconds)*time.Second != t.bin {
+		return nil
+	}
+	for c, v := range saved.Classes {
+		if !validWarmClass(c) || len(v) != t.bins+1 {
+			return nil
+		}
+		for _, x := range v {
+			if math.IsNaN(x) || x < 0 || x > cacheWarmMaxCount {
+				return nil
 			}
 		}
 	}
-	return t
+	return saved.Classes
+}
+
+// validWarmClass reports whether c is a key warmClassKey can produce.
+func validWarmClass(c string) bool {
+	for _, subagent := range []bool{false, true} {
+		for _, tool := range []bool{false, true} {
+			if c == warmClassKey(subagent, tool, 5*time.Minute) || c == warmClassKey(subagent, tool, time.Hour) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // warmClassKey names a stream class: main or subagent, whether the last
@@ -104,33 +153,91 @@ func (t *warmTable) lookup(class string) *warmClass {
 	}
 }
 
-// observe records one gap of class; inf means the stream never came back.
+// observe records one gap of class; negative means the stream never came back.
 func (t *warmTable) observe(class string, gap time.Duration) {
-	if t.lookup(class) == nil {
-		return
+	t.record([]warmGap{{class: class, d: gap}})
+}
+
+// record counts gaps and saves every 20th. The file is written here, outside
+// both the table's and the caller's lock.
+func (t *warmTable) record(gaps []warmGap) {
+	due := false
+	for _, g := range gaps {
+		if !validWarmClass(g.class) {
+			continue
+		}
+		b, share := t.bins, []float64(nil)
+		if g.d >= 0 && g.d < time.Duration(t.bins)*t.bin {
+			b = int(g.d / t.bin)
+			if g.silent {
+				share = t.later(g.class, g.d)
+			}
+		}
+		t.mu.Lock()
+		counts := t.counts[g.class]
+		if counts == nil {
+			counts = make([]float64, t.bins+1)
+			t.counts[g.class] = counts
+		}
+		if share == nil {
+			counts[b]++
+		}
+		for i, x := range share {
+			counts[i] += x
+		}
+		if t.pending++; t.pending >= 20 {
+			t.pending, due = 0, true
+		}
+		t.mu.Unlock()
 	}
-	b := t.bins
-	if gap >= 0 && gap < time.Duration(t.bins)*t.bin {
-		b = int(gap / t.bin)
-	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	if t.counts[class] == nil {
-		t.counts[class] = make([]float64, t.bins+1)
-	}
-	t.counts[class][b]++
-	if t.pending++; t.pending >= 20 {
-		t.pending = 0
-		t.saveLocked()
+	if due {
+		t.save()
 	}
 }
 
-// saveLocked writes the counts atomically, 0600. Counts per class and bin only.
-func (t *warmTable) saveLocked() {
+// later spreads one stream last seen silent at age (it was evicted, or the
+// proxy stopped, before it came back or was given up on) over the bins after
+// age, by the class's own distribution past that point. That is the unbiased
+// count (Kaplan-Meier's redistribution to the right): dropping the stream
+// keeps only the returns that came before it could be lost, so the table
+// drifts toward "always returns" and over-warms; counting it as never
+// returning drifts the other way.
+func (t *warmTable) later(class string, age time.Duration) []float64 {
+	p, _, ok := t.probs(class)
+	total := 0.0
+	if ok {
+		total = t.survival(p, age)
+	}
+	out := make([]float64, t.bins+1)
+	if total <= 1e-9 {
+		out[t.bins] = 1
+		return out
+	}
+	b := int(age / t.bin)
+	out[b] = p[b] * (1 - float64(age-time.Duration(b)*t.bin)/float64(t.bin)) / total
+	for i := b + 1; i <= t.bins; i++ {
+		out[i] = p[i] / total
+	}
+	return out
+}
+
+// save writes the counts atomically, 0600: counts per class and bin only. A
+// path that is a symlink (or anything but a plain file) is left alone. Two
+// proxies sharing $CAVEMAN_HOME each write their own counts, so the last
+// writer wins and the other's observations since its load are lost: the
+// table learns slower, never wrong.
+func (t *warmTable) save() {
 	if t.path == "" {
 		return
 	}
+	t.saveMu.Lock()
+	defer t.saveMu.Unlock()
+	if info, err := os.Lstat(t.path); err == nil && !info.Mode().IsRegular() {
+		return
+	}
+	t.mu.Lock()
 	raw, err := json.Marshal(map[string]any{"version": 1, "bin_seconds": int(t.bin / time.Second), "classes": t.counts})
+	t.mu.Unlock()
 	if err != nil {
 		return
 	}
@@ -153,8 +260,8 @@ func (t *warmTable) probs(class string) ([]float64, float64, bool) {
 		return nil, 0, false
 	}
 	t.mu.Lock()
+	defer t.mu.Unlock()
 	seen := t.counts[class]
-	t.mu.Unlock()
 	if seen == nil {
 		return prior.P, prior.Realized, true
 	}
@@ -189,8 +296,11 @@ func (t *warmTable) survival(p []float64, at time.Duration) float64 {
 // plan decides every warm of one idle stream up front by backward induction
 // (optimal stopping). Warm k at k*delay costs warm and extends the cache from
 // k*delay+ttl-delay to k*delay+ttl; a return in that window saves
-// full*realized. Warm k is sent only when its value, counting every later
-// warm it commits to, is positive. plan[0] is unused.
+// full*realized, where realized is the share of the miss a stream that DID
+// return paid (the window probability already leaves out the streams that
+// never do; a realized measured over them too would count them twice). Warm k
+// is sent only when its value, counting every later warm it commits to, is
+// positive. plan[0] is unused.
 func (t *warmTable) plan(class string, ttl, horizon time.Duration, full, warm float64) []bool {
 	d := cacheWarmDelay(ttl)
 	p, realized, ok := t.probs(class)

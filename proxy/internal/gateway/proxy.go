@@ -205,7 +205,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Cache warming (cache_warm.go): a real request stops its stream's warming
-	// (and, for a session, its subagents') before anything is sent. Only an
+	// before anything is sent. Only an
 	// exact stream counts: the route stage's key (x-cave-session or the
 	// agent's own session header; a Claude Code child its own, with its
 	// parent). Side requests neither stop nor start one.
@@ -895,25 +895,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// No warm on this credential while the provider is limiting it.
 		s.warmer.backoff(credentialKey(upstreamHeaders), backoffUntil(s.warmer.clock.Now(), resp.Header, authMode))
 	}
-	if warmArm && resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0 &&
-		s.warmer.enabled() && cacheWarmEligible(r, adapter, meta, s.warmOrigin, upstreamURL) {
-		// The exact bytes and headers that were answered, at zero output; the
-		// table plans the chain for this stream's class and prices.
-		if warm, ttl := warmBody(transform.Body); warm != nil && !(ttl == time.Hour && finalUsage.CacheCreation5mTokens > 0) {
-			class := warmClassKey(warmParent != "", toolStopped.seen, ttl)
-			var req *warmRequest
-			if full, cost, ok := cacheWarmCosts(finalUsage, meta, authMode, ttl); ok {
-				if plan := s.warmer.table.plan(class, ttl, cacheWarmHorizon, full, cost); len(plan) > 1 && plan[1] {
-					req = &warmRequest{
-						url: upstreamURL.String(), header: upstreamHeaders.Clone(), body: warm, ttl: ttl,
-						adapter: adapter, meta: meta, authMode: authMode, mode: effectiveRuntimeMode,
-						label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID, basis: evidence.SessionCorrelationBasis,
-						cred: credentialKey(upstreamHeaders), plan: plan,
-					}
-				}
-			}
-			s.warmer.arm(warmKey, warmParent, class, req, warmStart)
-		}
+	if warmArm {
+		s.armCacheWarm(r, warmAnswer{
+			key: warmKey, subagent: warmParent != "", start: warmStart,
+			ok:      resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0,
+			adapter: adapter, meta: meta, authMode: authMode, upstream: upstreamURL, header: upstreamHeaders, body: transform.Body,
+			usage: finalUsage, tool: toolStopped.seen, encoded: encoding != "" && !strings.EqualFold(encoding, "identity"),
+			mode: effectiveRuntimeMode, label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID, basis: evidence.SessionCorrelationBasis,
+		})
 	}
 	if run != nil && !run.off && !run.auxiliary && run.key != "" && resp.StatusCode < 300 && errCode == "" {
 		// What this session's next ask reports as its previous request (route-ask-v1

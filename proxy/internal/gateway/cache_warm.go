@@ -97,12 +97,13 @@ type warmRequest struct {
 }
 
 // warmEntry is the warming state of one stream: a session, or one subagent
-// of it (whose parent is the session's key).
+// of it.
 type warmEntry struct {
-	key, parent string
-	gen         int
-	timer       interface{ Stop() bool }
-	req         *warmRequest
+	key   string
+	gen   int
+	timer interface{ Stop() bool }
+	// req is held only while a warm of it may still be sent.
+	req *warmRequest
 	// class and start of the stream's last real request, until its next one
 	// (or its absence) has been counted in the table.
 	class     string
@@ -136,29 +137,28 @@ func newCacheWarmer(enabled func() bool, send func(context.Context, *warmRequest
 	}
 }
 
-// begin marks a real request of stream key (parent: the session a subagent
-// belongs to). It stops the stream's warming and, for a session, every
-// subagent of it: a parent that is talking again has its children's results.
+// begin marks a real request of stream key and stops the stream's warming.
+// A session's request leaves its subagents' warms alone: a subagent can still
+// be running when its parent talks, and on the measured sessions stopping
+// them cost more misses than the warms it spared (proxy/CLAUDE.md has the
+// numbers); the table already plans few warms for a subagent that is done.
 // It never waits: a warm already in flight finishes in the background. The
-// gap since the stream's last request is counted in the table. The returned
-// func ends the request.
+// gap since the stream's last request is counted in the table, after the
+// lock is released. The returned func ends the request.
 func (w *cacheWarmer) begin(key string) func() {
+	var seen []warmGap
 	w.mu.Lock()
 	now := w.clock.Now()
 	w.real[key]++
 	if e := w.entries[key]; e != nil {
 		if e.pending {
 			e.pending = false
-			w.table.observe(e.class, now.Sub(e.lastStart))
+			seen = append(seen, warmGap{class: e.class, d: now.Sub(e.lastStart)})
 		}
 		w.stopLocked(e)
 	}
-	for _, e := range w.entries {
-		if e.parent == key {
-			w.stopLocked(e)
-		}
-	}
 	w.mu.Unlock()
+	w.table.record(seen)
 	var once sync.Once
 	return func() {
 		once.Do(func() {
@@ -179,6 +179,12 @@ func (w *cacheWarmer) stopLocked(e *warmEntry) {
 		e.timer.Stop()
 		e.timer = nil
 	}
+	w.releaseLocked(e)
+}
+
+// releaseLocked lets go of the held request (its body and credential
+// headers) as soon as no warm of it will be sent.
+func (w *cacheWarmer) releaseLocked(e *warmEntry) {
 	if e.req != nil {
 		w.bytes -= len(e.req.body)
 		e.req = nil
@@ -210,10 +216,10 @@ func (w *cacheWarmer) pausedLocked(cred string, now time.Time) bool {
 // arm records a stream's last request (class, start) for the table and, when
 // req is not nil, keeps its cache entry warm by req.plan. startedAt is when
 // the real request started: the provider measures the lifetime from there.
-func (w *cacheWarmer) arm(key, parent, class string, req *warmRequest, startedAt time.Time) {
+func (w *cacheWarmer) arm(key, class string, req *warmRequest, startedAt time.Time) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
-	w.sweepLocked()
+	now := w.clock.Now()
+	seen := w.sweepLocked(now)
 	e := w.entries[key]
 	if e == nil {
 		e = &warmEntry{key: key}
@@ -223,89 +229,121 @@ func (w *cacheWarmer) arm(key, parent, class string, req *warmRequest, startedAt
 		w.lru.MoveToFront(e.elem)
 	}
 	w.stopLocked(e)
-	e.parent, e.class, e.lastStart, e.pending = parent, class, startedAt, class != ""
+	e.class, e.lastStart, e.pending = class, startedAt, class != ""
 	if req != nil {
 		e.req = req
 		w.bytes += len(req.body)
-		w.scheduleLocked(e, e.gen, req, 1, startedAt, startedAt.Add(cacheWarmHorizon))
+		if !w.scheduleLocked(e, e.gen, req, 1, startedAt, startedAt.Add(cacheWarmHorizon)) {
+			w.releaseLocked(e)
+		}
 	}
 	for w.lru.Len() > cacheWarmMaxEntries || w.bytes > cacheWarmMaxBytes {
 		old := w.lru.Back().Value.(*warmEntry)
 		if old == e && w.lru.Len() == 1 {
 			break
 		}
-		w.evictLocked(old)
+		seen = append(seen, w.dropLocked(old, now)...)
 	}
+	w.mu.Unlock()
+	w.table.record(seen)
 }
 
-func (w *cacheWarmer) evictLocked(e *warmEntry) {
+// dropLocked forgets an entry (evicted, or the proxy is stopping). A stream
+// still waiting for its next request was silent this long: the table counts
+// it as one that comes back later than its age (warmTable.later), which past
+// cacheWarmGone is "never".
+func (w *cacheWarmer) dropLocked(e *warmEntry, now time.Time) []warmGap {
+	var seen []warmGap
+	if e.pending {
+		e.pending = false
+		seen = []warmGap{{class: e.class, d: now.Sub(e.lastStart), silent: true}}
+	}
 	w.stopLocked(e)
 	w.lru.Remove(e.elem)
 	delete(w.entries, e.key)
+	return seen
 }
 
-// sweepLocked counts streams silent for cacheWarmGone as never returning, at
-// most once a minute.
-func (w *cacheWarmer) sweepLocked() {
+// close stops every warm, counts the streams still waiting (dropLocked) and
+// saves the table: the gaps seen since the last save, and the streams that
+// never came back, would otherwise be lost with the process.
+func (w *cacheWarmer) close() {
+	var seen []warmGap
+	w.mu.Lock()
 	now := w.clock.Now()
+	for _, e := range w.entries {
+		seen = append(seen, w.dropLocked(e, now)...)
+	}
+	w.mu.Unlock()
+	w.table.record(seen)
+	w.table.save()
+}
+
+// sweepLocked gives up on streams silent for cacheWarmGone, at most once a
+// minute: they are returned to be counted as never returning.
+func (w *cacheWarmer) sweepLocked(now time.Time) []warmGap {
 	if now.Sub(w.swept) < time.Minute {
-		return
+		return nil
 	}
 	w.swept = now
+	var seen []warmGap
 	for _, e := range w.entries {
 		if e.pending && now.Sub(e.lastStart) > cacheWarmGone {
 			e.pending = false
-			w.table.observe(e.class, -1)
+			seen = append(seen, warmGap{class: e.class, d: -1})
 		}
 	}
+	return seen
 }
 
-// scheduleLocked arms warm k of the chain, due `delay` after from.
-func (w *cacheWarmer) scheduleLocked(e *warmEntry, gen int, req *warmRequest, k int, from, horizon time.Time) {
+// scheduleLocked arms warm k of the chain, due `delay` after from, and
+// reports whether it did: the chain is over when it did not.
+func (w *cacheWarmer) scheduleLocked(e *warmEntry, gen int, req *warmRequest, k int, from, horizon time.Time) bool {
 	delay := cacheWarmDelay(req.ttl)
 	if delay == 0 || k >= len(req.plan) || !req.plan[k] {
-		return
+		return false
 	}
 	due := from.Add(delay)
 	// A timer that fires late (sleep, a busy session) keeps half the margin;
 	// past it the warm would likely be a full-price write, not a refresh.
 	deadline := due.Add((req.ttl - delay) / 2)
 	if due.After(horizon) {
-		return
+		return false
 	}
 	var fire func()
 	fire = func() {
 		w.mu.Lock()
+		defer w.mu.Unlock()
+		if e.gen != gen {
+			return // stopped, or re-armed with another request
+		}
+		e.timer = nil
 		now := w.clock.Now()
-		if e.gen != gen || now.After(deadline) || (w.enabled != nil && !w.enabled()) || w.pausedLocked(req.cred, now) {
-			w.mu.Unlock()
+		if now.After(deadline) || (w.enabled != nil && !w.enabled()) || w.pausedLocked(req.cred, now) {
+			w.releaseLocked(e)
 			return
 		}
 		if w.real[e.key] > 0 {
 			// Never sent while a real request of the stream is in flight.
 			if now.Add(cacheWarmBusyRetry).After(deadline) {
-				w.mu.Unlock()
+				w.releaseLocked(e)
 				return
 			}
 			e.timer = w.clock.AfterFunc(cacheWarmBusyRetry, fire)
-			w.mu.Unlock()
 			return
 		}
-		e.timer = nil
 		w.mu.Unlock()
-
 		// A warm unanswered when the entry would have expired is lost either way.
 		ctx, cancel := context.WithTimeout(context.Background(), req.ttl-delay)
 		again := w.send(ctx, req)
 		cancel()
-
 		w.mu.Lock()
-		if again && e.gen == gen {
-			w.scheduleLocked(e, gen, req, k+1, now, horizon)
+		if e.gen == gen && !(again && w.scheduleLocked(e, gen, req, k+1, now, horizon)) {
+			w.releaseLocked(e)
 		}
-		w.mu.Unlock()
 	}
 	e.timer = w.clock.AfterFunc(max(0, due.Sub(w.clock.Now())), fire)
+	return true
 }
 
 // cacheControlRE finds every cache_control marker (route.go's cacheControlRE
@@ -369,10 +407,13 @@ func warmBody(body []byte) ([]byte, time.Duration) {
 	return out, ttl
 }
 
-// declaredCacheTTL is the shortest lifetime any cache_control marker declares
-// (top-level automatic caching included): warming on the shortest one keeps
-// every entry warm. Zero when there is no marker or one names a lifetime
-// Anthropic does not document.
+// declaredCacheTTL is the one lifetime every cache_control marker declares
+// (top-level automatic caching included). Zero when there is no marker, one
+// names a lifetime Anthropic does not document, or 5m and 1h markers are
+// mixed: such a request has no single lifetime to value a miss or class the
+// stream by, so it is not warmed. The simulator applies the same rule to the
+// usage it reads (a stream is 1h only when every token written was 1h, 5m
+// only when every one was 5m; none of the measured requests mixed them).
 func declaredCacheTTL(body []byte) time.Duration {
 	ttl := time.Duration(0)
 	for _, m := range cacheControlMarkerRE.FindAllSubmatch(body, -1) {
@@ -393,9 +434,10 @@ func declaredCacheTTL(body []byte) time.Duration {
 		default:
 			return 0
 		}
-		if ttl == 0 || d < ttl {
-			ttl = d
+		if ttl != 0 && d != ttl {
+			return 0
 		}
+		ttl = d
 	}
 	return ttl
 }
@@ -453,26 +495,46 @@ func credentialKey(h http.Header) string {
 	if v == "\x00" {
 		return ""
 	}
+	return shortHash(v)
+}
+
+func shortHash(v string) string {
 	sum := sha256.Sum256([]byte(v))
 	return hex.EncodeToString(sum[:8])
 }
 
-// backoffUntil is how long a 429 pauses warming on its credential: a
-// subscription login for the rest of the local day (its usage limit is the
-// day's budget), an API key for Retry-After (default one minute).
+// backoffUntil is how long a 429 pauses warming on its credential: until the
+// later of the response's Retry-After and anthropic-ratelimit-unified-reset
+// (a subscription's limit window: epoch seconds, or RFC 3339) when it names
+// one within eight days; otherwise one hour for a subscription login, whose
+// limits reset on rolling windows and not at midnight, and one minute for an
+// API key.
 func backoffUntil(now time.Time, h http.Header, authMode AuthMode) time.Time {
-	if authMode == AuthModeSubscription || authMode == AuthModeOAuth {
-		y, m, d := now.Date()
-		return time.Date(y, m, d+1, 0, 0, 0, 0, now.Location())
-	}
+	var until time.Time
 	if s, err := strconv.Atoi(strings.TrimSpace(h.Get("Retry-After"))); err == nil && s > 0 {
-		return now.Add(time.Duration(s) * time.Second)
+		until = now.Add(time.Duration(s) * time.Second)
+	}
+	reset := strings.TrimSpace(h.Get("anthropic-ratelimit-unified-reset"))
+	at, err := time.Parse(time.RFC3339, reset)
+	if s, serr := strconv.ParseInt(reset, 10, 64); serr == nil {
+		at, err = time.Unix(s, 0), nil
+	}
+	if err == nil && at.After(until) {
+		until = at
+	}
+	if until.After(now) && until.Before(now.Add(8*24*time.Hour)) {
+		return until
+	}
+	if authMode == AuthModeSubscription || authMode == AuthModeOAuth {
+		return now.Add(time.Hour)
 	}
 	return now.Add(time.Minute)
 }
 
 // toolStop reports whether a response asked for a tool, read off the bytes
-// as they stream past (JSON or SSE), never buffering them.
+// as they stream past (JSON or SSE), never buffering them: it keeps the last
+// len(needle)-1 bytes, so the needle is found across any number of reads.
+// It reads plain bytes only; an encoded response is not classed (armCacheWarm).
 type toolStop struct {
 	tail []byte
 	seen bool
@@ -484,20 +546,120 @@ func (t *toolStop) Write(p []byte) (int, error) {
 	if t.seen {
 		return len(p), nil
 	}
-	head := p
-	if len(head) > len(toolStopNeedle) {
-		head = head[:len(toolStopNeedle)]
-	}
-	if bytes.Contains(append(t.tail, head...), toolStopNeedle) || bytes.Contains(p, toolStopNeedle) {
-		t.seen = true
+	keep := len(toolStopNeedle) - 1
+	t.tail = append(t.tail, p[:min(len(p), keep)]...)
+	if bytes.Contains(t.tail, toolStopNeedle) || bytes.Contains(p, toolStopNeedle) {
+		t.seen, t.tail = true, nil
 		return len(p), nil
 	}
-	keep := p
-	if len(keep) > len(toolStopNeedle) {
-		keep = keep[len(keep)-len(toolStopNeedle):]
+	switch {
+	case len(p) >= keep:
+		t.tail = append(t.tail[:0], p[len(p)-keep:]...)
+	case len(t.tail) > keep:
+		t.tail = append(t.tail[:0], t.tail[len(t.tail)-keep:]...)
 	}
-	t.tail = append(t.tail[:0], keep...)
 	return len(p), nil
+}
+
+// warmAnswer is one answered request of a stream, as armCacheWarm needs it.
+type warmAnswer struct {
+	key      string
+	subagent bool
+	start    time.Time
+	// ok: a 2xx answer read to its end, with no retrieve loop behind it.
+	ok       bool
+	adapter  providers.Adapter
+	meta     providers.RequestMetadata
+	authMode AuthMode
+	upstream *url.URL
+	header   http.Header // as sent upstream
+	body     []byte      // as sent upstream
+	usage    providers.UsageObservation
+	// tool: the answer asked for a tool; unknown when the answer was encoded.
+	tool, encoded                      bool
+	mode, label, agent, session, basis string
+}
+
+// armCacheWarm plans the warm chain of the stream whose request was just
+// answered (the exact bytes and headers that were answered, at zero output,
+// for the stream's class and the prices of the model sent) and says in one
+// log line what it decided and why: the session as a hash, never content or
+// a credential.
+func (s *Server) armCacheWarm(r *http.Request, a warmAnswer) {
+	class, ttl, warms, skip := "", time.Duration(0), 0, ""
+	switch {
+	case !a.ok:
+		skip = "response_error"
+	case !s.warmer.enabled():
+		skip = "off"
+	case !cacheWarmEligible(r, a.adapter, a.meta, s.warmOrigin, a.upstream):
+		skip = "not_anthropic_api"
+	default:
+		var body []byte
+		body, ttl = warmBody(a.body)
+		wrote5m, wrote1h := a.usage.CacheCreation5mTokens > 0, a.usage.CacheCreation1hTokens > 0
+		switch {
+		case body == nil:
+			skip = "not_replayable"
+		case (ttl == time.Hour && wrote5m) || (ttl == 5*time.Minute && wrote1h):
+			skip = "lifetime_mismatch"
+		default:
+			var req *warmRequest
+			var plan []bool
+			class = warmClassKey(a.subagent, a.tool, ttl)
+			full, cost, priced := cacheWarmCosts(a.usage, a.meta, a.authMode, ttl)
+			if priced {
+				plan = s.warmer.table.plan(class, ttl, cacheWarmHorizon, full, cost)
+				if a.encoded {
+					// The answer's stop reason was not read: plan for whichever of
+					// the two classes warms less, and count the gap for neither.
+					other := s.warmer.table.plan(warmClassKey(a.subagent, !a.tool, ttl), ttl, cacheWarmHorizon, full, cost)
+					if warmCount(other) < warmCount(plan) {
+						plan = other
+					}
+					class = ""
+				}
+			}
+			switch warms = warmCount(plan); {
+			case !priced:
+				skip = "unpriced"
+			case warms == 0:
+				skip = "not_worth_it"
+			default:
+				req = &warmRequest{
+					url: a.upstream.String(), header: a.header.Clone(), body: body, ttl: ttl,
+					adapter: a.adapter, meta: a.meta, authMode: a.authMode, mode: a.mode,
+					label: a.label, agent: a.agent, session: a.session, basis: a.basis,
+					cred: credentialKey(a.header), plan: plan,
+				}
+			}
+			s.warmer.arm(a.key, class, req, a.start)
+			if a.encoded {
+				class = "unclassed"
+			}
+		}
+	}
+	if s.logger != nil {
+		s.logger.Info("cache warm plan", "session", shortHash(a.session), "model", a.meta.Model, "class", class,
+			"ttl", ttl.String(), "warms", warms, "skip", skip)
+	}
+}
+
+// warmCount is how many warms a plan sends: the chain stops at its first no.
+func warmCount(plan []bool) int {
+	n := 0
+	for n+1 < len(plan) && plan[n+1] {
+		n++
+	}
+	return n
+}
+
+// Close stops cache warming and saves what the warm table learned. Call it
+// when the proxy shuts down.
+func (s *Server) Close() {
+	if s.warmer != nil {
+		s.warmer.close()
+	}
 }
 
 // sendCacheWarm sends one warm and records it. It reports whether warming

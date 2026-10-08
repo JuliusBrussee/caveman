@@ -397,6 +397,7 @@ func runServe(logger *slog.Logger) {
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
+	server.Close() // saves what cache warming learned
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)
 	}
