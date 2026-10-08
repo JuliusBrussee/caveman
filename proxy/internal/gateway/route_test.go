@@ -1,12 +1,14 @@
 package gateway
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -30,6 +32,29 @@ func TestSetModelSwapsOnlyTheTopLevelModel(t *testing.T) {
 			t.Errorf("setModel(%s) = %s, %v; want the body unchanged and false", refused, out, ok)
 		}
 	}
+}
+
+// autoModelRE is a request body's first "model" pair.
+var autoModelRE = regexp.MustCompile(`"model"\s*:\s*"([^"]+)"`)
+
+// auto turns a route-stage test request into an Auto one that runs on the
+// model it named: that model is Auto's fallback for the test, so the route
+// stage asks about it and the bytes upstream are the ones the test expects.
+func auto(t testing.TB, body string) string {
+	t.Helper()
+	match := autoModelRE.FindStringSubmatch(body)
+	if match == nil || match[1] == AutoModel {
+		return body
+	}
+	provider := "openai"
+	if strings.HasPrefix(match[1], "claude-") {
+		provider = "anthropic"
+	}
+	if was := autoFallback[provider]; was != match[1] {
+		autoFallback[provider] = match[1]
+		t.Cleanup(func() { autoFallback[provider] = was })
+	}
+	return strings.Replace(body, match[0], `"model":"`+AutoModel+`"`, 1)
 }
 
 type fakeCloud struct {
@@ -98,7 +123,7 @@ func toStub(stub string) http.RoundTripper {
 
 func sendMessages(t *testing.T, srv *Server, header map[string]string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"fix the bug"}]}`))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, `{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"fix the bug"}]}`)))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-cave-agent", "claude")
 	for name, value := range header {
@@ -170,22 +195,64 @@ func TestRouteStageRejectedModelRetriesTheAskedOne(t *testing.T) {
 	}
 }
 
-// The request-wide opt-out and subscription traffic never ask.
-func TestRouteStageSkipsPassThroughAndSubscription(t *testing.T) {
+// bearerCreds resolves the agent's own bearer, as the standalone resolver does.
+type bearerCreds struct{}
+
+func (bearerCreds) Resolve(_ string, r *http.Request) providers.Credential {
+	return providers.Credential{Mode: "ephemeral_header", Key: strings.TrimPrefix(r.Header.Get("authorization"), "Bearer "), Scheme: "bearer"}
+}
+
+// The request-wide opt-out never asks.
+func TestRouteStageSkipsPassThrough(t *testing.T) {
 	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
 	srv, models := routeServer(t, cloud, "")
 	sendMessages(t, srv, map[string]string{"x-cave-transforms": "caveman.pass-through.v1"})
-	sendMessages(t, srv, map[string]string{"x-api-key": "", "authorization": "Bearer sk-ant-oat01-subscription", "user-agent": "claude-cli/2.1.0"})
-	if len(cloud.asks) != 0 {
-		t.Fatalf("asks = %d, want none", len(cloud.asks))
+	if len(cloud.asks) != 0 || len(*models) != 1 || (*models)[0] != "claude-opus-5-5" {
+		t.Fatalf("asks = %d, upstream models = %v; want none and the asked model", len(cloud.asks), *models)
 	}
-	for _, model := range *models {
-		if model != "claude-opus-5-5" {
-			t.Fatalf("upstream models = %v, want only the asked model", *models)
+	if len(cloud.observed) != 1 || cloud.observed[0].RouteOutcome != "" {
+		t.Errorf("observed = %+v", cloud.observed)
+	}
+}
+
+// Auto on a subscription routes too: the routed model goes to the provider's
+// own API on the subscription's own token, and a model the plan refuses
+// replays on the asked one.
+func TestRouteStageRoutesSubscriptions(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+	var mu sync.Mutex
+	var seen []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
 		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		seen = append(seen, req.Model+" "+r.Header.Get("authorization"))
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		if req.Model == "claude-sonnet-5-5" {
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"permission_error","message":"not on this plan"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","model":"`+req.Model+`","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+	srv := New(Config{
+		Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: bearerCreds{}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	})
+	rec := sendMessages(t, srv, map[string]string{"x-api-key": "", "authorization": "Bearer sk-ant-oat01-subscription", "user-agent": "claude-cli/2.1.0"})
+	if len(cloud.asks) != 1 {
+		t.Fatalf("asks = %d, want one", len(cloud.asks))
 	}
-	if len(cloud.observed) != 2 || cloud.observed[0].RouteOutcome != "" || cloud.observed[1].RouteReason != "subscription" {
-		t.Errorf("observed = %d rows, outcomes %q / %q", len(cloud.observed), cloud.observed[0].RouteOutcome, cloud.observed[1].RouteReason)
+	want := []string{"claude-sonnet-5-5 Bearer sk-ant-oat01-subscription", "claude-opus-5-5 Bearer sk-ant-oat01-subscription"}
+	if strings.Join(seen, "|") != strings.Join(want, "|") {
+		t.Fatalf("upstream saw %q, want %q", seen, want)
+	}
+	if !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) || cloud.observed[0].RouteOutcome != "degraded" {
+		t.Errorf("agent read %s, outcome %q", rec.Body.String(), cloud.observed[0].RouteOutcome)
 	}
 }
 
@@ -215,5 +282,70 @@ func TestRouteStageReportsARejectedModel(t *testing.T) {
 	sendMessages(t, srv, nil)
 	if rejected != 1 {
 		t.Fatalf("Reject called %d times, want once", rejected)
+	}
+}
+
+// A model the agent named itself is never asked about and goes as sent.
+func TestRouteStageNeverAsksAboutANamedModel(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Effort: "low", Outcome: "routed"}}
+	srv, log := effortServer(t, cloud, nil)
+	body := convo("high", uA)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	req.Header.Set("x-claude-code-session-id", "sess-1")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	sent, _ := log.last()
+	if len(cloud.asks) != 0 || string(sent) != body || !strings.Contains(rec.Body.String(), "claude-opus-5-5") {
+		t.Fatalf("asks %d, sent %s, agent read %s", len(cloud.asks), sent, rec.Body.String())
+	}
+	if row := cloud.observed[0]; row.RouteOutcome != "" || row.Model != "claude-opus-5-5" {
+		t.Errorf("row outcome %q model %q, want no route stage on the asked model", row.RouteOutcome, row.Model)
+	}
+}
+
+// Auto that Cloud cannot route runs on the provider's fallback model, the ask
+// names that model, and the agent reads Auto, in JSON and in a stream.
+func TestAutoFallsBackAndShowsAuto(t *testing.T) {
+	for _, stream := range []bool{false, true} {
+		cloud := &fakeCloud{answer: RouteAnswer{Outcome: "degraded", Reason: "timeout"}}
+		srv, log := streamServer(t, cloud)
+		body := strings.Replace(convo("high", uA), `"model":"claude-opus-5-5"`, `"model":"caveman-auto"`, 1)
+		if stream {
+			body = strings.Replace(body, `"max_tokens":5`, `"max_tokens":5,"stream":true`, 1)
+		}
+		rec := post(t, srv, body, nil)
+		sent, _ := log.last()
+		if !bytes.Contains(sent, []byte(`"model":"claude-sonnet-5-5"`)) || bytes.Contains(sent, []byte(AutoModel)) {
+			t.Fatalf("stream=%v: upstream got %s", stream, sent)
+		}
+		if len(cloud.asks) != 1 || cloud.asks[0].Model != "claude-sonnet-5-5" {
+			t.Fatalf("stream=%v: asks %+v", stream, cloud.asks)
+		}
+		if got := rec.Body.String(); !strings.Contains(got, `"model":"caveman-auto"`) || strings.Contains(got, "claude-sonnet-5-5") {
+			t.Errorf("stream=%v: the agent read %s", stream, got)
+		}
+		if row := cloud.observed[0]; row.RouteOutcome != "degraded" || row.Model != "claude-sonnet-5-5" {
+			t.Errorf("stream=%v: row outcome %q model %q", stream, row.RouteOutcome, row.Model)
+		}
+	}
+}
+
+// count_tokens naming Auto counts on the fallback model; with no Cloud link
+// at all Auto still never reaches the provider.
+func TestAutoCountTokensAndNoCloudLink(t *testing.T) {
+	for _, cloud := range []CloudLink{&fakeCloud{}, nil} {
+		srv, log := effortServer(t, cloud, nil)
+		for _, path := range []string{"/v1/messages/count_tokens", "/v1/messages"} {
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"model":"caveman-auto","messages":[{"role":"user","content":"hi"}]}`))
+			req.Header.Set("x-api-key", "sk-ant-api-key")
+			srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+			if sent, _ := log.last(); string(sent) != `{"model":"claude-sonnet-5-5","messages":[{"role":"user","content":"hi"}]}` {
+				t.Errorf("cloud %v %s: upstream got %s", cloud != nil, path, sent)
+			}
+		}
+		if fake, ok := cloud.(*fakeCloud); ok && len(fake.asks) != 1 {
+			t.Errorf("asks = %d, want one (Messages only)", len(fake.asks))
+		}
 	}
 }

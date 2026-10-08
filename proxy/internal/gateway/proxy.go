@@ -182,6 +182,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// The caller's session identity, already shape-bounded by requestEvidenceFromHeaders.
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID
+	// Auto goes upstream as the provider's fallback model (the route stage may
+	// still move it); agentModel is what the agent's copy of the answer names.
+	agentModel := meta.Model
+	if fallback := autoFallback[meta.Provider]; meta.Model == AutoModel && fallback != "" {
+		if out, ok := setModel(body, fallback); ok {
+			body, meta.Model = out, fallback
+			evidence.originalBody, rawHash = body, sha256.Sum256(body)
+		}
+	}
 
 	// byte-safe transform. record mode never transforms. On ANY transform error we
 	// forward the ORIGINAL bytes unchanged (fail-open) rather than failing the
@@ -227,10 +236,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
 		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
 		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
+		// Subscription and OAuth traffic routes too: a moved request stays on
+		// the provider's own API and the agent's own credential, and a pool
+		// entry goes out on its own login or the Cloud gateway key, never on it.
 		switch {
-		case authMode == AuthModeSubscription:
-			evidence.route = RouteAnswer{Outcome: "off", Reason: "subscription"}
-		case authMode != AuthModePAYG:
 		case uerr != nil || !statsPricingOriginKnown(meta.Provider, upstream):
 			evidence.route = RouteAnswer{Outcome: "off", Reason: "custom_provider_origin"}
 		default:
@@ -244,6 +253,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			run.asked = meta.Model
 			if countTokens {
 				run.perRequest, run.replay = true, true
+				break
+			}
+			if agentModel != AutoModel {
+				// A model the agent named itself is never asked about; the
+				// session's marks and heal still apply, as with routing off.
 				break
 			}
 			last, perMessageOff := s.routes.facts(run.key, time.Now())
@@ -413,7 +427,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				sent = body
 			}
 			w.Header().Set("x-caveman-routed-from", modelRequested)
-			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, modelRequested)
+			result := s.serveTarget(w, r, run, credential.Key, meta.Endpoint, sent, target, answer.Effort, agentModel)
 			evidence.poolID, evidence.upstreamID = target.PoolID, result.upstreamID
 			if result.errMsg != "" && s.logger != nil {
 				s.logger.Warn("pool target failed", "pool_id", target.PoolID, "via", target.Via, "reason", result.errMsg, "served", result.served, "request_id", requestID)
@@ -520,17 +534,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		upstreamHeaders.Set("user-agent", r.UserAgent())
 	}
 	s.applyUpstreamAuthFallback(adapter.Name(), credential, upstreamHeaders)
-	if run != nil {
-		switch {
-		case meta.Model != modelRequested:
-			// An identity answer, so the agent's copy can name the model it asked for.
-			upstreamHeaders.Del("accept-encoding")
-		case !run.off || run.heal:
-			withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
-		}
-		if run.dropBlocks {
-			upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
-		}
+	switch {
+	case meta.Model != agentModel:
+		// An identity answer, so the agent's copy can name the model it asked for.
+		upstreamHeaders.Del("accept-encoding")
+	case run != nil && (!run.off || run.heal):
+		withoutBrotli(upstreamHeaders) // the heal and last read the answer decoded
+	}
+	if run != nil && run.dropBlocks {
+		upstreamHeaders = withBeta(upstreamHeaders, bindingBeta)
 	}
 	healHeaders := upstreamHeaders // the marks heal carries no marks, so no per-message beta
 	if run != nil && run.marked {
@@ -728,10 +740,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	meta.Stream = meta.Stream || streamingResponse(resp.Header)
 	// Buffer non-streaming JSON before committing headers so a broken body is a
 	// clean 502. Do not replay: the provider may already have finished/billed it.
-	// The agent reads the model it asked for when the route stage moved the
-	// request (route.go shownModel); a compressed answer is left as it is.
+	// The agent reads the model it asked for when the request went to another
+	// one (Auto, or the route stage moved it; route.go shownModel); a
+	// compressed answer is left as it is.
 	encoding := strings.TrimSpace(resp.Header.Get("Content-Encoding"))
-	moved := run != nil && meta.Model != modelRequested && (encoding == "" || strings.EqualFold(encoding, "identity"))
+	moved := meta.Model != agentModel && (encoding == "" || strings.EqualFold(encoding, "identity"))
 	var shown []byte
 	if !meta.Stream {
 		data, rerr := readUpstreamBody(resp)
@@ -744,7 +757,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		resp.Body = io.NopCloser(bytes.NewReader(data))
 		resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
 		if moved {
-			if out, ok := setModel(data, modelRequested); ok {
+			if out, ok := setModel(data, agentModel); ok {
 				shown = out
 				resp.Header.Set("Content-Length", strconv.Itoa(len(shown)))
 			}
@@ -800,7 +813,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.Copy(scanned, resp.Body) // the provider's bytes still feed usage and last
 		src = bytes.NewReader(shown)
 	case moved && meta.Stream:
-		src = newShownModel(src, meta.Model, modelRequested)
+		src = newShownModel(src, meta.Model, agentModel)
 	}
 	counter, copyErrCode := s.streamResponse(w, r, src, meta.Stream, requestID)
 	ttfb := time.Since(start).Milliseconds()

@@ -109,9 +109,22 @@ type CloudLink interface {
 	Observe(rec RequestRecord)
 }
 
-// routable: Anthropic Messages or OpenAI chat/responses. Only API-key traffic
-// to the provider's own API is asked about: subscription (OAuth Pro/Max) turns
-// have no per-request dollar cost, so routing does nothing there (ADR 0083 §7).
+// AutoModel is Auto, the model the CLI adds to an agent's model picker while
+// the routing module is on: the route stage asks Cloud only about requests
+// naming it. It never reaches a provider; the request runs on the provider's
+// autoFallback model unless the answer moves it, and the agent's copy of the
+// answer names Auto.
+const AutoModel = "caveman-auto"
+
+// autoFallback is the model Auto runs on per provider whenever the route stage
+// keeps the asked model (a Cloud failure, pause or limit, signed out, routing
+// off, another origin), and the asked model the ask
+// carries. OpenAI's is gpt-6-sol: the provider catalog names no default, and
+// it is the mid tier of the route pool's models the catalog prices.
+var autoFallback = map[string]string{"anthropic": "claude-sonnet-5-5", "openai": "gpt-6-sol"}
+
+// routable: Anthropic Messages or OpenAI chat/responses, to the provider's own
+// API, on an API key or a subscription alike.
 func routable(provider, endpoint string) bool {
 	switch provider {
 	case "anthropic":

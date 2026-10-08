@@ -128,7 +128,7 @@ func localTarget(host string) *RouteTarget {
 
 func poolSend(t *testing.T, srv *Server, body string) *httptest.ResponseRecorder {
 	t.Helper()
-	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, body)))
 	req.Header.Set("x-api-key", "sk-ant-api-key")
 	req.Header.Set("x-cave-agent", "claude")
 	req.Header.Set("x-claude-code-session-id", "sess-1")
@@ -155,7 +155,7 @@ func newPoolCase(t *testing.T, target *RouteTarget, effort string) poolCase {
 func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	c := newPoolCase(t, localTarget("api.openai.com"), "high")
 	rec := poolSend(t, c.srv, poolBody)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") || !strings.Contains(rec.Body.String(), `"claude-opus-5-5"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") || !strings.Contains(rec.Body.String(), `"caveman-auto"`) {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
 	if rec.Header().Get("x-caveman-routed-from") != "claude-opus-5-5" {
@@ -186,7 +186,7 @@ func TestPoolLocalTargetStreamsBackInTheCallersGrammar(t *testing.T) {
 		"data: {\"id\":\"c1\",\"model\":\"gpt-6.1-sol\",\"choices\":[],\"usage\":{\"prompt_tokens\":11,\"completion_tokens\":2}}\n\ndata: [DONE]\n\n"
 	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"messages":[{"role":"user","content":"fix the bug"}]}`)
 	out := rec.Body.String()
-	for _, want := range []string{"event: message_start", `"claude-opus-5-5"`, "content_block_delta", "str", "eamed", "message_stop"} {
+	for _, want := range []string{"event: message_start", `"caveman-auto"`, "content_block_delta", "str", "eamed", "message_stop"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stream lacks %q:\n%s", want, out)
 		}
@@ -233,7 +233,7 @@ func cloudTarget() *RouteTarget {
 func TestPoolCloudTargetSendsTheCallersGrammarToTheGateway(t *testing.T) {
 	c := newPoolCase(t, cloudTarget(), "low")
 	rec := poolSend(t, c.srv, poolBody)
-	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "cloud says hi") || !strings.Contains(rec.Body.String(), `"model":"claude-opus-5-5"`) {
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "cloud says hi") || !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) {
 		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
 	}
 	req, body := c.stub.last("/gw/v1/messages")
@@ -315,7 +315,7 @@ func TestPoolClaudeCodeOnTheChatGPTLogin(t *testing.T) {
 		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\",\"usage\":{\"input_tokens\":12,\"output_tokens\":3}}}\n\n"
 	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"tools":[{"name":"Read","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"fix the bug"}]}`)
 	out := rec.Body.String()
-	for _, want := range []string{"event: message_start", `"claude-opus-5-5"`, "plan says hi", "message_stop"} {
+	for _, want := range []string{"event: message_start", `"caveman-auto"`, "plan says hi", "message_stop"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("stream lacks %q:\n%s", want, out)
 		}
@@ -468,7 +468,7 @@ func TestPoolFallbackFitsTheEffortToTheAskedModel(t *testing.T) {
 		c = newPoolCase(t, localTarget("down.example"), "max")
 		c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"harness says hi\"}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
-		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(`{"model":"`+model+`","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`))
+		req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(auto(t, `{"model":"`+model+`","stream":true,"reasoning":{"effort":"low"},"input":[{"role":"user","content":"fix the bug"}]}`)))
 		req.Header.Set("authorization", "Bearer sk-proj-harness")
 		req.Header.Set("x-cave-agent", "codex")
 		req.Header.Set("session_id", "thread-1")
