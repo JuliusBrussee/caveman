@@ -257,7 +257,7 @@ Started as a joke in April 2026. Now past 100,000 stars. Joke got serious. Voice
 
 ## Privacy
 
-The skill runs on your machine and sends nothing. The `caveman` CLI sends usage stats by default: commands run, token counts, a random install ID, OS, and IP. Never your prompts, code, or file paths. One person maintains this for free, and those stats show what to build next. Turn it off for good with `caveman telemetry off` or `DO_NOT_TRACK=1`. The full list, and how to delete what was sent: [SECURITY.md](./SECURITY.md).
+The caveman skill runs on your machine and sends nothing. `/caveman-compress` is the exception: it sends the file you compress to your configured model provider. The `caveman` CLI sends usage stats by default: commands run, token counts, a random install ID, OS, and IP. Never your prompts, code, or file paths. One person maintains this for free, and those stats show what to build next. Turn it off for good with `caveman telemetry off` or `DO_NOT_TRACK=1`. The full list, and how to delete what was sent: [SECURITY.md](./SECURITY.md).
 
 ## License
 

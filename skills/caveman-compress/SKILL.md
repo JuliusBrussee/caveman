@@ -2,12 +2,15 @@
 name: caveman-compress
 description: >
   Compress a memory file such as CLAUDE.md or a todo list into caveman format
-  to save input tokens, keeping a readable backup. Trigger: /caveman-compress.
+  to save input tokens, keeping a readable backup. Sends the file's text to the
+  configured model provider. Trigger: /caveman-compress.
 ---
 
 # Caveman Compress
 
 ## Purpose
+
+> **Data leaves the machine.** Compression sends the file's full text to the model provider that `scripts/compress.py` is configured for: the `claude` CLI, the Anthropic API, or an OpenAI-compatible endpoint. Files whose names look like secrets (`.env`, `credentials`, `secrets`, `.netrc`, …) are refused before they are read. Don't compress a file the provider shouldn't see.
 
 Compress natural language files (CLAUDE.md, todos, preferences) into caveman-speak to reduce input tokens. Compressed version overwrites original. Human-readable backup saved as `<filename>.original.md`, but NOT beside the source file — it lives in an out-of-tree data dir (`$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>/`, or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` on Windows) so skill auto-loaders don't re-ingest it as a live file.
 
