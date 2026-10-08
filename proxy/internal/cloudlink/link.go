@@ -412,6 +412,13 @@ func (l *Link) Ask(_ context.Context, ask gateway.RouteAsk) func() gateway.Route
 	}
 }
 
+// AutoOffered reports whether Auto is in the agents' pickers: signed in with
+// the routing module on.
+func (l *Link) AutoOffered() bool {
+	cfg := l.settings()
+	return cfg.routing && !cfg.offline && cfg.signedIn()
+}
+
 func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAnswer {
 	cfg := l.settings()
 	if !cfg.routing || cfg.offline || !cfg.signedIn() {
@@ -518,7 +525,7 @@ func (l *Link) poolEntries(ask gateway.RouteAsk, grammar string, models []string
 	l.mu.Lock()
 	off := l.noPool
 	l.mu.Unlock()
-	if off || l.logins == nil {
+	if off || l.logins == nil || ask.NoPool {
 		return nil
 	}
 	out := make([]pool.Entry, 0, len(models))

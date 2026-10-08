@@ -61,6 +61,9 @@ type RouteAsk struct {
 	Last *RouteLast
 	// PerMessageOff: this session's per-message effort is latched off.
 	PerMessageOff bool
+	// NoPool: the request may move only between the provider's own models on
+	// the agent's own credential (a ChatGPT login), so the ask lists no pool.
+	NoPool bool
 }
 
 // RouteLast is what one session's previous upstream request ran (contracts

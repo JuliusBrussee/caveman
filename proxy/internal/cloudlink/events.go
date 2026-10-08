@@ -307,9 +307,9 @@ func (l *Link) call(cfg settings, method, path string, body []byte, out any) (in
 }
 
 // modelID is a model name only when the request went to the provider's own
-// API or matched the price catalog; a local server's id can be a file path.
+// API or matched the price catalog, or is Auto; a local server's id can be a file path.
 func modelID(rec gateway.RequestRecord, id string) string {
-	if id == "" || rec.ProviderOriginKnown || rec.PricingKnown || slices.Contains(pools[rec.Provider], id) {
+	if id == "" || id == gateway.AutoModel || rec.ProviderOriginKnown || rec.PricingKnown || slices.Contains(pools[rec.Provider], id) {
 		return truncate(id, 128)
 	}
 	return "custom"

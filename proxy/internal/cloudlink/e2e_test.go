@@ -113,7 +113,7 @@ func TestSignedInProxyRoutesAndReports(t *testing.T) {
 		t.Fatalf("events = %v", events)
 	}
 	route, _ := events[0]["route"].(map[string]any)
-	if events[0]["model_requested"] != "claude-sonnet-5-5" || events[0]["model_used"] != "claude-opus-5-5" || route["outcome"] != "routed" {
+	if events[0]["model_requested"] != "caveman-auto" || events[0]["model_used"] != "claude-opus-5-5" || route["outcome"] != "routed" {
 		t.Errorf("event = %v", events[0])
 	}
 	if raw, _ := json.Marshal(events); strings.Contains(string(raw), promptText) {
