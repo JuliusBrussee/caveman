@@ -78,21 +78,29 @@ Every reply runs a check before it sends: opener that announces the plan, delete
 
 ## Install
 
-```bash
-npx skills add JuliusBrussee/caveman -g
-```
+### 1. The proxy: agent reads less
 
-Works in Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Cline, Copilot, and [30+ more](./INSTALL.md). Type `/caveman` if it doesn't start on its own. Say `stop caveman` to go back. One rock. That it.
-
-Want big rock too? [The proxy](#big-rock-the-proxy) shrinks what the agent **reads**: 33.2% fewer input tokens, same answers. Needs Node.js 22.13+.
+**Start here. Biggest rock.** 33.2% fewer input tokens across whole sessions, same answers. Runs on your machine, with your keys and your Claude Pro/Max login.
 
 ```bash
 npm install -g @caveman-ai/cli && caveman setup --install
 caveman claude        # or codex · gemini · aider · kilo · qwen · opencode · hermes · openclaw · pi
 ```
 
+Needs Node.js 22.13+. After the first run, plain `claude` stays caveman'd. [What the proxy does](#big-rock-the-proxy)
+
+### 2. The skill: agent says less
+
+```bash
+npx skills add JuliusBrussee/caveman -g
+```
+
+Works in Claude Code, Codex, Gemini CLI, Cursor, Windsurf, Cline, Copilot, and [30+ more](./INSTALL.md). Type `/caveman` if it doesn't start on its own. Say `stop caveman` to go back.
+
+Two rock. That it.
+
 <details>
-<summary><strong>Other ways in</strong>: Claude Code plugin, Gemini, every agent at once, Windows, uninstall</summary>
+<summary><strong>Other ways to get the skill</strong>: Claude Code plugin, Gemini, every agent at once, Windows, uninstall</summary>
 
 <br>
 
