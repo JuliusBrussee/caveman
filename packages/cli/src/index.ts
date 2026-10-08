@@ -10509,7 +10509,7 @@ async function login(argv: string[] = []) {
     const accessToken = typeof tok.access_token === "string" ? tok.access_token : "";
     if (accessToken) {
 	  if (instance && (tokenStatus < 200 || tokenStatus >= 300 || tok.credential_kind !== "none" ||
-	      ["gateway_api_key", "gateway_key_id", "gateway_url"].some((key) => tok[key] != null) ||
+	      ["gateway_api_key", "gateway_key_id"].some((key) => tok[key] != null) ||
 	      typeof tok.refresh_token !== "string" || !tok.refresh_token || typeof tok.project_id !== "string" || !tok.project_id ||
 	      typeof tok.delivery_ack_token !== "string" || !tok.delivery_ack_token || typeof tok.scope !== "string" || !tok.scope ||
 	      tok.scope.split(/\s+/).some((scope) => scope === "proxy:write" || scope === "sdk:write"))) {
