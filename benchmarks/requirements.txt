@@ -1,1 +1,1 @@
-anthropic>=1.8.0
+anthropic>=1.11.0
