@@ -6,7 +6,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { unforwardedProviderHeaders } from "../../cli/src/provider-routing.ts";
 import { compatForRoutedModel, unpreservedAttributionHeaders } from "./provider-compat.ts";
-import { MAX_MESSAGE_BYTES, boundedString, compatUpstreamFor, hostOf, isLoopbackUrl, routeForApi, upstreamHostFor } from "./protocol.ts";
+import { MAX_MESSAGE_BYTES, boundedString, compatUpstreamFor, hostOf, isLoopbackUrl, routeForApi, targetsGateway, upstreamHostFor } from "./protocol.ts";
 
 type Notify = (message: string, kind: "warning" | "info") => void;
 
@@ -145,6 +145,8 @@ export class ProviderRouter {
         const host = hostOf(original);
         const reason = authIssue ?? compatibilityIssue ?? headerIssue ?? (!host
             ? `provider endpoint "${original}" is not an HTTP URL; this provider sends no routable request`
+            : targetsGateway(this.gateway, original)
+              ? `provider baseUrl ${original} points at the Caveman proxy itself, so no mount can carry it; set it to the real upstream and add compat.${model.provider}.base_url to caveman.yaml to route it`
             : expected === undefined
               ? `no compat mount named "${model.provider}" in the local proxy; add compat.${model.provider}.base_url to caveman.yaml to route it`
               : host !== expected

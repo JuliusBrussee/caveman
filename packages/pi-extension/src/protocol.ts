@@ -143,6 +143,25 @@ export function hostOf(url: string | undefined): string | undefined {
   }
 }
 
+// targetsGateway reports whether a provider endpoint is the running Caveman
+// proxy itself rather than an upstream. Before 2.x, routing a custom provider
+// meant publishing the gateway's own /w/pi wedge as the provider baseUrl, and
+// those configs survive the upgrade (#1212).
+//
+// Such an endpoint can never be routed and no compat mount can carry it: a
+// mount names the upstream the proxy should forward TO, so pointing one at the
+// proxy's own URL aims it at itself. Origin equality is the whole test — the
+// proxy's origin is only ever the proxy — which also catches the bare gateway
+// and any deeper wedge path (/w/pi/anthropic) without enumerating prefixes.
+export function targetsGateway(gateway: string, url: string | undefined): boolean {
+  if (!url) return false;
+  try {
+    return new URL(url).origin === new URL(gateway).origin;
+  } catch {
+    return false;
+  }
+}
+
 // A compat mount name is a path segment in /w/pi/compat/<name>, so it is held to
 // the same shape the proxy accepts. "constructor" passes this regex, which is
 // why compatUpstreamFor also demands a string value.
