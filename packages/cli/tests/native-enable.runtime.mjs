@@ -1645,3 +1645,52 @@ test("a commented settings.json enables, and a third-party Anthropic upstream ge
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
   assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /CUSTOM_MODEL_OPTION/);
 });
+
+// What login and logout run once the credential is stored or gone.
+const syncAuto = (env) => new Promise((resolve, reject) => {
+  const child = spawn(process.execPath, ["--input-type=module", "-e", `const cli = await import(${JSON.stringify(pathToFileURL(cli).href)}); cli.syncAutoEntries();`], { env });
+  let stderr = "";
+  child.stderr.on("data", (chunk) => (stderr += chunk));
+  child.on("exit", (code) => resolve({ code, stderr }));
+  child.on("error", reject);
+});
+
+test("OpenCode's saved Auto goes with its own provider's entry, not only with the last one", async () => {
+  const fx = fixture();
+  signedInRouting(fx);
+  assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+  const opencodePath = join(fx.home, ".config", "opencode", "opencode.json");
+  const read = () => JSON.parse(readFileSync(opencodePath, "utf8"));
+  const save = (model) => writeFileSync(opencodePath, JSON.stringify({ ...read(), model }, null, 2) + "\n");
+  // OpenAI now goes to a third party, which cannot serve Auto; Anthropic still can.
+  writeFileSync(join(fx.home, ".caveman", "caveman.yaml"), "providers:\n  openai:\n    base_url: https://gateway.example.com/v1\n");
+  save("anthropic/caveman-auto");
+  let out = await syncAuto(fx.env);
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(read().model, "anthropic/caveman-auto", "a provider that still offers Auto keeps the choice");
+  assert.equal(read().provider.openai.models?.["caveman-auto"], undefined);
+  assert.equal(read().provider.anthropic.models["caveman-auto"].name, "Auto");
+  writeFileSync(join(fx.home, ".caveman", "caveman.yaml"), "");
+  assert.equal((await syncAuto(fx.env)).code, 0);
+  save("openai/caveman-auto");
+  writeFileSync(join(fx.home, ".caveman", "caveman.yaml"), "providers:\n  openai:\n    base_url: https://gateway.example.com/v1\n");
+  out = await syncAuto(fx.env);
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(read().model, undefined, "Auto left OpenAI: the saved choice of it goes too");
+  assert.equal(read().provider.anthropic.models["caveman-auto"].name, "Auto");
+});
+
+test("a sync that changes nothing leaves the user's layout and comments alone", async () => {
+  const fx = fixture();
+  signedInRouting(fx);
+  for (const agent of ["claude", "opencode"]) assert.equal((await run(["enable", agent], fx.env)).code, 0, agent);
+  for (const path of [join(fx.home, ".claude", "settings.json"), join(fx.home, ".config", "opencode", "opencode.json")]) {
+    // The same values, one line, with a comment: not JSON.stringify(…, 2).
+    const mine = `// mine\n${JSON.stringify(JSON.parse(readFileSync(path, "utf8")))}\n`;
+    writeFileSync(path, mine);
+    const out = await syncAuto(fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stderr, "");
+    assert.equal(readFileSync(path, "utf8"), mine, path);
+  }
+});

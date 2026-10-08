@@ -36,7 +36,7 @@ import { request as httpRequest } from "node:http";
 import { request as httpsRequest } from "node:https";
 import { createHash, createHmac, createPublicKey, randomBytes, randomUUID, verify as edVerify, type KeyObject } from "node:crypto";
 import { fileURLToPath } from "node:url";
-import { parseEnv } from "node:util";
+import { isDeepStrictEqual, parseEnv } from "node:util";
 import { PROFILES, type AgentProfile } from "./agents.generated.js";
 import { autopilotStatusText, claimLearnNudge, confirmLearnNudge, maybeSpawnAutopilot, runAutopilot } from "./learn-autopilot.js";
 import {
@@ -3800,7 +3800,7 @@ function addClaudeAutoEnv(env: Record<string, unknown>): string[] {
 // OpenCode config after login or logout: a narrow edit of those two files and
 // their journals that needs no agent or Caveman binary, so an IDE-only user
 // gets it too. Taking it out also clears a saved model choice of Auto.
-function syncAutoEntries(): void {
+export function syncAutoEntries(): void {
   const gwLocal = wrapMode(gatewayURL()) === "local";
   for (const agent of ["claude", "opencode"] as NativeAgent[]) {
     try {
@@ -3840,10 +3840,15 @@ function syncAutoEntries(): void {
             if (Object.keys(models).length > 0) provider.models = models; else delete provider.models;
           }
           owned.auto_models = next;
-          if (!next.length && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) delete root.model;
+          // A saved choice of Auto goes with its provider's entry, not only
+          // when the last one does.
+          const saved = typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`) ? root.model.slice(0, -AUTO_MODEL.length - 1) : undefined;
+          if (saved !== undefined && !next.includes(saved) && (!next.length || saved === "openai" || saved === "anthropic")) delete root.model;
         }
         const after = jsonBytes(root);
-        if (after.equals(before)) return;
+        // Compared as values: a file in another layout (or with comments)
+        // that needs no change is not rewritten.
+        if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) return;
         atomicWriteFile(operation.file, after);
         operation.owned = owned;
         operation.after_sha256 = bytesHash(after);
