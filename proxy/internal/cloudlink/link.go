@@ -466,23 +466,27 @@ func (l *Link) decide(ask gateway.RouteAsk, deadline time.Time) gateway.RouteAns
 	// The turn tells a repeated short ask ("yes") apart; it holds within a tool loop.
 	key := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%s\x00%s\x00%d\x00%s", ask.SessionID, ask.Provider, ask.Model, text.Turn, text.Text)))
 	// Every tool-loop turn of one ask reuses its answer, failures included, so
-	// a turn never switches model halfway; a pause only stops new asks.
+	// a turn never switches model halfway; a pause only stops new asks, and an
+	// ask that starts in one keeps the paused answer after it ends.
 	l.mu.Lock()
 	d, seen := l.decisions[string(key[:])]
-	if !seen && l.now().Before(l.pauseUntil) {
-		paused := l.paused
-		l.mu.Unlock()
-		l.recheckPause(cfg)
-		return paused
-	}
+	paused := !seen && l.now().Before(l.pauseUntil)
 	if !seen {
 		if l.decisions == nil || len(l.decisions) >= decisionsMax {
 			l.decisions = map[string]*decision{} // ponytail: drop all when full; an LRU if hit rates ever matter
 		}
 		d = &decision{done: make(chan struct{})}
+		if paused {
+			d.answer = l.paused
+			close(d.done)
+		}
 		l.decisions[string(key[:])] = d
 	}
 	l.mu.Unlock()
+	if paused {
+		l.recheckPause(cfg)
+		return d.answer
+	}
 	if !seen {
 		func() {
 			defer close(d.done) // waiters on this ask never hang, even on a panic

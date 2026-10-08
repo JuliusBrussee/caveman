@@ -439,7 +439,7 @@ func TestRouteAskReportsTheSessionsLastRequest(t *testing.T) {
 	}
 	post(t, srv, convo("high", uA, aB, uC, aD, uTR), nil)
 	last := cloud.asks[1].Last
-	want := RouteLast{Model: "claude-opus-5-5-20261001", Effort: "low", AgeS: 0, InputTokens: 51300, CacheReadTokens: 50000, CacheWriteTokens: 1200, Compacted: true}
+	want := RouteLast{Model: "claude-opus-5-5-20261001", Effort: "low", AgeS: 0, InputTokens: 51300, CacheReadTokens: 50000, CacheWriteTokens: 1200, Compacted: true, sent: "claude-opus-5-5", provider: "anthropic"}
 	if last == nil || *last != want {
 		t.Fatalf("last = %+v, want %+v", last, want)
 	}
@@ -486,7 +486,7 @@ func TestRouteEffortAndLastOnOpenAI(t *testing.T) {
 		if string(sent) != c.sent {
 			t.Errorf("%s sent %s", c.path, sent)
 		}
-		want := RouteLast{Model: "gpt-6-sol-2026-09-01", Effort: "low", InputTokens: 1000, CacheReadTokens: 800}
+		want := RouteLast{Model: "gpt-6-sol-2026-09-01", Effort: "low", InputTokens: 1000, CacheReadTokens: 800, sent: "gpt-6-sol", provider: "openai"}
 		if len(cloud.asks) != 2 || cloud.asks[1].Last == nil || *cloud.asks[1].Last != want || cloud.asks[1].SessionID != "codex-1" {
 			t.Errorf("%s: asks %d, last %+v", c.path, len(cloud.asks), cloud.asks[len(cloud.asks)-1].Last)
 		}
@@ -1068,7 +1068,9 @@ func TestRefusedModelTakesTheEffortTopLevel(t *testing.T) {
 }
 
 // A routed request's 429 on the asked model is passed on: no original-bytes
-// retry, no reject. On a moved model it falls back to the asked one.
+// retry, no reject. On a moved model it falls back to the asked one, and a
+// 429 there too still rejects the decision: the agent's own retry must not
+// send both again.
 func TestRateLimitOnARoutedRequestIsNotRetried(t *testing.T) {
 	rateLimited := func([]byte) (int, string) {
 		return http.StatusTooManyRequests, `{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}`

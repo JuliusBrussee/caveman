@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -50,6 +51,15 @@ const (
 	// A stream not heard from this long after its last request counts as one
 	// that never came back.
 	cacheWarmGone = 2 * time.Hour
+	// Warms in flight at once in the whole process: sibling subagents answered
+	// in the same seconds come due together, each a full-context request.
+	cacheWarmMaxConcurrent = 2
+	// A warm fires up to this much before its planned time, never after it,
+	// so those siblings do not all start in the same instant.
+	cacheWarmJitter = 5 * time.Second
+	// A 529 or 5xx on a warm pauses its credential this long when the answer
+	// names no Retry-After.
+	cacheWarmOverloadPause = 5 * time.Minute
 )
 
 // cacheWarmDelay is Pi's refresh point: 90% of the lifetime, keeping at least
@@ -126,15 +136,20 @@ type cacheWarmer struct {
 	bytes   int
 	// real counts the real requests in flight per stream.
 	real map[string]int
-	// pausedUntil holds 429 backoffs per credential hash.
+	// pausedUntil holds 429 and overload backoffs per credential hash.
 	pausedUntil map[string]time.Time
 	swept       time.Time
+	// sending counts the warms in flight (cacheWarmMaxConcurrent).
+	sending int
+	// jitter is how much earlier than planned a warm fires; tests fix it.
+	jitter func() time.Duration
 }
 
 func newCacheWarmer(enabled func() bool, send func(context.Context, *warmRequest) bool, table *warmTable) *cacheWarmer {
 	return &cacheWarmer{
 		clock: systemClock{}, enabled: enabled, send: send, table: table,
 		entries: map[string]*warmEntry{}, lru: list.New(), real: map[string]int{}, pausedUntil: map[string]time.Time{},
+		jitter: func() time.Duration { return rand.N(cacheWarmJitter) },
 	}
 }
 
@@ -324,8 +339,9 @@ func (w *cacheWarmer) scheduleLocked(e *warmEntry, gen int, req *warmRequest, k 
 			w.releaseLocked(e)
 			return
 		}
-		if w.real[e.key] > 0 {
-			// Never sent while a real request of the stream is in flight.
+		if w.real[e.key] > 0 || w.sending >= cacheWarmMaxConcurrent {
+			// Never sent while a real request of the stream is in flight, nor
+			// past the process-wide cap: it tries again, never past its deadline.
 			if now.Add(cacheWarmBusyRetry).After(deadline) {
 				w.releaseLocked(e)
 				return
@@ -334,9 +350,13 @@ func (w *cacheWarmer) scheduleLocked(e *warmEntry, gen int, req *warmRequest, k 
 			return
 		}
 		again := false
+		w.sending++
 		func() {
 			w.mu.Unlock()
-			defer w.mu.Lock()
+			defer func() {
+				w.mu.Lock()
+				w.sending--
+			}()
 			defer func() { _ = recover() }() // a warm never takes the proxy down
 			// A warm unanswered when the entry would have expired is lost either way.
 			ctx, cancel := context.WithTimeout(context.Background(), req.ttl-delay)
@@ -347,7 +367,8 @@ func (w *cacheWarmer) scheduleLocked(e *warmEntry, gen int, req *warmRequest, k 
 			w.releaseLocked(e)
 		}
 	}
-	e.timer = w.clock.AfterFunc(max(0, due.Sub(w.clock.Now())), fire)
+	// Earlier only: due and deadline stay where the lifetime puts them.
+	e.timer = w.clock.AfterFunc(max(0, due.Sub(w.clock.Now())-w.jitter()), fire)
 	return true
 }
 
@@ -671,8 +692,8 @@ func warmCount(plan []bool) int {
 // when the proxy shuts down.
 // sendCacheWarm sends one warm and records it. It reports whether warming
 // should go on: only a clean answer that read the cache does. Any error, or
-// a warm that found the entry gone, stops the stream's warming; a 429 also
-// pauses its credential.
+// a warm that found the entry gone, stops the stream's warming; a 429, a 529
+// or a 5xx also pauses its credential.
 func (s *Server) sendCacheWarm(ctx context.Context, req *warmRequest) bool {
 	start := time.Now()
 	header := req.header.Clone()
@@ -703,6 +724,14 @@ func (s *Server) sendCacheWarm(ctx context.Context, req *warmRequest) bool {
 		}
 		if status == http.StatusTooManyRequests && s.warmer != nil {
 			s.warmer.backoff(req.cred, backoffUntil(s.warmer.clock.Now(), resp.Header, req.authMode))
+		}
+		if status >= 500 && s.warmer != nil {
+			// Overloaded (529) or failing: more full-context warms only add load.
+			until := s.warmer.clock.Now().Add(cacheWarmOverloadPause)
+			if resp.Header.Get("Retry-After") != "" {
+				until = backoffUntil(s.warmer.clock.Now(), resp.Header, req.authMode)
+			}
+			s.warmer.backoff(req.cred, until)
 		}
 	}
 	s.recordCacheWarm(start, req, status, errCode, n, usage)

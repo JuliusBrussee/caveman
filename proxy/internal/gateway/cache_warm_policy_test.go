@@ -428,6 +428,7 @@ func newUnitWarmer(send func(context.Context, *warmRequest) bool) (*cacheWarmer,
 	w := newCacheWarmer(func() bool { return true }, send, returnsAt(30*time.Minute))
 	c := &fakeClock{now: time.Now().Round(0)}
 	w.clock = c
+	w.jitter = func() time.Duration { return 0 } // tests pin the planned times
 	return w, c
 }
 
@@ -490,5 +491,116 @@ func TestCacheWarmFollowsAutoAcrossModels(t *testing.T) {
 	f.clock.advance(30 * time.Minute)
 	if rt.count() != sent || model(sent-1) != "claude-not-in-the-catalog/real" {
 		t.Fatalf("an unpriced routed model was warmed: %d -> %d, last real %s", sent, rt.count(), model(sent-1))
+	}
+}
+
+// Sibling subagents answered together come due together: at most two warms
+// are in flight in the whole process; one that gets no slot before its own
+// deadline is dropped, one that gets it in time is sent.
+func TestCacheWarmCapsConcurrentWarms(t *testing.T) {
+	for name, dropped := range map[string]bool{"dropped at its deadline": true, "sent once a slot frees": false} {
+		t.Run(name, func(t *testing.T) {
+			var mu sync.Mutex
+			inFlight, most, sent := 0, 0, 0
+			release := make(chan struct{})
+			w, c := newUnitWarmer(func(context.Context, *warmRequest) bool {
+				mu.Lock()
+				inFlight++
+				sent++
+				most = max(most, inFlight)
+				mu.Unlock()
+				<-release
+				mu.Lock()
+				inFlight--
+				mu.Unlock()
+				return true
+			})
+			for _, key := range []string{"a", "b", "c"} {
+				w.arm(key, "subagent/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true}}, c.Now())
+			}
+			// Each due warm holds the goroutine that fired it while in flight.
+			var first sync.WaitGroup
+			for _, d := range []time.Duration{270 * time.Second, 0} {
+				first.Add(1)
+				go func() { defer first.Done(); c.advance(d) }()
+				time.Sleep(20 * time.Millisecond)
+			}
+			// The third is due now and its deadline is 15 s away.
+			wait := time.Duration(0)
+			if dropped {
+				wait = 3 * cacheWarmBusyRetry
+			}
+			third := make(chan struct{})
+			go func() { c.advance(wait); close(third) }()
+			select {
+			case <-third:
+			case <-time.After(time.Second):
+				close(release)
+				t.Fatal("a third warm went out while two were in flight")
+			}
+			close(release)
+			first.Wait()
+			if !dropped {
+				c.advance(cacheWarmBusyRetry)
+			}
+			c.advance(time.Hour)
+			mu.Lock()
+			defer mu.Unlock()
+			if want := map[bool]int{true: 2, false: 3}[dropped]; sent != want || most != 2 {
+				t.Fatalf("sent %d warms, %d at once; want %d, 2 at once", sent, most, want)
+			}
+		})
+	}
+}
+
+// Warms planned for the same instant are spread over the seconds before it,
+// never after: a late warm is a full-price write.
+func TestCacheWarmJitterIsOnlyEarlier(t *testing.T) {
+	w := newCacheWarmer(func() bool { return true }, func(context.Context, *warmRequest) bool { return true }, returnsAt(30*time.Minute))
+	c := &fakeClock{now: time.Now().Round(0)}
+	w.clock = c
+	due := c.Now().Add(270 * time.Second)
+	for i := range 20 {
+		w.arm("s"+itoa(int64(i)), "subagent/end/5m", &warmRequest{ttl: 5 * time.Minute, plan: []bool{false, true}}, c.Now())
+	}
+	distinct := map[time.Time]bool{}
+	for _, timer := range c.timers {
+		if timer.at.After(due) || timer.at.Before(due.Add(-5*time.Second)) {
+			t.Fatalf("a warm planned for +270s is armed at %v", timer.at.Sub(c.Now()))
+		}
+		distinct[timer.at] = true
+	}
+	if len(distinct) < 2 {
+		t.Fatal("twenty warms planned for the same instant all fire at it")
+	}
+}
+
+// An overloaded or failing provider (529, 5xx) pauses warming on the
+// credential, as a 429 does: five minutes unless it names a wait.
+func TestCacheWarmOverloadPausesTheCredential(t *testing.T) {
+	for _, status := range []int{529, http.StatusServiceUnavailable} {
+		rt := &warmTransport{warmStatus: status, warmResp: `{"type":"error","error":{"type":"overloaded_error","message":"Overloaded"}}`}
+		f := newWarmFixture(t, rt, anthropicAPI, nil)
+		other := map[string]string{}
+		for k, v := range warmHeaders {
+			other[k] = v
+		}
+		other["x-cave-session"] = "sess-warm-2"
+		f.serve(t, reqBody(""), warmHeaders)
+		f.clock.advance(270 * time.Second) // the warm is refused
+		rt.mu.Lock()
+		rt.warmStatus = 0
+		rt.mu.Unlock()
+		f.serve(t, reqBody(""), other) // another stream on the same key
+		f.clock.advance(270 * time.Second)
+		if rt.count() != 3 {
+			t.Fatalf("status %d: warmed 270 s after an overload on the same key: %d requests", status, rt.count())
+		}
+		f.clock.advance(60 * time.Second) // 330 s after the refusal
+		f.serve(t, reqBody(""), other)
+		f.clock.advance(270 * time.Second)
+		if rt.count() != 5 {
+			t.Fatalf("status %d: the pause outlived five minutes: %d requests", status, rt.count())
+		}
 	}
 }

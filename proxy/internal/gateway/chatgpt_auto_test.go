@@ -453,3 +453,175 @@ func TestChatGPTAutoRefusedUpdateHealsAndLatches(t *testing.T) {
 		t.Fatalf("after the latch: %d sends, last %s, latched %v, rejected %d", sends, bodies[len(bodies)-1], cloud.asks[len(cloud.asks)-1].PerMessageOff, rejected)
 	}
 }
+
+// A rate-limit 429 or an auth failure on routed bytes is returned, never
+// replayed: the fallback model's bytes cannot beat the limit or the login.
+func TestChatGPTAutoReturnsRateLimitsAndAuthFailures(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusUnauthorized, http.StatusForbidden} {
+		calls := 0
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			calls++
+			w.Header().Set("Retry-After", "30")
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"detail":"no"}`)
+		}))
+		srv, _, _ := chatgptTestServer(t, upstream.URL)
+		rejected := 0
+		srv.cloud = &fakeCloud{answer: RouteAnswer{Model: "gpt-6-astra", Effort: "high", Outcome: "routed", Reject: func() { rejected++ }}}
+		rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), nil)
+		upstream.Close()
+		if rec.Code != status || calls != 1 || rejected != 0 {
+			t.Errorf("status %d: agent read %d after %d upstream requests, rejected %d; want it returned once", status, rec.Code, calls, rejected)
+		}
+	}
+}
+
+// A refusal the fallback model's own bytes get too was not the route stage's:
+// the ask keeps its decision.
+func TestChatGPTAutoKeepsTheDecisionWhenTheReplayFailsToo(t *testing.T) {
+	u := newChatGPTAutoUpstream(t, "")
+	u.upstream.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = io.WriteString(w, `{"detail":"too large"}`)
+	})
+	srv, _, _ := chatgptTestServer(t, u.upstream.URL)
+	rejected := 0
+	srv.cloud = &fakeCloud{answer: RouteAnswer{Model: "gpt-6-astra", Outcome: "routed", Reject: func() { rejected++ }}}
+	if rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), nil); rec.Code != http.StatusRequestEntityTooLarge || rejected != 0 {
+		t.Fatalf("agent read %d, rejected %d; want the 413 and the decision kept", rec.Code, rejected)
+	}
+}
+
+// A transient Cloud failure runs the model the session was last served by;
+// a limit or a refused login runs the fallback.
+func TestChatGPTAutoCloudFailureKeepsTheSessionsModel(t *testing.T) {
+	for _, tc := range []struct {
+		answer RouteAnswer
+		want   string
+	}{
+		{RouteAnswer{Outcome: "degraded", Reason: "timeout"}, "gpt-6-astra"},
+		{RouteAnswer{Outcome: "degraded", Reason: "cloud_503"}, "gpt-6-astra"},
+		{RouteAnswer{Outcome: "paused", Reason: "allowance"}, "gpt-6.1-sol"},
+		{RouteAnswer{Outcome: "degraded", Reason: "cloud_401"}, "gpt-6.1-sol"},
+		{RouteAnswer{Outcome: "off"}, "gpt-6.1-sol"},
+	} {
+		u := newChatGPTAutoUpstream(t, "")
+		srv, sink, _ := chatgptTestServer(t, u.upstream.URL)
+		cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-astra", Outcome: "routed"}}
+		srv.cloud = cloud
+		session := map[string]string{"session_id": "codex-1"}
+		sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), session)
+		cloud.mu.Lock()
+		cloud.answer = tc.answer
+		cloud.mu.Unlock()
+		rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), session)
+		if rec.Code != 200 || len(u.bodies) != 2 || u.bodies[1]["model"] != tc.want || strings.Contains(rec.Body.String(), "gpt-6") {
+			t.Errorf("%s %s: upstream %v, want %s; agent read %s", tc.answer.Outcome, tc.answer.Reason, u.bodies, tc.want, rec.Body.String())
+		}
+		if row := sink.rows[len(sink.rows)-1]; row.RouteOutcome != tc.answer.Outcome || row.RouteReason != tc.answer.Reason {
+			t.Errorf("%s %s: row outcome %q reason %q", tc.answer.Outcome, tc.answer.Reason, row.RouteOutcome, row.RouteReason)
+		}
+	}
+	// A session with no previous request runs the fallback.
+	u := newChatGPTAutoUpstream(t, "")
+	srv, _, _ := chatgptTestServer(t, u.upstream.URL)
+	srv.cloud = &fakeCloud{answer: RouteAnswer{Outcome: "degraded", Reason: "timeout"}}
+	sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), map[string]string{"session_id": "codex-2"})
+	if u.bodies[0]["model"] != "gpt-6.1-sol" {
+		t.Errorf("first request of a session: upstream %v", u.bodies[0])
+	}
+}
+
+// The Auto id with Claude Code's [1m] suffix is Auto: the fallback model goes
+// upstream and the agent reads the id it sent.
+func TestChatGPTAutoTakesThe1MSuffix(t *testing.T) {
+	u := newChatGPTAutoUpstream(t, "")
+	srv, _, _ := chatgptTestServer(t, u.upstream.URL)
+	body := strings.Replace(chatGPTAutoBodyText, AutoModel, AutoModel+"[1m]", 1)
+	rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(body), nil)
+	if rec.Code != 200 || len(u.bodies) != 1 || u.bodies[0]["model"] != "gpt-6.1-sol" || strings.Count(rec.Body.String(), `"model":"caveman-auto[1m]"`) != 2 {
+		t.Fatalf("%d %s; upstream %v", rec.Code, rec.Body.String(), u.bodies)
+	}
+}
+
+// An accepted replay of the fallback model's own bytes pins the conversation
+// raw, as on a named model: the provider cached those bytes.
+func TestChatGPTAutoAcceptedReplayPinsTheConversationRaw(t *testing.T) {
+	first, second, third := strings.Repeat("codex first output ", 40), strings.Repeat("codex second output ", 40), strings.Repeat("codex third output ", 40)
+	turn := func(model string, texts ...string) string {
+		return strings.Replace(chatGPTTurn(texts...), "gpt-5.5", model, 1)
+	}
+	rt := &captureTransport{statuses: []int{http.StatusOK, http.StatusBadRequest, http.StatusOK, http.StatusOK}}
+	srv := chatGPTCompressServer(rt)
+	serveChatGPT(srv, turn(AutoModel, first))
+	serveChatGPT(srv, turn(AutoModel, first, second))
+	serveChatGPT(srv, turn(AutoModel, first, second, third))
+	if len(rt.bodies) != 4 || bytes.Contains(rt.bodies[0], []byte(first)) || bytes.Contains(rt.bodies[1], []byte(first)) || string(rt.bodies[2]) != turn("gpt-6.1-sol", first, second) {
+		t.Fatalf("test setup: want turn 1 compressed and turn 2 replayed raw, got %d calls", len(rt.bodies))
+	}
+	if string(rt.bodies[3]) != turn("gpt-6.1-sol", first, second, third) {
+		t.Fatalf("the turn after an accepted replay must go out as sent:\n%s", rt.bodies[3])
+	}
+}
+
+// A 429 without Retry-After on the routed model and on the replay: the
+// decision is rejected, so the agent's own retries send one request each.
+func TestChatGPTAutoRateLimitedReplayDoesNotDoubleTheAgentsRetries(t *testing.T) {
+	calls := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = io.WriteString(w, `{"detail":"usage limit"}`)
+	}))
+	defer upstream.Close()
+	srv, _, _ := chatgptTestServer(t, upstream.URL)
+	srv.cloud = rejectingCloud(RouteAnswer{Model: "gpt-6-astra", Outcome: "routed"})
+	for attempt, want := range []int{2, 3, 4} {
+		if rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), nil); rec.Code != http.StatusTooManyRequests || calls != want {
+			t.Fatalf("attempt %d: status %d, %d upstream sends so far, want %d", attempt+1, rec.Code, calls, want)
+		}
+	}
+}
+
+// A held model that does not serve is not held again, and a side request is
+// never held on the session's model.
+func TestChatGPTAutoHeldModelGivesWay(t *testing.T) {
+	session := map[string]string{"session_id": "codex-1"}
+	held := func() (*chatGPTAutoUpstream, *Server) {
+		u := newChatGPTAutoUpstream(t, "")
+		srv, _, _ := chatgptTestServer(t, u.upstream.URL)
+		cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-astra", Outcome: "routed"}}
+		srv.cloud = cloud
+		sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), session)
+		cloud.mu.Lock()
+		cloud.answer = RouteAnswer{Outcome: "degraded", Reason: "timeout"}
+		cloud.mu.Unlock()
+		return u, srv
+	}
+	u, srv := held()
+	inner := u.upstream.Config.Handler
+	u.upstream.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(raw))
+		if bytes.Contains(raw, []byte("gpt-6-astra")) {
+			u.mu.Lock()
+			u.bodies = append(u.bodies, map[string]any{"model": "gpt-6-astra"})
+			u.mu.Unlock()
+			w.WriteHeader(529)
+			return
+		}
+		inner.ServeHTTP(w, r)
+	})
+	sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), session)
+	sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), session)
+	if len(u.bodies) != 3 || u.bodies[1]["model"] != "gpt-6-astra" || u.bodies[2]["model"] != "gpt-6.1-sol" {
+		t.Errorf("held model answering 529: upstream %v, want it once and then the fallback", u.bodies)
+	}
+
+	u, srv = held()
+	side := map[string]string{"session_id": "codex-1", "x-openai-subagent": "title"}
+	sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), side)
+	if len(u.bodies) != 2 || u.bodies[1]["model"] != "gpt-6.1-sol" {
+		t.Errorf("side request: upstream %v, want the fallback", u.bodies)
+	}
+}

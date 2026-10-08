@@ -387,3 +387,250 @@ func TestAutoElsewhereIsRefusedAndEncodedAutoRuns(t *testing.T) {
 		t.Fatalf("gzip Auto: %d, upstream got %q (%q)", rec.Code, sent, header.Get("content-encoding"))
 	}
 }
+
+// A refusal the asked model's own bytes get too (an expired login, a prompt
+// too long) was not the route stage's doing: the ask keeps its decision.
+func TestRouteStageKeepsTheDecisionWhenTheRetryFailsToo(t *testing.T) {
+	for _, answer := range []RouteAnswer{{Model: "claude-sonnet-5-5", Outcome: "routed"}, {Effort: "low", Outcome: "kept"}} {
+		rejected, calls := 0, 0
+		answer.Reject = func() { rejected++ }
+		srv := New(Config{
+			Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+			Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, Cloud: &fakeCloud{answer: answer},
+			HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				calls++
+				return &http.Response{StatusCode: http.StatusRequestEntityTooLarge, Request: r, Header: http.Header{"Content-Type": {"application/json"}},
+					Body: io.NopCloser(strings.NewReader(`{"type":"error","error":{"type":"request_too_large","message":"prompt is too long"}}`))}, nil
+			})},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, `{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"fix the bug"}]}`)))
+		req.Header.Set("x-api-key", "sk-ant-api-key")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusRequestEntityTooLarge || calls != 2 || rejected != 0 {
+			t.Errorf("%s: agent read %d after %d upstream requests, rejected %d; want the 413 and the decision kept", answer.Outcome, rec.Code, calls, rejected)
+		}
+	}
+}
+
+// A transient Cloud failure runs the model the session's previous request
+// went to (its cache holds the prefix) and records the failure as it was; a
+// deliberate state, a limit or a provider's refusal runs the fallback.
+func TestCloudFailureKeepsTheSessionsModel(t *testing.T) {
+	session := map[string]string{"x-claude-code-session-id": "sess-1"}
+	for _, tc := range []struct {
+		answer RouteAnswer
+		want   string
+	}{
+		{RouteAnswer{Outcome: "degraded", Reason: "timeout"}, "claude-sonnet-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "cloud_unreachable"}, "claude-sonnet-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "cloud_503"}, "claude-sonnet-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "answer_unreadable"}, "claude-sonnet-5-5"},
+		{RouteAnswer{Outcome: "off"}, "claude-opus-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "login_expired"}, "claude-opus-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "cloud_401"}, "claude-opus-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "cloud_403"}, "claude-opus-5-5"},
+		{RouteAnswer{Outcome: "paused", Reason: "allowance"}, "claude-opus-5-5"},
+		{RouteAnswer{Outcome: "paused", Reason: "billing_limit"}, "claude-opus-5-5"},
+		{RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}, "claude-opus-5-5"},
+	} {
+		cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+		srv, models := routeServer(t, cloud, "")
+		sendMessages(t, srv, session)
+		cloud.mu.Lock()
+		cloud.answer = tc.answer
+		cloud.mu.Unlock()
+		rec := sendMessages(t, srv, session)
+		if got := *models; len(got) != 2 || got[1] != tc.want {
+			t.Errorf("%s %s: upstream models = %v, want %s second", tc.answer.Outcome, tc.answer.Reason, got, tc.want)
+		}
+		if row := cloud.observed[1]; row.RouteOutcome != tc.answer.Outcome || row.RouteReason != tc.answer.Reason || row.Model != tc.want || !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) {
+			t.Errorf("%s %s: row outcome %q reason %q model %q, agent read %s", tc.answer.Outcome, tc.answer.Reason, row.RouteOutcome, row.RouteReason, row.Model, rec.Body.String())
+		}
+	}
+	// A session with no previous request runs the fallback.
+	srv, models := routeServer(t, &fakeCloud{answer: RouteAnswer{Outcome: "degraded", Reason: "timeout"}}, "")
+	sendMessages(t, srv, session)
+	if got := *models; len(got) != 1 || got[0] != "claude-opus-5-5" {
+		t.Errorf("first request of a session: upstream models = %v", got)
+	}
+}
+
+// The Auto id with Claude Code's [1m] suffix is Auto: it is asked about, the
+// fallback model goes upstream and the agent reads the id it sent.
+func TestAutoTakesThe1MSuffix(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Outcome: "degraded", Reason: "timeout"}}
+	srv, log := effortServer(t, cloud, nil)
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(`{"model":"caveman-auto[1m]","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}`))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if sent, _ := log.last(); string(sent) != `{"model":"claude-sonnet-5-5","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}` {
+		t.Fatalf("upstream got %s", sent)
+	}
+	if len(cloud.asks) != 1 || cloud.asks[0].Model != "claude-sonnet-5-5" || !strings.Contains(rec.Body.String(), `"model":"caveman-auto[1m]"`) {
+		t.Errorf("asks %+v, agent read %s", cloud.asks, rec.Body.String())
+	}
+	if row := cloud.observed[0]; row.RouteFrom != AutoModel || row.Model != "claude-sonnet-5-5" {
+		t.Errorf("row from %q model %q", row.RouteFrom, row.Model)
+	}
+}
+
+// The original-bytes retry of an Auto request asks for an identity answer too:
+// a compressed one would reach the agent naming the real model.
+func TestAutoRetryAnswerNamesAuto(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		w.Header().Set("content-type", "application/json")
+		if req.Model == "claude-sonnet-5-5" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"invalid_request_error","message":"no"}}`)
+			return
+		}
+		// As a provider answers an agent that takes gzip (the Go transport
+		// decodes only what it asked for itself).
+		w.Header().Set("content-encoding", "gzip")
+		zw := gzip.NewWriter(w)
+		_, _ = io.WriteString(zw, `{"id":"m","type":"message","model":"`+req.Model+`","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+		_ = zw.Close()
+	}))
+	defer upstream.Close()
+	srv := New(Config{
+		Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)},
+		Cloud: &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}},
+	})
+	rec := sendMessages(t, srv, map[string]string{"accept-encoding": "gzip"})
+	if rec.Header().Get("content-encoding") != "" || !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) {
+		t.Fatalf("agent read (%q) %q", rec.Header().Get("content-encoding"), rec.Body.String())
+	}
+}
+
+// rejectingCloud is a fakeCloud whose Reject does what the link's does: the
+// rest of the ask runs the asked model.
+func rejectingCloud(answer RouteAnswer) *fakeCloud {
+	cloud := &fakeCloud{}
+	answer.Reject = func() {
+		cloud.mu.Lock()
+		defer cloud.mu.Unlock()
+		cloud.answer = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model"}
+	}
+	cloud.answer = answer
+	return cloud
+}
+
+// heldServer is an Anthropic proxy whose upstream answers each model with
+// the status set for it (200 when none) and records the models it was sent.
+func heldServer(t *testing.T, cloud CloudLink) (*Server, *[]string, map[string]int) {
+	t.Helper()
+	var mu sync.Mutex
+	models, statuses := []string{}, map[string]int{}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var req struct {
+			Model string `json:"model"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		models = append(models, req.Model)
+		status := statuses[req.Model]
+		mu.Unlock()
+		w.Header().Set("content-type", "application/json")
+		if status != 0 {
+			w.WriteHeader(status)
+			_, _ = io.WriteString(w, `{"type":"error","error":{"type":"overloaded_error","message":"no"}}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"m","type":"message","model":"`+req.Model+`","content":[],"usage":{"input_tokens":10,"output_tokens":2}}`)
+	}))
+	t.Cleanup(upstream.Close)
+	return New(Config{
+		Adapters: []providers.Adapter{anthropic.New("https://api.anthropic.com")}, Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "record"}},
+		Creds: stubCreds{key: "sk-byok"}, Sink: &captureSink{}, HTTPClient: &http.Client{Transport: toStub(upstream.URL)}, Cloud: cloud,
+	}), &models, statuses
+}
+
+func sendAuto(t *testing.T, srv *Server, header map[string]string) int {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(auto(t, `{"model":"claude-opus-5-5","max_tokens":5,"messages":[{"role":"user","content":"fix the bug"}]}`)))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	for name, value := range header {
+		req.Header.Set(name, value)
+	}
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	return rec.Code
+}
+
+// A 429 without Retry-After on the routed model and on the retry: the
+// decision is rejected, so the agent's own retries send one request each.
+func TestRateLimitedRetryDoesNotDoubleTheAgentsRetries(t *testing.T) {
+	srv, models, statuses := heldServer(t, rejectingCloud(RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}))
+	statuses["claude-sonnet-5-5"], statuses["claude-opus-5-5"] = http.StatusTooManyRequests, http.StatusTooManyRequests
+	for attempt, want := range []int{2, 3, 4} {
+		if code := sendAuto(t, srv, nil); code != http.StatusTooManyRequests || len(*models) != want {
+			t.Fatalf("attempt %d: status %d, %d upstream sends so far (%v), want %d", attempt+1, code, len(*models), *models, want)
+		}
+	}
+}
+
+// A held model that does not serve is not held again: the next attempt runs
+// the fallback. One that is refused costs the replay once.
+func TestHeldModelThatFailsGivesWayToTheFallback(t *testing.T) {
+	session := map[string]string{"x-claude-code-session-id": "sess-1"}
+	for _, status := range []int{529, http.StatusServiceUnavailable, http.StatusBadRequest} {
+		cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+		srv, models, statuses := heldServer(t, cloud)
+		sendAuto(t, srv, session)
+		cloud.mu.Lock()
+		cloud.answer = RouteAnswer{Outcome: "degraded", Reason: "timeout"}
+		cloud.mu.Unlock()
+		statuses["claude-sonnet-5-5"] = status
+		sendAuto(t, srv, session)
+		sendAuto(t, srv, session)
+		want := "claude-sonnet-5-5 claude-sonnet-5-5 claude-opus-5-5"
+		if status == http.StatusBadRequest {
+			want = "claude-sonnet-5-5 claude-sonnet-5-5 claude-opus-5-5 claude-opus-5-5" // refused: replayed once
+		}
+		if got := strings.Join(*models, " "); got != want {
+			t.Errorf("held model answering %d: upstream models %q, want %q", status, got, want)
+		}
+	}
+}
+
+// What heldModel refuses: another provider's model under the same session
+// key, and a session whose last request was a compaction (no cache to keep).
+func TestHeldModelGuards(t *testing.T) {
+	timeout := RouteAnswer{Outcome: "degraded", Reason: "timeout"}
+	for name, tc := range map[string]struct {
+		provider string
+		last     *RouteLast
+		want     string
+	}{
+		"same provider":           {"anthropic", &RouteLast{sent: "claude-opus-5-5", provider: "anthropic"}, "claude-opus-5-5"},
+		"another provider":        {"anthropic", &RouteLast{sent: "gpt-6-astra", provider: "openai"}, ""},
+		"after compaction":        {"anthropic", &RouteLast{sent: "claude-opus-5-5", provider: "anthropic", Compacted: true}, ""},
+		"openai":                  {"openai", &RouteLast{sent: "gpt-6-astra", provider: "openai"}, "gpt-6-astra"},
+		"openai, anthropic model": {"openai", &RouteLast{sent: "claude-opus-5-5", provider: "anthropic"}, ""},
+	} {
+		if got := heldModel(timeout, tc.provider, tc.last); got != tc.want {
+			t.Errorf("%s: held %q, want %q", name, got, tc.want)
+		}
+	}
+}
+
+// A model the agent named itself that ends in [1m] is not Auto: it goes
+// upstream once as sent and Cloud is never asked.
+func TestNamedModelWithThe1MSuffixIsNotAuto(t *testing.T) {
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}}
+	srv, log := effortServer(t, cloud, nil)
+	body := `{"model":"claude-opus-5-5[1m]","max_tokens":5,"messages":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(body))
+	req.Header.Set("x-api-key", "sk-ant-api-key")
+	srv.Handler().ServeHTTP(httptest.NewRecorder(), req)
+	if sent, _ := log.last(); len(log.bodies) != 1 || string(sent) != body || len(cloud.asks) != 0 {
+		t.Fatalf("%d upstream requests, last %s, %d asks", len(log.bodies), sent, len(cloud.asks))
+	}
+}

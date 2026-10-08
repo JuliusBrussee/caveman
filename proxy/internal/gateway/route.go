@@ -86,6 +86,10 @@ type RouteLast struct {
 	CacheReadTokens  int    `json:"cache_read_tokens"`
 	CacheWriteTokens int    `json:"cache_write_tokens"`
 	Compacted        bool   `json:"compacted"`
+	// sent is the model id that request went upstream with (Model is the
+	// provider's name for it, often a dated id) and provider whose it is: a
+	// session key can be used on both. Never on the wire.
+	sent, provider string
 }
 
 // RouteAnswer is the decision for one request. Model is set only when the
@@ -127,6 +131,12 @@ type CloudLink interface {
 // answer names Auto.
 const AutoModel = "caveman-auto"
 
+// isAuto reports the Auto id, with or without the [1m] suffix Claude Code's
+// picker saves it under (its CLI strips the suffix; another surface may not).
+func isAuto(model string) bool {
+	return strings.TrimSuffix(model, "[1m]") == AutoModel
+}
+
 // namesAuto reports a JSON body whose top-level "model" is Auto.
 func namesAuto(body []byte) bool {
 	root, ok := jsonsplice.Root(body)
@@ -135,7 +145,7 @@ func namesAuto(body []byte) bool {
 	}
 	span, _ := jsonsplice.Field(body, root, "model")
 	model, _ := jsonsplice.String(body, span)
-	return model == AutoModel
+	return isAuto(model)
 }
 
 // autoFallback is the model Auto runs on per provider whenever the route stage
@@ -156,6 +166,31 @@ func autoModelsFor(provider string) []string {
 		return AutoOpenAIModels
 	}
 	return nil
+}
+
+// heldModel is the model a transient Cloud failure (a timeout, an unreachable
+// or failing Cloud, an unreadable answer, the pause after one) runs instead of
+// the fallback: the one the session's previous request went to, whose cache
+// holds its prefix, when it is one Auto runs on provider. "" keeps the
+// fallback: no previous request on this provider, one that was a compaction
+// or came after one (no cache to keep), a held model that then did not serve
+// (unhold), and every deliberate state (signed out, routing off, an expired
+// or refused login, a limit, a provider's refusal).
+func heldModel(answer RouteAnswer, provider string, last *RouteLast) string {
+	if last == nil || last.sent == "" || last.provider != provider || last.Compacted || answer.Outcome != "degraded" {
+		return ""
+	}
+	switch reason := answer.Reason; {
+	case reason == "timeout", reason == "cloud_unreachable", reason == "answer_unreadable", strings.HasPrefix(reason, "cloud_5"):
+	default:
+		return ""
+	}
+	// Only an Auto request the route stage was on for records last, so with no
+	// list (the provider's whole pool) it is the fallback or a model Cloud picked.
+	if models := autoModelsFor(provider); models != nil && !slices.Contains(models, last.sent) {
+		return ""
+	}
+	return last.sent
 }
 
 // autoOpenAIAnswer refuses an answer naming an OpenAI model outside
@@ -614,6 +649,17 @@ func (rs *routeSessions) served(key string, last RouteLast, at time.Time, moved 
 	if session := rs.get(key, true); session != nil {
 		session.last, session.lastAt, session.lastBytes = &last, at, bytes
 		session.moved = session.moved || moved
+	}
+}
+
+// unhold forgets the model key's previous request went to: a held model that
+// did not serve (a limit, an overload, a refusal the replay got too) is not
+// held again, so the next attempt runs the fallback.
+func (rs *routeSessions) unhold(key string) {
+	rs.mu.Lock()
+	defer rs.mu.Unlock()
+	if session := rs.get(key, false); session != nil && session.last != nil {
+		session.last.sent = ""
 	}
 }
 

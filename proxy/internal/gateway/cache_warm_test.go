@@ -207,6 +207,7 @@ func newWarmFixture(t *testing.T, rt *warmTransport, base string, logger *slog.L
 	})
 	clock := &fakeClock{now: time.Now().Round(0)}
 	srv.warmer.clock = clock
+	srv.warmer.jitter = func() time.Duration { return 0 } // tests pin the planned times
 	// Tests plan against a known return time, not the shipped measurements.
 	srv.warmer.table = returnsAt(30 * time.Minute)
 	return &warmFixture{srv: srv, sink: sink, rt: rt, clock: clock, on: &on}

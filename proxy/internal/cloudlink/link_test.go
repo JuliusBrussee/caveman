@@ -1085,3 +1085,39 @@ func TestLogoutPendingCleanupIsSignedOut(t *testing.T) {
 		t.Fatalf("%d calls to the cloud while a logout is pending", hits.Load())
 	}
 }
+
+// A turn that starts during a pause keeps the paused answer for its whole
+// tool loop: the pause ending halfway never switches the model.
+func TestTurnStartedInAPauseKeepsItsAnswer(t *testing.T) {
+	var hits atomic.Int32
+	cloud := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hits.Add(1) == 1 {
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		_, _ = io.WriteString(w, `{"model":"claude-sonnet-5-5","reason":"ranked"}`)
+	}))
+	defer cloud.Close()
+	link := newLink(cloudHome(t, cloud.URL, true, `{"access_token":"`+token(time.Now().Add(time.Hour))+`"}`))
+	var mu sync.Mutex
+	now := time.Now()
+	link.now = func() time.Time { mu.Lock(); defer mu.Unlock(); return now }
+	link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))() // a 500: asks pause
+	turn := messagesAsk("claude-opus-5-5")
+	turn.SessionID = "s2"
+	if first := link.Ask(t.Context(), turn)(); first.Model != "" || first.Reason != "cloud_500" {
+		t.Fatalf("during the pause: %+v", first)
+	}
+	mu.Lock()
+	now = now.Add(2 * failurePause)
+	mu.Unlock()
+	if again := link.Ask(t.Context(), turn)(); again.Model != "" || again.Reason != "cloud_500" || hits.Load() != 1 {
+		t.Fatalf("the same turn after the pause: %+v, cloud asked %d times", again, hits.Load())
+	}
+	// The next ask is a new one.
+	next := messagesAsk("claude-opus-5-5")
+	next.SessionID = "s3"
+	if answer := link.Ask(t.Context(), next)(); answer.Model != "claude-sonnet-5-5" {
+		t.Fatalf("a new ask after the pause: %+v", answer)
+	}
+}

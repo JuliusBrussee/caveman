@@ -157,14 +157,19 @@ func chatGPTAutoBody(captured []byte, contentEncoding string) (body []byte, tooL
 // chatGPTAuto serves one POST naming Auto on the agent's own login: a turn
 // (/responses) runs the model and effort Cloud picks among AutoOpenAIModels,
 // anything else gpt-6.1-sol. A 4xx on bytes
-// the route stage changed replays the fallback model's own bytes. The agent
-// reads caveman-auto as the model.
+// the route stage changed replays the fallback model's own bytes, except a
+// rate-limit 429 and a 401 or 403, which are returned. The agent reads the
+// Auto id it sent as the model.
 func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestContext, requestID, traceID, upstreamURL, suffix string, start time.Time, evidence requestEvidence, body []byte) {
 	fallback := autoFallback["openai"]
 	asked, ok := setModel(body, fallback)
 	if !ok {
 		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto needs a readable model field.")
 		return
+	}
+	shown := AutoModel // the id as the agent sent it ([1m] or not)
+	if from, to, ok := prefixModel(body); ok {
+		shown = string(body[from+1 : to-1])
 	}
 	// Only a turn is routed; compaction and other requests run the fallback.
 	turn := suffix == "/responses"
@@ -180,6 +185,7 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 	// The ask starts first, so its round trip overlaps compression.
 	var run *routeRun
 	var await func() RouteAnswer
+	var last *RouteLast
 	if s.cloud != nil && turn {
 		exact := ""
 		if evidence.SessionCorrelationBasis == "explicit_header" {
@@ -187,7 +193,8 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 		}
 		run = newRouteRun(r.Header, exact, "/v1/responses", asked)
 		run.asked = fallback
-		last, perMessageOff := s.routes.facts(run.key, time.Now())
+		var perMessageOff bool
+		last, perMessageOff = s.routes.facts(run.key, time.Now())
 		await = s.cloud.Ask(r.Context(), RouteAsk{
 			Provider: "openai", Endpoint: "/v1/responses", Model: fallback, Agent: rc.AgentSlug,
 			SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(asked), Body: asked,
@@ -200,14 +207,22 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 	var comp *compressionOutcome
 	lockedRoutes, planAllowed := compiledPlanRoutes(r.Header)
 	eligible := turn && rc.RuntimeMode == "compress" && s.compressor != nil && s.liveZoneCompressionAllowed(adapter, nil) && planAllowed && inspectErr == nil
-	if eligible && s.cacheEpochAllows(r, adapter, meta, asked, evidence.SessionID) {
+	// As in chatgpt.go: a conversation pinned raw goes out as sent.
+	if eligible && !s.rawPinned(adapter, meta, asked) && s.cacheEpochAllows(r, adapter, meta, asked, evidence.SessionID) {
 		comp = s.compressRequest(adapter, asked, meta, &transform, requestID, lockedRoutes)
 	}
 	sent, model := transform.Body, fallback
+	compressed := sent // what compression made of asked, for the raw pin
+	held := false      // the request runs the session's held model (heldModel)
 	if await != nil {
 		// AutoOpenAIModels only, never a pool entry: anything else runs
 		// gpt-6.1-sol at that answer's effort.
 		route = autoOpenAIAnswer(await(), "/v1/responses", fallback, sent, true)
+		if model := heldModel(route, "openai", last); model != "" && !run.auxiliary {
+			// Cloud failed: the session's cache is on this model. A side
+			// request has a prefix of its own.
+			route.Model, held = model, true
+		}
 		if route.Model != "" && route.Model != fallback {
 			if moved, ok := setModel(sent, route.Model); ok {
 				sent, model = moved, route.Model
@@ -246,15 +261,20 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 			}
 		}
 	}
-	if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(sent, asked) {
+	if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(sent, asked) && !rateLimited(resp) &&
+		resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
 		// The login refused the routed model, its effort or the compressed
-		// bytes: the fallback model's own bytes, and the rest of this ask
-		// stays there.
+		// bytes: the fallback model's own bytes, and, once those are served,
+		// the rest of this ask stays there and the conversation is pinned raw
+		// (pinRaw). A 429 on them rejects the decision too: else each of the
+		// agent's own retries would send both requests again. A rate-limit
+		// 429 is returned instead, as in chatgpt.go and proxy.go. A 401 or 403
+		// is returned too, on this path alone (those two replay it): the
+		// login is the agent's own, so the fallback model's bytes meet the
+		// same refusal and the replay only doubles the request.
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
-		if route.Reject != nil {
-			route.Reject()
-		}
+		reject := route.Reject
 		route = RouteAnswer{Outcome: "degraded", Reason: "provider_rejected_routed_model", DecisionID: route.DecisionID}
 		sent, model, comp = asked, fallback, nil
 		transform.OptimizerIDs = []string{}
@@ -262,6 +282,13 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 			run.effort = ""
 		}
 		resp, err = send(asked)
+		served := err == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
+		if served {
+			s.pinRaw(adapter, meta, asked, compressed)
+		}
+		if reject != nil && (served || err == nil && resp.StatusCode == http.StatusTooManyRequests) {
+			reject()
+		}
 	}
 	reqCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
 	_, _ = reqCapture.Write(sent)
@@ -287,7 +314,7 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 	case !identity: // left as it is, like a compressed answer on the provider path
 	case stream:
 		resp.Header.Del("Content-Length")
-		src = newShownModel(src, model, AutoModel)
+		src = newShownModel(src, model, shown)
 	default:
 		data, rerr := io.ReadAll(src)
 		if rerr != nil {
@@ -295,8 +322,8 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 			record(0, "cave_upstream_body_read_failed", nil, 0, false)
 			return
 		}
-		if shown, ok := setModel(data, AutoModel); ok {
-			data = shown
+		if named, ok := setModel(data, shown); ok {
+			data = named
 		}
 		resp.Header.Set("Content-Length", strconv.Itoa(len(data)))
 		src = bytes.NewReader(data)
@@ -321,8 +348,10 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 		}
 		s.routes.served(run.key, RouteLast{
 			Model: labelOrDefault(served.name(""), model), Effort: run.effort,
-			InputTokens: usage.InputTokens, CacheReadTokens: usage.CachedInputTokens, Compacted: run.compacted,
+			InputTokens: usage.InputTokens, CacheReadTokens: usage.CachedInputTokens, Compacted: run.compacted, sent: model, provider: "openai",
 		}, time.Now(), model != fallback && !run.perRequest, len(asked))
+	} else if held {
+		s.routes.unhold(run.key) // the held model did not serve: the fallback next
 	}
 	if errCode != "" {
 		panic(http.ErrAbortHandler)
@@ -473,7 +502,7 @@ func namesAutoHead(head []byte, encoding string) bool {
 	defer reader.Close()
 	decoded, _ := io.ReadAll(io.LimitReader(reader, autoSniffBytes)) // a cut stream still yields its head
 	start, end, ok := prefixModel(decoded)
-	return ok && string(decoded[start:end]) == `"`+AutoModel+`"`
+	return ok && isAuto(string(decoded[start+1:end-1]))
 }
 
 // chatGPTAutoDoor serves a /chatgpt POST whose head names Auto. A body that
@@ -541,7 +570,7 @@ func (s *Server) chatGPTAutoDoor(w http.ResponseWriter, r *http.Request, rc Requ
 	src := io.Reader(resp.Body)
 	if encoding := resp.Header.Get("Content-Encoding"); encoding == "" || strings.EqualFold(encoding, "identity") {
 		resp.Header.Del("Content-Length")
-		src = newShownModel(resp.Body, fallback, AutoModel)
+		src = newShownModel(resp.Body, fallback, string(head[from+1:to-1]))
 	}
 	copySafeResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)

@@ -210,15 +210,16 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID
 	// Auto goes upstream as the provider's fallback model (the route stage may
-	// still move it); agentModel is what the agent's copy of the answer names.
+	// still move it); agentModel is what the agent's copy of the answer names
+	// (the Auto id as it sent it, [1m] or not).
 	agentModel := meta.Model
-	if fallback := autoFallback[meta.Provider]; meta.Model == AutoModel && fallback != "" {
+	if fallback := autoFallback[meta.Provider]; isAuto(meta.Model) && fallback != "" {
 		if out, ok := setModel(body, fallback); ok {
 			body, meta.Model = out, fallback
 			evidence.originalBody, rawHash = body, sha256.Sum256(body)
 		}
 	}
-	if meta.Model == AutoModel {
+	if isAuto(meta.Model) {
 		// No provider here serves Auto: the literal id never goes upstream.
 		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Auto runs only on Claude and OpenAI models through Caveman, and this request goes to another provider (Bedrock, Vertex or a custom endpoint): pick another model with /model.")
 		return
@@ -279,8 +280,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// request-wide opt-out and an encoded body keep the model untouched too.
 	var awaitRoute func() RouteAnswer
 	var run *routeRun
+	var last *RouteLast // what the session's previous request ran, for the ask
+	held := false       // the request runs the session's held model (heldModel)
 	modelRequested := meta.Model
 	evidence.modelRequested = agentModel
+	if isAuto(agentModel) {
+		evidence.modelRequested = AutoModel // an Auto row says caveman-auto, suffix or not
+	}
 	// count_tokens runs the same thinking-binding check as Messages
 	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
 	// and drop_block, is never asked about and gets no heal retry.
@@ -310,13 +316,14 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				run.perRequest, run.replay = true, true
 				break
 			}
-			if agentModel != AutoModel {
+			if !isAuto(agentModel) {
 				// A model the agent named itself is never asked about; the
 				// session's marks and heal still apply, as with routing off.
 				evidence.route = RouteAnswer{Outcome: "off", Reason: "named_model"}
 				break
 			}
-			last, perMessageOff := s.routes.facts(run.key, time.Now())
+			var perMessageOff bool
+			last, perMessageOff = s.routes.facts(run.key, time.Now())
 			awaitRoute = s.cloud.Ask(r.Context(), RouteAsk{
 				Provider: meta.Provider, Endpoint: meta.Endpoint, Model: meta.Model, Agent: rc.AgentSlug,
 				SessionID: run.key, ParentSessionID: run.parent, ToolsCount: meta.ToolsCount, InputBytes: len(body), Body: body,
@@ -489,6 +496,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		answer := awaitRoute()
 		if meta.Provider == "openai" {
 			answer = autoOpenAIAnswer(answer, meta.Endpoint, modelRequested, transform.Body, false)
+		}
+		if model := heldModel(answer, meta.Provider, last); model != "" && !run.auxiliary {
+			// Cloud failed: the session's cache is on this model, not the
+			// fallback. A side request has a prefix of its own.
+			answer.Model, held = model, true
 		}
 		if target := answer.Target; target != nil {
 			// The bytes compression produced go, unless they lean on the
@@ -754,6 +766,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			retryHeaders.Set("user-agent", r.UserAgent())
 		}
 		s.applyUpstreamAuthFallback(adapter.Name(), credential, retryHeaders)
+		if modelRequested != agentModel {
+			// An identity answer, as above: the agent's copy names Auto.
+			retryHeaders.Del("accept-encoding")
+		}
 		s.inflight.Add(1)
 		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(original, retryHeaders))
 		s.inflight.Add(-1)
@@ -764,15 +780,22 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 			return
 		}
-		if retryResp.StatusCode >= 200 && retryResp.StatusCode < 300 {
+		retryServed := retryResp.StatusCode >= 200 && retryResp.StatusCode < 300
+		if retryServed {
 			s.pinRaw(adapter, meta, body, transform.Body)
+		}
+		// A served retry shows the routed bytes were the cause; an error the
+		// original bytes get too (an expired login, a prompt too long) leaves
+		// the ask its decision. A 429 there rejects it all the same: else each
+		// of the agent's own retries would send both requests again.
+		if retryServed || retryResp.StatusCode == http.StatusTooManyRequests {
+			if reject := evidence.route.Reject; reject != nil && (meta.Model != modelRequested || run != nil && run.applied) {
+				reject() // the rest of this ask stays on the asked model and the request's own effort
+			}
 		}
 		rawRetried = true
 		resp = retryResp
 		upstreamHeaders = retryHeaders
-		if reject := evidence.route.Reject; reject != nil && (meta.Model != modelRequested || run != nil && run.applied) {
-			reject() // the rest of this ask stays on the asked model and the request's own effort
-		}
 		if run != nil {
 			run.effort = "" // the original bytes: read back from them
 		}
@@ -995,8 +1018,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		s.routes.served(run.key, RouteLast{
 			Model: labelOrDefault(served.name(resp.Header.Get("Content-Encoding")), meta.Model), Effort: run.effort,
 			InputTokens: finalUsage.InputTokens, CacheReadTokens: finalUsage.CachedInputTokens,
-			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted,
+			CacheWriteTokens: finalUsage.CacheCreationInputTokens, Compacted: run.compacted, sent: meta.Model, provider: meta.Provider,
 		}, time.Now(), meta.Model != modelRequested && !run.perRequest, len(body))
+	} else if held {
+		s.routes.unhold(run.key) // the held model did not serve: the fallback next
 	}
 	combinedUsage := finalUsage
 	if resp.Request != nil && !statsPricingOriginKnown(meta.Provider, resp.Request.URL) {
