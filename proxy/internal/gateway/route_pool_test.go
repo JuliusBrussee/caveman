@@ -375,7 +375,8 @@ func TestPoolFailureAfterHeadersBeforeContentFallsBack(t *testing.T) {
 }
 
 // A Claude Code request with tools on an OpenAI API key goes out on the
-// Responses wire with function tools, at the answered effort.
+// Responses wire with function tools, at the answered effort (the catalog
+// lists max for gpt-6.1-sol).
 func TestPoolOpenAIKeyIsResponsesOnly(t *testing.T) {
 	header := http.Header{}
 	header.Set("authorization", "Bearer sk-openai")
@@ -397,7 +398,7 @@ func TestPoolOpenAIKeyIsResponsesOnly(t *testing.T) {
 	}
 	var sent map[string]any
 	_ = json.Unmarshal([]byte(body), &sent)
-	if encode(sent["tools"]) != `[{"name":"Bash","parameters":{"type":"object"},"strict":false,"type":"function"}]` || encode(sent["reasoning"]) != `{"effort":"xhigh","summary":"auto"}` {
+	if encode(sent["tools"]) != `[{"name":"Bash","parameters":{"type":"object"},"strict":false,"type":"function"}]` || encode(sent["reasoning"]) != `{"effort":"max","summary":"auto"}` {
 		t.Fatalf("responses body = %s", body)
 	}
 }
@@ -464,7 +465,8 @@ func TestPoolFallbackFitsTheEffortToTheAskedModel(t *testing.T) {
 	if _, body := c.stub.last("/v1/messages"); !strings.Contains(body, `"output_config":{"effort":"high"}`) {
 		t.Fatalf("max with thinking off: %s", body)
 	}
-	for model, want := range map[string]string{"gpt-6.1-sol": "xhigh", "gpt-6-sol": "max"} { // the catalog lists max for gpt-6-sol
+	// gpt-uncataloged has no catalog row (OpenAI's common set); the catalog lists max for the others.
+	for model, want := range map[string]string{"gpt-uncataloged": "xhigh", "gpt-6.1-sol": "max", "gpt-6-sol": "max"} {
 		c = newPoolCase(t, localTarget("down.example"), "max")
 		c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"harness says hi\"}\n\n" +
 			"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"

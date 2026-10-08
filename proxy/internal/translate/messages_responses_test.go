@@ -32,7 +32,7 @@ func TestMessagesToResponsesRequest(t *testing.T) {
 	}
 	want := map[string]any{
 		"model": "gpt-6.1-sol", "store": false, "stream": true, "instructions": "You are Claude Code", "max_output_tokens": 2048.0,
-		"reasoning": map[string]any{"effort": "xhigh", "summary": "auto"}, "include": []any{"reasoning.encrypted_content"},
+		"reasoning": map[string]any{"effort": "max", "summary": "auto"}, "include": []any{"reasoning.encrypted_content"},
 		"tools":       []any{map[string]any{"type": "function", "name": "Read", "description": "read a file", "strict": false, "parameters": map[string]any{"type": "object", "properties": map[string]any{"path": map[string]any{"type": "string"}}}}},
 		"tool_choice": map[string]any{"type": "function", "name": "Read"},
 		"input": []any{

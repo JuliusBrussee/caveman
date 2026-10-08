@@ -235,8 +235,8 @@ func TestRejectFitsTheEffortToTheAskedModel(t *testing.T) {
 	}{
 		{messagesAsk("claude-opus-5-5"), "minimal", "low"},
 		{messagesAsk("claude-opus-5-5"), "none", ""},
-		{responses("gpt-6.1-sol"), "max", "xhigh"}, // not in the catalog: OpenAI's common set
-		{responses("gpt-6-sol"), "max", "max"},     // the catalog lists max
+		{responses("gpt-6.1-sol"), "max", "max"}, // the catalog lists max
+		{responses("gpt-6-sol"), "max", "max"},
 		{thinkingOff, "max", "high"},
 	} {
 		fake := &poolCloud{answer: func(map[string]any) (int, string) {
