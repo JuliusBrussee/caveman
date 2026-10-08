@@ -65,13 +65,13 @@ jobs:
           - id: aider
             install: python -m pip install aider-chat==0.86.2
           - id: claude
-            install: npm install -g @anthropic-ai/claude-code@2.1.289
+            install: npm install -g @anthropic-ai/claude-code@2.1.291
           - id: codex
-            install: npm install -g @openai/codex@0.160.0
+            install: npm install -g @openai/codex@0.160.1
           - id: gemini
             install: npm install -g @google/gemini-cli@0.62.0
           - id: hermes
-            install: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@1f8acb340f9c72aec1426248cca54139816a77f5#egg=hermes-agent" && python -c "import sys; from importlib.metadata import version; name, expected = 'hermes-agent==0.19.1'.split('=='); observed = version(name); print(observed); sys.exit(0 if observed == expected else 'Hermes package version mismatch')"
+            install: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@f97608f178d1ffeca59860195ab7da295f7c8e5f#egg=hermes-agent" && python -c "import sys; from importlib.metadata import version; name, expected = 'hermes-agent==0.21.5'.split('=='); observed = version(name); print(observed); sys.exit(0 if observed == expected else 'Hermes package version mismatch')"
           - id: kilo
             install: npm install -g @kilocode/cli@7.8.3
           - id: openclaw
@@ -79,9 +79,9 @@ jobs:
           - id: opencode
             install: npm install -g opencode-ai@1.18.34
           - id: pi
-            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.2
+            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
           - id: qwen
-            install: npm install -g @qwen-code/qwen-code@0.24.7
+            install: npm install -g @qwen-code/qwen-code@0.25.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
@@ -116,7 +116,7 @@ jobs:
           - id: gemini
             install_latest: npm install -g @google/gemini-cli@latest
           - id: hermes
-            install_latest: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@main#egg=hermes-agent"
+            install_latest: url=$(curl -fsSL -o /dev/null -w '%{url_effective}' https://github.com/NousResearch/hermes-agent/releases/latest) && tag="${url#*/releases/tag/}" && [ "$tag" != "$url" ] && python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@${tag}#egg=hermes-agent"
           - id: kilo
             install_latest: npm install -g @kilocode/cli@latest
           - id: openclaw

@@ -15,6 +15,23 @@ func New(baseURL string) providers.Adapter {
 	}, MetadataRoutes: []string{"/v1/models", "/openai/v1/models"}}}
 }
 
+// MatchMetadataRequest is the OpenAI half of the bare /v1/models split (see
+// anthropic.Adapter.MatchMetadataRequest): /openai/v1/models is always OpenAI,
+// the bare spelling only when the caller carries neither Anthropic's markers
+// (anthropic-version, x-api-key) nor a Google key (x-goog-api-key or the
+// key/$key query parameter), so their keys never reach this upstream.
+func (a Adapter) MatchMetadataRequest(r *http.Request) bool {
+	if !a.MatchMetadataRoute(r.Method, r.URL.Path) {
+		return false
+	}
+	if strings.HasPrefix(r.URL.Path, "/openai/") {
+		return true
+	}
+	googleKey, err := providers.GoogleRequestAPIKey(r)
+	return err == nil && googleKey == "" &&
+		r.Header.Get("anthropic-version") == "" && r.Header.Get("x-api-key") == ""
+}
+
 func isInputTokenCountEndpoint(endpoint string) bool {
 	return strings.HasSuffix(endpoint, "/responses/input_tokens")
 }

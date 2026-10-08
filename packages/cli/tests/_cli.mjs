@@ -33,13 +33,17 @@ exit 0
 `, { mode: 0o755 });
     chmodSync(noop, 0o755);
   }
-  // A developer's CLAUDE_CONFIG_DIR would send test writes to their real Claude config.
-  const { CLAUDE_CONFIG_DIR: _real, ...inherited } = process.env;
   return {
     home,
     env: {
-      ...inherited,
+      ...process.env,
       HOME: home,
+      USERPROFILE: home,
+      CLAUDE_CONFIG_DIR: "",
+      CODEX_HOME: "",
+      GEMINI_CLI_HOME: "",
+      HERMES_HOME: "",
+      XDG_CONFIG_HOME: join(home, ".config"),
       CAVEMAN_HOME: home,
       CAVE_NO_KEYCHAIN: "1",
       NO_COLOR: "1",

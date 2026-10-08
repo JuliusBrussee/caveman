@@ -18,6 +18,7 @@ func TestMain(m *testing.M) {
 func TestAgentRootsHonorRelocationVariables(t *testing.T) {
 	base := t.TempDir()
 	t.Setenv("HOME", filepath.Join(base, "home"))
+	t.Setenv("USERPROFILE", filepath.Join(base, "home"))
 	t.Setenv("CAVEMAN_CLAUDE_ROOT", "")
 	t.Setenv("CAVEMAN_CODEX_ROOT", "")
 	t.Setenv("CAVEMAN_CLAUDE_GLOBAL_CONFIG", "")
@@ -55,6 +56,7 @@ func TestGeminiAndOpencodeRootsHonorRelocationVariables(t *testing.T) {
 	base := t.TempDir()
 	home := filepath.Join(base, "home")
 	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	t.Setenv("CAVEMAN_GEMINI_ROOT", "")
 	t.Setenv("CAVEMAN_OPENCODE_ROOT", "")
 

@@ -8,7 +8,7 @@ import { spawnSync } from 'node:child_process';
 import { nodeStub, stubEnv } from '../../packages/cli/tests/harness/stub-bin.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-const INSTALLER = path.join(ROOT, 'bin/install.js');
+const INSTALLER = path.join(ROOT, 'installer/install.js');
 const skillNames = fs.readdirSync(path.join(ROOT, 'skills')).filter(name => fs.existsSync(path.join(ROOT, 'skills', name, 'SKILL.md'))).sort();
 
 function fixture(t) {
@@ -179,11 +179,11 @@ test('a foreign same-name skill fails the real install without modifying it or c
 test('detached real installer stages the source with --copy and then owns the vendor installation', (t) => {
   const f = fixture(t);
   const detached = path.join(f.directory, 'detached');
-  fs.cpSync(path.join(ROOT, 'bin'), path.join(detached, 'bin'), { recursive: true });
+  fs.cpSync(path.join(ROOT, 'installer'), path.join(detached, 'installer'), { recursive: true });
   const log = path.join(f.directory, 'stage.json');
   nodeStub(f.bin, 'npx', `import fs from 'node:fs'; import path from 'node:path'; fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args: ARGV, cwd: process.cwd() })); fs.cpSync(${JSON.stringify(path.join(ROOT, 'skills'))}, path.join(process.cwd(), '.agents', 'skills'), { recursive: true });`);
   f.env.CONTINUE_GLOBAL_DIR = path.join(f.directory, 'continue configured');
-  const installed = f.run(['--only', 'continue'], path.join(detached, 'bin', 'install.js'));
+  const installed = f.run(['--only', 'continue'], path.join(detached, 'installer', 'install.js'));
   assert.equal(installed.status, 0, installed.stdout + installed.stderr);
   const stage = JSON.parse(fs.readFileSync(log, 'utf8'));
   assert.deepEqual(stage.args, ['-y', 'skills', 'add', 'JuliusBrussee/caveman', '--skill', '*', '-a', 'codex', '--yes', '--copy']);

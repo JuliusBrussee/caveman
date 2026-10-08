@@ -1,5 +1,5 @@
 # caveman — one-command hook installer for Claude Code (Windows PowerShell)
-# Installs: SessionStart hook (auto-load rules) + UserPromptSubmit hook (mode tracking)
+# Installs: SessionStart hook (auto-load rules) + SubagentStart hook (subagent mode) + UserPromptSubmit hook (mode tracking) + SessionEnd stats recorder
 # Usage: powershell -ExecutionPolicy Bypass -File src\hooks\install.ps1
 #   or:  powershell -ExecutionPolicy Bypass -File src\hooks\install.ps1 -Force
 #   or (remote, no -Force support via pipe):
@@ -33,7 +33,7 @@ $ScriptDir = if ($PSScriptRoot) { $PSScriptRoot } else { $null }
 # refuse unreadable settings before copying hooks or replacing existing files.
 $SettingsHelper = ""
 if ($ScriptDir) {
-    $candidate = Join-Path $ScriptDir "../../bin/lib/settings.js"
+    $candidate = Join-Path $ScriptDir "../../installer/lib/settings.js"
     if (Test-Path -LiteralPath $candidate) { $SettingsHelper = $candidate }
 }
 $env:CAVEMAN_SETTINGS = $Settings
@@ -57,7 +57,7 @@ try {
   }
 } catch (error) {
   console.error('Cannot install standalone hooks: ' + error.message);
-  console.error('Nothing was changed. For JSONC settings, use bin/install.js from a clone.');
+  console.error('Nothing was changed. For JSONC settings, use installer/install.js from a clone.');
   process.exit(1);
 }
 '@ | node --input-type=commonjs
@@ -101,7 +101,9 @@ if (-not $Force) {
                 return $false
             }
             $HooksWired = (& $hasCavemanHook "SessionStart" "caveman-activate.js") `
-                -and (& $hasCavemanHook "UserPromptSubmit" "caveman-mode-tracker.js")
+                -and (& $hasCavemanHook "SubagentStart" "caveman-activate.js") `
+                -and (& $hasCavemanHook "UserPromptSubmit" "caveman-mode-tracker.js") `
+                -and (& $hasCavemanHook "SessionEnd" "caveman-stats.js")
             $HasStatusLine = $null -ne $settingsObj.statusLine
         } catch {
             $HooksWired = $false
@@ -154,7 +156,7 @@ if (-not (Test-Path $Settings)) {
 # Back up existing settings.json before touching it. Back up ONCE: without the
 # Test-Path guard a -Force reinstall overwrites the only pre-caveman copy with
 # the already-merged file, destroying the user's recovery path. Same guard as
-# bin/install.js.
+# installer/install.js.
 if (-not (Test-Path "$Settings.bak")) {
     Copy-Item $Settings "$Settings.bak"
 }
@@ -196,6 +198,22 @@ if (!hasStart) {
   });
 }
 
+// SubagentStart — hand subagents this session's active mode (#621)
+if (!settings.hooks.SubagentStart) settings.hooks.SubagentStart = [];
+const hasSubagent = settings.hooks.SubagentStart.some(e =>
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
+);
+if (!hasSubagent) {
+  settings.hooks.SubagentStart.push({
+    hooks: [{
+      type: 'command',
+      command: 'node "' + hooksDir + '/caveman-activate.js" --subagent',
+      timeout: 30,
+      statusMessage: 'Loading caveman mode for subagent...'
+    }]
+  });
+}
+
 // UserPromptSubmit
 if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
 const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
@@ -208,6 +226,22 @@ if (!hasPrompt) {
       command: 'node "' + hooksDir + '/caveman-mode-tracker.js"',
       timeout: 30,
       statusMessage: 'Tracking caveman mode...'
+    }]
+  });
+}
+
+// SessionEnd
+if (!settings.hooks.SessionEnd) settings.hooks.SessionEnd = [];
+const hasEnd = settings.hooks.SessionEnd.some(e =>
+  e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-stats.js'))
+);
+if (!hasEnd) {
+  settings.hooks.SessionEnd.push({
+    hooks: [{
+      type: 'command',
+      command: 'node "' + hooksDir + '/caveman-stats.js" --record',
+      timeout: 5,
+      statusMessage: 'Recording caveman stats...'
     }]
   });
 }
@@ -254,6 +288,8 @@ Write-Host "Done! Restart Claude Code to activate." -ForegroundColor Green
 Write-Host ""
 Write-Host "What's installed:"
 Write-Host "  - SessionStart hook: auto-loads caveman rules every session"
+Write-Host "  - SubagentStart hook: subagents inherit the session's active mode"
 Write-Host "  - Mode tracker hook: updates statusline badge when you switch modes"
 Write-Host "    (/caveman, /ultracave, /megacave, /caveman-commit, etc.)"
+Write-Host "  - SessionEnd hook: records lifetime stats silently"
 Write-Host "  - Statusline badge: shows [CAVEMAN], [ULTRACAVE] or [MEGACAVE]"

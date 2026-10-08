@@ -34,8 +34,11 @@ type captureUpstreamTransport struct {
 }
 
 func (t *captureUpstreamTransport) RoundTrip(r *http.Request) (*http.Response, error) {
-	body, _ := io.ReadAll(r.Body)
-	t.body = append([]byte(nil), body...)
+	t.body = nil
+	if r.Body != nil { // metadata GETs forward with no body
+		body, _ := io.ReadAll(r.Body)
+		t.body = append([]byte(nil), body...)
+	}
 	t.headers = r.Header.Clone()
 	t.url = r.URL.String()
 	status := t.status
@@ -717,6 +720,13 @@ func TestCreds_PassthroughThenBYOK(t *testing.T) {
 	rNoAuth := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
 	if got := c.Resolve("anthropic", rNoAuth).Key; got != "sk-byok-env" {
 		t.Errorf("BYOK fallback key = %q, want sk-byok-env", got)
+	}
+}
+
+func TestProviderUpstreamsPublishesChatGPTSubscriptionProof(t *testing.T) {
+	upstreams := ProviderUpstreams(config.Config{})
+	if got := upstreams["openai-codex"]; got != "https://chatgpt.com/backend-api" {
+		t.Fatalf("openai-codex upstream = %q, want ChatGPT backend base", got)
 	}
 }
 
@@ -1550,6 +1560,25 @@ func TestStandaloneOpenCodeGoAuthEndToEnd(t *testing.T) {
 			wantHeaders: map[string]string{
 				"x-opencode-session": "ses_chat",
 				"x-opencode-client":  "pi",
+			},
+		},
+		{
+			// `caveman enable opencode` and `caveman wrap opencode` route
+			// OpenCode's own opencode-go provider through this mount (#1090).
+			name:     "opencode agent responses forwards the OpenCode session headers",
+			path:     "/w/opencode/compat/opencode-go/v1/responses",
+			body:     responsesBody,
+			response: responsesResponse,
+			inbound: map[string]string{
+				"authorization":      "Bearer sk-inbound",
+				"x-opencode-session": "ses_opencode",
+				"x-opencode-client":  "cli",
+			},
+			wantURL:  "https://opencode.ai/zen/go/v1/responses",
+			wantAuth: "Bearer sk-inbound",
+			wantHeaders: map[string]string{
+				"x-opencode-session": "ses_opencode",
+				"x-opencode-client":  "cli",
 			},
 		},
 		{

@@ -10,11 +10,11 @@ const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const shellShim = readFileSync(join(root, "install.sh"), "utf8");
 const powershellShim = readFileSync(join(root, "install.ps1"), "utf8");
 
-test("stdin shell install never executes caller cwd bin/install.js", { skip: process.platform === "win32" }, () => {
+test("stdin shell install never executes caller cwd installer/install.js", { skip: process.platform === "win32" }, () => {
   const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-cwd-"));
-  mkdirSync(join(cwd, "bin"));
+  mkdirSync(join(cwd, "installer"));
   const marker = join(cwd, "executed");
-  writeFileSync(join(cwd, "bin", "install.js"), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "bad")`);
+  writeFileSync(join(cwd, "installer", "install.js"), `require("node:fs").writeFileSync(${JSON.stringify(marker)}, "bad")`);
 
   const fakeBin = join(cwd, "fake-bin");
   mkdirSync(fakeBin);
@@ -44,13 +44,13 @@ test("both public shims pin bootstrap package to immutable release", () => {
 
 test("every bootstrap pin names the same release", () => {
   // v2.3.0 shipped with install.sh and install.ps1 still pinned to v2.2.0:
-  // bumping bin/install.js and the README one-liners is not enough, because
+  // bumping installer/install.js and the README one-liners is not enough, because
   // each shim carries its own default ref and the curl-pipe path uses that
   // one. Keep the four pins (plus the installer package version) in lockstep.
   const pins = {
     "install.sh": shellShim.match(/^PINNED_REF="\$\{CAVEMAN_REF:-(v[^}"]+)\}"$/m)?.[1],
     "install.ps1": powershellShim.match(/\$PinnedRef = if \(\$env:CAVEMAN_REF\) \{ \$env:CAVEMAN_REF \} else \{ "(v[^"]+)" \}/)?.[1],
-    "bin/install.js": readFileSync(join(root, "bin", "install.js"), "utf8")
+    "installer/install.js": readFileSync(join(root, "installer", "install.js"), "utf8")
       .match(/^const PINNED_REF = process\.env\.CAVEMAN_REF \|\| '(v[^']+)';$/m)?.[1],
   };
   for (const [file, pin] of Object.entries(pins)) {

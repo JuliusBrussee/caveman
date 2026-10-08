@@ -526,3 +526,61 @@ func TestStripCacheControl(t *testing.T) {
 		}
 	}
 }
+
+// TestCachedPrefixComponentsCoverTheMarkedMessage pins the difference from
+// FrozenPrefixComponents: the provider caches THROUGH the last marked message,
+// which is the live one Claude Code marks every turn. The next request has to
+// reproduce that message's forwarded bytes too, so it must be in the range.
+func TestCachedPrefixComponentsCoverTheMarkedMessage(t *testing.T) {
+	marked := func(text string) string {
+		return `{"type":"text","text":"` + text + `","cache_control":{"type":"ephemeral"}}`
+	}
+	plain := func(text string) string { return `{"type":"text","text":"` + text + `"}` }
+	user := func(block string) string { return `{"role":"user","content":[` + block + `]}` }
+	request := func(extra string, messages ...string) []byte {
+		return []byte(`{"model":"claude-sonnet-4-6",` + extra + `"system":[` + marked("system") + `],` +
+			`"tools":[{"name":"Read","input_schema":{"type":"object"}}],"messages":[` + strings.Join(messages, ",") + `]}`)
+	}
+	answer := `{"role":"assistant","content":[` + plain("answer") + `]}`
+
+	// Turn N marks its newest message; turn N+1 moves the marker one turn on.
+	turnN := request("", user(plain("one")), answer, user(marked("two")))
+	turnN1 := request("", user(plain("one")), answer, user(plain("two")), answer, user(marked("three")))
+	first, cached, ok := CachedPrefixComponents(turnN)
+	if !ok || cached != 5 || len(first) != 5 {
+		t.Fatalf("turn N: ok=%v cached=%d n=%d, want system+tools+3 messages all cached", ok, cached, len(first))
+	}
+	second, cached1, ok := CachedPrefixComponents(turnN1)
+	if !ok || cached1 != 7 || len(second) != 7 {
+		t.Fatalf("turn N+1: ok=%v cached=%d n=%d, want 7/7", ok, cached1, len(second))
+	}
+	for i := 0; i < cached; i++ {
+		if !bytes.Equal(first[i], second[i]) {
+			t.Fatalf("component %d changed although only the marker moved", i)
+		}
+	}
+
+	// An unmarked tail is sent but not cached; no marked message caches only system+tools.
+	tail := request("", user(marked("one")), answer, user(plain("two")))
+	if _, cached, ok := CachedPrefixComponents(tail); !ok || cached != 3 {
+		t.Fatalf("unmarked tail: ok=%v cached=%d, want 3", ok, cached)
+	}
+	unmarked := request("", user(plain("one")))
+	if _, cached, ok := CachedPrefixComponents(unmarked); !ok || cached != 2 {
+		t.Fatalf("no marked message: ok=%v cached=%d, want 2", ok, cached)
+	}
+	// Top-level automatic caching places the breakpoint on the last block.
+	automatic := request(`"cache_control":{"type":"ephemeral"},`, user(plain("one")), answer, user(plain("two")))
+	if _, cached, ok := CachedPrefixComponents(automatic); !ok || cached != 5 {
+		t.Fatalf("automatic caching: ok=%v cached=%d, want 5", ok, cached)
+	}
+	if _, cached, ok := CachedPrefixComponents([]byte(`{"model":"m","messages":[` + user(plain("one")) + `]}`)); !ok || cached != 0 {
+		t.Fatalf("no marker anywhere caches nothing: ok=%v cached=%d", ok, cached)
+	}
+	if _, _, ok := CachedPrefixComponents([]byte(`{"messages":"nope"}`)); ok {
+		t.Fatal("a request with no messages array has no cached prefix")
+	}
+	if _, _, ok := (Adapter{}).CachedPrefixComponents(turnN, providers.RequestMetadata{Endpoint: "/v1/messages/count_tokens"}); ok {
+		t.Fatal("count_tokens is never cached")
+	}
+}

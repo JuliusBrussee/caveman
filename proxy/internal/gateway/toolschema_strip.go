@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bytes"
 	"encoding/json"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -43,13 +44,16 @@ const toolSchemaStripVersion = "v1"
 // this strip ran loses the strip for the rest of that session, and falls open to
 // forwarding the catalog unchanged.
 func (s *Server) toolSchemaStripAllowed(adapter providers.Adapter, body []byte, sessionID string) bool {
+	return s.toolSchemaStripApplies(adapter, body) && s.ledger.LeverAllowed(sessionID, leverToolSchemaStrip)
+}
+
+// toolSchemaStripApplies is toolSchemaStripAllowed without the ledger: the
+// strip would run here if the session's harm tripwire had not frozen it.
+func (s *Server) toolSchemaStripApplies(adapter providers.Adapter, body []byte) bool {
 	if s.toolSchemaStrip != toolSchemaStripMode || s.compressor == nil {
 		return false
 	}
 	if _, ok := s.compressor.(ToolSchemaStripper); !ok {
-		return false
-	}
-	if !s.ledger.LeverAllowed(sessionID, leverToolSchemaStrip) {
 		return false
 	}
 	return s.liveZoneCompressionAllowed(adapter, body)
@@ -83,26 +87,60 @@ func (s *Server) toolSchemaCacheScope() string {
 // Every failure keeps the original catalog: a shape we cannot extract, a strip
 // that removed nothing, an unstorable original, a failed splice, or output that is
 // not valid JSON.
+//
+// Purity of the strip is not enough on its own, because storing the original can
+// fail: the first decision for a catalog — stripped or original — is memoised in
+// the PrefixCache and re-sent from then on, so a recovery-store hiccup can never
+// flip the head of the prefix. A hit splices the stored bytes without storing
+// again. The ledger freeze is the one deliberate exception: a session whose
+// tripwire froze the lever falls back to the original catalog once, by design.
 func (s *Server) stripToolSchema(body []byte, meta providers.RequestMetadata, requestID string) ([]byte, string, bool) {
 	stripper, ok := s.compressor.(ToolSchemaStripper)
-	if !ok {
+	if !ok || s.prefixCache == nil {
 		return nil, "", false
 	}
 	raw, reassemble, ok := providers.ExtractToolCatalog(body, meta)
 	if !ok {
 		return nil, "", false
 	}
-	stripped, ok := stripper.StripToolSchema(raw)
-	if !ok || len(stripped) >= len(raw) {
+	scope := "toolschema" + s.toolSchemaCacheScope()
+	stripped, handle, hit := s.prefixCache.LookupReplacement(scope, raw)
+	if hit && handle == RawDecisionHandle {
 		return nil, "", false
 	}
-	handle, err := s.compressor.StoreOriginal(raw)
-	if err != nil || handle == "" {
-		if s.logger != nil {
-			s.logger.Warn("tool-schema recovery store failed; keeping the original catalog",
-				"error", redact.Error(err), "request_id", requestID)
+	if !hit {
+		if s.unpersistedRaw.has(scope, raw) {
+			// Sent original while the store could not record it; a stored row
+			// outranks that, so record it now and follow what comes back.
+			stripped, handle = nil, RawDecisionHandle
+		} else {
+			var ok bool
+			if stripped, ok = stripper.StripToolSchema(raw); !ok || len(stripped) >= len(raw) {
+				return nil, "", false // removes nothing, on every turn
+			}
+			var err error
+			handle, err = s.compressor.StoreOriginal(raw)
+			if err != nil || handle == "" {
+				if s.logger != nil {
+					s.logger.Warn("tool-schema recovery store failed; keeping the original catalog",
+						"error", redact.Error(err), "request_id", requestID)
+				}
+				stripped, handle = nil, RawDecisionHandle
+			}
 		}
-		return nil, "", false
+		stored, err := s.prefixCache.RememberReplacement(scope, raw, stripped, handle)
+		if err != nil {
+			s.unpersistedRaw.add(scope, raw)
+			return nil, "", false
+		}
+		if len(stored) == 0 {
+			return nil, "", false
+		}
+		if !bytes.Equal(stored, stripped) {
+			if stripped, handle, hit = s.prefixCache.LookupReplacement(scope, raw); !hit || handle == RawDecisionHandle {
+				return nil, "", false
+			}
+		}
 	}
 	out, err := reassemble(stripped)
 	if err != nil || len(out) == 0 || !json.Valid(out) {

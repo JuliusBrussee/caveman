@@ -377,6 +377,16 @@ type MetadataRouter interface {
 	MatchMetadataRoute(method string, path string) bool
 }
 
+// MetadataRequestMatcher refines MetadataRouter for adapters that share a
+// metadata spelling with another provider. Bare GET /v1/models is both
+// OpenAI's and Anthropic's catalog route, so the path cannot choose the
+// upstream, and choosing by registration order sent the caller's key to
+// whichever provider registered first (issue #1187). The gateway consults this
+// instead of MatchMetadataRoute when an adapter implements it.
+type MetadataRequestMatcher interface {
+	MatchMetadataRequest(r *http.Request) bool
+}
+
 // TokenCounter is an optional provider capability for projecting an original
 // inference request onto that provider's token-count endpoint. Implementations
 // only shape and parse bytes; the gateway owns all network I/O so credentials,

@@ -1,7 +1,8 @@
 """
 Measure the per-turn reinforcement (caveman-mode-tracker.js) on top of the
-caveman skill, old text vs new text, with the same prompts and control arms
-as llm_run.py.
+caveman skill, old text vs new text, with the same English prompts
+(prompts/en.txt) and control arms as llm_run.py. CAVEMAN_EVAL_SET and
+CAVEMAN_EVAL_LANG do not apply here.
 
 llm_run.py puts SKILL.md in the system prompt and nothing else, so it cannot
 see the reminder the UserPromptSubmit hook adds to every Claude Code turn
@@ -42,8 +43,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
 from llm_run import (  # noqa: E402
-    PROMPTS, SKILLS, TERSE_PREFIX, claude_bin, claude_version,
+    EVALS, SKILLS, TERSE_PREFIXES, claude_bin, claude_version,
 )
+
+# Fixed, not llm_run's env-selected PROMPTS: a leftover CAVEMAN_EVAL_SET=
+# fidelity would feed fidelity.json in line by line, and every language
+# would overwrite the one reminder.json.
+PROMPTS = EVALS / "prompts" / "en.txt"
+TERSE_PREFIX = TERSE_PREFIXES["en"]
 
 ROOT = Path(__file__).parent.parent
 HOOKS = ROOT / "src" / "hooks"

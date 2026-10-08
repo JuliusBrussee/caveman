@@ -18,7 +18,7 @@ test("caveman-init.js embedded RULE_BODY equals src/rules/caveman-activate.md", 
 });
 
 test("openclaw embedded bootstrap fallback equals src/rules/caveman-openclaw-bootstrap.md", () => {
-  const { loadBootstrapSnippet } = require("../../bin/lib/openclaw.js");
+  const { loadBootstrapSnippet } = require("../../installer/lib/openclaw.js");
   assert.equal(loadBootstrapSnippet(null), read("src/rules/caveman-openclaw-bootstrap.md"));
 });
 

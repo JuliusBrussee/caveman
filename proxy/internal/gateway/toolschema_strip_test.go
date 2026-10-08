@@ -53,9 +53,10 @@ func strippedToolCatalog(t *testing.T) string {
 // so a test exercises the tool-schema path alone. It strips through the engine's
 // canonical function — the same one the binary wires.
 type toolSchemaStripCompressor struct {
-	mu     sync.Mutex
-	stored [][]byte
-	strips int
+	mu        sync.Mutex
+	stored    [][]byte
+	strips    int
+	failStore bool
 }
 
 func (c *toolSchemaStripCompressor) CompressSegment(seg []byte) ([]byte, int, int) {
@@ -65,6 +66,9 @@ func (c *toolSchemaStripCompressor) CompressSegment(seg []byte) ([]byte, int, in
 func (c *toolSchemaStripCompressor) StoreOriginal(body []byte) (string, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	if c.failStore {
+		return "", errTestPrefixCacheDown
+	}
 	c.stored = append(c.stored, append([]byte(nil), body...))
 	return contentHandle(body), nil
 }
@@ -383,5 +387,43 @@ func TestToolSchemaStripWithoutPrefixCachePassesThrough(t *testing.T) {
 	}
 	if comp.strips != 0 || len(comp.stored) != 0 {
 		t.Fatalf("no prefix cache still stripped: strips=%d stored=%d", comp.strips, len(comp.stored))
+	}
+}
+
+// TestToolSchemaStripSurvivesStoreFailure: the catalog is the head of the
+// provider prefix. A strip that fell back to the original catalog whenever the
+// recovery store failed busted every conversation's whole prefix that turn; one
+// that stripped a catalog it had first sent unstripped busted it the other way.
+// The first decision for a catalog is remembered and re-sent from then on.
+func TestToolSchemaStripSurvivesStoreFailure(t *testing.T) {
+	rt := &captureTransport{responses: []string{subMessageRespBody, subMessageRespBody, subMessageRespBody, subMessageRespBody}}
+	comp := &toolSchemaStripCompressor{}
+	srv, _ := newToolSchemaStripServer(t, comp, rt, Config{RecoveryViaMCP: true, ToolSchemaStrip: toolSchemaStripMode})
+	stripped := strippedToolCatalog(t)
+
+	serveBody(t, srv, "/v1/messages", toolCatalogRequest("first turn"), subscriptionAgentHeaders)
+	comp.mu.Lock()
+	comp.failStore = true
+	comp.mu.Unlock()
+	rec := serveBody(t, srv, "/v1/messages", toolCatalogRequest("second turn"), subscriptionAgentHeaders)
+	for i, body := range rt.bodies {
+		if !strings.Contains(string(body), `"tools":`+stripped) {
+			t.Fatalf("request %d did not re-send the stripped catalog the provider cached:\n%s", i+1, body)
+		}
+	}
+	if rec.Header().Get("x-caveman-toolschema-recovery-handle") != contentHandle([]byte(toolCatalog)) {
+		t.Fatalf("a re-sent strip must still disclose its recovery handle: %v", rec.Header())
+	}
+
+	// A catalog whose first strip could not be stored went out unstripped, so
+	// it stays unstripped once the store recovers.
+	other := strings.Replace(toolCatalogRequest("other catalog"), "Read a file from disk.", "Read any file.", 1)
+	serveBody(t, srv, "/v1/messages", other, subscriptionAgentHeaders)
+	comp.mu.Lock()
+	comp.failStore = false
+	comp.mu.Unlock()
+	serveBody(t, srv, "/v1/messages", other, subscriptionAgentHeaders)
+	if !bytes.Equal(rt.bodies[2], []byte(other)) || !bytes.Equal(rt.bodies[3], []byte(other)) {
+		t.Fatalf("a catalog first sent unstripped must stay unstripped:\n%s\n%s", rt.bodies[2], rt.bodies[3])
 	}
 }

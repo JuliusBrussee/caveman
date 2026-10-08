@@ -6,7 +6,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 const require = createRequire(import.meta.url);
-const OWNED = require('../../bin/lib/owned-install.js');
+const OWNED = require('../../installer/lib/owned-install.js');
 
 function freshRoot() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-owned-'));

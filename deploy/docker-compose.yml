@@ -1,6 +1,6 @@
 services:
   caveman-proxy:
-    image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.2
+    image: ghcr.io/juliusbrussee/caveman-proxy:bin-v2.1.0@sha256:da293df3c6929c7b31eba580f7af74da0448e83a55a973cca86e81041877d0bb
     # Alternative to pulling: build from a clone with `docker compose build`.
     build: ..
     ports:

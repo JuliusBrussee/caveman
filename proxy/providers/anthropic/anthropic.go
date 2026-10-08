@@ -3,6 +3,7 @@ package anthropic
 import (
 	"context"
 	"net/http"
+	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 )
@@ -36,4 +37,16 @@ func New(baseURL string) providers.Adapter {
 		// reason the inference routes are doubled up.
 		MetadataRoutes: []string{"/anthropic/v1/models", "/v1/models"},
 	}}
+}
+
+// MatchMetadataRequest claims /anthropic/v1/models always, but the bare
+// /v1/models spelling only from Anthropic wire-protocol callers: every
+// Anthropic SDK and Claude Code send anthropic-version, and a caller that
+// omits it (curl, scripts) still sends its key in x-api-key, which OpenAI
+// clients never do. The bare spelling is shared with the OpenAI adapter
+// (issue #1187).
+func (a Adapter) MatchMetadataRequest(r *http.Request) bool {
+	return a.MatchMetadataRoute(r.Method, r.URL.Path) &&
+		(strings.HasPrefix(r.URL.Path, "/anthropic/") ||
+			r.Header.Get("anthropic-version") != "" || r.Header.Get("x-api-key") != "")
 }

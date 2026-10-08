@@ -107,3 +107,106 @@ func TestStandaloneGeminiStableGenerationRoutes(t *testing.T) {
 		})
 	}
 }
+
+func TestStandaloneOpenAIModelDiscoveryRoutesPassThrough(t *testing.T) {
+	const response = `{"data":[{"id":"gpt-5.5","object":"model","context_length":1000000}]}`
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/v1/models?limit=1", "https://upstream.test/v1/models?limit=1"},
+		{"/v1/models/gpt-5.5", "https://upstream.test/v1/models/gpt-5.5"},
+		{"/openai/v1/models?limit=1", "https://upstream.test/v1/models?limit=1"},
+		{"/openai/v1/models/gpt-5.5", "https://upstream.test/v1/models/gpt-5.5"},
+		{"/w/hermes/v1/models?limit=1", "https://upstream.test/v1/models?limit=1"},
+		{"/w/hermes/v1/models/gpt-5.5", "https://upstream.test/v1/models/gpt-5.5"},
+		{"/w/hermes/openai/v1/models?limit=1", "https://upstream.test/v1/models?limit=1"},
+		{"/w/hermes/openai/v1/models/gpt-5.5", "https://upstream.test/v1/models/gpt-5.5"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			upstream := &captureUpstreamTransport{response: response}
+			srv := New(config.Config{
+				Mode:      "compress",
+				Providers: map[string]config.ProviderConfig{"openai": {BaseURL: "https://upstream.test"}},
+			}, nil, Options{
+				HTTPClient:     &http.Client{Transport: upstream},
+				Compressor:     countTransformGuard{t},
+				RecoveryViaMCP: true,
+			})
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.Header.Set("Authorization", "Bearer sk-openai-test")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if rec.Body.String() != response {
+				t.Fatalf("response bytes changed: got %q, want %q", rec.Body.String(), response)
+			}
+			if upstream.url != tc.want {
+				t.Fatalf("upstream URL = %q, want %q", upstream.url, tc.want)
+			}
+			if len(upstream.body) != 0 {
+				t.Fatalf("GET request body = %q, want empty", upstream.body)
+			}
+			if got := upstream.headers.Get("Authorization"); got != "Bearer sk-openai-test" {
+				t.Fatalf("upstream Authorization = %q, want forwarded bearer", got)
+			}
+		})
+	}
+}
+
+// The bare /v1/models spelling is shared by the OpenAI and Anthropic wire
+// protocols, and the real proxy registers Anthropic first. The catalog read
+// must go to the provider whose protocol the caller speaks, so one provider's
+// key never reaches the other's upstream (issue #1187).
+func TestStandaloneAnthropicModelDiscoveryRoutesPassThrough(t *testing.T) {
+	const response = `{"data":[{"id":"claude-opus-5","type":"model"}]}`
+	for _, tc := range []struct {
+		path string
+		want string
+	}{
+		{"/v1/models?limit=1", "https://anthropic.test/v1/models?limit=1"},
+		{"/v1/models/claude-opus-5", "https://anthropic.test/v1/models/claude-opus-5"},
+		{"/anthropic/v1/models", "https://anthropic.test/v1/models"},
+		{"/w/claude/v1/models?limit=1", "https://anthropic.test/v1/models?limit=1"},
+		{"/w/claude/v1/models/claude-opus-5", "https://anthropic.test/v1/models/claude-opus-5"},
+	} {
+		t.Run(tc.path, func(t *testing.T) {
+			upstream := &captureUpstreamTransport{response: response}
+			srv := New(config.Config{
+				Mode: "compress",
+				Providers: map[string]config.ProviderConfig{
+					"anthropic": {BaseURL: "https://anthropic.test"},
+					"openai":    {BaseURL: "https://openai.test"},
+				},
+			}, nil, Options{
+				HTTPClient:     &http.Client{Transport: upstream},
+				Compressor:     countTransformGuard{t},
+				RecoveryViaMCP: true,
+			})
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.Header.Set("anthropic-version", "2023-06-01")
+			req.Header.Set("x-api-key", "sk-ant-test")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if rec.Body.String() != response {
+				t.Fatalf("response bytes changed: got %q, want %q", rec.Body.String(), response)
+			}
+			if upstream.url != tc.want {
+				t.Fatalf("upstream URL = %q, want %q", upstream.url, tc.want)
+			}
+			if got := upstream.headers.Get("x-api-key"); got != "sk-ant-test" {
+				t.Fatalf("upstream x-api-key = %q, want forwarded anthropic key", got)
+			}
+			if got := upstream.headers.Get("Authorization"); got != "" {
+				t.Fatalf("upstream Authorization = %q, want none on an anthropic key read", got)
+			}
+		})
+	}
+}

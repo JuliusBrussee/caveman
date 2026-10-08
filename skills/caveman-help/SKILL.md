@@ -18,7 +18,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 | **megacave** | `/megacave` (alias `/caveman wenyan`) | Classical Chinese 文言文. Far fewer characters, technical terms verbatim. |
 
 Mode stick until changed or session end.
-`/caveman status` reports current mode without changing it. Claude Code and the standalone OpenCode plugin read stored state; other hosts use conversation context and report `unknown` if no mode is known.
+`/caveman status` reports current mode without changing it. Claude Code and the standalone OpenCode plugin read stored state; other hosts answer from the conversation and mark it `(not tracked by this host)`.
 
 ## Skills
 
@@ -26,7 +26,7 @@ Mode stick until changed or session end.
 |-------|---------|-----------|
 | **caveman-commit** | `/caveman-commit` | Terse commit messages. Conventional Commits. ≤50 char subject. |
 | **caveman-review** | `/caveman-review` | One-line PR comments: `L42: bug: user null. Add guard.` |
-| **caveman-compress** | `/caveman-compress <file>` | Compress .md files to caveman prose. Saves ~46% input tokens. |
+| **caveman-compress** | `/caveman-compress <file>` | Compress .md files to caveman prose. 33.2% fewer tokens on the repo's five test files. |
 | **caveman-help** | `/caveman-help` | This card. |
 
 ## Deactivate

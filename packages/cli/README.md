@@ -113,6 +113,12 @@ checksum manifest plus every SHA-256, installs atomically into
 `~/.caveman/bin`, then launches the agent. Manual install/repair is
 `caveman setup --install`.
 
+On Claude Code and Codex, the first `caveman <agent>` run (or
+`caveman enable <agent>` on an existing install) also writes the voice skills
+(`caveman`, `ultracave`, `megacave`) into the agent's user skills directory, so
+`/caveman` is available. An existing `SKILL.md` is never overwritten, and
+`caveman disable <agent>` leaves the skills in place.
+
 The npm CLI requires Node.js 22.13 or newer. Caveman exposes ten native agent
 shortcuts: `aider`, `claude`, `codex`, `gemini`, `hermes`, `kilo` (`kilocode`
 alias), `openclaw`, `opencode`, `pi`, and `qwen`.
@@ -223,6 +229,15 @@ Run `caveman doctor codex` or `caveman doctor claude` to see active Core state,
 source, profile, and pack version. Changes affect later hook events; start a new
 agent session to clear Core already delivered into model context. Aider's shallow,
 static Core read cannot apply `think.core`; `caveman disable aider` removes it.
+`caveman disable` (or `caveman disable --all`) removes all native integrations.
+`caveman disable claude` clears every discovered Claude profile: the default,
+named `~/.claude-*` / `~/.claude_*` profiles, `CLAUDE_CONFIG_DIR`, and custom
+profiles remembered by earlier enables. It also removes recognizable Caveman
+runtime entries left behind without an install journal, backing up changed
+files first. Unrelated routes, credentials, hooks, and MCP servers are preserved.
+Restart running Claude sessions afterward: disable cannot change their existing
+process environment. Arbitrary custom profiles created by older versions must
+be supplied through `CLAUDE_CONFIG_DIR` if they are outside the named locations.
 `caveman disable <agent>` removes native routing/hooks while preserving unrelated
 host edits.
 

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Caveman Mode — ChatGPT, Claude & Gemini",
-  "version": "1.2.0",
+  "version": "1.3.0",
   "description": "Caveman Mode adds a short instruction to each message you send on ChatGPT, Claude & Gemini, so replies stay compact.",
   "icons": {
     "16": "icons/icon16.png",

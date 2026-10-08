@@ -45,6 +45,23 @@ class BenchmarkContractTests(unittest.TestCase):
                 manifest = (ROOT / ".claude-plugin" / name).read_text(encoding="utf-8")
                 self.assertNotIn("65%", manifest)
 
+    def test_docs_drop_unreproducible_compress_and_cavecrew_figures(self):
+        # benchmark.py over tests/caveman-compress gives 33.2% total; 46% never
+        # matched the fixtures, and no benchmark backs the cavecrew figures.
+        banned = {
+            "README.md": ["46% smaller"],
+            "docs/HONEST-NUMBERS.md": ["~46%"],
+            "skills/caveman-help/SKILL.md": ["~46%"],
+            "skills/caveman-compress/README.md": ["46%", "59.6%"],
+            "skills/cavecrew/SKILL.md": ["~700 tokens"],
+            "agents/cavecrew-investigator.md": ["60% fewer"],
+            "plugins/caveman/agents/cavecrew-investigator.md": ["60% fewer"],
+        }
+        for rel, needles in banned.items():
+            text = (ROOT / rel).read_text(encoding="utf-8")
+            for needle in needles:
+                self.assertFalse(needle in text, f"{rel} still says {needle!r}")
+
     def test_chart_reads_terse_control_from_current_harness_table(self):
         spec = importlib.util.spec_from_file_location("benchmark_charts", ROOT / "benchmarks" / "render_charts.py")
         charts = importlib.util.module_from_spec(spec)

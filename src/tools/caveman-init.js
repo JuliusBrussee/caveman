@@ -32,17 +32,17 @@ Rules:
 Switch: /caveman (default), /ultracave (fragments, each fact once), /megacave (Classical Chinese 文言文)
 Stop: "stop caveman" or "normal mode"
 
-Auto-Clarity: plain prose for security warnings, irreversible actions, step order a fragment could scramble, user confused. Resume after.
+Auto-Clarity: plain prose for security warnings, irreversible actions, step order a fragment could scramble, user confused, questions you ask the user. Resume after.
 
-Boundaries: code, comments, commits, PRs, docs written normal.
+Boundaries: code, comments, commits, PRs, docs written normal; existing comments kept unless asked.
 Floor: code, commands, paths, numbers and error strings verbatim; never drop not/never/no/only.
 `;
 
 const SENTINEL = 'Respond terse like smart caveman';
 
 // Marker fence for blocks appended to files the user also authors (AGENTS.md,
-// copilot-instructions.md). Same convention as bin/lib/openclaw.js (SOUL.md)
-// and the opencode AGENTS.md path in bin/install.js. Without it our block can
+// copilot-instructions.md). Same convention as installer/lib/openclaw.js (SOUL.md)
+// and the opencode AGENTS.md path in installer/install.js. Without it our block can
 // be neither refreshed on upgrade nor removed on uninstall — it just fossilizes
 // in the user's repo.
 const FENCE_BEGIN = '<!-- caveman-begin -->';
@@ -90,11 +90,11 @@ function writeAtomic(fullPath, content) {
 
 // OpenClaw is a global workspace tool (not per-repo) and needs two write
 // targets — a skill folder + a SOUL.md bootstrap block. The shared helper
-// lives at bin/lib/openclaw.js; we require it lazily so caveman-init.js
+// lives at installer/lib/openclaw.js; we require it lazily so caveman-init.js
 // keeps working when run standalone (curl|node) without the helper on disk.
 function loadOpenclawHelper() {
   try {
-    return require(path.join(__dirname, '..', '..', 'bin', 'lib', 'openclaw.js'));
+    return require(path.join(__dirname, '..', '..', 'installer', 'lib', 'openclaw.js'));
   } catch (_) { return null; }
 }
 

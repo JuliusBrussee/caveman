@@ -35,9 +35,15 @@
 //
 // A slash-qualified id (`anthropic/claude-haiku-4-5`) is valid for opencode and
 // is left byte-identical.
+//
+// 3. `{ subagent: true }` adds `mode: subagent` when no `mode:` is set (#725).
+//    opencode defaults `mode` to `all`, and Tab cycles every primary-capable
+//    agent, so the cavecrew helpers crowded the Tab rotation. Subagent mode
+//    keeps them @-mentionable and Task-callable. Opt-in so OMP bytes stay put.
 
 const TOOLS_FIELD_RE = /^tools[ \t]*:/;
 const MODEL_FIELD_RE = /^model[ \t]*:[ \t]*(.*)$/;
+const MODE_FIELD_RE = /^mode[ \t]*:/;
 const CONTINUATION_RE = /^[ \t]/;
 const FRONTMATTER_FENCE = '---\n';
 
@@ -53,7 +59,7 @@ function isProviderlessModel(rawValue) {
   return value !== '' && !value.includes('/');
 }
 
-function transformOpencodeAgentFrontmatter(content) {
+function transformOpencodeAgentFrontmatter(content, { subagent = false } = {}) {
   if (typeof content !== 'string' || !content.startsWith(FRONTMATTER_FENCE)) return content;
   const fmEnd = content.indexOf('\n---', FRONTMATTER_FENCE.length);
   if (fmEnd < 0) return content;
@@ -63,6 +69,7 @@ function transformOpencodeAgentFrontmatter(content) {
 
   const out = [];
   let dropping = false;
+  let hasMode = false;
   for (const line of fm.split('\n')) {
     if (dropping) {
       if (CONTINUATION_RE.test(line)) continue;
@@ -71,8 +78,10 @@ function transformOpencodeAgentFrontmatter(content) {
     if (TOOLS_FIELD_RE.test(line)) { dropping = true; continue; }
     const model = MODEL_FIELD_RE.exec(line);
     if (model && isProviderlessModel(model[1])) continue;
+    if (MODE_FIELD_RE.test(line)) hasMode = true;
     out.push(line);
   }
+  if (subagent && !hasMode) out.push('mode: subagent');
 
   return FRONTMATTER_FENCE + out.join('\n') + rest;
 }

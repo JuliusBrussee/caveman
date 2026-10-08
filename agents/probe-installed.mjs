@@ -9,7 +9,7 @@ import { fileURLToPath } from "node:url";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const require = createRequire(import.meta.url);
-const { portableInvocation, resolveWindowsCommand } = require("../bin/lib/portable-process.js");
+const { portableInvocation, resolveWindowsCommand } = require("../installer/lib/portable-process.js");
 const registry = JSON.parse(readFileSync(join(here, "agents.json"), "utf8"));
 const args = process.argv.slice(2);
 const required = new Set();

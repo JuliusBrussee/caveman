@@ -167,18 +167,27 @@ type Retriever interface {
 // fails OPEN: a miss, an unavailable store, or a write error means the original
 // bytes are forwarded and no new replacement is created — the proxy never emits a
 // rewrite it could not reproduce on the next turn.
+//
+// It records the FIRST forwarding decision for a block, raw included: a block
+// that went out raw is remembered as an empty replacement under
+// RawDecisionHandle, so a later compression of the same bytes in any
+// conversation can never put them on the wire replaced.
 type PrefixCache interface {
 	// LookupReplacement returns the exact replacement bytes previously emitted for
-	// these original bytes plus the CCR handle they disclose. An evicted or absent
-	// entry is a plain miss: the caller forwards the original, which re-syncs the
-	// prefix at a one-time cost and stays stable from then on.
+	// these original bytes plus the CCR handle they disclose, or (nil,
+	// RawDecisionHandle, true) for a block that went out raw. An evicted or absent
+	// entry is a plain miss.
 	LookupReplacement(scope string, original []byte) (replacement []byte, handle string, ok bool)
-	// RememberReplacement durably records original→replacement and returns the
-	// AUTHORITATIVE bytes for that original — the caller must forward what comes
-	// back, not what it passed in. Storage is first-write-wins so two requests that
-	// compressed the same block can never put two different prefixes on the wire.
+	// RememberReplacement durably records original→replacement (nil under
+	// RawDecisionHandle records raw) and returns the AUTHORITATIVE bytes for that
+	// original — nil when raw won. The caller must forward what comes back, not
+	// what it passed in. Storage is first-write-wins so two requests that saw the
+	// same block can never put two different prefixes on the wire.
 	RememberReplacement(scope string, original, replacement []byte, handle string) (stored []byte, err error)
 }
+
+// RawDecisionHandle is the PrefixCache handle of a block forwarded raw.
+const RawDecisionHandle = "raw"
 
 // PrefixStabilizer is the optional adapter capability that exposes the frozen
 // (already-cached) blocks alongside the live zone, so the proxy can substitute a
@@ -188,6 +197,14 @@ type PrefixCache interface {
 // nothing to stabilize and keep the byte-identical passthrough.
 type PrefixStabilizer interface {
 	ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]providers.RewritableBlock, func([][]byte) ([]byte, error), bool)
+}
+
+// CachedPrefixInspector splits a request into the components the provider's
+// prompt cache keys on (cache markers stripped) and reports how many of them
+// this request caches. Adapters without it are treated as caching the whole
+// prompt (see cachedPrefix).
+type CachedPrefixInspector interface {
+	CachedPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, int, bool)
 }
 
 // PrefixEvidenceInspector returns ordered exact provider-wire JSON components
@@ -219,11 +236,13 @@ type RequestRecord struct {
 	ProviderCachePrefixSHA256    string
 	ProviderCacheComponentSHA256 string
 	CacheBoundaryKnown           bool
-	// CacheBust is set by the observe-only prefix-monotonicity check when this
-	// request's frozen prefix did not extend the previous request in the same
-	// session (see prefix_monitor.go). It is a diagnostic flag only — it never
+	// CacheBust is set by the observe-only cache tripwire when this request did
+	// not extend the prefix its session cached (see prefix_monitor.go), and
+	// CacheBustCause says who changed the bytes: "client", "caveman",
+	// "raw_retry", "stream_switch" or "lever_freeze". Diagnostic only — it never
 	// blocks or modifies traffic and never affects any savings figure.
-	CacheBust bool
+	CacheBust      bool
+	CacheBustCause string
 	// CompressionEligible marks that this request reached the compression path as a
 	// candidate (compress mode, recovery-reachable, cache-epoch allowed) regardless
 	// of whether any bytes were ultimately saved. It is the denominator behind the
@@ -322,17 +341,20 @@ type Server struct {
 	// PrefixCache). A nil cache means the proxy cannot maintain a rewrite across
 	// turns, which is what the non-PAYG live-zone paths fail closed on.
 	prefixCache PrefixCache
-	cacheGuard  *cacheguard.Guard
-	// prefixMonitor runs the observe-only per-session prefix-monotonicity check
-	// (see prefix_monitor.go). It flags cache_bust when a request's frozen prefix
-	// does not extend the prior request in the same session.
+	// unpersistedRaw remembers blocks that went out raw while prefixCache could
+	// not record it (see rawMemory).
+	unpersistedRaw rawMemory
+	// rawPins are conversations the provider accepted only raw, and lineages
+	// the cached prefixes that went out replaced (see raw_pin.go).
+	rawPins    rawPins
+	lineages   lineages
+	cacheGuard *cacheguard.Guard
+	// prefixMonitor is the observe-only cache tripwire (see prefix_monitor.go). It
+	// flags cache_bust when a request does not extend what its session cached,
+	// and says whether the client or caveman changed the bytes. prefixSeq orders
+	// sends and acceptances for it.
 	prefixMonitor *prefixMonitor
-	// cacheEpochGate is the compression GATE for header-less wrap clients: a second,
-	// independent prefix monitor keyed on the derived cache epoch. It cannot share
-	// prefixMonitor's state (that one is consulted on every request; this one only
-	// on compress candidates), and unlike cacheguard it tolerates append-only
-	// frozen-prefix growth — see derivedEpochAllows.
-	cacheEpochGate *prefixMonitor
+	prefixSeq     atomic.Uint64
 	// recoveryViaMCP records that the wrapped agent fulfills caveman_retrieve itself
 	// (via the caveman MCP server, sharing the CCR store) — set by `caveman wrap`
 	// when it installed that tool. When true, compress mode reshapes streaming and
@@ -407,15 +429,18 @@ type Server struct {
 // rule for non-PAYG traffic is unchanged. Subscription rows it produces are
 // tokens-only: the row's dollar fields stay zero (see record()).
 func (s *Server) liveZoneCompressionAllowed(adapter providers.Adapter, body []byte) bool {
+	return s.liveZoneConfigured(adapter) && s.mcpRecoveryAvailable(body)
+}
+
+// liveZoneConfigured is every live-zone condition except the recovery proof,
+// which a request may carry in its own (possibly still encoded) body.
+func (s *Server) liveZoneConfigured(adapter providers.Adapter) bool {
 	switch s.subscriptionCompress {
 	case "", "live_zone":
 	default:
 		return false
 	}
 	if adapter == nil {
-		return false
-	}
-	if !s.mcpRecoveryAvailable(body) {
 		return false
 	}
 	return s.prefixStabilized(adapter)
@@ -560,7 +585,6 @@ func New(cfg Config) *Server {
 		prefixCache:          cfg.PrefixCache,
 		cacheGuard:           cacheguard.New(),
 		prefixMonitor:        newPrefixMonitor(),
-		cacheEpochGate:       newPrefixMonitor(),
 		recoveryViaMCP:       cfg.RecoveryViaMCP,
 		observeEstimate:      cfg.ObserveEstimate,
 		chatGPTUpstream:      strings.TrimSuffix(upstream, "/"),
