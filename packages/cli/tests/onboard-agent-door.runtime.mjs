@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 const skip = process.platform === "win32" ? "shell agent stubs" : false;
 
-// Conforming caveman-mcp/caveman-proxy stubs: if the door called the native
-// enable, it would succeed and write ~/.claude/settings.json. It must not —
-// before setup, nothing machine-wide is written without Continue.
+// Conforming caveman-mcp/caveman-proxy stubs, so the native enable succeeds.
+// Claude Code is wired natively without asking (the IDE and desktop app read
+// only ~/.claude/settings.json); other agents still wait for setup.
 function doorEnv() {
   const home = mkdtempSync(join(tmpdir(), "cave-door-"));
   const bin = join(home, "bin");
@@ -56,16 +56,19 @@ function run(env, argv) {
   });
 }
 
-test("caveman claude before setup, with no terminal to confirm in, writes nothing machine-wide", { skip }, async () => {
+test("caveman claude before setup wires Claude Code natively and silently, then launches it directly", { skip }, async () => {
   const { env, home } = doorEnv();
   try {
     const out = await run(env, ["claude", "-p", "hi"]);
     assert.equal(out.code, 0, out.stderr);
-    assert.match(out.stdout, /agent:--plugin-dir \S*caveman-wrap-claude-\S* -p hi/, "the agent runs through the session-only wrap");
-    assert.doesNotMatch(out.stderr, /native Caveman enabled|planned user-scoped writes/);
-    assert.equal(existsSync(join(home, ".claude", "settings.json")), false, "no Claude settings written");
-    assert.equal(existsSync(join(home, "integrations", "claude.json")), false, "no native install journaled");
+    assert.equal(out.stdout, "agent:-p hi\n", "direct launch, no temp wrap pack");
+    assert.doesNotMatch(out.stderr, /native Caveman enabled|planned user-scoped writes/, "silent");
+    assert.match(readFileSync(join(home, ".claude", "settings.json"), "utf8"), /"ANTHROPIC_BASE_URL": "http:\/\/127\.0\.0\.1:9\/w\/claude"/);
+    assert.ok(existsSync(join(home, "integrations", "claude.json")), "journaled, so caveman disable claude reverses it");
     assert.equal(JSON.parse(readFileSync(join(home, "cloud.json"), "utf8")).modules, undefined, "setup did not run");
+    const disabled = await run(env, ["disable", "claude"]);
+    assert.equal(disabled.code, 0, disabled.stderr);
+    assert.equal(existsSync(join(home, ".claude", "settings.json")), false, "disable reverses it");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

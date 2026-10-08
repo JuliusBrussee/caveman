@@ -417,6 +417,7 @@ test("a primary key that contradicts the module state is reconciled", async () =
 
 test("switching routing off and on takes Auto out of and back into wired agents", async () => {
   const fx = modulesFixture({ agents: ["claude"], blocks: true });
+  fx.env.CAVE_TOKEN = "signed-in"; // Auto shows only while signed in
   const auto = () => JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION;
   try {
     assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
