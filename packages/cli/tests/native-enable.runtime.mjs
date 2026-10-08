@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -1492,4 +1492,152 @@ test("doctor flags an opencode plugin whose baked invocation no longer exists an
   assert.equal(JSON.parse(fixed.stdout).fix.result, "repaired");
   assert.equal(JSON.parse(fixed.stdout).state, "installed");
   assert.doesNotMatch(readFileSync(pluginPath, "utf8"), /v26\.9\.0/);
+});
+
+// Voice skills ride along with the Claude/Codex native install. Explicit
+// CLAUDE_CONFIG_DIR: the fixture env inherits the host's, and this must never
+// land in a real config dir.
+function voiceFixture() {
+  const fx = fixture();
+  const configDir = join(fx.home, "claude-config");
+  const env = { ...fx.env, CLAUDE_CONFIG_DIR: configDir, CODEX_HOME: join(fx.home, "codex-home"), HERMES_HOME: "" };
+  const skill = (name, root = configDir) => join(root, "skills", name, "SKILL.md");
+  return { ...fx, env, configDir, skill };
+}
+
+test("enable claude installs the voice skills and discloses the write", async () => {
+  const fx = voiceFixture();
+  const enabled = await run(["enable", "claude"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  for (const name of ["caveman", "ultracave", "megacave"]) {
+    assert.match(readFileSync(fx.skill(name), "utf8"), new RegExp(`^---\\nname: ${name}\\n`));
+    assert.ok(enabled.stderr.includes(fx.skill(name)), enabled.stderr);
+  }
+  assert.equal(existsSync(join(fx.home, ".claude", "skills")), false, "CLAUDE_CONFIG_DIR must be honored");
+
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  for (const name of ["caveman", "ultracave", "megacave"]) {
+    assert.equal(existsSync(dirname(fx.skill(name))), false, `${name} dir must be removed`);
+  }
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.voice-skills.json")), false);
+});
+
+test("enable codex installs the voice skills under CODEX_HOME; hermes installs none", async () => {
+  const fx = voiceFixture();
+  mkdirSync(join(fx.home, "codex-home"));
+  const codex = await run(["enable", "codex"], fx.env);
+  assert.equal(codex.code, 0, codex.stderr);
+  assert.ok(existsSync(fx.skill("caveman", join(fx.home, "codex-home"))));
+  assert.equal(existsSync(join(fx.home, ".codex", "skills")), false, "CODEX_HOME must be honored");
+  const hermes = await run(["enable", "hermes"], fx.env);
+  assert.equal(hermes.code, 0, hermes.stderr);
+  assert.doesNotMatch(hermes.stderr, /voice skills/);
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.voice-skills.json")), false);
+});
+
+test("a pre-existing voice skill is never clobbered and survives disable", async () => {
+  const fx = voiceFixture();
+  mkdirSync(dirname(fx.skill("caveman")), { recursive: true });
+  writeFileSync(fx.skill("caveman"), "mine\n");
+  const enabled = await run(["enable", "claude"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  assert.equal(readFileSync(fx.skill("caveman"), "utf8"), "mine\n");
+  assert.equal(enabled.stderr.includes(fx.skill("caveman")), false, "must not claim a file it did not write");
+  assert.ok(existsSync(fx.skill("ultracave")));
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  assert.equal(readFileSync(fx.skill("caveman"), "utf8"), "mine\n");
+  assert.equal(existsSync(fx.skill("ultracave")), false);
+});
+
+test("disable removes unchanged voice skills and keeps an edited one", async () => {
+  const fx = voiceFixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  writeFileSync(fx.skill("ultracave"), "edited by user\n");
+  writeFileSync(join(dirname(fx.skill("megacave")), "notes.md"), "sibling\n");
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.equal(existsSync(fx.skill("caveman")), false);
+  assert.equal(readFileSync(fx.skill("ultracave"), "utf8"), "edited by user\n");
+  assert.equal(existsSync(fx.skill("megacave")), false);
+  assert.ok(existsSync(join(dirname(fx.skill("megacave")), "notes.md")), "non-empty skill dir must be preserved");
+});
+
+test("editing or deleting a voice skill never degrades the integration or blocks enable", async () => {
+  const fx = voiceFixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  writeFileSync(fx.skill("caveman"), "pixelized\n");
+  rmSync(dirname(fx.skill("megacave")), { recursive: true });
+  const doctor = await run(["doctor", "claude"], fx.env);
+  assert.equal(doctor.code, 0, doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).state, "installed");
+  const again = await run(["enable", "claude"], fx.env);
+  assert.equal(again.code, 0, again.stderr);
+  assert.match(again.stderr, /already enabled/);
+  assert.equal(readFileSync(fx.skill("caveman"), "utf8"), "pixelized\n");
+  assert.equal(existsSync(fx.skill("megacave")), false, "a deleted skill is not written back");
+});
+
+test("enable on an install that predates voice skills picks them up once", async () => {
+  const fx = voiceFixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  rmSync(join(fx.configDir, "skills"), { recursive: true });
+  unlinkSync(join(fx.home, ".caveman", "integrations", "claude.voice-skills.json"));
+  const again = await run(["enable", "claude"], fx.env);
+  assert.equal(again.code, 0, again.stderr);
+  assert.match(again.stderr, /already enabled/);
+  assert.ok(existsSync(fx.skill("caveman")));
+});
+
+test("a voice-skill write failure does not fail enable", async () => {
+  const fx = voiceFixture();
+  mkdirSync(fx.configDir, { recursive: true });
+  writeFileSync(join(fx.configDir, "skills"), "not a directory\n");
+  const enabled = await run(["enable", "claude"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  assert.match(enabled.stderr, /voice skills not installed/);
+  assert.equal(JSON.parse((await run(["doctor", "claude"], fx.env)).stdout).state, "installed");
+});
+
+test("disable keeps a symlinked skill, clears a self-deleted one's dir and always drops the record", async () => {
+  const fx = voiceFixture();
+  const record = join(fx.home, ".caveman", "integrations", "claude.voice-skills.json");
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  // Byte-identical target behind a user symlink: still the user's.
+  const dotfile = join(fx.home, "dotfiles-caveman.md");
+  writeFileSync(dotfile, readFileSync(fx.skill("caveman")));
+  unlinkSync(fx.skill("caveman"));
+  symlinkSync(dotfile, fx.skill("caveman"));
+  unlinkSync(fx.skill("megacave"));
+  // A tampered entry must not reach outside the suite's SKILL.md files.
+  const outside = join(fx.home, "keep.txt");
+  writeFileSync(outside, "keep\n");
+  const parsed = JSON.parse(readFileSync(record, "utf8"));
+  parsed.files.push({ file: outside, sha256: "0" }, "garbage");
+  writeFileSync(record, JSON.stringify(parsed));
+
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.ok(lstatSync(fx.skill("caveman")).isSymbolicLink());
+  assert.equal(existsSync(dirname(fx.skill("megacave"))), false);
+  assert.equal(existsSync(dirname(fx.skill("ultracave"))), false);
+  assert.equal(readFileSync(outside, "utf8"), "keep\n");
+  assert.equal(existsSync(record), false);
+
+  // Record gone, so the next enable installs again instead of silently skipping.
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  assert.ok(existsSync(fx.skill("ultracave")));
+});
+
+test("enable codex skips a voice skill the Skills CLI already put in ~/.agents/skills", async () => {
+  const fx = voiceFixture();
+  mkdirSync(join(fx.home, "codex-home"));
+  mkdirSync(join(fx.home, ".agents", "skills", "caveman"), { recursive: true });
+  writeFileSync(join(fx.home, ".agents", "skills", "caveman", "SKILL.md"), "from skills cli\n");
+  const codex = await run(["enable", "codex"], fx.env);
+  assert.equal(codex.code, 0, codex.stderr);
+  assert.equal(existsSync(fx.skill("caveman", join(fx.home, "codex-home"))), false);
+  assert.ok(existsSync(fx.skill("ultracave", join(fx.home, "codex-home"))));
 });

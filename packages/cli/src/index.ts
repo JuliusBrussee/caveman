@@ -21,6 +21,7 @@ import {
   realpathSync,
   renameSync,
   rmSync,
+  rmdirSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -8789,6 +8790,85 @@ function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | 
               : aiderNativeMutations(gw);
 }
 
+// Voice skills (`output` suite) ride along with a Claude/Codex native install so
+// `/caveman` exists after `caveman <agent>`. Ownership lives in a sidecar, NOT in
+// the native journal: journal operations feed `nativeIntegrationStatus`, where an
+// edited or deleted file reads `degraded` and blocks enable. A skill the user
+// edits, pixelizes or deletes must never do that.
+function nativeVoiceSkillsRecordPath(agent: NativeAgent): string {
+  return join(cavemanHome(), "integrations", `${agent}.voice-skills.json`);
+}
+
+// Fail-open and once per install: an existing record means this already ran, so
+// a skill the user deleted afterwards is not written back.
+function installNativeVoiceSkills(agent: NativeAgent): void {
+  if (agent !== "claude" && agent !== "codex") return;
+  try {
+    const record = nativeVoiceSkillsRecordPath(agent);
+    if (existsSync(record)) return;
+    const root = join(agent === "claude" ? claudeConfigDir() : codexHomeDir(), "skills");
+    const files: Array<{ file: string; sha256: string }> = [];
+    let failure: unknown;
+    try {
+      for (const name of AGENT_SKILL_SUITES.output ?? []) {
+        const file = join(root, name, "SKILL.md");
+        // The Skills CLI puts global Codex skills in ~/.agents/skills; a copy
+        // there already answers `/caveman`, so a second one is only a duplicate.
+        if (agent === "codex" && existsSync(join(homedir(), ".agents", "skills", name, "SKILL.md"))) continue;
+        const body = Buffer.from(SKILLS[name]!);
+        mkdirSync(dirname(file), { recursive: true });
+        // `wx` never clobbers: an existing SKILL.md (any content, any link) stays
+        // the user's and is not recorded as ours.
+        try { writeFileSync(file, body, { flag: "wx" }); } catch (error) {
+          if ((error as NodeJS.ErrnoException).code === "EEXIST") continue;
+          // A half-written file would read as the user's on every later run.
+          try { unlinkSync(file); } catch { /* nothing landed */ }
+          throw error;
+        }
+        files.push({ file, sha256: bytesHash(body) });
+      }
+    } catch (error) { failure = error; }
+    // Record whatever landed so disable can still remove it; a total failure
+    // leaves no record and is retried by the next enable.
+    if (files.length > 0 || !failure) atomicWriteFile(record, Buffer.from(JSON.stringify({ files }, null, 2) + "\n"));
+    if (failure) throw failure;
+    if (files.length > 0) process.stderr.write(`  voice skills: ${files.map((item) => item.file).join(", ")}\n`);
+  } catch (error) {
+    process.stderr.write(dim(`→ voice skills not installed: ${(error as Error).message}\n`));
+  }
+}
+
+// Removes only files the record names that still hold the bytes we wrote. The
+// record always goes, even when a file could not be removed: a leftover record
+// would make every later enable skip the install, and an unowned file is the
+// safe direction.
+function removeNativeVoiceSkills(agent: NativeAgent): void {
+  const record = nativeVoiceSkillsRecordPath(agent);
+  try {
+    const bytes = fileBytes(record);
+    if (!bytes) return;
+    const files: unknown = (JSON.parse(bytes.toString("utf8")) as { files?: unknown }).files;
+    for (const item of Array.isArray(files) ? files : []) {
+      try {
+        const { file, sha256 } = item as { file?: unknown; sha256?: unknown };
+        // The record is user-writable: only ever touch a suite skill's SKILL.md.
+        if (typeof file !== "string" || basename(file) !== "SKILL.md" || !(AGENT_SKILL_SUITES.output ?? []).includes(basename(dirname(file)))) continue;
+        if (existsSync(file)) {
+          // A symlink the user put here is theirs even if its target matches.
+          if (!lstatSync(file).isFile() || bytesHash(readFileSync(file)) !== sha256) continue;
+          unlinkSync(file);
+        }
+        try { rmdirSync(dirname(file)); } catch { /* non-empty: preserve */ }
+      } catch (error) {
+        process.stderr.write(dim(`→ voice skill not removed: ${(error as Error).message}\n`));
+      }
+    }
+  } catch (error) {
+    process.stderr.write(dim(`→ voice skills not removed: ${(error as Error).message}\n`));
+  }
+  try { unlinkSync(record); } catch { /* absent */ }
+}
+
 function enableNative(argv: string[]) {
   const detected = argv.includes("--detected");
   const target = argv.find((arg) => !arg.startsWith("--"));
@@ -8812,7 +8892,10 @@ function enableNative(argv: string[]) {
       nativeProxyBinaryRequired(gw);
       const existing = nativeIntegrationStatus(agent);
       if (existing.installed) {
-        if (existing.state === "installed") return "already" as const;
+        if (existing.state === "installed") {
+          installNativeVoiceSkills(agent);
+          return "already" as const;
+        }
         // `--fix` on purpose: bare `caveman doctor <agent>` prints JSON that says
         // `degraded` and nothing that says how to leave that state, so pointing
         // at it alone dead-ends the user who followed this line here (#1049).
@@ -8835,6 +8918,7 @@ function enableNative(argv: string[]) {
             ? `  lifecycle/Core: ${nativeHookCommand(agent)}; command-output rewrite unavailable in Codex\n`
             : `  lifecycle/Core/tool rewrite: ${nativeHookCommand(agent)}${agent === "hermes" ? " via native plugin" : ` + ${cavemanBinForHook()} shrink-hook`}\n`);
       applyNativeMutations(agent, profile, mutations);
+      installNativeVoiceSkills(agent);
       return "enabled" as const;
     });
     // Outside the lock, and on BOTH outcomes. The native SessionStart hook
@@ -9152,6 +9236,7 @@ function disableNativeAgent(target: NativeAgent): boolean {
     const journal = readNativeJournal(target);
     if (!journal) return undefined;
     restoreNativeJournalFiles(journal);
+    removeNativeVoiceSkills(target);
     return journal;
   });
   if (!disabled) {
@@ -9190,6 +9275,7 @@ function repairNativeAgent(target: NativeAgent): void {
       atomicWriteFile(nativeJournalPath(target), journalBytes);
       throw error;
     }
+    installNativeVoiceSkills(target);
   });
   process.stderr.write(`${mark("ok")} ${profile.display_name}: native Caveman repaired; unrelated host edits preserved\n`);
 }
