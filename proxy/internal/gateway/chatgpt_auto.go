@@ -308,6 +308,11 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 // names Auto; the rest streams as before when it does not.
 const autoSniffBytes = 64 << 10
 
+// autoSniffRaw is how much of the body as sent is read for that: one whole
+// zstd block (128 KiB at most) and its frame header, so an encoded head
+// always decodes far enough to show its model.
+const autoSniffRaw = 192 << 10
+
 // prefixModel spans the value of the top-level "model" string in the head of
 // a JSON object (quotes included). ok is false when the head ends first or
 // holds no such string.

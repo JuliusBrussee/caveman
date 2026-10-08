@@ -392,3 +392,25 @@ func TestChatGPTAutoBrokenEncodingHasItsOwnReason(t *testing.T) {
 		}
 	}
 }
+
+// A zstd block that barely compresses is up to 128 KiB as sent: the head read
+// covers one whole block, so the model at its start is still seen.
+func TestChatGPTAutoSniffReadsAWholeZstdBlock(t *testing.T) {
+	// Random base64-like text: about three quarters of its size once encoded.
+	const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	random := rand.New(rand.NewSource(1))
+	image := make([]byte, 600<<10)
+	for i := range image {
+		image[i] = alphabet[random.Intn(len(alphabet))]
+	}
+	sent := encodedBody(t, "zstd", []byte(`{"model":"caveman-auto","input":"`+string(image)+`"}`))
+	if len(sent) <= autoSniffRaw {
+		t.Fatalf("body of %d bytes fits the head; the test proves nothing", len(sent))
+	}
+	if namesAutoHead(sent[:autoSniffBytes], "zstd") {
+		t.Skip("this encoder's first block fits 64 KiB; nothing to prove")
+	}
+	if !namesAutoHead(sent[:autoSniffRaw], "zstd") {
+		t.Fatal("the head read does not reach the end of the first zstd block")
+	}
+}

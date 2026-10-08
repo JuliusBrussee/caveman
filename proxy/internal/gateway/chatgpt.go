@@ -75,7 +75,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		// path (Codex compaction too); any other streams on as before, with
 		// the head put back in front.
 		original := r.Body
-		head, _ := io.ReadAll(io.LimitReader(original, autoSniffBytes))
+		head, _ := io.ReadAll(io.LimitReader(original, autoSniffRaw))
 		r.Body = struct {
 			io.Reader
 			io.Closer
