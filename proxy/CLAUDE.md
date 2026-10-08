@@ -134,11 +134,11 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   (`/chatgpt`, `chatgpt_auto.go`; OpenCode's ChatGPT login lands there too) `/models` gains an Auto
   entry (a copy of `gpt-6.1-sol`'s, listed last, fetched without `If-None-Match`, served without
   `ETag`) while the link reports `AutoOffered` (signed in, routing on). Every POST there has its
-  first 64 KiB read (decoded when gzip, deflate or zstd; a br body is never looked into) for a
+  first 64 KiB read (decoded when gzip, deflate (zlib or raw) or zstd, by a decoder that is always closed; a br body is never looked into) for a
   top-level `"model":"caveman-auto"`; any other streams on unchanged. `/responses` naming Auto asks
   with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx; any other
   path (Codex compaction) runs `gpt-6.1-sol` unasked; a body over `CAVE_MAX_REQUEST_BYTES` streams
-  with only its model changed. The agent reads `caveman-auto`. The
+  with only its model changed (`auto_body_too_large`; one that fits but does not decode records `auto_body_decode_failed`). The agent reads `caveman-auto`. The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
   caller's models, counts, what the request declares (the raw values of eleven allowlisted agent
   headers, never cut: a value over 256 bytes, 16 KiB for Codex's turn metadata, which also comes

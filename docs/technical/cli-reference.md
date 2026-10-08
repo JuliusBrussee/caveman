@@ -50,6 +50,9 @@ Auto is offered only while you are signed in with routing on, and only for a
 provider the local runtime sends to its own API. Claude Code set to Bedrock,
 Vertex or Foundry (`CLAUDE_CODE_USE_*`) gets no Auto; if you turn one of those
 on after Auto was added, pick another model with `/model`.
+A saved Codex `model = "caveman-auto"` (top level or under `[profiles.*]`) only
+works while Caveman is wired; `caveman disable codex` clears the top-level one,
+a profile's is yours to change.
 
 ## Modules
 
