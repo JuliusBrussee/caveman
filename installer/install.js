@@ -751,15 +751,14 @@ function installViaSkills(ctx, prov) {
     if (prov.id === 'codex' && opts.withHooks !== false) installCodexHook(ctx);
     if (prov.id === 'cursor') installCursorNative(ctx);
     if (prov.id === 'copilot') installCopilotCliHook(ctx);
-  } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
-
-  if (prov.id === 'cursor') {
-    try {
-      CURSOR_HOOKS.installCursorHooks({ note });
-    } catch (error) {
-      warn(`  Cursor dedupe hook pilot failed: ${error.message}`);
+    if (prov.id === 'cursor' && opts.withHooks !== false) {
+      try {
+        CURSOR_HOOKS.installCursorHooks({ note, dryRun: opts.dryRun });
+      } catch (error) {
+        warn(`  Cursor dedupe hook pilot failed: ${error.message}`);
+      }
     }
-  }
+  } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
 
@@ -1937,7 +1936,7 @@ function uninstall(ctx) {
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
 
   try {
-    CURSOR_HOOKS.uninstallCursorHooks({ note });
+    CURSOR_HOOKS.uninstallCursorHooks({ note, dryRun: opts.dryRun });
   } catch (error) {
     cleanupFailed = true;
     warn(`  Cursor dedupe hook uninstall failed: ${error.message}`);

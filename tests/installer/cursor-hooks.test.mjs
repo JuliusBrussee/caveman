@@ -65,6 +65,17 @@ test('install pilot prints plan and writes nothing', () => {
   }
 });
 
+test('uninstall of a home with no Cursor hook stays silent', () => {
+  const home = freshHome();
+  try {
+    const notes = [];
+    CURSOR.uninstallCursorHooks({ home, note: (line) => notes.push(line) });
+    assert.deepEqual(notes, []);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
 test('uninstall pilot prints plan and writes nothing', () => {
   const home = freshHome();
   try {

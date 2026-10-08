@@ -66,19 +66,23 @@ function stripCavemanHooks(doc) {
   return { changed, doc: { ...doc, hooks } };
 }
 
-function installCursorHooks({ home = os.homedir(), note = () => {} }) {
+function installCursorHooks({ home = os.homedir(), note = () => {}, dryRun = false }) {
   const dest = hookScriptPath(home);
   const manifest = hooksJsonPath(home);
   note(`  would copy src/hooks/${HOOK_SCRIPT_NAME} → ${dest}`);
   note(`  would merge caveman Cursor dedupe hook entries into ${manifest}`);
+  // Pilot: dry-run and live install both stop at the plan. No copy, no write.
+  void dryRun;
 }
 
-function uninstallCursorHooks({ home = os.homedir(), note = () => {} }) {
+function uninstallCursorHooks({ home = os.homedir(), note = () => {}, dryRun = false }) {
   const dest = hookScriptPath(home);
   const manifest = hooksJsonPath(home);
+  // A home that never got this hook must stay silent. Codex uninstall asserts
+  // that an unparseable hooks.json caveman did not write is not mentioned.
   if (fs.existsSync(dest)) note(`  would remove ${dest}`);
-  else note(`  would remove ${dest} (not present)`);
-  note(`  would prune caveman Cursor dedupe hook entries from ${manifest}`);
+  if (fs.existsSync(manifest)) note(`  would prune caveman Cursor dedupe hook entries from ${manifest}`);
+  void dryRun;
   return { changed: false };
 }
 
