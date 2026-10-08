@@ -49,9 +49,12 @@ func requestAccounting(row *RequestRecord, meta providers.RequestMetadata, usage
 	if !ok {
 		return
 	}
-	afterJSON, ok := compactTextRequest(accepted)
-	if !ok {
-		return
+	// Unchanged bytes canonicalize to the same JSON: decode them once.
+	afterJSON := beforeJSON
+	if !bytes.Equal(original, accepted) {
+		if afterJSON, ok = compactTextRequest(accepted); !ok {
+			return
+		}
 	}
 	codec, err := requestTokenCodec()
 	if err != nil {

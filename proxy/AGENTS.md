@@ -7,9 +7,9 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 
 ## Layout
 - `providers/` — the shared, public byte-safe adapter set: `Adapter` interface + `Base` embed + `UsageScanner`/`ParseUsageBytes` (`adapter.go`), and `anthropic`/`openai`/`gemini`/`azureopenai`/`bedrock`/`vertex`/`openaicompat`. `ResolveUpstreamURL` takes `providers.RouteContext` (no control-plane coupling). Anthropic + OpenAI carry both prefixed and bare routes (`/v1/messages`, `/v1/chat/completions`). `vertex` preserves caller OAuth bearer or Express-mode Google API-key credentials for Gemini + Claude on Vertex AI (no signing, no environment-key fallback, no custom usage parser).
-- `internal/gateway/` — the request lifecycle (`server.go` + `proxy.go`) behind three injected seams: `Authenticator`, `CredentialResolver`, `TelemetrySink`. Ports the managed loop with the fail-open fix.
+- `internal/gateway/` — the request lifecycle (`server.go` + `proxy.go`) behind three injected seams: `Authenticator`, `CredentialResolver`, `TelemetrySink`. Ports the managed loop with the fail-open fix. `serve` sets `Config.AsyncRecord`: a row's request token count, sink write (batched) and Cloud observe run after the handler returns, in record order (`recorder.go`). A reader that must see the request it follows calls `Server.Flush` first (session receipts do); close the server before the sink.
 - `internal/config/` — `caveman.yaml` loader + BYOK env-key resolution; unknown mode fails closed to `record`.
-- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink`.
+- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink` and `BatchSink`. `RecordBatch` commits request rows with `synchronous=NORMAL` on its own connection (WAL): a power loss or OS crash can drop the last batches, a process crash or clean exit loses none; every other table keeps FULL.
 - `internal/standalone/` — wiring: static `Auth`, BYOK `Creds`, adapter set, and the always-on SSRF-guarded client.
 - `internal/identity/` — who calls the framework middleware routes (legacy token, token map, OIDC/JWT, mTLS) and the reloadable TLS listener config.
 - `cmd/caveman-proxy/` — binary: `serve` (default), `stats`, and content-blind

@@ -479,7 +479,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
 		}
 	}
-	transformedHash := sha256.Sum256(transform.Body)
+	transformedHash := rawHash
+	if !bytes.Equal(transform.Body, body) {
+		transformedHash = sha256.Sum256(transform.Body)
+	}
 	evidence.acceptedBody = transform.Body
 	providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown := providerPrefixEvidence(adapter, transform.Body, meta)
 
@@ -510,7 +513,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	if !statsPricingOriginKnown(meta.Provider, upstreamURL) {
 		evidence.statsPricingUnsupportedReason = "custom_provider_origin"
 	}
-	authContext := providers.WithRequestPayloadHash(r.Context(), transform.Body)
+	authContext := providers.WithRequestPayloadSHA256(r.Context(), transformedHash)
 	upstreamHeaders, err := adapter.SanitizeAndMapHeaders(authContext, r, credential, upstreamURL)
 	if err != nil {
 		providerHeaderError(w, r, err)
@@ -638,7 +641,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if s.logger != nil {
 			s.logger.Warn("upstream rejected transformed request; retrying with original bytes", "status", resp.StatusCode, "request_id", requestID)
 		}
-		retryAuthContext := providers.WithRequestPayloadHash(r.Context(), body)
+		retryAuthContext := providers.WithRequestPayloadSHA256(r.Context(), rawHash)
 		retryHeaders, rerr := adapter.SanitizeAndMapHeaders(retryAuthContext, r, credential, upstreamURL)
 		if rerr != nil {
 			providerHeaderError(w, r, rerr)
@@ -1699,18 +1702,18 @@ func (s *Server) record(start time.Time, ttfb int64, requestID, traceID string, 
 	if evidence.statsPricingUnsupportedReason != "" {
 		statsMeta.PricingUnsupportedReason = evidence.statsPricingUnsupportedReason
 	}
-	requestAccounting(&row, statsMeta, usage, evidence.originalBody, evidence.acceptedBody, retrieved)
 	// The legacy inferred-dollar field now uses the whole-request net delta too.
 	// Marker/tool overhead and regressions must not disappear behind segment wins.
 	// Not when the tool-schema strip also ran: that delta spans both transforms,
 	// and the strip books a handle and nothing else — no tokens, no dollars.
-	if authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers) && row.RequestEstimatedInputDeltaUSD != nil {
-		row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
-	}
-	s.sink.Record(row)
-	if s.cloud != nil {
-		s.cloud.Observe(row)
-	}
+	bookDelta := authMode == AuthModePAYG && comp != nil && comp.bookSavings && toolSchemaHandle == "" && hasCompressionOptimizer(optimizers)
+	original, accepted := evidence.originalBody, evidence.acceptedBody
+	s.finishRecord(row, true, func(row *RequestRecord) {
+		requestAccounting(row, statsMeta, usage, original, accepted, retrieved)
+		if bookDelta && row.RequestEstimatedInputDeltaUSD != nil {
+			row.SavingsUSD = cost.RoundUSD(row.SavingsUSD + *row.RequestEstimatedInputDeltaUSD)
+		}
+	})
 }
 
 // costBreakdown prices normalized provider usage. Cache and reasoning fields are

@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -352,22 +353,31 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 		RecoveryHandle:             compHandle,
 	}
 	var originalBody []byte
-	meta := providers.RequestMetadata{Provider: "chatgpt-subscription", Model: model}
-	if requestHashComplete && reqCapture != nil && !reqCapture.truncated {
+	inspect := requestHashComplete && reqCapture != nil && !reqCapture.truncated
+	if inspect {
 		originalBody = reqCapture.buf.Bytes()
-		if inspected, err := openai.New("").InspectRequest(r.Context(), bytes.NewReader(originalBody), r.Header); err == nil {
-			meta = inspected
-			meta.Provider = "chatgpt-subscription"
-		}
-	}
-	if s.chatGPTUpstream != DefaultChatGPTUpstream {
-		meta.PricingUnsupportedReason = "custom_subscription_origin"
 	}
 	if acceptedBody == nil {
 		acceptedBody = originalBody
 	}
-	requestAccounting(&row, meta, usage, originalBody, acceptedBody, false)
-	s.sink.Record(row)
+	var headers http.Header
+	if inspect {
+		headers = r.Header.Clone()
+	}
+	customOrigin := s.chatGPTUpstream != DefaultChatGPTUpstream
+	s.finishRecord(row, false, func(row *RequestRecord) {
+		meta := providers.RequestMetadata{Provider: "chatgpt-subscription", Model: model}
+		if inspect {
+			if inspected, err := openai.New("").InspectRequest(context.Background(), bytes.NewReader(originalBody), headers); err == nil {
+				meta = inspected
+				meta.Provider = "chatgpt-subscription"
+			}
+		}
+		if customOrigin {
+			meta.PricingUnsupportedReason = "custom_subscription_origin"
+		}
+		requestAccounting(row, meta, usage, originalBody, acceptedBody, false)
+	})
 }
 
 type eofTrackingReader struct {
