@@ -10,7 +10,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 - `internal/gateway/` — the request lifecycle (`server.go` + `proxy.go`) behind three injected seams: `Authenticator`, `CredentialResolver`, `TelemetrySink`. Ports the managed loop with the fail-open fix.
 - `GET /health/ready` identifies the runtime and advertises `billing: "byok"` because the standalone proxy forwards the caller's selected provider credential. The managed twin advertises `managed`; SDK dollar budgets fail closed on missing/unknown billing provenance.
 - `internal/config/` — `caveman.yaml` loader + BYOK env-key resolution; unknown mode fails closed to `record`.
-- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink`.
+- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink` and `BatchSink`. `RecordBatch` commits request rows with `synchronous=NORMAL` on its own connection (WAL): a power loss or OS crash can drop the last batches, a process crash or clean exit loses none; every other table keeps FULL.
 - `internal/standalone/` — wiring: static `Auth`, BYOK `Creds`, adapter set, and the always-on SSRF-guarded client.
 - `internal/identity/` — who calls the framework middleware routes (legacy token, token map, OIDC/JWT, mTLS) and the reloadable TLS listener config.
 - `internal/nativeruntime/` — normalized local-agent lifecycle, Task Contract,
