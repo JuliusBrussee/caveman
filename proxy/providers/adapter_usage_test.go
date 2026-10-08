@@ -620,3 +620,15 @@ func TestAnthropicMessageIterationsStayPriced(t *testing.T) {
 		}
 	}
 }
+
+func TestAnthropicInferenceGeoNotAvailableIsNoGeography(t *testing.T) {
+	var usage UsageObservation
+	ParseUsageBytes("anthropic", []byte(`{"stop_reason":"end_turn","usage":{"input_tokens":2,"cache_creation_input_tokens":34890,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":34890,"ephemeral_1h_input_tokens":0},"output_tokens":4,"service_tier":"standard","inference_geo":"Not_Available","iterations":[{"type":"message","input_tokens":2,"output_tokens":4}]}}`), &usage)
+	if usage.InferenceGeo != "" || usage.PricingUnsupportedReason != "" || usage.CacheCreation5mTokens != 34890 {
+		t.Fatalf("usage = %+v", usage)
+	}
+	ParseUsageBytes("anthropic", []byte(`{"usage":{"input_tokens":2,"output_tokens":4,"inference_geo":"us"}}`), &usage)
+	if usage.InferenceGeo != "us" {
+		t.Fatalf("a named geography was dropped: %+v", usage)
+	}
+}

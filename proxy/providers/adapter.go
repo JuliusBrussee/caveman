@@ -1774,7 +1774,9 @@ func mergePricingQualifiers(obj map[string]any, usage *UsageObservation) {
 			usage.ServiceTier = "traffic_type_" + strings.ToLower(strings.TrimSpace(traffic))
 		}
 	}
-	if geo, ok := obj["inference_geo"].(string); ok {
+	// Anthropic answers "not_available" when it does not say where inference
+	// ran: that is no geography, and the request's own (or global) pricing holds.
+	if geo, ok := obj["inference_geo"].(string); ok && !strings.EqualFold(strings.TrimSpace(geo), "not_available") {
 		usage.InferenceGeo = strings.TrimSpace(geo)
 	}
 	// Server-side tools and grounding are billed outside the token rates in the

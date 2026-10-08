@@ -14,6 +14,7 @@ import (
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+	"github.com/JuliusBrussee/caveman/shared/platform/catalog"
 )
 
 // fakeClock fires timers only when the test advances it, each at its own due
@@ -143,6 +144,11 @@ func (t *warmTransport) body(i int) string {
 	return string(t.bodies[i])
 }
 
+// realUsageTail is what Anthropic's API sends with every usage object today.
+// Fixtures carry it by default: a response without these fields was priced
+// while every real one was not, and the warm tests passed on a dead feature.
+const realUsageTail = `,"service_tier":"standard","inference_geo":"not_available","iterations":[{"type":"message","input_tokens":10,"output_tokens":5}]`
+
 // usageJSON is an Anthropic usage object for a 200k-token cached prefix.
 func usageJSON(read, write int, ttl string) string {
 	creation := `"cache_creation":{"ephemeral_5m_input_tokens":` + strconv.Itoa(write) + `,"ephemeral_1h_input_tokens":0}`
@@ -150,7 +156,7 @@ func usageJSON(read, write int, ttl string) string {
 		creation = `"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":` + strconv.Itoa(write) + `}`
 	}
 	return `{"input_tokens":10,"output_tokens":5,"cache_read_input_tokens":` + strconv.Itoa(read) +
-		`,"cache_creation_input_tokens":` + strconv.Itoa(write) + `,` + creation + `}`
+		`,"cache_creation_input_tokens":` + strconv.Itoa(write) + `,` + creation + realUsageTail + `}`
 }
 
 func messageResp(model, usage string) string {
@@ -275,7 +281,8 @@ func TestCacheWarmReplaysExactBytesAtZeroOutput(t *testing.T) {
 func TestCacheWarmStreamingRequestWarmsWithoutStream(t *testing.T) {
 	sse := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"model\":\"" + warmModel +
 		"\",\"content\":[],\"usage\":" + usageJSON(0, 200_000, "5m") + "}}\n\n" +
-		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":5}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":" +
+		"{\"input_tokens\":10,\"cache_creation_input_tokens\":200000,\"cache_read_input_tokens\":0,\"output_tokens\":5" + realUsageTail + "}}\n\n" +
 		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
 	rt := &warmTransport{realResp: sse, sse: true}
 	f := newWarmFixture(t, rt, anthropicAPI, nil)
@@ -522,5 +529,43 @@ func TestCacheWarmNeverLogsCredentials(t *testing.T) {
 	}
 	if strings.Contains(logs.String(), "sk-ant-api-secret-key") || strings.Contains(logs.String(), "You are an agent") {
 		t.Fatalf("warm logged a credential or content:\n%s", logs.String())
+	}
+}
+
+// The usage object exactly as api.anthropic.com sent it on live subscription
+// traffic: priced at the catalog rate, and a stream answered with it is warmed.
+func TestCacheWarmPricesTheLiveUsageShape(t *testing.T) {
+	const live = `{"input_tokens":2,"cache_creation_input_tokens":34890,"cache_read_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":34890,"ephemeral_1h_input_tokens":0},"output_tokens":4,"service_tier":"standard","inference_geo":"not_available","iterations":[{"type":"message","input_tokens":2,"output_tokens":4}]}`
+	meta := providers.RequestMetadata{Provider: "anthropic", Model: "claude-sonnet-5-5"}
+	scanner := anthropic.New(anthropicAPI).NewUsageScanner(http.Header{})
+	_, _ = scanner.Write([]byte(messageResp(meta.Model, live)))
+	usage := scanner.Usage()
+	want, _ := catalog.Price("anthropic", meta.Model)
+	if got := standalonePriceForUsage(meta, usage); got != want || want.CacheReadPerMillion <= 0 {
+		t.Fatalf("price = %+v, want the catalog's %+v (usage %+v)", got, want, usage)
+	}
+	if _, _, ok := cacheWarmCosts(usage, meta, AuthModeSubscription, 5*time.Minute); !ok {
+		t.Fatalf("live usage shape not costed: %+v", usage)
+	}
+	sse := "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m\",\"type\":\"message\",\"model\":\"" + warmModel +
+		"\",\"content\":[],\"usage\":" + live + "}}\n\n" +
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\",\"stop_sequence\":null},\"usage\":" + live + "}\n\n" +
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n"
+	for name, rt := range map[string]*warmTransport{
+		"json": {realResp: messageResp(warmModel, live)},
+		"sse":  {realResp: sse, sse: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newWarmFixture(t, rt, anthropicAPI, nil)
+			extra := ""
+			if rt.sse {
+				extra = `"stream":true,`
+			}
+			f.serve(t, reqBody(extra), warmHeaders)
+			f.clock.advance(270 * time.Second)
+			if rows := f.warmRows(); rt.count() != 2 || len(rows) != 1 || rows[0].TotalCostUSD <= 0 {
+				t.Fatalf("requests = %d, warm rows = %+v", rt.count(), rows)
+			}
+		})
 	}
 }
