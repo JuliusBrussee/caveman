@@ -3766,10 +3766,13 @@ function globalCapabilityDocument(): Record<string, unknown> {
 }
 
 // Auto (AUTO_MODEL) is in an agent's model picker while signed in with the
-// routing module stored on: the two things caveman-proxy's route stage reads
-// (cloud.json; the secret itself is never read here). Login and logout
-// re-wire the agents so the entry follows (refreshAutoWiring).
-function autoModelOffered(): boolean {
+// routing module stored on, the two things caveman-proxy's route stage reads
+// (cloud.json; the secret itself is never read here), and only for a
+// provider the proxy sends to its own API: Auto never runs on a third-party
+// upstream. Login and logout re-sync the entries (syncAutoEntries).
+const AUTO_FIRST_PARTY: Record<"anthropic" | "openai", string> = { anthropic: "api.anthropic.com", openai: "api.openai.com" };
+function autoModelOffered(provider: "anthropic" | "openai" = "anthropic"): boolean {
+  if (!proxyUpstreamIsFirstParty(provider, AUTO_FIRST_PARTY[provider])) return false;
   const doc = globalCapabilityDocument();
   if (objectValue(doc.modules).routing !== true) return false;
   if (process.env.CAVE_TOKEN) return true;
@@ -3793,16 +3796,108 @@ function addClaudeAutoEnv(env: Record<string, unknown>): string[] {
   return added;
 }
 
-// Re-wires the native agents that carry an Auto entry after login or
-// logout, so it shows only while signed in. Best effort: a repair that
-// cannot run says how to finish it.
-function refreshAutoWiring(): void {
-  if (objectValue(globalCapabilityDocument().modules).routing !== true) return;
+// Puts Auto into, or takes it out of, the natively wired Claude Code and
+// OpenCode config after login or logout: a narrow edit of those two files and
+// their journals that needs no agent or Caveman binary, so an IDE-only user
+// gets it too. Taking it out also clears a saved model choice of Auto.
+function syncAutoEntries(): void {
+  const gwLocal = wrapMode(gatewayURL()) === "local";
   for (const agent of ["claude", "opencode"] as NativeAgent[]) {
-    if (!readNativeJournal(agent)) continue;
-    try { repairNativeAgent(agent, { quiet: true }); }
-    catch (error) { process.stderr.write(`${mark("warn")} ${agent}: Auto model not updated (${(error as Error).message}) · caveman doctor ${agent} --fix\n`); }
+    try {
+      withIntegrationLock(agent, () => {
+        const journal = readNativeJournal(agent);
+        const operation = journal?.operations.find((op) => op.kind === (agent === "claude" ? "claude-settings" : "opencode-config"));
+        if (!journal || !operation) return;
+        const before = fileBytes(operation.file);
+        if (!before) return;
+        const root = parseJsonFileObject(operation.file, before);
+        const owned = { ...(operation.owned ?? {}) };
+        if (agent === "claude") {
+          const env = objectValue(root.env);
+          const ours = Array.isArray(owned.auto_env) ? owned.auto_env.filter((key): key is string => typeof key === "string") : [];
+          if (gwLocal && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env)) {
+            owned.auto_env = [...new Set([...ours, ...addClaudeAutoEnv(env)])];
+          } else {
+            for (const key of ours) if (env[key] === CLAUDE_AUTO_ENV[key]) delete env[key];
+            owned.auto_env = [];
+            if (root.model === AUTO_MODEL) delete root.model;
+          }
+          if (Object.keys(env).length > 0) root.env = env; else delete root.env;
+        } else {
+          const providers = objectValue(root.provider);
+          const ours = Array.isArray(owned.auto_models) ? owned.auto_models.filter((id): id is string => typeof id === "string") : [];
+          const next: string[] = [];
+          for (const id of ["openai", "anthropic"] as const) {
+            if (!isPlainObject(providers[id])) continue;
+            const provider = providers[id] as Record<string, unknown>;
+            const models = objectValue(provider.models);
+            if (gwLocal && autoModelOffered(id)) {
+              if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = OPENCODE_AUTO_MODEL;
+              if (ours.includes(id) || objectValue(models[AUTO_MODEL]).name === AUTO_NAME) next.push(id);
+            } else if (ours.includes(id) && objectValue(models[AUTO_MODEL]).name === AUTO_NAME) {
+              delete models[AUTO_MODEL];
+            }
+            if (Object.keys(models).length > 0) provider.models = models; else delete provider.models;
+          }
+          owned.auto_models = next;
+          if (!next.length && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) delete root.model;
+        }
+        const after = jsonBytes(root);
+        if (after.equals(before)) return;
+        atomicWriteFile(operation.file, after);
+        operation.owned = owned;
+        operation.after_sha256 = bytesHash(after);
+        atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
+      });
+    } catch (error) {
+      process.stderr.write(`${mark("warn")} ${agent}: Auto model not updated (${(error as Error).message}) · caveman doctor ${agent} --fix\n`);
+    }
   }
+}
+
+// After a native disable: a saved model choice of Auto would reach the
+// provider directly and fail, so it goes (only that exact value).
+function clearAutoModelChoice(agent: NativeAgent): void {
+  try {
+    if (agent === "claude") {
+      const path = claudeSettingsPath();
+      const bytes = fileBytes(path);
+      const root = parseJsonFileObject(path, bytes);
+      if (bytes && root.model === AUTO_MODEL) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+    } else if (agent === "opencode") {
+      const path = join(homedir(), ".config", "opencode", "opencode.json");
+      const bytes = fileBytes(path);
+      const root = parseJsonFileObject(path, bytes);
+      if (bytes && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+    } else if (agent === "codex") {
+      // Codex's /model writes a top-level `model = "…"` to config.toml.
+      const path = join(codexHomeDir(), "config.toml");
+      const bytes = fileBytes(path);
+      if (!bytes) return;
+      let section = "";
+      const lines = bytes.toString("utf8").split("\n");
+      const at = lines.findIndex((line) => {
+        section = codexTomlSectionName(line) ?? section;
+        return section === "" && new RegExp(`^\\s*model\\s*=\\s*"${AUTO_MODEL}"\\s*(#.*)?\\r?$`).test(line);
+      });
+      if (at >= 0) atomicWriteFile(path, Buffer.from(lines.filter((_, i) => i !== at).join("\n")));
+    }
+  } catch {
+    // Best effort: the files are the user's; a parse failure leaves them alone.
+  }
+}
+
+// `caveman disable <agent>` and `caveman enable <agent>` record the choice, so
+// the `caveman claude` door never re-wires an agent the user took out.
+function setNativeOptOut(agent: string, out: boolean): void {
+  const current = globalCapabilityDocument().nativeOptOut;
+  const list = Array.isArray(current) ? current.filter((id): id is string => typeof id === "string") : [];
+  if (list.includes(agent) === out) return;
+  mutateRawConfig((config) => {
+    const next = list.filter((id) => id !== agent);
+    if (out) next.push(agent);
+    if (next.length) config.nativeOptOut = next; else delete config.nativeOptOut;
+  });
 }
 
 // Claude Code's one extra /model picker row. The capabilities are what Claude
@@ -3925,6 +4020,12 @@ function yamlProviderBaseUrl(raw: string, provider: string): string | null | und
 // first-party host, and anything unverifiable (unreadable file, flow-style
 // YAML) refuses the assertion — withholding it only keeps today's behavior.
 function proxyAnthropicUpstreamIsFirstParty(): boolean {
+  return proxyUpstreamIsFirstParty("anthropic", "api.anthropic.com");
+}
+
+// proxyUpstreamIsFirstParty: the local proxy sends provider to its own API
+// (no caveman.yaml base_url override, or one naming host).
+function proxyUpstreamIsFirstParty(provider: string, host: string): boolean {
   const path = process.env.CAVEMAN_CONFIG ?? join(cavemanHome(), "caveman.yaml");
   let raw: string;
   try {
@@ -3932,11 +4033,11 @@ function proxyAnthropicUpstreamIsFirstParty(): boolean {
   } catch (e) {
     return (e as NodeJS.ErrnoException)?.code === "ENOENT";
   }
-  const override = yamlProviderBaseUrl(raw, "anthropic");
+  const override = yamlProviderBaseUrl(raw, provider);
   if (override === undefined) return false;
   if (override === null) return true;
   try {
-    return new URL(override).host === "api.anthropic.com";
+    return new URL(override).host === host;
   } catch {
     return false;
   }
@@ -5653,12 +5754,18 @@ async function agentShortcut(rest: string[]) {
   // native door applies none of its transforms, so a locked project must keep
   // routing through wrap or the lock would be silently unenforced.
   if (existsSync(join(process.cwd(), ".caveman", "agent.lock.json"))) return wrap(rest);
-  // `caveman claude` wires Claude Code natively, silently: the same journaled
-  // writes as `caveman enable claude`, so the IDE extension and desktop app,
-  // which read only ~/.claude/settings.json, get the same route and Auto
-  // model as this terminal. `caveman disable claude` reverses it. Only a
-  // module choice that wires no agent at all keeps it session-only.
-  if (native === "claude" && !readNativeJournal(native) && MODULES.some((m) => m.wiresAgents && currentSelection()[m.id])) {
+  // Once setup has run with Claude Code chosen, `caveman claude` keeps it
+  // wired natively without asking: the same journaled writes as `caveman
+  // enable claude`, so the IDE extension and desktop app, which read only
+  // ~/.claude/settings.json, get the same route and Auto model as this
+  // terminal. It never overrides a choice: not after `caveman disable claude`
+  // (nativeOptOut), not when setup left Claude Code out or was declined, and
+  // not when no module that wires agents is on. A first run goes through the
+  // door below (disclosure, modules, sign-in) before anything is written.
+  const doorConfig = globalCapabilityDocument();
+  const listed = (value: unknown) => Array.isArray(value) && value.includes(native);
+  if (native === "claude" && !readNativeJournal(native) && setupRan() && !setupDeclined() && listed(doorConfig.setupAgents)
+    && !listed(doorConfig.nativeOptOut) && MODULES.some((m) => m.wiresAgents && currentSelection()[m.id])) {
     try {
       enableNative([native], { quiet: true });
     } catch (error) {
@@ -5666,9 +5773,9 @@ async function agentShortcut(rest: string[]) {
       return wrap(rest);
     }
   }
-  // For the other agents nothing machine-wide is written without consent. A
-  // native journal is consent (users from before setup existed launch exactly
-  // as before). After setup, an agent it left out runs session-only until
+  // Otherwise nothing machine-wide is written without consent. A native
+  // journal is consent (users from before setup existed launch exactly as
+  // before). After setup, an agent it left out runs session-only until
   // `caveman setup` adds it. Before setup the first run asks once; declining,
   // or no terminal to ask in, runs this session only.
   if (!readNativeJournal(native)) {
@@ -7718,7 +7825,8 @@ function durableUnlink(path: string): void {
 
 function parseJsonFileObject(path: string, bytes: Buffer | null): Record<string, unknown> {
   if (!bytes || bytes.length === 0) return {};
-  const parsed = JSON.parse(bytes.toString("utf8"));
+  // JSONC-tolerant: Claude Code and OpenCode both accept comments here.
+  const parsed = parseJsonc(bytes.toString("utf8"));
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${path} is not a JSON object`);
   return parsed as Record<string, unknown>;
 }
@@ -7794,7 +7902,9 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   // Auto in the /model picker (and the IDE extension and desktop app, which
   // read this env) while the routing module is on. A custom option the user
   // already set is theirs and stays.
-  const autoEnv = wrapMode(gw) === "local" && autoModelOffered() && !claudeOffProxyLane(env, process.env) ? addClaudeAutoEnv(env) : [];
+  const autoEnv = wrapMode(gw) === "local" && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env) ? addClaudeAutoEnv(env) : [];
+  // Without Auto a saved choice of it would fail: it goes, only that value.
+  if (!autoEnv.length && env.ANTHROPIC_CUSTOM_MODEL_OPTION !== AUTO_MODEL && settings.model === AUTO_MODEL) delete settings.model;
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
@@ -8320,7 +8430,7 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
     if (provider.models !== undefined && !isPlainObject(provider.models)) {
       throw new Error(`${configPath} provider.${providerID}.models must be a JSON object; refusing to overwrite it`);
     }
-    if (wrapMode(gw) === "local" && autoModelOffered() && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
+    if (wrapMode(gw) === "local" && autoModelOffered(providerID as "openai" | "anthropic") && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
       provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: OPENCODE_AUTO_MODEL };
       autoModels.push(providerID);
     }
@@ -9173,6 +9283,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     // accidental side effect of the first install rather than something the
     // command does. The integration lock is for file mutations — a liveness
     // probe and a detached spawn need no part of it.
+    setNativeOptOut(agent, false);
     if (outcome === "stale") {
       const was = agentStaleRoute(agent);
       repairNativeAgent(agent, { quiet: true });
@@ -9497,6 +9608,8 @@ function disableNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: bo
     return false;
   }
   cleanupNativeAgentFiles(target, disabled);
+  clearAutoModelChoice(target);
+  setNativeOptOut(target, true);
   if (quiet) return true;
   const name = findAgent(target)?.display_name ?? target;
   process.stderr.write(`${mark("ok")} ${name}: ${target === "aider" ? "shallow" : "native"} Caveman disabled; unrelated host edits preserved\n`);
@@ -10512,8 +10625,9 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
         rendered = deepMerge(rendered, { mcp: { caveman: kiloMcpEntry(ownedMcp) } });
       }
     }
-    if (agent.id === "opencode" && wrapMode(gw) === "local" && autoModelOffered()) {
-      rendered = deepMerge(rendered, { provider: Object.fromEntries(["openai", "anthropic"].map((id) => [id, { models: { [AUTO_MODEL]: OPENCODE_AUTO_MODEL } }])) });
+    if (agent.id === "opencode" && wrapMode(gw) === "local") {
+      const ids = (["openai", "anthropic"] as const).filter((id) => autoModelOffered(id));
+      if (ids.length) rendered = deepMerge(rendered, { provider: Object.fromEntries(ids.map((id) => [id, { models: { [AUTO_MODEL]: OPENCODE_AUTO_MODEL } }])) });
     }
     if (agent.id === "opencode" && process.env[inj.env_var]) {
       // OpenCode treats inline JSONC as its own configuration layer. Replacing
@@ -10556,7 +10670,7 @@ export function buildWrapEnv(agent?: AgentProfile, gw = gatewayURL(), mcpMode: M
       : wrapWorkTags();
     if (tags) env.ANTHROPIC_CUSTOM_HEADERS = mergeAnthropicCustomHeader(env.ANTHROPIC_CUSTOM_HEADERS, "x-cave-tags", tags);
   }
-  if (agent.id === "claude" && wrapMode(gw) === "local" && autoModelOffered() && !claudeOffProxyLane(env)) {
+  if (agent.id === "claude" && wrapMode(gw) === "local" && autoModelOffered("anthropic") && !claudeOffProxyLane(env)) {
     // Auto in the /model picker, as the native settings carry it. A custom
     // option already in the environment is the user's and wins.
     addClaudeAutoEnv(env);
@@ -10837,7 +10951,7 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   // bridge until the control plane has recorded that this CLI stored the bundle.
   await saveConfig(saved);
   await grant.acknowledge();
-  refreshAutoWiring();
+  syncAutoEntries();
   await printSignInLines();
   const email = tokenClaim(accessToken, "email");
   if (instance) {
@@ -10916,7 +11030,7 @@ async function logout() {
 	await saveConfig({ ...cfg, logoutPendingLocalCleanup: true });
   clearToken(cfg.tokenStore);
   await saveConfig({ baseURL: "", token: "" });
-  refreshAutoWiring();
+  syncAutoEntries();
   print({ logged_out: true });
 }
 

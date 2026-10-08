@@ -1580,3 +1580,68 @@ test("a Claude Code lane that bypasses the proxy gets no Auto", async () => {
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
   assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /CUSTOM_MODEL_OPTION/);
 });
+
+const signedInRouting = (fx, extra = {}) => {
+  mkdirSync(join(fx.home, ".caveman"), { recursive: true });
+  writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ modules: { routing: true }, baseURL: "https://api.caveman.so", tokenStore: "file", ...extra }) + "\n");
+};
+
+test("a saved choice of Auto goes on disable: Claude Code, OpenCode and Codex", async () => {
+  const fx = fixture();
+  signedInRouting(fx);
+  for (const agent of ["claude", "opencode", "codex"]) assert.equal((await run(["enable", agent], fx.env)).code, 0, agent);
+  const claudePath = join(fx.home, ".claude", "settings.json");
+  const claude = JSON.parse(readFileSync(claudePath, "utf8"));
+  writeFileSync(claudePath, JSON.stringify({ ...claude, model: "caveman-auto", theme: "dark" }, null, 2) + "\n");
+  const opencodePath = join(fx.home, ".config", "opencode", "opencode.json");
+  writeFileSync(opencodePath, JSON.stringify({ ...JSON.parse(readFileSync(opencodePath, "utf8")), model: "openai/caveman-auto" }, null, 2) + "\n");
+  const codexPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(codexPath, `model = "caveman-auto"\n` + readFileSync(codexPath, "utf8") + `\n[profiles.x]\nmodel = "caveman-auto"\n`);
+  for (const agent of ["claude", "opencode", "codex"]) {
+    const out = await run(["disable", agent], fx.env);
+    assert.equal(out.code, 0, `${agent}: ${out.stderr}`);
+  }
+  const after = JSON.parse(readFileSync(claudePath, "utf8"));
+  assert.equal(after.model, undefined);
+  assert.equal(after.theme, "dark");
+  if (existsSync(opencodePath)) assert.equal(JSON.parse(readFileSync(opencodePath, "utf8")).model, undefined);
+  const codex = readFileSync(codexPath, "utf8");
+  assert.ok(!codex.startsWith('model = "caveman-auto"'), codex);
+  assert.match(codex, /\[profiles\.x\]\nmodel = "caveman-auto"/, "only the top-level choice goes");
+});
+
+test("logout takes Auto and a saved choice of it out without any binary on PATH", async () => {
+  const fx = fixture();
+  const server = createServer((req, res) => { res.writeHead(200, { "content-type": "application/json" }); res.end("{}"); });
+  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    mkdirSync(join(fx.home, ".caveman"), { recursive: true });
+    writeFileSync(join(fx.home, ".caveman", "cloud.json"), JSON.stringify({ modules: { routing: true }, baseURL: `http://127.0.0.1:${server.address().port}`, token: "tok" }) + "\n");
+    assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+    const settingsPath = join(fx.home, ".claude", "settings.json");
+    writeFileSync(settingsPath, JSON.stringify({ ...JSON.parse(readFileSync(settingsPath, "utf8")), model: "caveman-auto" }, null, 2) + "\n");
+    const out = await run(["logout"], { ...fx.env, CAVE_NO_KEYCHAIN: "1", PATH: "/usr/bin:/bin", CAVEMAN_MCP_BIN: "/missing", CAVEMAN_PROXY_BIN: "/missing" });
+    assert.equal(out.code, 0, out.stderr);
+    const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(settings.env.ANTHROPIC_CUSTOM_MODEL_OPTION, undefined);
+    assert.equal(settings.model, undefined);
+    assert.equal((await run(["disable", "claude"], fx.env)).code, 0, "the journal still reverses cleanly");
+  } finally {
+    server.close();
+  }
+});
+
+test("a commented settings.json enables, and a third-party Anthropic upstream gets no Auto", async () => {
+  const fx = fixture();
+  signedInRouting(fx);
+  mkdirSync(join(fx.home, ".claude"), { recursive: true });
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  writeFileSync(settingsPath, '{\n  // mine\n  "env": { "KEEP": "yes" },\n}\n');
+  const out = await run(["enable", "claude"], fx.env);
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(JSON.parse(readFileSync(settingsPath, "utf8")).env.ANTHROPIC_CUSTOM_MODEL_OPTION, "caveman-auto");
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  writeFileSync(join(fx.home, ".caveman", "caveman.yaml"), "providers:\n  anthropic:\n    base_url: https://gateway.example.com\n");
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  assert.doesNotMatch(readFileSync(settingsPath, "utf8"), /CUSTOM_MODEL_OPTION/);
+});

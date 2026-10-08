@@ -9,9 +9,9 @@ import { fileURLToPath } from "node:url";
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 const skip = process.platform === "win32" ? "shell agent stubs" : false;
 
-// Conforming caveman-mcp/caveman-proxy stubs, so the native enable succeeds.
-// Claude Code is wired natively without asking (the IDE and desktop app read
-// only ~/.claude/settings.json); other agents still wait for setup.
+// Conforming caveman-mcp/caveman-proxy stubs: if the door called the native
+// enable, it would succeed and write ~/.claude/settings.json. It must not —
+// before setup, nothing machine-wide is written without Continue.
 function doorEnv() {
   const home = mkdtempSync(join(tmpdir(), "cave-door-"));
   const bin = join(home, "bin");
@@ -56,19 +56,16 @@ function run(env, argv) {
   });
 }
 
-test("caveman claude before setup wires Claude Code natively and silently, then launches it directly", { skip }, async () => {
+test("caveman claude before setup, with no terminal to confirm in, writes nothing machine-wide", { skip }, async () => {
   const { env, home } = doorEnv();
   try {
     const out = await run(env, ["claude", "-p", "hi"]);
     assert.equal(out.code, 0, out.stderr);
-    assert.equal(out.stdout, "agent:-p hi\n", "direct launch, no temp wrap pack");
-    assert.doesNotMatch(out.stderr, /native Caveman enabled|planned user-scoped writes/, "silent");
-    assert.match(readFileSync(join(home, ".claude", "settings.json"), "utf8"), /"ANTHROPIC_BASE_URL": "http:\/\/127\.0\.0\.1:9\/w\/claude"/);
-    assert.ok(existsSync(join(home, "integrations", "claude.json")), "journaled, so caveman disable claude reverses it");
+    assert.match(out.stdout, /agent:--plugin-dir \S*caveman-wrap-claude-\S* -p hi/, "the agent runs through the session-only wrap");
+    assert.doesNotMatch(out.stderr, /native Caveman enabled|planned user-scoped writes/);
+    assert.equal(existsSync(join(home, ".claude", "settings.json")), false, "no Claude settings written");
+    assert.equal(existsSync(join(home, "integrations", "claude.json")), false, "no native install journaled");
     assert.equal(JSON.parse(readFileSync(join(home, "cloud.json"), "utf8")).modules, undefined, "setup did not run");
-    const disabled = await run(env, ["disable", "claude"]);
-    assert.equal(disabled.code, 0, disabled.stderr);
-    assert.equal(existsSync(join(home, ".claude", "settings.json")), false, "disable reverses it");
   } finally {
     rmSync(home, { recursive: true, force: true });
   }
@@ -114,6 +111,30 @@ test("a user from before setup existed, with a native journal and no modules, la
     assert.equal(out.code, 0, out.stderr);
     assert.equal(out.stdout, "agent:-p hi\n", "the journal is consent: direct launch, no first run, no wrap");
     assert.doesNotMatch(out.stderr, /isn't set up/);
+  } finally {
+    rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test("after setup chose Claude Code, caveman claude re-wires it silently, but never after disable claude", { skip }, async () => {
+  const { env, home } = doorEnv();
+  try {
+    assert.equal((await run(env, ["setup", "--yes", "--only", "output"])).code, 0);
+    assert.ok(JSON.parse(readFileSync(join(home, "cloud.json"), "utf8")).setupAgents.includes("claude"));
+    // The journal lost (an old uninstall, a wiped home): the door wires again, silently.
+    rmSync(join(home, "integrations", "claude.json"));
+    rmSync(join(home, ".claude", "settings.json"));
+    let out = await run(env, ["claude", "-p", "hi"]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout, "agent:-p hi\n", "direct launch");
+    assert.doesNotMatch(out.stderr, /planned user-scoped writes/);
+    assert.ok(existsSync(join(home, "integrations", "claude.json")));
+    // An explicit disable sticks.
+    assert.equal((await run(env, ["disable", "claude"])).code, 0);
+    out = await run(env, ["claude", "-p", "hi"]);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stdout, /agent:--plugin-dir \S*caveman-wrap-claude-\S* -p hi/, "session-only after disable");
+    assert.equal(existsSync(join(home, "integrations", "claude.json")), false);
   } finally {
     rmSync(home, { recursive: true, force: true });
   }

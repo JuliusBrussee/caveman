@@ -105,12 +105,10 @@ function runLockedClaude(routes, { harness = "pi", mutateDuringCheck = false } =
 // Claude out (no native journal), `caveman claude` says how to add it and runs
 // exactly the `caveman wrap claude` behavior: the agent with the local-proxy
 // base URL injected.
-// caveman claude wires Claude Code natively on its own; when that cannot run
-// (here the MCP and proxy binaries are missing) it says so and runs session-only.
-test("caveman claude falls back to the session-only wrap when native setup fails", async () => {
+test("caveman claude after a setup that left Claude out runs the session-only wrap", async () => {
   const out = await runShortcut("claude", ["claude"]);
   assert.equal(out.code, 0, `cli exited ${out.code}: ${out.stderr}`);
-  assert.match(out.stderr, /Claude Code native setup failed \(.*\); this session only$/m);
+  assert.match(out.stderr, /^Claude Code isn't set up for Caveman · caveman setup to add it$/m);
   const [agentArgs, baseURL] = out.stdout.split("|");
   assert.equal(userAgentArgs(agentArgs), "", "no user args should be added");
   assert.equal(baseURL, "http://127.0.0.1:8787/w/claude", "ANTHROPIC_BASE_URL must point at the attributed local proxy");

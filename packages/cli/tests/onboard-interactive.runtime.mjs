@@ -203,15 +203,14 @@ function expectRun(script, env) {
   });
 }
 
-// Claude Code skips the door: caveman claude wires it natively (agent-door tests).
-test("end to end: a No at the agent door is remembered; caveman codex stops asking", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
+test("end to end: a No at the agent door is remembered; caveman claude stops asking", { skip: hasExpect() ? false : "expect(1) not installed" }, async () => {
   const box = modulesFixture();
   const env = { ...box.env, TERM: "xterm" };
   delete env.CI;
   const first = join(box.home, "first.exp");
   writeFileSync(first, [
     "set timeout 20",
-    `spawn -noecho ${process.execPath} ${cli} codex`,
+    `spawn -noecho ${process.execPath} ${cli} claude`,
     'expect "space toggles"', "sleep 0.2", 'send "\\r"',
     'expect "Agents"', "sleep 0.2", 'send "\\r"',
     'expect "Continue?"', "sleep 0.6", 'send "n"',
@@ -221,14 +220,14 @@ test("end to end: a No at the agent door is remembered; caveman codex stops aski
   const second = join(box.home, "second.exp");
   writeFileSync(second, [
     "set timeout 20",
-    `spawn -noecho ${process.execPath} ${cli} codex`,
+    `spawn -noecho ${process.execPath} ${cli} claude`,
     'expect { "space toggles" { puts "\\nASKED-AGAIN"; exit 3 } eof { exit 0 } }',
     "",
   ].join("\n"));
   try {
     const declined = await expectRun(first, env);
-    assert.match(declined.text, /Nothing changed · Codex runs this session only · caveman setup when you want it/);
-    assert.equal(existsSync(join(box.home, ".codex", "config.toml")), false);
+    assert.match(declined.text, /Nothing changed · Claude Code runs this session only · caveman setup when you want it/);
+    assert.equal(existsSync(join(box.home, ".claude", "settings.json")), false);
     const again = await expectRun(second, env);
     assert.equal(again.code, 0, again.text);
     assert.doesNotMatch(again.text, /ASKED-AGAIN|space toggles/);
@@ -284,10 +283,10 @@ test("end to end: at the agent door, unticking every wiring module never wires t
   delete env.CI;
   const script = join(box.home, "door.exp");
   // Untick output, input, waste fixes and routing (the four that wire agents);
-  // keep scripts and browse, keep Codex ticked, confirm.
+  // keep scripts and browse, keep Claude Code ticked, confirm.
   writeFileSync(script, [
     "set timeout 20",
-    `spawn -noecho ${process.execPath} ${cli} codex`,
+    `spawn -noecho ${process.execPath} ${cli} claude`,
     'expect "space toggles"', "sleep 0.2",
     'send " "', "sleep 0.1", 'send "j"', "sleep 0.1",
     'send " "', "sleep 0.1", 'send "j"', "sleep 0.1",
@@ -300,9 +299,9 @@ test("end to end: at the agent door, unticking every wiring module never wires t
   ].join("\n"));
   try {
     const out = await expectRun(script, env);
-    assert.doesNotMatch(out.text, /UPDATE {4}~\/\.codex|CREATE {4}~\/\.codex/, "the plan never offered to wire Codex");
-    assert.equal(existsSync(join(box.home, ".codex", "config.toml")), false, out.text);
-    assert.equal(existsSync(join(box.home, "integrations", "codex.json")), false, out.text);
+    assert.doesNotMatch(out.text, /UPDATE {4}~\/\.claude|CREATE {4}~\/\.claude/, "the plan never offered to wire Claude Code");
+    assert.equal(existsSync(join(box.home, ".claude", "settings.json")), false, out.text);
+    assert.equal(existsSync(join(box.home, "integrations", "claude.json")), false, out.text);
   } finally {
     box.cleanup();
   }
