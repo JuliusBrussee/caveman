@@ -206,8 +206,8 @@
     }
   },
   "devDependencies": {
-    "typescript": "5.9.3",
-    "@types/node": "22.13.10",
+    "typescript": "7.0.2",
+    "@types/node": "26.6.4",
     "ai": "7.0.94",
     "@ai-sdk/provider": "4.0.11",
     "openai": "7.12.1",
@@ -219,7 +219,7 @@
     "@google/genai": "2.21.0",
     "@mastra/core": "1.65.0",
     "@modelcontextprotocol/sdk": "1.30.0",
-    "esbuild": "0.28.1"
+    "esbuild": "0.28.2"
   },
   "publishConfig": {
     "access": "public"
