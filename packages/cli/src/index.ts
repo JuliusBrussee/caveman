@@ -79,6 +79,7 @@ import { modulesDoctor } from "./modules/doctor.js";
 import { findModule } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
+import { providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -257,7 +258,7 @@ const CLOUD_DISCOVERY: DiscoveryGroup[] = [
     { verb: "whoami", description: "show connected identity" },
     { verb: "projects", description: "list or create projects" },
     { verb: "keys", description: "create or revoke project keys" },
-    { verb: "providers", description: "list or verify providers" },
+    { verb: "providers", description: "list or verify providers; add keys and logins for routing" },
     { verb: "billing", description: "inspect billing and verified savings" },
   ] },
   { heading: "evidence", verbs: [
@@ -355,7 +356,17 @@ const CLOUD_HANDLERS: Record<string, CommandHandler> = {
   providers: async (argv) => {
     if (argv[0] === "list") return get(`/api/v1/projects/${await projectId()}/providers`).then(print);
     if (argv[0] === "verify") return post(`/api/v1/projects/${await projectId()}/providers/${argv[1] ?? ""}/verify`, {}).then(print);
-    return commandUsage("providers list|verify <id>");
+    // Provider credentials on this machine, for routing (src/modules/provider-logins.ts).
+    if (argv[0] === "add") return print(providersAdd(argv.slice(1), () => readFileSync(0, "utf8")));
+    if (argv[0] === "remove") return print(providersRemove(argv.slice(1)));
+    if (argv[0] === "local") return print(providersLocal());
+    if (argv[0] === "cloud") return print(providersCloud(argv.slice(1)));
+    if (argv[0] === "login") {
+      const status = providersLogin(argv.slice(1), cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN"));
+      if (status !== 0) process.exitCode = status;
+      return;
+    }
+    return commandUsage("providers list|verify <id> | add <id> [--key-env NAME|--stdin] | remove <id> | login chatgpt | local | cloud [on|off]");
   },
   billing: (argv) => {
     if (argv.length === 0) return billingCommand();

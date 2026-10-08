@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -456,26 +457,31 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 		CompressionTokenCountBasis: compBasis,
 		RecoveryHandle:             compHandle,
 	}
-	meta := providers.RequestMetadata{Provider: "chatgpt-subscription", Model: model}
-	if originalLogicalBody != nil {
-		headersForInspect := r.Header.Clone()
-		headersForInspect.Del("Content-Encoding")
-		if inspected, err := openai.New("").InspectRequest(r.Context(), bytes.NewReader(originalLogicalBody), headersForInspect); err == nil {
-			meta = inspected
-			meta.Provider = "chatgpt-subscription"
-		}
-	}
-	if s.chatGPTUpstream != DefaultChatGPTUpstream {
-		meta.PricingUnsupportedReason = "custom_subscription_origin"
-	}
 	var acceptedLogicalBody []byte
 	if acceptedBody == nil {
 		acceptedLogicalBody = originalLogicalBody
 	} else if decoded, _, err := decodeChatGPTRequestBody(acceptedBody, r.Header.Get("Content-Encoding"), chatGPTCaptureLimit); err == nil {
 		acceptedLogicalBody = decoded
 	}
-	requestAccounting(&row, meta, usage, originalLogicalBody, acceptedLogicalBody, false)
-	s.sink.Record(row)
+	var headersForInspect http.Header
+	if originalLogicalBody != nil {
+		headersForInspect = r.Header.Clone()
+		headersForInspect.Del("Content-Encoding")
+	}
+	customOrigin := s.chatGPTUpstream != DefaultChatGPTUpstream
+	s.finishRecord(row, false, func(row *RequestRecord) {
+		meta := providers.RequestMetadata{Provider: "chatgpt-subscription", Model: model}
+		if originalLogicalBody != nil {
+			if inspected, err := openai.New("").InspectRequest(context.Background(), bytes.NewReader(originalLogicalBody), headersForInspect); err == nil {
+				meta = inspected
+				meta.Provider = "chatgpt-subscription"
+			}
+		}
+		if customOrigin {
+			meta.PricingUnsupportedReason = "custom_subscription_origin"
+		}
+		requestAccounting(row, meta, usage, originalLogicalBody, acceptedLogicalBody, false)
+	})
 }
 
 type eofTrackingReader struct {

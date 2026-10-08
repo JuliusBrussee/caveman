@@ -6,12 +6,15 @@
 package store
 
 import (
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"fmt"
 	"log/slog"
 	"math"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -111,7 +114,10 @@ CREATE TABLE IF NOT EXISTS requests (
   price_cache_read_per_million REAL,
   price_cache_write_per_million REAL,
   price_cache_write_1h_per_million REAL,
-  price_reasoning_per_million REAL
+  price_reasoning_per_million REAL,
+  route_pool_id TEXT,
+  route_reason TEXT,
+  upstream_response_id TEXT
 );
 
 CREATE TABLE IF NOT EXISTS usage_events (
@@ -335,6 +341,9 @@ var migrations = []string{
 	`ALTER TABLE requests ADD COLUMN cache_bust_cause TEXT`,
 	`ALTER TABLE requests ADD COLUMN compression_eligible INTEGER`,
 	`ALTER TABLE requests ADD COLUMN request_hash_complete INTEGER NOT NULL DEFAULT 0`,
+	`ALTER TABLE requests ADD COLUMN route_pool_id TEXT`,
+	`ALTER TABLE requests ADD COLUMN route_reason TEXT`,
+	`ALTER TABLE requests ADD COLUMN upstream_response_id TEXT`,
 	`ALTER TABLE usage_events ADD COLUMN cache_creation_input_tokens INTEGER`,
 	`ALTER TABLE learn_sinks ADD COLUMN tokens_observed INTEGER`,
 }
@@ -402,6 +411,86 @@ func (s *Store) Close() error { return s.db.Close() }
 // traffic (the byte-safe ethos). Basis is recorded as the lifecycle set it —
 // always "inferred" in standalone.
 func (s *Store) Record(rec gateway.RequestRecord) {
+	sanitizeRequestRecord(&rec)
+	if _, err := s.db.Exec(insertRequestSQL, requestRecordArgs(&rec)...); err != nil && s.logger != nil {
+		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)
+	}
+}
+
+// RecordBatch persists rows in one transaction (gateway.BatchSink): the rows
+// Record would write, with one commit. If the transaction cannot be used, each
+// row falls back to Record.
+//
+// The commit runs with synchronous(NORMAL) on its own connection: under WAL
+// that syncs at checkpoints instead of on every commit, so the request rows
+// cost no fsync each. A power loss or OS crash can drop the last batches
+// committed before it; a process crash or a clean exit loses none. Every
+// other write to this database (recovery originals, the prefix-replacement
+// cache, middleware state) keeps the default FULL.
+func (s *Store) RecordBatch(recs []gateway.RequestRecord) {
+	// Middleware writes wait their turn here rather than in SQLite's busy
+	// handler (see middlewareWrite).
+	s.middlewareWriter <- struct{}{}
+	defer func() { <-s.middlewareWriter }()
+	if err := s.recordBatch(recs); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("local spend store batch failed; writing rows one by one", "error", err, "rows", len(recs))
+		}
+		for _, rec := range recs {
+			s.Record(rec)
+		}
+	}
+}
+
+func (s *Store) recordBatch(recs []gateway.RequestRecord) error {
+	ctx := context.Background()
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	var level int
+	if err := conn.QueryRowContext(ctx, `PRAGMA synchronous`).Scan(&level); err != nil {
+		_ = conn.Close()
+		return err
+	}
+	defer func() {
+		if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=`+strconv.Itoa(level)); err != nil {
+			// Never hand a NORMAL connection back to the pool.
+			_ = conn.Raw(func(any) error { return driver.ErrBadConn })
+		}
+		_ = conn.Close()
+	}()
+	if _, err := conn.ExecContext(ctx, `PRAGMA synchronous=NORMAL`); err != nil {
+		return err
+	}
+	tx, err := conn.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	// Runs before the restore above, so a panic mid-batch cannot leave the
+	// connection inside a transaction (no-op after Commit).
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.PrepareContext(ctx, insertRequestSQL)
+	if err != nil {
+		return err
+	}
+	for _, rec := range recs {
+		sanitizeRequestRecord(&rec)
+		// One failed insert fails the batch: it rolls back, and each row then
+		// gets its own Record, as it would have without batching.
+		if _, err := stmt.ExecContext(ctx, requestRecordArgs(&rec)...); err != nil {
+			return fmt.Errorf("insert request %s: %w", rec.RequestID, err)
+		}
+	}
+	_ = stmt.Close()
+	// A failed commit wrote nothing, so the rows are written again one by
+	// one. (Only a commit SQLite rolled back itself mid-batch, on a full
+	// disk or an I/O error, could leave earlier rows in and duplicate them.)
+	return tx.Commit()
+}
+
+// sanitizeRequestRecord is the persistence boundary's own validation of a row.
+func sanitizeRequestRecord(rec *gateway.RequestRecord) {
 	// Standalone is never allowed to mint Cloud verification, even if a buggy
 	// embedder passes a forged Basis. Enforce provenance again at persistence
 	// boundary instead of trusting lifecycle callers.
@@ -523,9 +612,10 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.RawRequestSHA256 = ""
 		rec.TransformedRequestSHA256 = ""
 	}
-	sanitizeStatsMeasurement(&rec)
-	_, err := s.db.Exec(
-		`INSERT INTO requests (
+	sanitizeStatsMeasurement(rec)
+}
+
+const insertRequestSQL = `INSERT INTO requests (
 		    ts, request_id, trace_id, label, session_id, session_correlation_basis, agent_build_sha256, efficiency_plan_sha256,
 		    context_bill, transform_trace, transform_location, cache_epoch, cache_prefix_sha256,
 		    provider_cache_prefix_sha256, provider_cache_component_sha256, cache_boundary_known, cache_bust, cache_bust_cause, compression_eligible,
@@ -540,9 +630,12 @@ func (s *Store) Record(rec gateway.RequestRecord) {
             request_token_basis, request_measurement_status, request_estimated_input_delta_usd, request_savings_basis,
             pricing_known, pricing_provider, pricing_model, pricing_catalog_version,
             price_input_per_million, price_output_per_million, price_cache_read_per_million,
-            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million
-		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-		rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
+            price_cache_write_per_million, price_cache_write_1h_per_million, price_reasoning_per_million,
+            route_pool_id, route_reason, upstream_response_id
+		) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`
+
+func requestRecordArgs(rec *gateway.RequestRecord) []any {
+	return []any{rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
 		rec.ContextBill, rec.TransformTrace, rec.TransformLocation, rec.CacheEpoch, rec.CachePrefixSHA256,
 		rec.ProviderCachePrefixSHA256, rec.ProviderCacheComponentSHA256, rec.CacheBoundaryKnown, rec.CacheBust, rec.CacheBustCause, rec.CompressionEligible,
 		rec.AgentSlug, rec.Provider, rec.Model, rec.RouteFrom, rec.RouteTo, rec.Endpoint, rec.Stream,
@@ -557,9 +650,7 @@ func (s *Store) Record(rec gateway.RequestRecord) {
 		rec.PricingKnown, rec.PricingProvider, rec.PricingModel, rec.PricingCatalogVersion,
 		rec.PriceInputPerMillion, rec.PriceOutputPerMillion, rec.PriceCacheReadPerMillion,
 		rec.PriceCacheWritePerMillion, rec.PriceCacheWrite1hPerMillion, rec.PriceReasoningPerMillion,
-	)
-	if err != nil && s.logger != nil {
-		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)
+		rec.RoutePoolID, rec.RouteReason, rec.UpstreamResponseID,
 	}
 }
 

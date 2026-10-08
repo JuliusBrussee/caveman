@@ -9,11 +9,14 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/anthropic"
+	"github.com/JuliusBrussee/caveman/proxy/providers/openai"
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
 
@@ -111,4 +114,53 @@ func (a *preflightAdapter) ResolveUpstreamURL(ctx context.Context, r *http.Reque
 	a.seen = true
 	a.err = providers.ValidateUpstreamEndpoint(ctx, a.endpoint, ssrf.ManagedConfig())
 	return a.Adapter.ResolveUpstreamURL(ctx, r, route)
+}
+
+// Go keeps two idle connections per host by default; eight callers at once
+// would then open six new upstream connections every round. The default
+// client keeps them all.
+func TestDefaultUpstreamClientKeepsConnectionsForConcurrentCallers(t *testing.T) {
+	const callers, rounds = 8, 3
+	var opened atomic.Int64
+	var mu sync.Mutex
+	arrived, release := 0, make(chan struct{})
+	upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.Copy(io.Discard, r.Body)
+		mu.Lock()
+		if arrived++; arrived == callers {
+			close(release) // every caller holds a connection at once
+		}
+		wait := release
+		mu.Unlock()
+		<-wait
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, chatRespBody)
+	}))
+	upstream.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			opened.Add(1)
+		}
+	}
+	upstream.Start()
+	defer upstream.Close()
+	s := New(Config{Adapters: []providers.Adapter{openai.New(upstream.URL)}, Auth: stubAuth{rc: RequestContext{RuntimeMode: "record"}}, Creds: stubCreds{key: "sk-test"}})
+	for round := 0; round < rounds; round++ {
+		mu.Lock()
+		arrived, release = 0, make(chan struct{})
+		mu.Unlock()
+		var done sync.WaitGroup
+		for i := 0; i < callers; i++ {
+			done.Go(func() {
+				rec := httptest.NewRecorder()
+				s.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(chatReqBody)))
+				if rec.Code != http.StatusOK {
+					t.Errorf("status %d: %s", rec.Code, rec.Body.String())
+				}
+			})
+		}
+		done.Wait()
+	}
+	if got := opened.Load(); got != callers {
+		t.Fatalf("%d callers over %d rounds opened %d upstream connections, want %d", callers, rounds, got, callers)
+	}
 }
