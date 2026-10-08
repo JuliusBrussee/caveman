@@ -111,10 +111,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2.1.292",
+    "tested_agent_version": "2.1.293",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-10-07",
-    "verified_by": "local pinned-binary probe (claude 2.1.292 on Node 22.22.0, agents/probe-installed.mjs); route probe: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages",
+    "last_verified_at": "2026-10-08",
+    "verified_by": "local pinned-binary probe (claude 2.1.293 on Node 22.22.0, agents/probe-installed.mjs); route probe: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -148,10 +148,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.160.1",
+    "tested_agent_version": "0.161.0",
     "injection_completeness": "code-only",
-    "last_verified_at": "2026-10-06",
-    "verified_by": "local pinned-binary probe (codex 0.160.1 on Node 24.16.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-10-08",
+    "verified_by": "local pinned-binary probe (codex 0.161.0 on Node 22.22.0, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -233,7 +233,7 @@ export const PROFILES: AgentProfile[] = [
       "kilocode"
     ],
     "args": [],
-    "install": "npm install -g @kilocode/cli@7.8.3",
+    "install": "npm install -g @kilocode/cli@7.8.8",
     "wire_protocol": "openai-chat",
     "injection": {
       "method": "config-env-content",
@@ -319,10 +319,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "X-Cave-Agent"
     },
-    "tested_agent_version": "7.8.3",
+    "tested_agent_version": "7.8.8",
     "injection_completeness": "declarative",
-    "last_verified_at": "2026-10-03",
-    "verified_by": "local pinned-binary probe (kilo 7.8.3 on Node 24.16.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-10-08",
+    "verified_by": "local pinned-binary route probe (kilo 7.8.8 on Node 22.22.0, agents/probe-installed.mjs); KILO_CONFIG_CONTENT overlay accepted and applied — POST /v1/chat/completions observed at the injected baseURL carrying X-Cave-Agent: kilo",
     "fallback": "generic-env",
     "maintainer": null
   },

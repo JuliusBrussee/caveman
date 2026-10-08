@@ -9,7 +9,7 @@
     "kilocode"
   ],
   "args": [],
-  "install": "npm install -g @kilocode/cli@7.8.3",
+  "install": "npm install -g @kilocode/cli@7.8.8",
   "wire_protocol": "openai-chat",
   "injection": {
     "method": "config-env-content",
@@ -95,10 +95,10 @@
   "attribution": {
     "header": "X-Cave-Agent"
   },
-  "tested_agent_version": "7.8.3",
+  "tested_agent_version": "7.8.8",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-10-03",
-  "verified_by": "local pinned-binary probe (kilo 7.8.3 on Node 24.16.0, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-10-08",
+  "verified_by": "local pinned-binary route probe (kilo 7.8.8 on Node 22.22.0, agents/probe-installed.mjs); KILO_CONFIG_CONTENT overlay accepted and applied — POST /v1/chat/completions observed at the injected baseURL carrying X-Cave-Agent: kilo",
   "fallback": "generic-env",
   "maintainer": null
 }
