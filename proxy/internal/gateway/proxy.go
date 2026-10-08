@@ -183,6 +183,24 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID
 
+	// Cache warming (cache_warm.go): a real request quiesces its session's
+	// warm before anything is sent, and only an exact session counts (the
+	// route stage's key: x-cave-session or the agent's own session header, a
+	// Claude Code child its own). Side requests neither stop nor start one.
+	warmSession, warmModel, warmArm, warmStart := "", meta.Model, false, time.Time{}
+	if s.warmer != nil && meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages") {
+		exact := ""
+		if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+			exact = evidence.SessionID
+		}
+		if wr := newRouteRun(r.Header, exact, meta.Endpoint, body); wr.key != "" && !wr.auxiliary {
+			warmSession, warmArm = wr.key, !wr.perRequest
+			// Before the send, so the provider's lifetime starts later still.
+			warmStart = s.warmer.clock.Now()
+			defer s.warmer.begin(warmSession, warmModel)()
+		}
+	}
+
 	// byte-safe transform. record mode never transforms. On ANY transform error we
 	// forward the ORIGINAL bytes unchanged (fail-open) rather than failing the
 	// request — the operator's traffic must never break because an optimizer hint
@@ -838,6 +856,17 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		activeLevers = append(activeLevers, leverBreakpointPlan)
 	}
 	s.observeSession(evidence.SessionID, activeLevers, finalUsage, requestID)
+	if warmArm && resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0 &&
+		s.warmer.enabled() && cacheWarmEligible(r, adapter, meta, s.warmOrigin, upstreamURL) {
+		// The exact bytes and headers that were answered, at zero output.
+		if warm, ttl := warmPlan(transform.Body, finalUsage, meta, authMode); warm != nil {
+			s.warmer.arm(warmSession, warmModel, &warmRequest{
+				url: upstreamURL.String(), header: upstreamHeaders.Clone(), body: warm, ttl: ttl,
+				adapter: adapter, meta: meta, authMode: authMode, mode: effectiveRuntimeMode,
+				label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID,
+			}, warmStart)
+		}
+	}
 	if run != nil && !run.off && !run.auxiliary && run.key != "" && resp.StatusCode < 300 && errCode == "" {
 		// What this session's next ask reports as its previous request (route-ask-v1
 		// last). One the route stage was off for (another model, signed out) or a

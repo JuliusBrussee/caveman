@@ -397,6 +397,11 @@ type Server struct {
 	cloud   CloudLink
 	// routes is what the route stage remembers per session (route.go).
 	routes routeSessions
+	// warmer keeps Anthropic prompt-cache entries warm while a session pauses
+	// (cache_warm.go); nil when warming is off. warmOrigin tells the
+	// provider's own API from any other origin (tests swap it for loopback).
+	warmer     *cacheWarmer
+	warmOrigin func(string, *url.URL) bool
 }
 
 // liveZoneCompressionAllowed reports whether subscription- or OAuth-classified
@@ -517,6 +522,9 @@ type Config struct {
 	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender). Nil
 	// keeps the proxy local-only.
 	Cloud CloudLink
+	// CacheWarm switches prompt-cache warming (cache_warm.go); it is asked
+	// before every arm and every warm. Nil keeps warming off.
+	CacheWarm func() bool
 }
 
 // BoundUpstreamTransport puts the connection-level bounds on an upstream
@@ -572,7 +580,7 @@ func New(cfg Config) *Server {
 		// date that change to a config change rather than to the provider.
 		cfg.Logger.Info("cache-breakpoint planner enabled", "mode", breakpointPlanModeFrontier)
 	}
-	return &Server{
+	s := &Server{
 		adapters:             cfg.Adapters,
 		auth:                 cfg.Auth,
 		creds:                cfg.Creds,
@@ -598,7 +606,12 @@ func New(cfg Config) *Server {
 		logger:               cfg.Logger,
 		capture:              newBodyCapture(os.Getenv("CAVE_CAPTURE_DIR"), cfg.Logger),
 		cloud:                cfg.Cloud,
+		warmOrigin:           statsPricingOriginKnown,
 	}
+	if cfg.CacheWarm != nil {
+		s.warmer = newCacheWarmer(cfg.CacheWarm, s.sendCacheWarm)
+	}
+	return s
 }
 
 // Handler returns the standalone HTTP handler: health, metrics, and the proxy
