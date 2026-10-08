@@ -185,10 +185,20 @@ test('Glob dedupe is scoped per conversation', () => {
 
 test('exact git status denied only while fingerprint matches', () => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-git-'));
-  spawnSync('git', ['init'], { cwd: dir });
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'caveman-test',
+    GIT_AUTHOR_EMAIL: 'caveman-test@example.com',
+    GIT_COMMITTER_NAME: 'caveman-test',
+    GIT_COMMITTER_EMAIL: 'caveman-test@example.com',
+  };
+  const init = spawnSync('git', ['init'], { cwd: dir, env: gitEnv });
+  assert.equal(init.status, 0, init.stderr && init.stderr.toString());
   fs.writeFileSync(path.join(dir, 'README'), 'hi\n');
-  spawnSync('git', ['add', 'README'], { cwd: dir });
-  spawnSync('git', ['commit', '-m', 'init'], { cwd: dir });
+  const add = spawnSync('git', ['add', 'README'], { cwd: dir, env: gitEnv });
+  assert.equal(add.status, 0, add.stderr && add.stderr.toString());
+  const commit = spawnSync('git', ['commit', '-m', 'init'], { cwd: dir, env: gitEnv });
+  assert.equal(commit.status, 0, commit.stderr && commit.stderr.toString());
   const stateDir = path.join(dir, 'state');
   let state = HOOK.loadState(stateDir);
   const input = { conversation_id: 'c1', command: 'git status' };
