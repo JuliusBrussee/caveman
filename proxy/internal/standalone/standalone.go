@@ -295,6 +295,9 @@ type Options struct {
 	// Cloud is the signed-in Cloud link (route stage + runtime/v1 sender); it
 	// gates itself on the CLI's login and routing module. Nil: local only.
 	Cloud gateway.CloudLink
+	// CacheWarm switches prompt-cache warming (the waste-fixes module plus the
+	// CAVEMAN_CACHE_WARM kill switch). Nil: warming off.
+	CacheWarm func() bool
 }
 
 // New assembles a standalone gateway server from a config and a telemetry sink.
@@ -324,6 +327,7 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 		Logger:               opts.Logger,
 		MetricsToken:         cfg.MetricsToken,
 		Cloud:                opts.Cloud,
+		CacheWarm:            opts.CacheWarm,
 	})
 }
 

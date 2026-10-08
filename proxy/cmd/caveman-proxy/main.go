@@ -291,6 +291,7 @@ func runServe(logger *slog.Logger) {
 	// Routing asks and runtime/v1 events, only while the CLI is signed in with
 	// the routing module on; every Cloud failure keeps the asked model.
 	opts.Cloud = cloudlink.New(home, logger)
+	opts.CacheWarm = cacheWarmSwitch(home, os.Getenv("CAVEMAN_CACHE_WARM"))
 	server := standalone.New(cfg, spend, opts)
 
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
