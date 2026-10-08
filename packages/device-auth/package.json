@@ -21,8 +21,8 @@
     "test": "npm run build && node --test tests/*.test.mjs"
   },
   "devDependencies": {
-    "@types/node": "24.10.1",
-    "typescript": "5.9.3"
+    "@types/node": "26.6.4",
+    "typescript": "7.0.2"
   },
   "engines": {
     "node": ">=22.13"
