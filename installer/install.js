@@ -1937,7 +1937,7 @@ function uninstall(ctx) {
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
 
   try {
-    CURSOR_HOOKS.uninstallCursorHooks({ dryRun: opts.dryRun, note });
+    CURSOR_HOOKS.uninstallCursorHooks({ note });
   } catch (error) {
     cleanupFailed = true;
     warn(`  Cursor dedupe hook uninstall failed: ${error.message}`);

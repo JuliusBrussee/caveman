@@ -4,12 +4,9 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const CURSOR = require('../../bin/lib/cursor-hooks.js');
-
-const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+const CURSOR = require('../../installer/lib/cursor-hooks.js');
 
 function freshHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-home-'));
@@ -54,28 +51,33 @@ test('strip removes only caveman hook entries', () => {
   assert.deepEqual(doc.hooks.beforeShellExecution, [{ command: './hooks/user.sh' }]);
 });
 
-test('install and uninstall round-trip', () => {
+test('install pilot prints plan and writes nothing', () => {
   const home = freshHome();
   try {
-    CURSOR.installCursorHooks({ repoRoot: REPO_ROOT, home, note: () => {} });
-    const manifest = JSON.parse(fs.readFileSync(CURSOR.hooksJsonPath(home), 'utf8'));
-    assert.ok(manifest.hooks.preToolUse.some((e) => CURSOR.isCavemanHookEntry(e)));
-    assert.ok(fs.existsSync(CURSOR.hookScriptPath(home)));
-
-    const userOnly = {
-      version: 1,
-      hooks: { beforeShellExecution: [{ command: './hooks/user.sh' }] },
-    };
-    fs.writeFileSync(CURSOR.hooksJsonPath(home), `${JSON.stringify(userOnly)}\n`);
-
-    CURSOR.installCursorHooks({ repoRoot: REPO_ROOT, home, note: () => {} });
-    const merged = JSON.parse(fs.readFileSync(CURSOR.hooksJsonPath(home), 'utf8'));
-    assert.equal(merged.hooks.beforeShellExecution.length, 2);
-
-    CURSOR.uninstallCursorHooks({ home, note: () => {} });
-    const after = JSON.parse(fs.readFileSync(CURSOR.hooksJsonPath(home), 'utf8'));
-    assert.deepEqual(after.hooks.beforeShellExecution, [{ command: './hooks/user.sh' }]);
+    const notes = [];
+    CURSOR.installCursorHooks({ home, note: (line) => notes.push(line) });
+    assert.ok(notes.some((line) => line.includes('cursor-dedupe-tools.js')));
+    assert.ok(notes.some((line) => line.includes('hooks.json')));
     assert.equal(fs.existsSync(CURSOR.hookScriptPath(home)), false);
+    assert.equal(fs.existsSync(CURSOR.hooksJsonPath(home)), false);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('uninstall pilot prints plan and writes nothing', () => {
+  const home = freshHome();
+  try {
+    fs.mkdirSync(path.join(home, '.cursor', 'hooks'), { recursive: true });
+    fs.writeFileSync(CURSOR.hookScriptPath(home), '# stub\n');
+    fs.writeFileSync(CURSOR.hooksJsonPath(home), '{"version":1,"hooks":{}}\n');
+
+    const notes = [];
+    CURSOR.uninstallCursorHooks({ home, note: (line) => notes.push(line) });
+    assert.ok(notes.some((line) => line.includes('would remove')));
+    assert.ok(notes.some((line) => line.includes('would prune')));
+    assert.equal(fs.existsSync(CURSOR.hookScriptPath(home)), true);
+    assert.equal(fs.readFileSync(CURSOR.hooksJsonPath(home), 'utf8'), '{"version":1,"hooks":{}}\n');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }

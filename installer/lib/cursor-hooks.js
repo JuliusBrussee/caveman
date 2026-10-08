@@ -4,8 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 
-// Filename only. The script itself lives in src/hooks and is copied at install
-// time. This module must not require it: detached installs ship bin/ alone.
+// Pilot: install/uninstall only print the plan. No copy and no hooks.json write yet.
 const HOOK_SCRIPT_NAME = 'cursor-dedupe-tools.js';
 
 function cursorDir(home = os.homedir()) {
@@ -67,65 +66,20 @@ function stripCavemanHooks(doc) {
   return { changed, doc: { ...doc, hooks } };
 }
 
-function installCursorHooks({ repoRoot, home = os.homedir(), dryRun = false, note = () => {} }) {
-  if (!repoRoot) throw new Error('cursor hook install requires the caveman package root');
-  const source = path.join(repoRoot, 'src', 'hooks', HOOK_SCRIPT_NAME);
-  if (!fs.existsSync(source)) throw new Error(`missing hook script: ${source}`);
-
+function installCursorHooks({ home = os.homedir(), note = () => {} }) {
   const dest = hookScriptPath(home);
   const manifest = hooksJsonPath(home);
-
-  if (dryRun) {
-    note(`  would copy ${source} → ${dest}`);
-    note(`  would merge caveman Cursor hook entries into ${manifest}`);
-    return;
-  }
-
-  fs.mkdirSync(path.dirname(dest), { recursive: true });
-  fs.copyFileSync(source, dest);
-  try { fs.chmodSync(dest, 0o755); } catch (_) {}
-
-  let doc = { version: 1, hooks: {} };
-  if (fs.existsSync(manifest)) {
-    try {
-      doc = JSON.parse(fs.readFileSync(manifest, 'utf8'));
-    } catch (error) {
-      throw new Error(`invalid ${manifest}: ${error.message}`);
-    }
-  }
-  const merged = mergeHooksDocument(doc);
-  fs.writeFileSync(manifest, `${JSON.stringify(merged, null, 2)}\n`, { mode: 0o600 });
-  note(`  installed Cursor dedupe hook (${dest})`);
+  note(`  would copy src/hooks/${HOOK_SCRIPT_NAME} → ${dest}`);
+  note(`  would merge caveman Cursor dedupe hook entries into ${manifest}`);
 }
 
-function uninstallCursorHooks({ home = os.homedir(), dryRun = false, note = () => {} }) {
+function uninstallCursorHooks({ home = os.homedir(), note = () => {} }) {
   const dest = hookScriptPath(home);
   const manifest = hooksJsonPath(home);
-  let changed = false;
-
-  if (fs.existsSync(dest)) {
-    if (dryRun) note(`  would remove ${dest}`);
-    else {
-      try { fs.unlinkSync(dest); } catch (_) {}
-      note(`  removed ${dest}`);
-    }
-    changed = true;
-  }
-
-  if (!fs.existsSync(manifest)) return { changed };
-  let doc;
-  try {
-    doc = JSON.parse(fs.readFileSync(manifest, 'utf8'));
-  } catch {
-    return { changed };
-  }
-  const stripped = stripCavemanHooks(doc);
-  if (stripped.changed) {
-    if (!dryRun) fs.writeFileSync(manifest, `${JSON.stringify(stripped.doc, null, 2)}\n`, { mode: 0o600 });
-    note(`  pruned caveman Cursor hook entries from ${manifest}`);
-    changed = true;
-  }
-  return { changed };
+  if (fs.existsSync(dest)) note(`  would remove ${dest}`);
+  else note(`  would remove ${dest} (not present)`);
+  note(`  would prune caveman Cursor dedupe hook entries from ${manifest}`);
+  return { changed: false };
 }
 
 module.exports = {
