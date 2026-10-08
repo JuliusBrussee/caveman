@@ -1,7 +1,9 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
+	"compress/flate"
 	"compress/gzip"
 	"compress/zlib"
 	"crypto/sha256"
@@ -10,6 +12,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -127,16 +130,20 @@ const (
 )
 
 // chatGPTAutoBody returns the request body when it names Auto, decoded when
-// the agent compressed it (Codex sends zstd).
-func chatGPTAutoBody(captured []byte, contentEncoding string) ([]byte, bool) {
-	if contentEncoding = strings.TrimSpace(contentEncoding); contentEncoding != "" && !strings.EqualFold(contentEncoding, "identity") {
-		decoded, ok := providers.DecodeBody(captured, contentEncoding, 32<<20)
-		if !ok {
-			return nil, false
-		}
-		captured = decoded
+// the agent compressed it (Codex sends zstd). tooLarge is a body that decodes
+// past the limit; any other failure is a body that does not decode.
+func chatGPTAutoBody(captured []byte, contentEncoding string) (body []byte, tooLarge, ok bool) {
+	const limit = 32 << 20
+	reader, ok := decodedReader(bytes.NewReader(captured), contentEncoding)
+	if !ok {
+		return nil, false, false
 	}
-	return captured, namesAuto(captured)
+	defer reader.Close()
+	decoded, err := io.ReadAll(io.LimitReader(reader, limit+1))
+	if err != nil || len(decoded) > limit {
+		return nil, err == nil, false
+	}
+	return decoded, false, namesAuto(decoded)
 }
 
 // chatGPTAuto serves one POST naming Auto on the agent's own login: a turn
@@ -349,19 +356,34 @@ func prefixModel(b []byte) (start, end int, ok bool) {
 }
 
 // decodedReader decodes a request body as it streams; ok is false for an
-// encoding with no decoder here (br): such a body is never looked into.
-func decodedReader(body io.Reader, encoding string) (io.Reader, bool) {
+// encoding with no decoder here (br): such a body is never looked into. The
+// caller closes the reader, which releases the decoder and leaves body open.
+func decodedReader(body io.Reader, encoding string) (io.ReadCloser, bool) {
 	switch strings.ToLower(strings.TrimSpace(encoding)) {
 	case "", "identity":
-		return body, true
+		return io.NopCloser(body), true
 	case "gzip", "x-gzip":
 		reader, err := gzip.NewReader(body)
-		return reader, err == nil
+		if err != nil {
+			return nil, false
+		}
+		return reader, true
 	case "deflate":
-		reader, err := zlib.NewReader(body)
-		return reader, err == nil
+		// "deflate" is zlib by the RFC, but some clients send the bare
+		// stream: no valid zlib header means raw deflate.
+		buffered := bufio.NewReader(body)
+		if h, _ := buffered.Peek(2); len(h) == 2 && h[0]&0x0f == 8 && (uint(h[0])<<8|uint(h[1]))%31 == 0 {
+			reader, err := zlib.NewReader(buffered)
+			if err != nil {
+				return nil, false
+			}
+			return reader, true
+		}
+		return flate.NewReader(buffered), true
 	case "zstd":
-		reader, err := zstd.NewReader(body)
+		// One goroutine-free decoder: the default starts stream goroutines
+		// that only Close stops.
+		reader, err := zstd.NewReader(body, zstd.WithDecoderConcurrency(1))
 		if err != nil {
 			return nil, false
 		}
@@ -370,12 +392,55 @@ func decodedReader(body io.Reader, encoding string) (io.Reader, bool) {
 	return nil, false
 }
 
+// upstreamBody is a decoded request body handed to the HTTP transport, which
+// may close it from another goroutine while a Read is still in flight; the
+// decoders are not safe for that, so a Close during a Read waits for it.
+type upstreamBody struct {
+	io.Reader
+	decoder io.Closer
+
+	mu              sync.Mutex
+	reading, closed bool
+}
+
+func (b *upstreamBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	if b.closed {
+		b.mu.Unlock()
+		return 0, io.ErrClosedPipe
+	}
+	b.reading = true
+	b.mu.Unlock()
+	n, err := b.Reader.Read(p)
+	b.mu.Lock()
+	b.reading = false
+	if b.closed {
+		_ = b.decoder.Close()
+	}
+	b.mu.Unlock()
+	return n, err
+}
+
+func (b *upstreamBody) Close() error {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.closed {
+		return nil
+	}
+	b.closed = true
+	if b.reading {
+		return nil // the Read in flight closes the decoder on its way out
+	}
+	return b.decoder.Close()
+}
+
 // namesAutoHead reports a POST body whose head names Auto as its model.
 func namesAutoHead(head []byte, encoding string) bool {
 	reader, ok := decodedReader(bytes.NewReader(head), encoding)
 	if !ok {
 		return false
 	}
+	defer reader.Close()
 	decoded, _ := io.ReadAll(io.LimitReader(reader, autoSniffBytes)) // a cut stream still yields its head
 	start, end, ok := prefixModel(decoded)
 	return ok && string(decoded[start:end]) == `"`+AutoModel+`"`
@@ -389,22 +454,39 @@ func (s *Server) chatGPTAutoDoor(w http.ResponseWriter, r *http.Request, rc Requ
 	encoding := r.Header.Get("Content-Encoding")
 	maxBytes := env.Int("CAVE_MAX_REQUEST_BYTES", 33554432)
 	raw, err := io.ReadAll(io.LimitReader(r.Body, int64(maxBytes)+1))
+	reason := "auto_body_too_large"
 	if err == nil && len(raw) <= maxBytes {
-		if body, ok := chatGPTAutoBody(raw, encoding); ok {
+		body, tooLarge, ok := chatGPTAutoBody(raw, encoding)
+		if ok {
 			s.chatGPTAuto(w, r, rc, requestID, traceID, upstreamURL, suffix, start, evidence, body)
 			return
 		}
+		if !tooLarge {
+			reason = "auto_body_decode_failed"
+		}
 	}
-	decoded, _ := decodedReader(io.MultiReader(bytes.NewReader(raw), r.Body), encoding)
+	unreadable := func() {
+		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Caveman could not read this Auto request; pick a model and retry.")
+	}
+	decoded, ok := decodedReader(io.MultiReader(bytes.NewReader(raw), r.Body), encoding)
+	if !ok {
+		unreadable()
+		return
+	}
+	// The transport closes the body it is given; this covers every return
+	// before that and an upstream abort.
+	upstream := &upstreamBody{decoder: decoded}
+	defer upstream.Close()
 	head, _ := io.ReadAll(io.LimitReader(decoded, autoSniffBytes))
 	from, to, ok := prefixModel(head)
 	if !ok {
-		httpx.Error(w, r, http.StatusBadRequest, "cave_auto_unavailable", "Caveman could not read this Auto request; pick a model and retry.")
+		unreadable()
 		return
 	}
 	fallback := autoFallback["openai"]
 	sent := append(append(append([]byte(nil), head[:from]...), `"`+fallback+`"`...), head[to:]...)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, io.MultiReader(bytes.NewReader(sent), decoded))
+	upstream.Reader = io.MultiReader(bytes.NewReader(sent), decoded)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, upstreamURL, upstream)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadRequest, "cave_provider_request_invalid", "ChatGPT route could not build the upstream request.")
 		return
@@ -417,7 +499,7 @@ func (s *Server) chatGPTAutoDoor(w http.ResponseWriter, r *http.Request, rc Requ
 	reqCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
 	_, _ = reqCapture.Write(sent)
 	reqCapture.truncated = true // the rest streamed: no model read back, no hash
-	route := &chatGPTRoute{from: AutoModel, answer: RouteAnswer{Outcome: "off", Reason: "auto_body_too_large"}}
+	route := &chatGPTRoute{from: AutoModel, answer: RouteAnswer{Outcome: "off", Reason: reason}}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")

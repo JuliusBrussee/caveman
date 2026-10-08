@@ -1,13 +1,20 @@
 package gateway
 
 import (
+	"bytes"
+	"compress/flate"
+	"compress/gzip"
+	"compress/zlib"
 	"encoding/json"
 	"io"
+	"math/rand"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/klauspost/compress/zstd"
 )
@@ -232,6 +239,156 @@ func TestPrefixModelFindsOnlyTheTopLevelModel(t *testing.T) {
 		start, end, ok := prefixModel([]byte(body))
 		if got := map[bool]string{true: body[start:end], false: ""}[ok]; got != want {
 			t.Errorf("prefixModel(%s) = %q, want %q", body, got, want)
+		}
+	}
+}
+
+// encodedBody compresses a request body the way an agent would send it;
+// "raw-deflate" is a deflate stream without the zlib wrapper, which some
+// clients send as Content-Encoding: deflate.
+func encodedBody(t *testing.T, encoding string, raw []byte) []byte {
+	t.Helper()
+	var buf bytes.Buffer
+	var w io.WriteCloser
+	switch encoding {
+	case "gzip":
+		w = gzip.NewWriter(&buf)
+	case "deflate":
+		w = zlib.NewWriter(&buf)
+	case "raw-deflate":
+		w, _ = flate.NewWriter(&buf, flate.DefaultCompression)
+	case "zstd":
+		w, _ = zstd.NewWriter(&buf)
+	}
+	_, _ = w.Write(raw)
+	if err := w.Close(); err != nil {
+		t.Fatal(err)
+	}
+	return buf.Bytes()
+}
+
+// noisyText is text an encoder shrinks only a few times over, so an encoded
+// body stays over a small CAVE_MAX_REQUEST_BYTES while its first zstd block
+// still fits the sniffed head.
+func noisyText(n int) string {
+	words := strings.Fields("fix the bug in parser when token stream ends early and retry with backoff after timeout")
+	random := rand.New(rand.NewSource(1))
+	var b strings.Builder
+	for b.Len() < n {
+		b.WriteString(words[random.Intn(len(words))] + " ")
+	}
+	return b.String()
+}
+
+// goroutinesSettleAt waits for the goroutine count to fall back to limit.
+func goroutinesSettleAt(limit int) int {
+	deadline := time.Now().Add(2 * time.Second)
+	for runtime.NumGoroutine() > limit && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return runtime.NumGoroutine()
+}
+
+// The sniff stops 64 KiB into the decoded head; a zstd decoder left open
+// there must not outlive the call.
+func TestChatGPTAutoSniffLeavesNoDecoderBehind(t *testing.T) {
+	head := encodedBody(t, "zstd", []byte(`{"model":"caveman-auto","input":"`+strings.Repeat("lorem ipsum dolor ", 60000)+`"}`))
+	if !namesAutoHead(head, "zstd") {
+		t.Fatal("the zstd head names Auto")
+	}
+	before := runtime.NumGoroutine()
+	for i := 0; i < 50; i++ {
+		namesAutoHead(head, "zstd")
+	}
+	if after := goroutinesSettleAt(before + 2); after > before+2 {
+		t.Fatalf("goroutines %d -> %d after 50 sniffs", before, after)
+	}
+}
+
+// An encoded body over CAVE_MAX_REQUEST_BYTES streams decoded on the fallback
+// model: the literal id never goes upstream, no stale Content-Encoding or
+// Content-Length rides along, and no decoder is left behind.
+func TestChatGPTAutoOversizedEncodedBodies(t *testing.T) {
+	text := noisyText(600 << 10)
+	body := []byte(`{"model":"caveman-auto","stream":true,"input":"` + text + `"}`)
+	for _, encoding := range []string{"gzip", "zstd", "deflate", "raw-deflate"} {
+		t.Run(encoding, func(t *testing.T) {
+			u := newChatGPTAutoUpstream(t, "")
+			srv, sink, _ := chatgptTestServer(t, u.upstream.URL)
+			cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-astra", Outcome: "routed"}}
+			srv.cloud = cloud
+			t.Setenv("CAVE_MAX_REQUEST_BYTES", "1024")
+			header := map[string]string{"Content-Encoding": strings.TrimPrefix(encoding, "raw-")}
+			sent := encodedBody(t, encoding, body)
+			sendChatGPTAuto(t, srv, "/chatgpt/responses", sent, header) // opens the upstream connection
+			before := runtime.NumGoroutine()
+			for i := 0; i < 10; i++ {
+				rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", sent, header)
+				if rec.Code != 200 || !strings.Contains(rec.Body.String(), `"model":"caveman-auto"`) {
+					t.Fatalf("agent read %d %s", rec.Code, rec.Body.String())
+				}
+			}
+			if after := goroutinesSettleAt(before + 3); after > before+3 {
+				t.Errorf("goroutines %d -> %d after 10 requests", before, after)
+			}
+			u.mu.Lock()
+			defer u.mu.Unlock()
+			got, gotHeader := u.bodies[len(u.bodies)-1], u.headers[len(u.headers)-1]
+			if got["model"] != "gpt-6.1-sol" || got["input"] != text || len(cloud.asks) != 0 {
+				t.Errorf("upstream model %v, input intact %v, asks %d", got["model"], got["input"] == text, len(cloud.asks))
+			}
+			if gotHeader.Get("Content-Encoding") != "" || gotHeader.Get("Content-Length") != "" {
+				t.Errorf("upstream headers %v", gotHeader)
+			}
+			if row := sink.rows[len(sink.rows)-1]; row.RouteFrom != AutoModel || row.RouteReason != "auto_body_too_large" {
+				t.Errorf("row %+v", row)
+			}
+		})
+	}
+}
+
+// Content-Encoding: deflate without the zlib wrapper is still read: the turn
+// is routed like any other.
+func TestChatGPTAutoReadsRawDeflate(t *testing.T) {
+	u := newChatGPTAutoUpstream(t, "")
+	srv, _, _ := chatgptTestServer(t, u.upstream.URL)
+	cloud := &fakeCloud{answer: RouteAnswer{Model: "gpt-6-astra", Outcome: "routed"}}
+	srv.cloud = cloud
+	for _, encoding := range []string{"deflate", "raw-deflate"} {
+		rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", encodedBody(t, encoding, []byte(chatGPTAutoBodyText)), map[string]string{"Content-Encoding": "deflate"})
+		if last := u.bodies[len(u.bodies)-1]; rec.Code != 200 || last["model"] != "gpt-6-astra" || u.headers[len(u.headers)-1].Get("Content-Encoding") != "" {
+			t.Fatalf("%s: %d, upstream %v", encoding, rec.Code, last)
+		}
+	}
+	if len(cloud.asks) != 2 {
+		t.Fatalf("asks %d", len(cloud.asks))
+	}
+}
+
+// A body that fits but does not decode whole is not "too large": it records
+// its own reason, and its decoder is closed when the upstream send aborts.
+func TestChatGPTAutoBrokenEncodingHasItsOwnReason(t *testing.T) {
+	u := newChatGPTAutoUpstream(t, "")
+	srv, sink, _ := chatgptTestServer(t, u.upstream.URL)
+	body := encodedBody(t, "zstd", []byte(`{"model":"caveman-auto","stream":true,"input":"`+noisyText(600<<10)+`"}`))
+	cut := body[:len(body)-100]
+	before := runtime.NumGoroutine()
+	for i := 0; i < 10; i++ {
+		if rec := sendChatGPTAuto(t, srv, "/chatgpt/responses", cut, map[string]string{"Content-Encoding": "zstd"}); rec.Code == 200 {
+			t.Fatalf("a cut body answered %d", rec.Code)
+		}
+	}
+	if after := goroutinesSettleAt(before + 3); after > before+3 {
+		t.Errorf("goroutines %d -> %d after 10 aborted sends", before, after)
+	}
+	if row := sink.rows[len(sink.rows)-1]; row.RouteReason != "auto_body_decode_failed" {
+		t.Errorf("row %+v", row)
+	}
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	for _, got := range u.bodies {
+		if got["model"] == AutoModel {
+			t.Fatalf("the literal id went upstream: %v", got["model"])
 		}
 	}
 }
