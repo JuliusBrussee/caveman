@@ -376,12 +376,14 @@ for (const layout of ["posix", "windows"]) {
       // POSIX npm links bin/cvm to the script; on Windows the shim is a separate file.
       if (layout === "posix") symlinkSync(script, join(bin, "cvm"));
       else writeFileSync(join(bin, "cvm"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+      // Registration goes through the claude CLI: a stub records what it was asked to add.
+      const calls = join(isolated.home, "claude-calls");
+      writeFileSync(join(bin, "claude"), `#!/bin/sh\nprintf '%s\\n' "$@" >> "${calls}"\n`, { mode: 0o755 });
       isolated.env.PATH = `${bin}:${isolated.env.PATH}`;
       const out = await runCli(["mcp", "install", "claude", "--server", "caveman-cloud"], { env: isolated.env });
       assert.equal(out.code, 0, out.stderr);
-      const entry = JSON.parse(readFileSync(join(isolated.home, ".claude.json"), "utf8")).mcpServers["caveman-cloud"];
-      assert.equal(entry.command, process.execPath);
-      assert.deepEqual(entry.args, [realpathSync(script), "mcp"]);
+      const added = readFileSync(calls, "utf8").trim().split("\n");
+      assert.deepEqual(added.slice(added.lastIndexOf("add")), ["add", "--scope", "user", "caveman-cloud", "--", process.execPath, realpathSync(script), "mcp"]);
     } finally {
       isolated.cleanup();
     }
