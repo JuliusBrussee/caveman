@@ -27,7 +27,9 @@ export type OnboardFound = {
   codexLogin?: string;
   keys?: FoundKey[];
 };
-export type SignInUi = { signal: AbortSignal; code(url: string, userCode: string, opened: boolean): void };
+// `approved` is called once the browser step is done, before sign-in prints
+// its own lines (what routing sends).
+export type SignInUi = { signal: AbortSignal; code(url: string, userCode: string, opened: boolean): void; approved?(): void };
 export type OnboardDeps = {
   cmd: string;
   agents: OnboardAgent[];
@@ -142,6 +144,8 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
       plan = await planModules(selection, agents);
       const rows = summaryRows(plan, selection, agents.map((id) => byId.get(id)!.name), found);
       if (deps.installCli) rows.push(["install", `the caveman command · ${deps.installCli.command}`]);
+      const moved = await portMove(selection, agents);
+      if (moved) rows.push(["port", `${moved.held} is in use by another program · the runtime will use ${moved.free}`]);
       const pick = await choose(input, out, c, rows, keys, plan.lines.length > 0 ? "Set up" : "Continue");
       if (pick === null) return cancelled(out, c);
       if (pick === "details") {
@@ -172,6 +176,8 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     plan = await planModules(selection, agents);
     out.write(plan.lines.length ? renderPlan(plan) : `This will\n  ${c.dim("change nothing")}\n`);
     if (deps.installCli) out.write(`  ${"RUN".padEnd(9)} ${deps.installCli.command}  the caveman command, kept after this run\n`);
+    const moved = await portMove(selection, agents);
+    if (moved) out.write(`  ${"RUN".padEnd(9)} local runtime on port ${moved.free}  ${moved.held} is in use by another program\n`);
     if (opts.dryRun) {
       out.write(`${c.dim("Dry run: nothing was written.")}\n`);
       return { confirmed: false, cancelled: false, ok: true, plan };
@@ -202,6 +208,12 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   if (deps.installCli) {
     result = await deps.installCli.apply(selection, agents, (line) => line.startsWith("downloading ") ? busy.show(line) : progress(line));
   } else {
+    // Before the first agent is wired: never to a port another program answers on.
+    const moved = await portMove(selection, agents);
+    if (moved) {
+      moduleHost().useRuntimePort(moved.free);
+      progress(`○ ${moved.held} is in use by another program · local runtime on port ${moved.free}`);
+    }
     // The agents this setup chose: `caveman claude` re-wires Claude Code later
     // only when it was one of them.
     moduleHost().mutateConfig((out) => { out.setupAgents = [...agents]; });
@@ -237,6 +249,13 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     if (await confirm(input, out, c, `Start ${startable.name} now?`)) launch = tryAgent;
   }
   return { confirmed: true, cancelled: false, ok: result.ok, plan, ...(launch ? { launch } : {}) };
+}
+
+// The runtime's port matters only when this setup wires an agent through it
+// (aider is wired without the runtime).
+async function portMove(selection: ModuleSelection, agents: string[]) {
+  if (!MODULES.some((m) => m.wiresAgents && selection[m.id]) || !agents.some((id) => id !== "aider")) return undefined;
+  return moduleHost().runtimePortTaken();
 }
 
 // currentSelection is the registry defaults on a fresh home, the stored state on
@@ -276,9 +295,10 @@ async function routingStep(opts: OnboardOptions, deps: OnboardDeps, input: NodeJ
         busy.say(`  Open ${c.cyan(url)} and enter ${c.bold(userCode)}   ${c.dim(opened ? "(browser opened · esc skips)" : "(esc skips)")}`);
         busy.show("waiting for you to approve in the browser");
       },
+      approved: () => busy.stop(),
     });
-    busy.say(`  ${c.green("✓")} signed in${email ? ` as ${email}` : ""}`);
-    out.write("\n");
+    busy.stop();
+    out.write(`  ${c.green("✓")} signed in${email ? ` as ${email}` : ""}\n\n`);
     return true;
   } catch (error) {
     busy.stop();

@@ -63,6 +63,11 @@ export type ModuleHost = {
   wireAgent(agent: string): void;
   unwireAgent(agent: string): void;
   refreshAgent(agent: string): void;
+  // Set before any agent is wired when a program that is not Caveman holds
+  // the local runtime's port: that address and the next free port.
+  runtimePortTaken(): Promise<{ held: string; free: number } | undefined>;
+  // Records the port the local runtime listens on from now on.
+  useRuntimePort(port: number): void;
   // True when wiring an agent will start the local runtime.
   runtimeAutostarts(): Promise<boolean>;
   // Whether the local runtime answers, waiting up to waitMs for it.

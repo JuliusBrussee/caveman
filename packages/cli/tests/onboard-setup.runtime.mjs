@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createServer } from "node:net";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, readFileSync } from "node:fs";
@@ -142,6 +143,43 @@ test("under npx the hints print the npx command, and setup without npm writes no
     assert.equal(existsSync(join(fx.home, ".claude", "settings.json")), false);
   } finally {
     fx.cleanup();
+  }
+});
+
+// wrangler dev, a container, anything: 8787 is a popular port. Wiring an agent
+// to it while someone else answers there sends them every request.
+test("a first setup moves the runtime off a port another program holds, and later runs keep that port", { skip }, async () => {
+  const holder = createServer();
+  // Already held by something on this machine is the same case.
+  await new Promise((resolve) => holder.once("error", resolve).listen(8787, "127.0.0.1", resolve));
+  const fx = modulesFixture({ agents: ["claude"] });
+  const fresh = modulesFixture({ agents: ["claude"] });
+  const env = { ...fx.env };
+  delete env.CAVE_GATEWAY_URL;
+  delete env.CAVEMAN_LISTEN;
+  try {
+    const dry = await runCli(["setup", "--dry-run"], env);
+    const port = dry.stdout.match(/RUN +local runtime on port (\d+) {2}127\.0\.0\.1:8787 is in use by another program\n/)?.[1];
+    assert.ok(port && port !== "8787", dry.stdout);
+    assert.equal(existsSync(join(env.CAVEMAN_HOME, "cloud.json")), false, "a dry run records nothing");
+    const out = await runCli(["setup", "--yes"], env);
+    assert.equal(out.code, 0, out.stdout + out.stderr);
+    assert.match(out.stdout, new RegExp(`○ 127\\.0\\.0\\.1:8787 is in use by another program · local runtime on port ${port}\\n✓ Claude Code wired\\n`));
+    const route = () => JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL;
+    assert.equal(route(), `http://127.0.0.1:${port}/w/claude`);
+    assert.equal(JSON.parse(readFileSync(join(env.CAVEMAN_HOME, "cloud.json"), "utf8")).localPort, Number(port));
+    // Wired now: the address is settled, and nothing moves again.
+    const again = await runCli(["setup", "--yes"], env);
+    assert.equal(again.code, 0, again.stdout + again.stderr);
+    assert.doesNotMatch(again.stdout, /in use by another program/);
+    assert.equal(route(), `http://127.0.0.1:${port}/w/claude`);
+    // An address the user chose is theirs: nothing is moved for it.
+    const chosen = await runCli(["setup", "--dry-run"], { ...fresh.env, CAVE_GATEWAY_URL: "http://127.0.0.1:8787" });
+    assert.doesNotMatch(chosen.stdout, /in use by another program/);
+  } finally {
+    holder.close();
+    fx.cleanup();
+    fresh.cleanup();
   }
 });
 

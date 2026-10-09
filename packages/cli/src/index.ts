@@ -139,13 +139,43 @@ function gatewayURL(): string {
 // gatewayUrlFromConfigFile reads the explicitly chosen managed gateway straight
 // from the config (a cheap sync read on the hot wrap path). Login also stores the
 // Cloud's gateway for Cloud calls (/v1/route); that alone is not a choice.
+// Without a managed gateway it is the local runtime on the port setup moved it
+// to (`localPort`), when another program held the default one.
 function gatewayUrlFromConfigFile(): string {
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { gatewayUrl?: unknown; managedGateway?: unknown };
-    return parsed.managedGateway === true && typeof parsed.gatewayUrl === "string" ? parsed.gatewayUrl : "";
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { gatewayUrl?: unknown; managedGateway?: unknown; localPort?: unknown };
+    if (parsed.managedGateway === true && typeof parsed.gatewayUrl === "string") return parsed.gatewayUrl;
+    return validLocalPort(parsed.localPort) ? `http://127.0.0.1:${parsed.localPort}` : "";
   } catch {
     return "";
   }
+}
+
+function validLocalPort(port: unknown): port is number {
+  return typeof port === "number" && Number.isInteger(port) && port >= 1024 && port <= 65535;
+}
+
+// When the local runtime's port is held by a program that is not Caveman,
+// before any agent is wired: that port and the next free one. Wiring an agent
+// to a port someone else answers on would send every request to them. Once an
+// agent is wired the address stays (doctor names a conflict), and an explicit
+// CAVE_GATEWAY_URL is the user's own choice.
+async function runtimePortTaken(): Promise<{ held: string; free: number } | undefined> {
+  if (process.env.CAVE_GATEWAY_URL || process.env.CAVEMAN_LISTEN) return undefined;
+  const gw = gatewayURL();
+  if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired)) return undefined;
+  const { host, port } = gatewayHostPort(gw);
+  if (!(await portListening(host, port))) return undefined;
+  // Ours when the runtime's own record names a live process on that port. A
+  // runtime too old to keep that record cannot be told apart, so it stays.
+  if (resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN")) {
+    const version = probeProxyVersion();
+    if (!version?.capabilities.includes("run_state") || readProxyRuntimeState(port, version).pid) return undefined;
+  }
+  for (let candidate = port + 1; candidate <= Math.min(port + 50, 65535); candidate++) {
+    if (!(await portListening("127.0.0.1", candidate))) return { held: `${host}:${port}`, free: candidate };
+  }
+  return undefined;
 }
 
 // Origins of the base URLs native wiring wrote for an agent, from its journal.
@@ -540,6 +570,8 @@ setModuleHost({
       if (Date.now() >= deadline) return false;
     }
   },
+  runtimePortTaken,
+  useRuntimePort: (port) => mutateRawConfig((out) => { out.localPort = port; }),
   runtimeAutostarts: async () => {
     const gw = gatewayURL();
     if (wrapMode(gw) !== "local" || !wrapRuntimeConfig().proxy) return false;
@@ -11432,6 +11464,7 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   } catch (error) {
     throw signInError(error, baseURL);
   }
+  ui?.approved?.();
   const { code } = grant;
   const tok = grant.credentials as Record<string, unknown>;
   const accessToken = grant.credentials.access_token;
@@ -21085,7 +21118,9 @@ function portListening(host: string, port: number): Promise<boolean> {
 }
 
 function standaloneProxyEndpoint(): { host: string; port: number; listen: string } {
-  const listen = (process.env.CAVEMAN_LISTEN ?? PROXY_ADDR).trim();
+  // Setup's moved port applies to `caveman start` too, so both name one runtime.
+  const moved = gatewayUrlFromConfigFile();
+  const listen = (process.env.CAVEMAN_LISTEN ?? (moved && wrapMode(moved) === "local" ? new URL(moved).host : PROXY_ADDR)).trim();
   try {
     const url = new URL(`http://${listen}`);
     const port = Number(url.port);
