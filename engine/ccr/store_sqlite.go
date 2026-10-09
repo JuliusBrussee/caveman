@@ -88,17 +88,17 @@ func SQLiteDSN(path string) string {
 	return u.String() + "?" + pragmas
 }
 
+const busyRetryBudget = 30 * time.Second
+
 // RetryOnBusy runs fn, retrying while SQLite reports the database is locked
 // (SQLITE_BUSY). Short-lived local processes can initialize the same database
 // concurrently, and a multi-statement migration can hold the write lock longer
-// than a single connection's busy_timeout. Retries have a five-second wall-clock
+// than a single connection's busy_timeout. Retries have a thirty-second wall-clock
 // budget; one already-running SQLite call may finish after that deadline, but no
 // new attempt starts after it.
-// Runtime single-statement writes are covered by busy_timeout alone and must
-// NOT route through here — a retry loop around ordinary contention would only
-// mask a real stall.
+// Callers must be idempotent because fn may run more than once.
 func RetryOnBusy(fn func() error) error {
-	return retryOnBusy(fn, 5*time.Second, time.Now, time.Sleep)
+	return retryOnBusy(fn, busyRetryBudget, time.Now, time.Sleep)
 }
 
 func retryOnBusy(fn func() error, maxWait time.Duration, now func() time.Time, sleep func(time.Duration)) error {

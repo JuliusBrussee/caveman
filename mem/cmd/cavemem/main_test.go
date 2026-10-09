@@ -249,7 +249,7 @@ func TestRememberStdinTooLargeSubprocessExits65(t *testing.T) {
 // one shared mem.db file — the real shape of Promise.all(facts.map(remember))
 // from the JS client, which each spawn a fresh binary. On the pre-fix store the
 // contending processes returned SQLITE_BUSY and dropped most writes; the
-// busy_timeout(5000)+WAL DSN makes them wait so every write lands.
+// busy_timeout(5000)+WAL plus the bounded busy retry makes every write land.
 func TestConcurrentRememberSubprocesses(t *testing.T) {
 	if testing.Short() {
 		t.Skip("builds and execs the cavemem binary; skipped under -short")
