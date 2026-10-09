@@ -41,7 +41,9 @@ export type ModuleHost = {
   wiringKeys: readonly string[];
   binaryRelease: string;
   resolveBinary(name: string): string | null;
-  installBinaries(modules: ModuleId[]): Promise<void>;
+  // `downloading` is told each binary as its download starts; with it the
+  // install prints nothing itself.
+  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<void>;
   // Binaries the hub installed for a module, from modules.lock.json.
   lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
@@ -51,11 +53,21 @@ export type ModuleHost = {
   // Files `enable <agent>` would write, computed without writing them.
   planWiring(agent: string): { file: string; exists: boolean; kind: string }[];
   wiredFiles(agent: string): string[];
+  // Claude Code config dirs `enable claude` wires, absolute, the active one first.
+  claudeProfiles(): string[];
+  // True when a wired agent has a login its wiring does not cover yet (a
+  // Claude Code profile that appeared after setup).
+  agentIncomplete(agent: string): boolean;
   agentName(agent: string): string;
   // Wiring is quiet: applyModules reports each step through its progress line.
   wireAgent(agent: string): void;
   unwireAgent(agent: string): void;
   refreshAgent(agent: string): void;
+  // Set before any agent is wired when a program that is not Caveman holds
+  // the local runtime's port: that address and the next free port.
+  runtimePortTaken(): Promise<{ held: string; free: number } | undefined>;
+  // Records the port the local runtime listens on from now on.
+  useRuntimePort(port: number): void;
   // True when wiring an agent will start the local runtime.
   runtimeAutostarts(): Promise<boolean>;
   // Whether the local runtime answers, waiting up to waitMs for it.
@@ -183,12 +195,13 @@ function wiringChanges(selection: ModuleSelection, agents: string[], only: Modul
 // Wired agents that stay wired but carry hooks built from a key this run
 // changes, the Auto model the routing module adds or takes away, or a base
 // URL that is no longer the traffic target (an earlier login's managed
-// gateway): any plan re-wires those, never anything else.
+// gateway), or a login that appeared since: any plan re-wires those, never
+// anything else.
 function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire: string[], state: readonly (readonly [string, unknown])[]): string[] {
   const h = moduleHost();
   const keyChanged = effects.some(([key]) => h.wiringKeys.includes(key)) || state.some(([id]) => id === "routing");
   return h.nativeAgents()
-    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id)))
+    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id) || h.agentIncomplete(agent.id)))
     .map((agent) => agent.id);
 }
 
@@ -375,8 +388,17 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   const target = h.agentTraffic().target === "local" ? "the local runtime" : "the managed gateway";
   for (const agent of refreshAgents(effects, unwire, state)) {
     const was = h.agentStaleRoute(agent);
-    const detail = was ? `point ${agent} at ${target} (was ${was})` : `refresh ${agent} hooks`;
-    for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail });
+    const detail = was ? `point ${agent} at ${target} (was ${was})` : h.agentIncomplete(agent) ? `wire the new ${agent} login` : `refresh ${agent} hooks`;
+    const wired = h.wiredFiles(agent);
+    for (const file of wired) lines.push({ action: "UPDATE", target: tilde(file), detail });
+    // A login that appeared since brings files the journal does not hold yet.
+    if (h.agentIncomplete(agent)) {
+      try {
+        for (const file of h.planWiring(agent)) {
+          if (!wired.includes(file.file)) lines.push({ action: file.exists ? "UPDATE" : "CREATE", target: tilde(file.file), detail });
+        }
+      } catch { /* repair reports a real refusal when it runs */ }
+    }
   }
   // aider is wired without the runtime; every other agent starts it.
   if (wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) {
@@ -404,7 +426,7 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
 
 // `progress` gets one line per step as it completes ("✓ Claude Code wired");
 // failures come back in `problems` with their full message.
-export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
+export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void; downloading?: (name: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
   const h = moduleHost();
   if (plan.lines.length === 0) return { ok: true, problems: [] };
   if (!opts.yes) {
@@ -417,7 +439,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const needs = binaryNeeds(plan.selection, plan.only);
   if (needs.missing.length) {
     try {
-      await h.installBinaries(needs.modules);
+      await h.installBinaries(needs.modules, opts.downloading);
       // A release from before modules.json brings no external binary.
       const still = binaryNeeds(plan.selection, plan.only).missing;
       const got = needs.missing.filter((name) => !still.includes(name));

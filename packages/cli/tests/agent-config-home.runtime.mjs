@@ -156,7 +156,9 @@ for (const [agent, variable, directory] of [["claude", "CLAUDE_CONFIG_DIR", ""],
     assert.match(readFileSync(settings, "utf8"), /native-hook/);
     assert.match(readFileSync(companion, "utf8"), agent === "claude" ? /caveman-mcp/ : /127\.0\.0\.1:9\/w\/gemini/);
     const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", `${agent}.json`), "utf8"));
-    assert.deepEqual(journal.operations.map((operation) => realpathSync(operation.file)), [settings, companion].map((path) => realpathSync(path)));
+    // Claude wires every profile, the selected one first; ~/.claude.json is new.
+    const wired = agent === "claude" ? [settings, companion, defaultSettings].map((path) => realpathSync(path)).concat(join(realpathSync(fx.home), ".claude.json")) : [settings, companion].map((path) => realpathSync(path));
+    assert.deepEqual(journal.operations.map((operation) => realpathSync(operation.file)), wired);
     succeeds(fx.run(["disable", agent], { [variable]: fx.custom }, join(fx.root, "other-project")));
     assert.equal(readFileSync(settings, "utf8"), settingsBefore);
     assert.equal(readFileSync(companion, "utf8"), companionBefore);

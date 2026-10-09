@@ -51,7 +51,7 @@ import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
 import { cloudConfigPath, legacyCloudDir, mirrorToLegacy } from "./modules/config-home.js";
 import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
-import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
+import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardDeps, type OnboardFound, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
 // RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
 export { nextDevicePollIntervalMs } from "./device-auth.generated.js";
 import {
@@ -74,12 +74,12 @@ import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, u
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { currentSelection, moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
-import { billingCommand, cloudMe, printSignInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
+import { billingCommand, cloudMe, printSignInLines, signInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule, MODULES } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
-import { providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
+import { foundKeys, providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -139,13 +139,43 @@ function gatewayURL(): string {
 // gatewayUrlFromConfigFile reads the explicitly chosen managed gateway straight
 // from the config (a cheap sync read on the hot wrap path). Login also stores the
 // Cloud's gateway for Cloud calls (/v1/route); that alone is not a choice.
+// Without a managed gateway it is the local runtime on the port setup moved it
+// to (`localPort`), when another program held the default one.
 function gatewayUrlFromConfigFile(): string {
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { gatewayUrl?: unknown; managedGateway?: unknown };
-    return parsed.managedGateway === true && typeof parsed.gatewayUrl === "string" ? parsed.gatewayUrl : "";
+    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { gatewayUrl?: unknown; managedGateway?: unknown; localPort?: unknown };
+    if (parsed.managedGateway === true && typeof parsed.gatewayUrl === "string") return parsed.gatewayUrl;
+    return validLocalPort(parsed.localPort) ? `http://127.0.0.1:${parsed.localPort}` : "";
   } catch {
     return "";
   }
+}
+
+function validLocalPort(port: unknown): port is number {
+  return typeof port === "number" && Number.isInteger(port) && port >= 1024 && port <= 65535;
+}
+
+// When the local runtime's port is held by a program that is not Caveman,
+// before any agent is wired: that port and the next free one. Wiring an agent
+// to a port someone else answers on would send every request to them. Once an
+// agent is wired the address stays (doctor names a conflict), and an explicit
+// CAVE_GATEWAY_URL is the user's own choice.
+async function runtimePortTaken(): Promise<{ held: string; free: number } | undefined> {
+  if (process.env.CAVE_GATEWAY_URL || process.env.CAVEMAN_LISTEN) return undefined;
+  const gw = gatewayURL();
+  if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired)) return undefined;
+  const { host, port } = gatewayHostPort(gw);
+  if (!(await portListening(host, port))) return undefined;
+  // Ours when the runtime's own record names a live process on that port. A
+  // runtime too old to keep that record cannot be told apart, so it stays.
+  if (resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN")) {
+    const version = probeProxyVersion();
+    if (!version?.capabilities.includes("run_state") || readProxyRuntimeState(port, version).pid) return undefined;
+  }
+  for (let candidate = port + 1; candidate <= Math.min(port + 50, 65535); candidate++) {
+    if (!(await portListening("127.0.0.1", candidate))) return { held: `${host}:${port}`, free: candidate };
+  }
+  return undefined;
 }
 
 // Origins of the base URLs native wiring wrote for an agent, from its journal.
@@ -486,9 +516,10 @@ setModuleHost({
   wiringKeys: ["think.shrink"],
   binaryRelease: BINARY_RELEASE,
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
-  installBinaries: async (modules) => {
+  installBinaries: async (modules, downloading) => {
+    installDownloading = downloading;
     try {
-      const { problems } = await ensureModuleBinaries(modules);
+      const { problems } = await ensureModuleBinaries(modules, downloading);
       if (problems.length > 0) throw new Error(problems.join("; "));
     } catch (error) {
       // A release cut before modules.json: install every signed hub binary
@@ -499,6 +530,8 @@ setModuleHost({
         return;
       }
       throw error;
+    } finally {
+      installDownloading = undefined;
     }
   },
   lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
@@ -515,6 +548,14 @@ setModuleHost({
   })),
   planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp", { plan: true })
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
+  claudeProfiles: () => { try { return claudeProfileRoots(); } catch { return [claudeConfigDir()]; } },
+  agentIncomplete: (agent) => {
+    if (agent !== "claude") return false;
+    try {
+      const journal = readNativeJournal("claude");
+      return Boolean(journal) && claudeUnwiredProfiles(journal!).length > 0;
+    } catch { return false; }
+  },
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   agentName: (agent) => agentShortName(findAgent(agent)!),
   wireAgent: (agent) => enableNative([agent], { quiet: true }),
@@ -529,6 +570,8 @@ setModuleHost({
       if (Date.now() >= deadline) return false;
     }
   },
+  runtimePortTaken,
+  useRuntimePort: (port) => mutateRawConfig((out) => { out.localPort = port; }),
   runtimeAutostarts: async () => {
     const gw = gatewayURL();
     if (wrapMode(gw) !== "local" || !wrapRuntimeConfig().proxy) return false;
@@ -2890,7 +2933,12 @@ export function cleanupPartial(path: string) {
   }
 }
 
+// Set while onboarding installs: it draws its own one-line progress, so the
+// per-binary lines below stay quiet and each download is reported to it.
+let installDownloading: ((name: string) => void) | undefined;
+
 function installProgressStart(name: string, platform: { os: string; arch: string }) {
+  if (installDownloading) return installDownloading(name);
   const line = `${name}  ${platform.os}/${platform.arch}  …`;
   if (interactive()) process.stderr.write(line);
   else console.error(line);
@@ -2901,6 +2949,7 @@ function installProgressComplete(
   platform: { os: string; arch: string },
   bytes: number,
 ) {
+  if (installDownloading) return;
   const line = `${name}  ${platform.os}/${platform.arch}  ${(bytes / 1_000_000).toFixed(1)} MB  checksum verified`;
   if (interactive()) process.stderr.write(`\r${line}\n`);
   else console.error(line);
@@ -2931,6 +2980,7 @@ function printInstallResult(
     });
     return;
   }
+  if (installDownloading) return;
   for (const item of installed) {
     const line = `${item.name}  ${platform.os}/${platform.arch}  ${item.path}  ${item.status} · checksum verified`;
     if (continuing) console.error(line);
@@ -3491,9 +3541,11 @@ async function setup(argv: string[] = []) {
     commandUsage(ONBOARD_USAGE);
   }
   if (onboarding) {
-    const result = await runOnboarding(onboarding);
+    const result = await runOnboarding(onboarding, undefined, true);
     if (result.cancelled) process.exitCode = 130;
     else if (!result.ok) process.exitCode = 1;
+    // "Start Claude Code now?" answered Yes: the same door as `caveman claude`.
+    else if (result.launch) await agentShortcut([result.launch]);
     return;
   }
   const json = argv.includes("--json");
@@ -3599,10 +3651,16 @@ async function setup(argv: string[] = []) {
 
 // runOnboarding hands the first run what it needs from the rest of the CLI.
 // Sign-in is the same `login` the verb runs, in its compact form.
-function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promise<OnboardResult> {
+function runOnboarding(options: OnboardOptions, launching?: AgentProfile, offerLaunch = false): Promise<OnboardResult> {
+  const agents = onboardAgents();
+  const handoff = runnerHandoff();
   return onboard(options, {
     cmd: runnableCommand(),
-    agents: onboardAgents(),
+    agents,
+    found: onboardFound(agents),
+    addKey: (key) => void providersAdd([key.id, "--key-env", key.env], () => ""),
+    ...(handoff ? { installCli: handoff } : {}),
+    offerLaunch,
     interactive: onboardInteractive(),
     signedIn: async () => Boolean((await config()).token),
     signIn: (ui) => login([], ui),
@@ -3628,10 +3686,171 @@ function onboardAgents(): OnboardAgent[] {
   });
 }
 
+// Logins beside the agents, for the first screen. Read-only, and nothing here
+// may stop setup: a profile that cannot be read is left out.
+function onboardFound(agents: OnboardAgent[]): OnboardFound {
+  const has = (id: string) => agents.some((agent) => agent.id === id && agent.installed);
+  const found: OnboardFound = {};
+  try { found.keys = foundKeys(); } catch { /* shown as none */ }
+  if (has("claude")) found.claudeLogins = moduleHost().claudeProfiles();
+  if (has("codex")) {
+    try {
+      if (existsSync(join(codexHomeDir(), "auth.json"))) found.codexLogin = detectCodexWrapAuthMode() === "subscription" ? "ChatGPT plan" : "API key";
+    } catch { /* an unreadable CODEX_HOME is enable's to report */ }
+  }
+  return found;
+}
+
 // The command a hint can tell someone to type: under `npx` nothing named
 // caveman is on PATH.
 function runnableCommand(): string {
-  return telemetryInstallChannel() === "npx" ? "npx @caveman-ai/cli" : invokedAs();
+  if (!cliIsEphemeral()) return invokedAs();
+  const durable = currentDurableCaveman();
+  return durable ? durableCommandName(durable) : "npx @caveman-ai/cli";
+}
+
+// A CLI run by a package runner (npx, bunx, pnpm dlx, yarn dlx) lives in that
+// runner's cache: the next cache clean or version bump removes it. Wiring
+// records this CLI's own paths (hook commands, the native-hook adapter,
+// bundled plugins), which would then fail in every agent session. So setup
+// from a runner never wires: it installs this version for good when it is not
+// installed yet, and has that copy do the wiring.
+const EPHEMERAL_PATH = /\/_npx\/|\/pnpm\/dlx\/|\/dlx-\d+\/|\/bunx-/;
+
+function isEphemeralPath(path: string): boolean {
+  return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
+}
+
+function cliIsEphemeral(): boolean {
+  return isEphemeralPath(fileURLToPath(import.meta.url));
+}
+
+// Where a private install lands when the global npm prefix is not writable.
+function privateCliPrefix(): string {
+  return join(cavemanHome(), "cli");
+}
+
+// npm puts a prefix's commands in <prefix>/bin, or in <prefix> itself on Windows.
+function privateCliBin(): string {
+  return process.platform === "win32" ? privateCliPrefix() : join(privateCliPrefix(), "bin");
+}
+
+// Every caveman command that outlives this process: the ones on PATH outside
+// a runner's cache, then the private install.
+function durableCavemen(): string[] {
+  const found: string[] = [];
+  for (const dir of [...(process.env.PATH ?? "").split(delimiter), privateCliBin()]) {
+    if (!dir || isEphemeralPath(dir)) continue;
+    for (const candidate of executableCandidateNames("caveman")) {
+      const full = join(dir, candidate);
+      if (!isExecutable(full) || found.includes(full)) continue;
+      try { if (isEphemeralPath(realpathSync(full))) continue; } catch { continue; }
+      found.push(full);
+      break;
+    }
+  }
+  return found;
+}
+
+function durableCaveman(): string | null {
+  return durableCavemen()[0] ?? null;
+}
+
+// The installed caveman of this very version, which is the one a runner hands
+// its wiring to: an older install would write an older wiring.
+function currentDurableCaveman(): string | null {
+  const version = cliVersion();
+  for (const candidate of durableCavemen()) {
+    const invocation = portableInvocation(candidate, ["--version"]);
+    const run = spawnSync(invocation.command, invocation.args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, windowsHide: true });
+    try { if (run.status === 0 && (JSON.parse(run.stdout) as { version?: unknown }).version === version) return candidate; } catch { /* not this one */ }
+  }
+  return null;
+}
+
+// `caveman` when typing that reaches it, else its full path.
+function durableCommandName(durable: string): string {
+  return which("caveman") === durable ? "caveman" : durable;
+}
+
+function durableCliInstallCommand(): string {
+  return `npm install -g @caveman-ai/cli@${cliVersion()}`;
+}
+
+// The installed CLI applies the setup that was confirmed here, so every path
+// it records is its own. Its step lines come back through `say`; the rest of
+// its report (the plan again, its own closing lines) is this process's to give.
+function applyWithDurableCli(selection: Record<string, boolean>, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }> {
+  const durable = currentDurableCaveman();
+  if (!durable) return Promise.resolve({ ok: false, problems: ["the caveman command is not installed"] });
+  const on = Object.keys(selection).filter((id) => selection[id]);
+  // ponytail: flags only add agents and set modules; unticking an agent that
+  // is already wired, from an npx run, still needs `caveman setup` afterwards.
+  const argv = ["setup", "--yes", ...(on.length ? ["--only", on.join(",")] : ["--skip", Object.keys(selection).join(",")]), "--agents", agents.join(",") || "none"];
+  const invocation = portableInvocation(durable, argv);
+  return new Promise((resolve) => {
+    const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const problems: string[] = [];
+    let last = "";
+    const reader = () => {
+      let pending = "";
+      return (chunk: Buffer) => {
+        const lines = (pending + chunk.toString("utf8")).split(/\r?\n/);
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) last = line.trim();
+          if (/^✗ Setup finished with problems/.test(line)) continue;
+          if (/^✗ /.test(line)) problems.push(line.slice(2));
+          else if (/^(?:[✓○] |downloading |claude profile )/.test(line) && !/^✓ Ready|^○ routing is on/.test(line)) say(line);
+        }
+      };
+    };
+    child.stdout.on("data", reader());
+    child.stderr.on("data", reader());
+    child.once("error", (error) => resolve({ ok: false, problems: [error.message] }));
+    child.once("close", (code) => resolve({
+      ok: code === 0 && problems.length === 0,
+      problems: problems.length || code === 0 ? problems : [`${durable} setup exited ${code}${last ? `: ${last}` : ""}`],
+    }));
+  });
+}
+
+// Installs this CLI version with npm: globally, or under ~/.caveman/cli when
+// the global prefix is not writable (a system Node) or still holds another
+// version. Returns the command hints should name. Throws when neither works:
+// nothing is wired then.
+async function installDurableCli(): Promise<string> {
+  const npm = which("npm");
+  if (!npm) throw new Error("npm not found: install the CLI yourself (npm install -g @caveman-ai/cli), then run caveman setup");
+  const run = (extra: string[]) => new Promise<string>((resolve) => {
+    const invocation = portableInvocation(npm, ["install", "-g", ...extra, "--no-audit", "--no-fund", `@caveman-ai/cli@${cliVersion()}`]);
+    const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 180_000);
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    child.once("error", (error) => { clearTimeout(timer); resolve(error.message); });
+    child.once("close", () => { clearTimeout(timer); resolve(stderr); });
+  });
+  const global = await run([]);
+  let found = currentDurableCaveman();
+  if (found) return durableCommandName(found);
+  const local = await run(["--prefix", privateCliPrefix()]);
+  found = currentDurableCaveman();
+  if (found) return durableCommandName(found);
+  const why = `${local}\n${global}`.split("\n").map((line) => line.trim()).find((line) => /^npm (?:error|ERR!)/.test(line)) ?? "npm install failed";
+  throw new Error(`could not install the caveman command (${why.replace(/^npm (?:error|ERR!)\s*/, "")}) · run ${durableCliInstallCommand()}, then caveman setup`);
+}
+
+// From a runner: the handoff setup uses. `command` is set when this version
+// still has to be installed.
+function runnerHandoff(): OnboardDeps["installCli"] {
+  if (!cliIsEphemeral()) return undefined;
+  const installed = currentDurableCaveman();
+  return {
+    ...(installed ? {} : { command: durableCliInstallCommand() }),
+    run: async () => installed ? durableCommandName(installed) : installDurableCli(),
+    apply: applyWithDurableCli,
+  };
 }
 
 function agentShortName(agent: AgentProfile): string {
@@ -3808,59 +4027,68 @@ export function syncAutoEntries(): void {
     try {
       withIntegrationLock(agent, () => {
         const journal = readNativeJournal(agent);
-        const operation = journal?.operations.find((op) => op.kind === (agent === "claude" ? "claude-settings" : "opencode-config"));
-        if (!journal || !operation) {
+        // Claude journals one settings file per profile; each gets the edit.
+        const operations = journal?.operations.filter((op) => op.kind === (agent === "claude" ? "claude-settings" : "opencode-config")) ?? [];
+        if (!journal || operations.length === 0) {
           // Not wired, yet a session-only `caveman claude` offers Auto too:
           // once it is gone a saved choice of it would reach Anthropic directly.
           if (agent === "claude" && !(gwLocal && autoModelOffered("anthropic"))) clearAutoModelChoice(agent);
           return;
         }
-        const before = fileBytes(operation.file);
-        if (!before) return;
-        const root = parseJsonFileObject(operation.file, before);
-        const owned = { ...(operation.owned ?? {}) };
-        if (agent === "claude") {
-          const env = objectValue(root.env);
-          const ours = Array.isArray(owned.auto_env) ? owned.auto_env.filter((key): key is string => typeof key === "string") : [];
-          if (gwLocal && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env)) {
-            owned.auto_env = [...new Set([...ours, ...addClaudeAutoEnv(env)])];
-          } else {
-            for (const key of ours) if (env[key] === CLAUDE_AUTO_ENV[key]) delete env[key];
-            owned.auto_env = [];
-            if (isClaudeAutoModel(root.model)) delete root.model;
-          }
-          if (Object.keys(env).length > 0) root.env = env; else delete root.env;
-        } else {
-          const providers = objectValue(root.provider);
-          const ours = Array.isArray(owned.auto_models) ? owned.auto_models.filter((id): id is string => typeof id === "string") : [];
-          const next: string[] = [];
-          for (const id of ["openai", "anthropic"] as const) {
-            if (!isPlainObject(providers[id])) continue;
-            const provider = providers[id] as Record<string, unknown>;
-            const models = objectValue(provider.models);
-            if (gwLocal && autoModelOffered(id)) {
-              if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = opencodeAutoModel(id);
-              if (ours.includes(id) || objectValue(models[AUTO_MODEL]).name === AUTO_NAME) next.push(id);
-            } else if (ours.includes(id) && objectValue(models[AUTO_MODEL]).name === AUTO_NAME) {
-              delete models[AUTO_MODEL];
+        let failure: unknown;
+        let changed = false;
+        for (const operation of operations) {
+          try {
+            const before = fileBytes(operation.file);
+            if (!before) continue;
+            const root = parseJsonFileObject(operation.file, before);
+            const owned = { ...(operation.owned ?? {}) };
+            if (agent === "claude") {
+              const env = objectValue(root.env);
+              const ours = Array.isArray(owned.auto_env) ? owned.auto_env.filter((key): key is string => typeof key === "string") : [];
+              if (gwLocal && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env)) {
+                owned.auto_env = [...new Set([...ours, ...addClaudeAutoEnv(env)])];
+              } else {
+                for (const key of ours) if (env[key] === CLAUDE_AUTO_ENV[key]) delete env[key];
+                owned.auto_env = [];
+                if (isClaudeAutoModel(root.model)) delete root.model;
+              }
+              if (Object.keys(env).length > 0) root.env = env; else delete root.env;
+            } else {
+              const providers = objectValue(root.provider);
+              const ours = Array.isArray(owned.auto_models) ? owned.auto_models.filter((id): id is string => typeof id === "string") : [];
+              const next: string[] = [];
+              for (const id of ["openai", "anthropic"] as const) {
+                if (!isPlainObject(providers[id])) continue;
+                const provider = providers[id] as Record<string, unknown>;
+                const models = objectValue(provider.models);
+                if (gwLocal && autoModelOffered(id)) {
+                  if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = opencodeAutoModel(id);
+                  if (ours.includes(id) || objectValue(models[AUTO_MODEL]).name === AUTO_NAME) next.push(id);
+                } else if (ours.includes(id) && objectValue(models[AUTO_MODEL]).name === AUTO_NAME) {
+                  delete models[AUTO_MODEL];
+                }
+                if (Object.keys(models).length > 0) provider.models = models; else delete provider.models;
+              }
+              owned.auto_models = next;
+              // A saved choice of Auto goes with its provider's entry, not only
+              // when the last one does.
+              const saved = typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`) ? root.model.slice(0, -AUTO_MODEL.length - 1) : undefined;
+              if (saved !== undefined && !next.includes(saved) && (!next.length || saved === "openai" || saved === "anthropic")) delete root.model;
             }
-            if (Object.keys(models).length > 0) provider.models = models; else delete provider.models;
-          }
-          owned.auto_models = next;
-          // A saved choice of Auto goes with its provider's entry, not only
-          // when the last one does.
-          const saved = typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`) ? root.model.slice(0, -AUTO_MODEL.length - 1) : undefined;
-          if (saved !== undefined && !next.includes(saved) && (!next.length || saved === "openai" || saved === "anthropic")) delete root.model;
+            // Compared as values: a file in another layout (or with comments)
+            // that needs no change is not rewritten.
+            if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) continue;
+            atomicWriteFile(operation.file, jsonBytes(root));
+            operation.owned = owned;
+            changed = true;
+          } catch (error) { failure ??= error; }
         }
-        // Compared as values: a file in another layout (or with comments)
-        // that needs no change is not rewritten.
-        if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) return;
-        const after = jsonBytes(root);
-        atomicWriteFile(operation.file, after);
-        operation.owned = owned;
         // after_sha256 stays enable's: the backup is from before enable, so a
         // synced file must take disable's merge path, never the wholesale restore.
-        atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
+        if (changed) atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
+        // One unreadable profile does not keep the others from the edit.
+        if (failure) throw failure;
       });
     } catch (error) {
       process.stderr.write(`${mark("warn")} ${agent}: Auto model not updated (${(error as Error).message}) · caveman doctor ${agent} --fix\n`);
@@ -3873,10 +4101,14 @@ export function syncAutoEntries(): void {
 function clearAutoModelChoice(agent: NativeAgent): void {
   try {
     if (agent === "claude") {
-      const path = claudeSettingsPath();
-      const bytes = fileBytes(path);
-      const root = parseJsonFileObject(path, bytes);
-      if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+      for (const dir of claudeProfileRoots()) {
+        const path = throughLink(join(dir, "settings.json"));
+        try {
+          const bytes = fileBytes(path);
+          const root = parseJsonFileObject(path, bytes);
+          if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+        } catch { /* this profile only; the others still lose the choice */ }
+      }
     } else if (agent === "opencode") {
       const path = join(homedir(), ".config", "opencode", "opencode.json");
       const bytes = fileBytes(path);
@@ -7908,8 +8140,31 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
 
 function detectedAgentVersion(agent: AgentProfile): string | null { return nativeHostProbe(agent).version; }
 
-function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
-  const settingsPath = claudeSettingsPath();
+// One wiring per Claude Code profile: people keep several logins as sibling
+// config dirs and pick one with CLAUDE_CONFIG_DIR, and a profile left out
+// would silently bypass Caveman. A profile that cannot be wired is skipped
+// with a warning, except the active one, which fails as it always has.
+function claudeNativeMutations(gw: string, mcpBinary: string, plan = false): NativeMutation[] {
+  const active = claudeConfigDir();
+  const files = new Set<string>();
+  return claudeProfileRoots().flatMap((root) => {
+    let mutations: NativeMutation[];
+    try { mutations = claudeProfileMutations(root, gw, mcpBinary); } catch (error) {
+      if (root === active) throw error;
+      if (!plan) process.stderr.write(`${mark("warn")} claude profile ${root} skipped: ${(error as Error).message}\n`);
+      return [];
+    }
+    // Profiles that share a file through a link get it written once.
+    return mutations.filter((mutation) => {
+      const real = nativeRealPath(mutation.file);
+      return !files.has(real) && Boolean(files.add(real));
+    });
+  });
+}
+
+function claudeProfileMutations(root: string, gw: string, mcpBinary: string): NativeMutation[] {
+  const other = root !== claudeConfigDir();
+  const settingsPath = throughLink(join(root, "settings.json"));
   const settingsBefore = fileBytes(settingsPath);
   const settings = parseJsonFileObject(settingsPath, settingsBefore);
   if (settings.env !== undefined && (typeof settings.env !== "object" || settings.env === null || Array.isArray(settings.env))) {
@@ -7919,6 +8174,12 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
+  // Another login that points somewhere else on purpose (its own gateway, a
+  // cloud provider lane) keeps doing so. The active one is the user's ask.
+  if (other && env.ANTHROPIC_BASE_URL !== undefined && env.ANTHROPIC_BASE_URL !== "" && !isCavemanClaudeRoute(env.ANTHROPIC_BASE_URL, false)) {
+    throw new Error("it sets its own ANTHROPIC_BASE_URL");
+  }
+  if (other && claudeOffProxyLane(env)) throw new Error("it uses a provider lane that bypasses ANTHROPIC_BASE_URL");
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
   env.ANTHROPIC_BASE_URL = route;
@@ -7952,7 +8213,19 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
-  const mcpPath = claudeGlobalConfigPath();
+  // As claudeGlobalConfigPath: the default profile keeps this file beside
+  // ~/.claude, every other profile keeps it inside its own directory.
+  const mcpPath = throughLink(other
+    ? join(nativeRealPath(root) === nativeRealPath(join(homedir(), ".claude")) ? homedir() : root, ".claude.json")
+    : claudeGlobalConfigPath());
+  // Found out here, before anything is written: a login that cannot be
+  // written is skipped whole, not left half wired or failing the others.
+  if (other) {
+    for (const file of [settingsPath, mcpPath]) {
+      accessSync(dirname(file), constants.W_OK);
+      if (existsSync(file)) accessSync(file, constants.W_OK);
+    }
+  }
   const mcpBefore = fileBytes(mcpPath);
   const mcpRoot = parseJsonFileObject(mcpPath, mcpBefore);
   if (mcpRoot.mcpServers !== undefined && (typeof mcpRoot.mcpServers !== "object" || mcpRoot.mcpServers === null || Array.isArray(mcpRoot.mcpServers))) {
@@ -9278,7 +9551,7 @@ function recoverPendingNativeInstallUnlocked(agent: NativeAgent): boolean {
 // `plan`: only the files and their kinds are wanted, so nothing runs the agent.
 function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | undefined, { plan = false } = {}): NativeMutation[] {
   return agent === "claude"
-    ? claudeNativeMutations(gw, mcpBinary!)
+    ? claudeNativeMutations(gw, mcpBinary!, plan)
     : agent === "codex"
       ? codexNativeMutations(gw, mcpBinary!)
       : agent === "hermes"
@@ -9369,7 +9642,8 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
         // is not the current target); it is re-wired below, outside the lock.
         // Module apply (quiet) writes only the files its plan showed, so the
         // voice skills ride along with an explicit `caveman enable` only.
-        if (agentStaleRoute(agent)) {
+        // A Claude profile the journal does not cover is re-wired the same way.
+        if (agentStaleRoute(agent) || existing.unwired_profiles.length > 0) {
           if (!quiet) installNativeVoiceSkills(agent);
           return "stale" as const;
         }
@@ -9425,7 +9699,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     if (outcome === "stale") {
       const was = agentStaleRoute(agent);
       repairNativeAgent(agent, { quiet: true });
-      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: routing: ${was} → ${new URL(gw).origin}\n`);
+      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: ${was ? `routing: ${was} → ${new URL(gw).origin}` : "native Caveman now covers every profile"}\n`);
     }
     ensureLocalProxyForNative(agent, gw);
     if (quiet || outcome === "stale") continue;
@@ -9727,13 +10001,80 @@ function nativeRealPath(file: string): string {
   }
 }
 
-function claudeProfileFiles(journal: NativeJournal | undefined): string[] {
-  const roots = new Set([join(homedir(), ".claude"), claudeConfigDir(), ...rememberedClaudeProfiles()]);
+// Every directory that may be a Claude Code profile, the active one first.
+function claudeProfileCandidates(): string[] {
+  const roots = new Set([claudeConfigDir(), join(homedir(), ".claude"), ...rememberedClaudeProfiles()]);
   for (const entry of readdirSync(homedir(), { withFileTypes: true })) {
     if (/^\.claude[-_].+/.test(entry.name) && (entry.isDirectory() || entry.isSymbolicLink())) {
       roots.add(join(homedir(), entry.name));
     }
   }
+  return [...roots];
+}
+
+// A settings file linked to another profile's is written through the link: a
+// rename onto the link itself would replace it with a copy.
+function throughLink(file: string): string {
+  try { return lstatSync(file).isSymbolicLink() ? realpathSync(file) : file; } catch { return file; }
+}
+
+// Whether Claude Code has signed in from this directory. Plugins keep dirs
+// named ~/.claude-* too, with a settings.json of their own; only Claude Code
+// writes these. (.credentials.json alone would miss macOS, where the
+// credential is in the keychain.)
+function claudeLoginDir(root: string): boolean {
+  if (existsSync(join(root, ".credentials.json"))) return true;
+  try {
+    const state = parseJsonFileObject(join(root, ".claude.json"), fileBytes(join(root, ".claude.json")));
+    return ["numStartups", "userID", "firstStartTime", "oauthAccount"].some((key) => state[key] !== undefined);
+  } catch { return false; }
+}
+
+// The profiles `enable claude` wires, one per real directory. The active one
+// always counts, as it did when it was the only one wired; ~/.claude and a
+// profile wired before count while they hold any Claude Code config; any
+// other ~/.claude-* only once Claude Code has signed in from it.
+function claudeProfileRoots(): string[] {
+  const active = claudeConfigDir();
+  const known = new Set([join(homedir(), ".claude"), ...rememberedClaudeProfiles()]);
+  const seen = new Set<string>();
+  return claudeProfileCandidates().filter((root) => {
+    if (root !== active) {
+      try {
+        if (!statSync(root).isDirectory()) return false;
+      } catch { return false; }
+      if (!(known.has(root) ? ["settings.json", ".credentials.json", ".claude.json", "projects"].some((name) => existsSync(join(root, name))) : claudeLoginDir(root))) return false;
+    }
+    const real = nativeRealPath(root);
+    return !seen.has(real) && Boolean(seen.add(real));
+  });
+}
+
+// Profiles the journal does not cover: a login added after enable, or an
+// install from before every profile was wired. One that enable would skip
+// does not count, or the install could never read as whole.
+function claudeUnwiredProfiles(journal: NativeJournal): string[] {
+  try {
+    const wired = new Set(journal.operations.filter((operation) => !claudeProfileGone(operation)).map((operation) => nativeRealPath(operation.file)));
+    return claudeProfileRoots().filter((root) => {
+      if (wired.has(nativeRealPath(join(root, "settings.json")))) return false;
+      if (root === claudeConfigDir()) return true;
+      try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch { return false; }
+    });
+  } catch { return []; }
+}
+
+// A journaled file of another Claude profile that no longer exists: the
+// profile was deleted, so there is nothing to restore or to check, and it
+// must not keep the remaining profiles from being disabled or repaired.
+function claudeProfileGone(operation: NativeJournal["operations"][number]): boolean {
+  if (operation.kind !== "claude-settings" && operation.kind !== "claude-mcp") return false;
+  const active = [join(claudeConfigDir(), "settings.json"), claudeGlobalConfigPath()].map(throughLink);
+  return !active.includes(operation.file) && !existsSync(operation.file);
+}
+
+function claudeProfileFiles(journal: NativeJournal | undefined): string[] {
+  const roots = new Set(claudeProfileCandidates());
   for (const operation of journal?.operations ?? []) {
     if (operation.kind === "claude-settings") roots.add(dirname(operation.file));
   }
@@ -9830,7 +10171,7 @@ function cleanClaudeProfile(root: Record<string, unknown>): boolean {
 function restoreNativeJournalFiles(journal: NativeJournal | undefined, allClaudeProfiles = false): Array<{ file: string; bytes: Buffer | null }> {
   // Resolve every merge/conflict before first write. A conflict therefore leaves
   // all host files and the journal byte-identical.
-  const restored = new Map((journal?.operations ?? []).map((operation) => [nativeRealPath(operation.file), restoreNativeOperation(operation)]));
+  const restored = new Map((journal?.operations ?? []).filter((operation) => !claudeProfileGone(operation)).map((operation) => [nativeRealPath(operation.file), restoreNativeOperation(operation)]));
   if (allClaudeProfiles) {
     for (const file of claudeProfileFiles(journal)) {
       const bytes = restored.has(file) ? restored.get(file) : fileBytes(file);
@@ -9970,7 +10311,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const available = host.launchable;
   const journal = readNativeJournal(agent);
   const transactionPending = Boolean(readPendingNativeJournal(agent));
-  const checks = journal?.operations.map((operation) => {
+  const checks = journal?.operations.filter((operation) => !claudeProfileGone(operation)).map((operation) => {
     const current = fileBytes(operation.file);
     let owned = false;
     if (current) {
@@ -10037,6 +10378,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const packCurrent = installed ? packVersion === expectedPackVersion : null;
   const drifted = checks.some((check) => !check.exact);
   const ownedHealthy = installed && checks.length > 0 && checks.every((check) => check.owned);
+  const unwiredProfiles = agent === "claude" && journal ? claudeUnwiredProfiles(journal) : [];
   const runtimeConfig = wrapRuntimeConfig();
   const coreResolution = runtimeConfig.resolution.values["think.core"];
   const coreConfigured = coreResolution.value === true;
@@ -10085,10 +10427,11 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
     ? Object.entries(opencodeNativeRoutes(gatewayURL())).every(([providerID, route]) => (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.[providerID] === route)
-    : agent === "pi" ? piBundleCurrent : routeOperation?.owned?.route === expectedRoute);
+    // Claude journals one route per profile; each has to be the current one.
+    : agent === "pi" ? piBundleCurrent : Boolean(routeOperation) && journal!.operations.every((operation) => operation.kind !== routeKind || operation.owned?.route === expectedRoute));
   const proxyHealthy = wrapMode(gatewayURL()) === "managed" || Boolean(probeProxyVersion()?.capabilities.includes("native_runtime_v1"));
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
-  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent ? "degraded" : "installed";
+  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent || unwiredProfiles.length > 0 ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
@@ -10099,6 +10442,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     const unrouted = opencodeUnroutedActiveProvider(routed);
     if (unrouted) warnings.push(`OpenCode's active provider "${unrouted}" is not routed through Caveman; its requests go direct and are not compressed or counted (routed: ${routed.join(", ")})`);
   }
+  for (const root of unwiredProfiles) warnings.push(`Claude profile ${root} is not routed through Caveman; run \`caveman enable claude\``);
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
@@ -10149,6 +10493,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     expected_pack_version: expectedPackVersion,
     pack_current: packCurrent,
     drifted,
+    unwired_profiles: unwiredProfiles,
     components,
     warnings,
     capabilities: nativeCapabilityReport(agent, components, versionStatus),
@@ -11165,9 +11510,17 @@ function openLoginBrowser(url: string): void {
 // signInError turns "this Cloud does not take sign-ins" into one plain line:
 // 403 cave_device_login_disabled, or 404 where the device endpoint is absent.
 function signInError(error: unknown, baseURL: string): unknown {
+  // fetch's own failure (offline, DNS, refused) carries no HTTP status.
+  if (error instanceof TypeError) {
+    return Object.assign(new Error(`Could not reach ${new URL(baseURL).host}; check the network.`), { code: "cloud_unreachable" });
+  }
   if (!(error instanceof DeviceAuthError)) return error;
   if ((error.status === 403 && error.code === "cave_device_login_disabled") || error.status === 404) {
     return Object.assign(new Error(`Sign-in is not open on ${new URL(baseURL).host} yet.`), { code: "sign_in_closed" });
+  }
+  // A Cloud that is down is not the user's mistake: say so, and when to retry.
+  if (error.status >= 500) {
+    return Object.assign(new Error(`${new URL(baseURL).host} is not answering right now (HTTP ${error.status}).`), { code: "cloud_unreachable" });
   }
   return error;
 }
@@ -11207,6 +11560,7 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   } catch (error) {
     throw signInError(error, baseURL);
   }
+  ui?.approved?.();
   const { code } = grant;
   const tok = grant.credentials as Record<string, unknown>;
   const accessToken = grant.credentials.access_token;
@@ -11246,7 +11600,9 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   await saveConfig(saved);
   await grant.acknowledge();
   syncAutoEntries();
-  await printSignInLines();
+  // The first-run screen says these its own way.
+  if (ui?.lines) ui.lines(await signInLines());
+  else await printSignInLines();
   const email = tokenClaim(accessToken, "email");
   if (instance) {
     print({ authenticated: true, baseURL, organization_id: organizationId ?? null, project_id: credentials.project_id, scope: tok.scope, credential_kind: "none", token_store: tokenStore });
@@ -15188,7 +15544,8 @@ function shouldShrink(command: string): boolean {
 // cavemanBinForHook is the invocation a Claude hook uses to call back into this
 // CLI, robust to PATH: a resolved `caveman`/`cave`, else this very script's node.
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
-  const command = which("caveman") ?? which("cave");
+  // Never a package runner's cached copy when a lasting one exists.
+  const command = durableCaveman() ?? which("caveman") ?? which("cave");
   return command
     ? hookExecutableInvocation(command, undefined, process.platform, powershell)
     : hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
@@ -20859,7 +21216,9 @@ function portListening(host: string, port: number): Promise<boolean> {
 }
 
 function standaloneProxyEndpoint(): { host: string; port: number; listen: string } {
-  const listen = (process.env.CAVEMAN_LISTEN ?? PROXY_ADDR).trim();
+  // Setup's moved port applies to `caveman start` too, so both name one runtime.
+  const moved = gatewayUrlFromConfigFile();
+  const listen = (process.env.CAVEMAN_LISTEN ?? (moved && wrapMode(moved) === "local" ? new URL(moved).host : PROXY_ADDR)).trim();
   try {
     const url = new URL(`http://${listen}`);
     const port = Number(url.port);

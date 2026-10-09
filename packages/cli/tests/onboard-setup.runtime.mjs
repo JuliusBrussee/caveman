@@ -1,4 +1,5 @@
 import { test } from "node:test";
+import { createServer } from "node:net";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, readFileSync } from "node:fs";
@@ -117,25 +118,68 @@ test("--only, --skip and --agents pick modules and agents; a re-run keeps the cu
   }
 });
 
-// Under npx nothing named caveman is on PATH, so every hint names the npx form.
-test("under npx the hints print the npx command, and Try prefers Claude Code", { skip }, async () => {
+// Under npx nothing named caveman is on PATH: hints name the npx form until
+// setup has installed the command (tests/setup-from-runner covers that), and
+// without npm to install it nothing is wired from the runner's cache.
+test("under npx the hints print the npx command, and setup without npm writes nothing", { skip }, async () => {
   const fx = modulesFixture({ agents: ["codex", "claude"] });
   const npxDist = join(fx.home, "_npx", "0a1b", "node_modules", "@caveman-ai", "cli");
   cpSync(join(here, "..", "dist"), join(npxDist, "dist"), { recursive: true });
   cpSync(join(here, "..", "package.json"), join(npxDist, "package.json"));
+  const run = (...argv) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(npxDist, "dist", "index.js"), "setup", ...argv], { env: fx.env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.on("exit", (code) => resolve({ code, stdout }));
+    child.on("error", reject);
+  });
   try {
-    const out = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [join(npxDist, "dist", "index.js"), "setup", "--yes", "--agents", "codex,claude"], { env: fx.env, stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "";
-      child.stdout.on("data", (d) => (stdout += d));
-      child.on("exit", (code) => resolve({ code, stdout }));
-      child.on("error", reject);
-    });
-    assert.equal(out.code, 0, out.stdout);
-    assert.match(out.stdout, /routing is on and starts after you sign in · npx @caveman-ai\/cli login/);
-    assert.match(out.stdout, /Try: {2}npx @caveman-ai\/cli claude {6}See it: {2}npx @caveman-ai\/cli status/);
+    const asked = await run("--agents", "codex,claude");
+    assert.equal(asked.code, 0, asked.stdout);
+    assert.match(asked.stdout, /Nothing changed: pass --yes to apply · npx @caveman-ai\/cli setup --yes\n$/);
+    const out = await run("--yes", "--agents", "codex,claude");
+    assert.equal(out.code, 1, out.stdout);
+    assert.match(out.stdout, /✗ npm not found: install the CLI yourself \(npm install -g @caveman-ai\/cli\), then run caveman setup\nNothing else changed\.\n$/);
+    assert.equal(existsSync(join(fx.home, ".claude", "settings.json")), false);
   } finally {
     fx.cleanup();
+  }
+});
+
+// wrangler dev, a container, anything: 8787 is a popular port. Wiring an agent
+// to it while someone else answers there sends them every request.
+test("a first setup moves the runtime off a port another program holds, and later runs keep that port", { skip }, async () => {
+  const holder = createServer();
+  // Already held by something on this machine is the same case.
+  await new Promise((resolve) => holder.once("error", resolve).listen(8787, "127.0.0.1", resolve));
+  const fx = modulesFixture({ agents: ["claude"] });
+  const fresh = modulesFixture({ agents: ["claude"] });
+  const env = { ...fx.env };
+  delete env.CAVE_GATEWAY_URL;
+  delete env.CAVEMAN_LISTEN;
+  try {
+    const dry = await runCli(["setup", "--dry-run"], env);
+    const port = dry.stdout.match(/RUN +local runtime on port (\d+) {2}127\.0\.0\.1:8787 is in use by another program\n/)?.[1];
+    assert.ok(port && port !== "8787", dry.stdout);
+    assert.equal(existsSync(join(env.CAVEMAN_HOME, "cloud.json")), false, "a dry run records nothing");
+    const out = await runCli(["setup", "--yes"], env);
+    assert.equal(out.code, 0, out.stdout + out.stderr);
+    assert.match(out.stdout, new RegExp(`○ 127\\.0\\.0\\.1:8787 is in use by another program · local runtime on port ${port}\\n✓ Claude Code wired\\n`));
+    const route = () => JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL;
+    assert.equal(route(), `http://127.0.0.1:${port}/w/claude`);
+    assert.equal(JSON.parse(readFileSync(join(env.CAVEMAN_HOME, "cloud.json"), "utf8")).localPort, Number(port));
+    // Wired now: the address is settled, and nothing moves again.
+    const again = await runCli(["setup", "--yes"], env);
+    assert.equal(again.code, 0, again.stdout + again.stderr);
+    assert.doesNotMatch(again.stdout, /in use by another program/);
+    assert.equal(route(), `http://127.0.0.1:${port}/w/claude`);
+    // An address the user chose is theirs: nothing is moved for it.
+    const chosen = await runCli(["setup", "--dry-run"], { ...fresh.env, CAVE_GATEWAY_URL: "http://127.0.0.1:8787" });
+    assert.doesNotMatch(chosen.stdout, /in use by another program/);
+  } finally {
+    holder.close();
+    fx.cleanup();
+    fresh.cleanup();
   }
 });
 

@@ -87,9 +87,10 @@ esac`),
   };
 }
 
-export function runCli(argv, env, { cwd, timeoutMs = 30_000 } = {}) {
+// `cli`: another copy of the built CLI to run (one placed in a runner's cache).
+export function runCli(argv, env, { cwd, timeoutMs = 30_000, cli: entry = cli } = {}) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...argv], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
+    const child = spawn(process.execPath, [entry, ...argv], { env, cwd, stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     const timer = setTimeout(() => {

@@ -48,13 +48,15 @@ function caveHome(): string {
 // "the local proxy needs restarting". Managed gateways (CAVE_GATEWAY_URL, or a
 // gatewayUrl chosen at login, managedGateway) off-loopback return undefined and
 // never pay a per-prompt delegate spawn. Signing in alone keeps the local
-// proxy. Default mirrors the full CLI's PROXY_ADDR.
+// proxy. Default mirrors the full CLI's PROXY_ADDR, as does `localPort`.
 function localGatewayEndpoint(): { host: string; port: number } | undefined {
   let gw: unknown = process.env.CAVE_GATEWAY_URL;
   if (typeof gw !== "string" || !gw.trim()) {
     try {
       const config = object(JSON.parse(readFileSync(cloudConfigPath(), "utf8")));
       if (config.managedGateway === true) gw = config.gatewayUrl;
+      // The port setup moved the runtime to (index.ts gatewayUrlFromConfigFile).
+      else if (typeof config.localPort === "number" && Number.isInteger(config.localPort) && config.localPort >= 1024 && config.localPort <= 65535) gw = `http://127.0.0.1:${config.localPort}`;
     } catch { /* local default */ }
   }
   if (typeof gw !== "string" || !gw.trim()) return { host: "127.0.0.1", port: 8787 };

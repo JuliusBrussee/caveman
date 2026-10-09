@@ -358,9 +358,12 @@ func randomToken() string {
 }
 
 func openBrowser(target string) error {
-	name := "xdg-open"
-	if runtime.GOOS == "darwin" {
-		name = "open"
+	switch runtime.GOOS {
+	case "darwin":
+		return exec.Command("open", target).Start()
+	case "windows":
+		// Not `cmd /c start`: cmd would read the & in the query string.
+		return exec.Command("rundll32", "url.dll,FileProtocolHandler", target).Start()
 	}
-	return exec.Command(name, target).Start()
+	return exec.Command("xdg-open", target).Start()
 }

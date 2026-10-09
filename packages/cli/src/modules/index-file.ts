@@ -124,7 +124,7 @@ export function writeLock(lock: ModuleLock): void {
 // as soon as its binaries are in place. A signature or network failure throws;
 // a module with no build for this platform is skipped and named in
 // `problems`, so the others still install.
-export async function ensureModuleBinaries(ids: ModuleId[]): Promise<{ lock: ModuleLock; problems: string[] }> {
+export async function ensureModuleBinaries(ids: ModuleId[], downloading?: (name: string) => void): Promise<{ lock: ModuleLock; problems: string[] }> {
   const platform = setupPlatform();
   const index = await loadModuleIndex();
   const timeout = setupTimeoutSeconds();
@@ -157,6 +157,7 @@ export async function ensureModuleBinaries(ids: ModuleId[]): Promise<{ lock: Mod
       digests[binary] = sha256;
       if (sha256File(target) === sha256) continue;
       const part = uniquePath(target, "part");
+      downloading?.(binary);
       try {
         let got: string;
         try {
