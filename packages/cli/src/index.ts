@@ -519,6 +519,13 @@ setModuleHost({
   planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp", { plan: true })
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
   claudeProfiles: () => { try { return claudeProfileRoots(); } catch { return [claudeConfigDir()]; } },
+  agentIncomplete: (agent) => {
+    if (agent !== "claude") return false;
+    try {
+      const journal = readNativeJournal("claude");
+      return Boolean(journal) && claudeUnwiredProfiles(journal!).length > 0;
+    } catch { return false; }
+  },
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   agentName: (agent) => agentShortName(findAgent(agent)!),
   wireAgent: (agent) => enableNative([agent], { quiet: true }),
@@ -3651,6 +3658,7 @@ function onboardFound(agents: OnboardAgent[]): OnboardFound {
   const has = (id: string) => agents.some((agent) => agent.id === id && agent.installed);
   const found: OnboardFound = {};
   try { found.keys = foundKeys(); } catch { /* shown as none */ }
+  if (has("claude")) found.claudeLogins = moduleHost().claudeProfiles();
   if (has("codex")) {
     try {
       if (existsSync(join(codexHomeDir(), "auth.json"))) found.codexLogin = detectCodexWrapAuthMode() === "subscription" ? "ChatGPT plan" : "API key";

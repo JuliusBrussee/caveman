@@ -55,6 +55,9 @@ export type ModuleHost = {
   wiredFiles(agent: string): string[];
   // Claude Code config dirs `enable claude` wires, absolute, the active one first.
   claudeProfiles(): string[];
+  // True when a wired agent has a login its wiring does not cover yet (a
+  // Claude Code profile that appeared after setup).
+  agentIncomplete(agent: string): boolean;
   agentName(agent: string): string;
   // Wiring is quiet: applyModules reports each step through its progress line.
   wireAgent(agent: string): void;
@@ -187,12 +190,13 @@ function wiringChanges(selection: ModuleSelection, agents: string[], only: Modul
 // Wired agents that stay wired but carry hooks built from a key this run
 // changes, the Auto model the routing module adds or takes away, or a base
 // URL that is no longer the traffic target (an earlier login's managed
-// gateway): any plan re-wires those, never anything else.
+// gateway), or a login that appeared since: any plan re-wires those, never
+// anything else.
 function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire: string[], state: readonly (readonly [string, unknown])[]): string[] {
   const h = moduleHost();
   const keyChanged = effects.some(([key]) => h.wiringKeys.includes(key)) || state.some(([id]) => id === "routing");
   return h.nativeAgents()
-    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id)))
+    .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id) || h.agentIncomplete(agent.id)))
     .map((agent) => agent.id);
 }
 
@@ -379,7 +383,7 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   const target = h.agentTraffic().target === "local" ? "the local runtime" : "the managed gateway";
   for (const agent of refreshAgents(effects, unwire, state)) {
     const was = h.agentStaleRoute(agent);
-    const detail = was ? `point ${agent} at ${target} (was ${was})` : `refresh ${agent} hooks`;
+    const detail = was ? `point ${agent} at ${target} (was ${was})` : h.agentIncomplete(agent) ? `wire the new ${agent} login` : `refresh ${agent} hooks`;
     for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail });
   }
   // aider is wired without the runtime; every other agent starts it.

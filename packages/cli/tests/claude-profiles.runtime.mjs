@@ -107,6 +107,26 @@ test("the quiet module path wires a profile the journal does not cover", async (
   }
 });
 
+test("setup run again wires a login that appeared since, and its first lines name every login", async () => {
+  const fx = threeProfiles();
+  try {
+    const first = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(first.code, 0, first.stderr + first.stdout);
+    assert.match(first.stdout, /Claude logins +~[\\/]\.claude-max20 · ~[\\/]\.claude · ~[\\/]\.claude-work\n/);
+    const late = join(fx.home, ".claude-late");
+    put(join(late, "settings.json"), {});
+    const dry = await runCli(["setup", "--dry-run"], fx.env);
+    assert.match(dry.stdout, /wire the new claude login/);
+    assert.equal(routed(late), false, "a dry run writes nothing");
+    const again = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(again.code, 0, again.stderr + again.stdout);
+    assert.ok(routed(late), again.stdout);
+    assert.deepEqual((await doctor(fx.env)).unwired_profiles, []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("a malformed profile is skipped with a warning; a malformed active profile still fails", async () => {
   const fx = threeProfiles();
   try {

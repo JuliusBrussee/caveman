@@ -53,8 +53,8 @@ function terminal() {
     async press(waitFor, keys) {
       await this.waitFor(waitFor);
       seen = text.length;
-      // The first screen ignores a Yes in its first 400ms (a double-tapped Enter).
-      if (/esc cancels/.test(waitFor.source) && /^[\ry]$/.test(keys)) await new Promise((resolve) => setTimeout(resolve, 450));
+      // A question ignores a Yes in its first 400ms (a double-tapped Enter).
+      if (/esc cancels|now/.test(waitFor.source) && /^[\ry]$/.test(keys)) await new Promise((resolve) => setTimeout(resolve, 450));
       input.write(keys);
     },
   };
@@ -186,6 +186,78 @@ test("a wired agent missing from PATH stays ticked, so the plan never unwires it
   await tty.press(/agents {4}Claude Code\n[^]*esc cancels/, "n");
   const result = await run;
   assert.deepEqual(result.plan.agents, ["claude"], "re-run keeps the wired agent and adds nothing unasked");
+});
+
+const KEYS = [
+  { id: "anthropic", name: "Anthropic", env: "ANTHROPIC_API_KEY", added: false },
+  { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", added: true },
+];
+
+test("found logins are shown; an exported key joins Auto's pool only when ticked", async () => {
+  for (const tick of [false, true]) {
+    rmSync(configPath, { force: true });
+    const tty = terminal();
+    const added = [];
+    const run = onboard({ yes: false, dryRun: false }, deps(tty, {
+      signedIn: async () => true,
+      found: { claudeLogins: ["/x/.claude", "/x/.claude-max"], codexLogin: "ChatGPT plan", keys: KEYS },
+      addKey: (key) => added.push(key.id),
+    }));
+    if (tick) await tty.press(/◻ let Auto use ANTHROPIC_API_KEY · Auto can spend on them\n[^]*k keys/, "k");
+    await tty.press(tick ? /◼ let Auto use ANTHROPIC_API_KEY[^]*esc cancels/ : /esc cancels/, "y");
+    assert.equal((await run).ok, true);
+    assert.match(tty.text(), / {2}Claude logins {2}\/x\/\.claude · \/x\/\.claude-max\n {2}Codex login {4}ChatGPT plan\n {2}API keys {7}ANTHROPIC_API_KEY · OPENROUTER_API_KEY \(in Auto's pool\)\n/);
+    // A key already in the pool is never offered or added again.
+    assert.deepEqual(added, tick ? ["anthropic"] : []);
+    if (tick) assert.match(tty.text(), /✓ Anthropic key added for Auto · caveman providers remove anthropic takes it back\n/);
+  }
+});
+
+test("a key that cannot be stored is a problem setup reports, not a silent skip", async () => {
+  rmSync(configPath, { force: true });
+  const tty = terminal();
+  const run = onboard({ yes: false, dryRun: false }, deps(tty, {
+    found: { keys: KEYS },
+    addKey: () => { throw new Error("caveman: that does not look like an API key"); },
+  }));
+  await tty.press(/k keys/, "k");
+  await tty.press(/◼ let Auto use[^]*esc cancels/, "y");
+  assert.equal((await run).ok, false);
+  assert.match(tty.text(), /✗ Anthropic key: that does not look like an API key\n/);
+});
+
+test("setup ends by offering the agent: Yes names it, Esc reads as No, and it is never offered when it cannot start", async () => {
+  const claude = { id: "claude", name: "Claude Code", installed: true, wired: false };
+  for (const [key, launch, shown] of [["\r", "claude", "Yes"], ["\x1b", undefined, "No"]]) {
+    rmSync(configPath, { force: true });
+    const tty = terminal();
+    const run = onboard({ yes: false, dryRun: false }, deps(tty, { agents: [claude], signedIn: async () => true, offerLaunch: true }));
+    await tty.press(/esc cancels/, "y");
+    await tty.press(/Auto is in the model picker · \/model in Claude Code\n\[disclosure\]\n\nStart Claude Code now\? › Yes \/ No/, key);
+    assert.equal((await run).launch, launch);
+    assert.match(tty.text(), new RegExp(`Start Claude Code now\\? › ${shown}\\n$`));
+  }
+  // Not installed (wired earlier, off PATH now), or continuing into an agent already.
+  for (const extra of [{ agents: [{ ...claude, installed: false, wired: true }] }, { agents: [claude], launching: "Claude Code" }]) {
+    rmSync(configPath, { force: true });
+    const tty = terminal();
+    const run = onboard({ yes: false, dryRun: false }, deps(tty, { ...extra, offerLaunch: true }));
+    await tty.press(/esc cancels/, "y");
+    assert.equal((await run).launch, undefined);
+    assert.doesNotMatch(tty.text(), /now\?/);
+  }
+});
+
+test("a Cloud that is down reads as that, and setup still finishes", async () => {
+  rmSync(configPath, { force: true });
+  const tty = terminal();
+  const run = onboard({ yes: false, dryRun: false }, deps(tty, {
+    signIn: async () => { throw Object.assign(new Error("api.caveman.so is not answering right now (HTTP 503)."), { code: "cloud_unreachable" }); },
+  }));
+  await tty.press(/esc cancels/, "\r");
+  assert.equal((await run).ok, true);
+  assert.match(tty.text(), /\n {2}! api\.caveman\.so is not answering right now \(HTTP 503\)\.\n○ routing is on and starts after you sign in · caveman login\n/);
+  assert.doesNotMatch(tty.text(), /sign-in failed|Auto is in the model picker/);
 });
 
 function hasExpect() {
