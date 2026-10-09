@@ -304,3 +304,48 @@ test("drift reporter rejects unknown expected profile id", (t) => {
   assert.match(result.stderr, /--expected-id must name a known profile/);
   assert.equal(result.ghCalls, "");
 });
+
+// #1236: hermes probed `--version` ok and `--help` broken at a version strictly
+// NEWER than the pin, and the issue body still offered "or it reported a version
+// that is not newer than the pin" as an alternative cause. Both flags and both
+// versions are in the artifact, so the report can name the one real cause instead
+// of handing the maintainer a disjunction to resolve by re-running the probe.
+test("broken probe names the failing surface when the version is newer", { skip: process.platform === "win32" && "gh stub is a sh script; the reporter runs on POSIX CI only" }, (t) => {
+  const artifact = validDrift();
+  Object.assign(resultFor(artifact), {
+    status: "broken",
+    version_ok: true,
+    help_ok: false,
+    version_error: "",
+    help_error: "",
+  });
+  const result = runReporter(t, artifact);
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.ghCalls, /^issue create --title agent-drift: kilo .*fails the latest probe/m);
+  // Says which surface failed, in a form a maintainer can act on.
+  assert.match(result.ghCalls, /--help` failed/);
+  // And does not offer the cause the artifact already rules out.
+  assert.doesNotMatch(result.ghCalls, /not newer than the pin/);
+});
+
+// The other half of the same disjunction: a binary that launched on both surfaces
+// but yielded no version newer than the pin is a version-reading/pin problem, not a
+// launch failure. Saying "it did not launch" there sends the maintainer looking for
+// a crash that never happened. `observed: ""` is the shipped shape of this: a
+// `--version` that exits 0 but prints nothing probe-installed can parse.
+test("broken probe that launched cleanly is not reported as a launch failure", { skip: process.platform === "win32" && "gh stub is a sh script; the reporter runs on POSIX CI only" }, (t) => {
+  const artifact = validDrift();
+  Object.assign(resultFor(artifact), {
+    status: "broken",
+    observed: "",
+    version_matches: false,
+    version_ok: true,
+    help_ok: true,
+    version_error: "",
+    help_error: "",
+  });
+  const result = runReporter(t, artifact);
+  assert.equal(result.status, 0, result.stderr);
+  assert.doesNotMatch(result.ghCalls, /did not launch/);
+  assert.match(result.ghCalls, /not newer than the pin/);
+});
