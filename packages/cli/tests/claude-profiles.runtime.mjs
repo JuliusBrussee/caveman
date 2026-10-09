@@ -3,7 +3,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { modulesFixture, runCli, snapshot } from "./_modules.mjs";
@@ -11,6 +11,8 @@ import { modulesFixture, runCli, snapshot } from "./_modules.mjs";
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 const ROUTE = "http://127.0.0.1:9/w/claude";
 
+// What Claude Code itself writes into a config dir it has run in.
+const MARKER = { numStartups: 1 };
 const put = (path, body) => {
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, typeof body === "string" ? body : JSON.stringify(body, null, 2) + "\n");
@@ -75,6 +77,7 @@ test("a profile created after enable reads as not whole until the next enable wi
     assert.equal((await runCli(["enable", "claude"], fx.env)).code, 0);
     const late = join(fx.home, ".claude-late");
     put(join(late, "settings.json"), { theme: "light" });
+    put(join(late, ".claude.json"), MARKER);
     const status = await doctor(fx.env);
     assert.equal(status.state, "degraded");
     assert.deepEqual(status.unwired_profiles, [late]);
@@ -115,6 +118,7 @@ test("setup run again wires a login that appeared since, and its first lines nam
     assert.match(first.stdout, /Claude logins +~[\\/]\.claude-max20 · ~[\\/]\.claude · ~[\\/]\.claude-work\n/);
     const late = join(fx.home, ".claude-late");
     put(join(late, "settings.json"), {});
+    put(join(late, ".claude.json"), MARKER);
     const dry = await runCli(["setup", "--dry-run"], fx.env);
     assert.match(dry.stdout, /wire the new claude login/);
     assert.equal(routed(late), false, "a dry run writes nothing");
@@ -132,11 +136,12 @@ test("a malformed profile is skipped with a warning; a malformed active profile 
   try {
     const bad = join(fx.home, ".claude-bad", "settings.json");
     put(bad, "[]\n");
+    put(join(dirname(bad), ".claude.json"), MARKER);
     const out = await runCli(["enable", "claude"], fx.env);
     assert.equal(out.code, 0, out.stderr);
     assert.match(out.stderr, /claude profile \S*\.claude-bad skipped: \S+/);
     assert.equal(readFileSync(bad, "utf8"), "[]\n");
-    assert.ok(!existsSync(join(fx.home, ".claude-bad", ".claude.json")));
+    assert.deepEqual(json(join(fx.home, ".claude-bad", ".claude.json")), MARKER);
     for (const dir of [fx.dirs.main, fx.dirs.max, fx.dirs.work]) assert.ok(routed(dir), `${dir} routed`);
     assert.equal((await doctor(fx.env)).state, "installed", "a profile enable skips does not degrade the install");
     // Disable reads every discovered profile and refuses while one is not a
@@ -205,11 +210,145 @@ test("a journal from before profiles (one settings op, one MCP op) still disable
     // A second login appears; the old journal knows nothing of it.
     const work = join(fx.home, ".claude-work");
     put(join(work, "settings.json"), { theme: "light" });
+    put(join(work, ".claude.json"), MARKER);
     const withWork = { ...before, ...Object.fromEntries(Object.entries(profileFiles(fx.home)).filter(([path]) => path.startsWith(".claude-work"))) };
     assert.deepEqual((await doctor(fx.env)).unwired_profiles, [work]);
     const off = await runCli(["disable", "claude"], fx.env);
     assert.equal(off.code, 0, off.stderr);
     assert.deepEqual(profileFiles(fx.home), withWork);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a ~/.claude-* dir that is not a Claude Code login is left alone", async () => {
+  const fx = threeProfiles();
+  try {
+    // A plugin's own dir: settings and projects, nothing Claude Code wrote.
+    const mem = join(fx.home, ".claude-mem");
+    put(join(mem, "settings.json"), { model: "x" });
+    put(join(mem, "projects", "a.json"), {});
+    put(join(mem, ".claude.json"), { theirs: true });
+    const before = profileFiles(fx.home);
+    const out = await runCli(["enable", "claude"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    const after = profileFiles(fx.home);
+    for (const path of Object.keys(before).filter((path) => path.startsWith(".claude-mem"))) assert.equal(after[path], before[path], path);
+    assert.equal((await doctor(fx.env)).state, "installed");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("another profile that routes elsewhere on purpose keeps its route", async () => {
+  const fx = threeProfiles();
+  try {
+    const glm = join(fx.home, ".claude-glm");
+    put(join(glm, ".claude.json"), MARKER);
+    put(join(glm, "settings.json"), { env: { ANTHROPIC_BASE_URL: "https://api.z.ai/api/anthropic", ANTHROPIC_AUTH_TOKEN: "theirs" } });
+    const aws = join(fx.home, ".claude-aws");
+    put(join(aws, ".claude.json"), MARKER);
+    put(join(aws, "settings.json"), { env: { CLAUDE_CODE_USE_BEDROCK: "1" } });
+    const before = profileFiles(fx.home);
+    const out = await runCli(["enable", "claude"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stderr, /claude profile \S*\.claude-glm skipped: \S+/);
+    const after = profileFiles(fx.home);
+    for (const path of Object.keys(after).filter((path) => /^\.claude-(glm|aws)/.test(path))) assert.equal(after[path], before[path], path);
+    for (const dir of [fx.dirs.main, fx.dirs.max, fx.dirs.work]) assert.ok(routed(dir), `${dir} routed`);
+    const status = await doctor(fx.env);
+    assert.equal(status.state, "installed");
+    assert.deepEqual(status.unwired_profiles, []);
+    // The active profile is still taken over, with its route remembered.
+    assert.equal((await runCli(["disable", "claude"], fx.env)).code, 0);
+    const active = await runCli(["enable", "claude"], { ...fx.env, CLAUDE_CONFIG_DIR: glm });
+    assert.equal(active.code, 0, active.stderr);
+    assert.ok(routed(glm));
+    assert.equal(journal(fx.home).operations[0].owned.previous_route, "https://api.z.ai/api/anthropic");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a wired profile deleted afterwards does not strand the others", async () => {
+  const fx = threeProfiles();
+  try {
+    const old = join(fx.home, ".claude-old");
+    put(join(old, ".claude.json"), MARKER);
+    put(join(old, "settings.json"), { theme: "old" });
+    const before = profileFiles(fx.home);
+    assert.equal((await runCli(["enable", "claude"], fx.env)).code, 0);
+    assert.ok(routed(old));
+    rmSync(old, { recursive: true });
+    assert.equal((await doctor(fx.env)).state, "installed");
+    const fixed = await runCli(["doctor", "claude", "--fix"], fx.env);
+    assert.equal(fixed.code, 0, fixed.stderr);
+    const again = await runCli(["enable", "claude"], fx.env);
+    assert.equal(again.code, 0, again.stderr);
+    // A new login makes the next enable re-wire; the deleted one is dropped.
+    const late = join(fx.home, ".claude-late");
+    put(join(late, ".claude.json"), MARKER);
+    const more = await runCli(["enable", "claude"], fx.env);
+    assert.equal(more.code, 0, more.stderr);
+    assert.ok(routed(late));
+    assert.ok(!journal(fx.home).operations.some((operation) => operation.file.includes(".claude-old")));
+    assert.ok(!existsSync(old));
+    rmSync(late, { recursive: true });
+    const off = await runCli(["disable", "claude"], fx.env);
+    assert.equal(off.code, 0, off.stderr);
+    const rest = Object.fromEntries(Object.entries(before).filter(([path]) => !path.startsWith(".claude-old")));
+    assert.deepEqual(profileFiles(fx.home), rest);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("a profile that cannot be written is skipped and the rest are wired", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const fx = threeProfiles();
+  const ro = join(fx.home, ".claude-ro");
+  try {
+    put(join(ro, ".claude.json"), MARKER);
+    put(join(ro, "settings.json"), { theme: "ro" });
+    const before = profileFiles(fx.home);
+    chmodSync(ro, 0o500);
+    const out = await runCli(["enable", "claude"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.match(out.stderr, /claude profile \S*\.claude-ro skipped: \S+/);
+    for (const dir of [fx.dirs.main, fx.dirs.max, fx.dirs.work]) assert.ok(routed(dir), `${dir} routed`);
+    const after = profileFiles(fx.home);
+    for (const path of Object.keys(after).filter((path) => path.startsWith(".claude-ro"))) assert.equal(after[path], before[path], path);
+    assert.ok(!journal(fx.home).operations.some((operation) => operation.file.includes(".claude-ro")));
+    assert.equal((await doctor(fx.env)).state, "installed");
+    const off = await runCli(["disable", "claude"], fx.env);
+    assert.equal(off.code, 0, off.stderr);
+    assert.deepEqual(profileFiles(fx.home), before);
+  } finally {
+    try { chmodSync(ro, 0o700); } catch { /* never created */ }
+    fx.cleanup();
+  }
+});
+
+test("a settings.json linked to another profile's stays a link and is wired once", { skip: process.platform === "win32" }, async () => {
+  const fx = threeProfiles();
+  try {
+    const b = join(fx.home, ".claude-b");
+    const link = join(b, "settings.json");
+    put(join(b, ".claude.json"), MARKER);
+    symlinkSync(join(fx.dirs.main, "settings.json"), link);
+    const env = { ...fx.env, CLAUDE_CONFIG_DIR: b };
+    const before = profileFiles(fx.home);
+    const out = await runCli(["enable", "claude"], env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.ok(lstatSync(link).isSymbolicLink(), "the link survives enable");
+    assert.ok(routed(fx.dirs.main));
+    assert.equal(journal(fx.home).operations.filter((operation) => operation.kind === "claude-settings" && /\.claude(-b)?[\\/]settings\.json$/.test(operation.file)).length, 1);
+    assert.ok(hasMcp(join(b, ".claude.json")));
+    assert.ok(hasMcp(join(fx.home, ".claude.json")));
+    assert.equal((await doctor(env)).state, "installed");
+    const off = await runCli(["disable", "claude"], env);
+    assert.equal(off.code, 0, off.stderr);
+    assert.ok(lstatSync(link).isSymbolicLink(), "the link survives disable");
+    assert.deepEqual(profileFiles(fx.home), before);
   } finally {
     fx.cleanup();
   }
