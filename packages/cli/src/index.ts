@@ -4102,7 +4102,7 @@ function clearAutoModelChoice(agent: NativeAgent): void {
   try {
     if (agent === "claude") {
       for (const dir of claudeProfileRoots()) {
-        const path = join(dir, "settings.json");
+        const path = throughLink(join(dir, "settings.json"));
         try {
           const bytes = fileBytes(path);
           const root = parseJsonFileObject(path, bytes);
@@ -8163,7 +8163,8 @@ function claudeNativeMutations(gw: string, mcpBinary: string, plan = false): Nat
 }
 
 function claudeProfileMutations(root: string, gw: string, mcpBinary: string): NativeMutation[] {
-  const settingsPath = join(root, "settings.json");
+  const other = root !== claudeConfigDir();
+  const settingsPath = throughLink(join(root, "settings.json"));
   const settingsBefore = fileBytes(settingsPath);
   const settings = parseJsonFileObject(settingsPath, settingsBefore);
   if (settings.env !== undefined && (typeof settings.env !== "object" || settings.env === null || Array.isArray(settings.env))) {
@@ -8173,6 +8174,12 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
+  // Another login that points somewhere else on purpose (its own gateway, a
+  // cloud provider lane) keeps doing so. The active one is the user's ask.
+  if (other && env.ANTHROPIC_BASE_URL !== undefined && env.ANTHROPIC_BASE_URL !== "" && !isCavemanClaudeRoute(env.ANTHROPIC_BASE_URL, false)) {
+    throw new Error("it sets its own ANTHROPIC_BASE_URL");
+  }
+  if (other && claudeOffProxyLane(env)) throw new Error("it uses a provider lane that bypasses ANTHROPIC_BASE_URL");
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
   env.ANTHROPIC_BASE_URL = route;
@@ -8208,9 +8215,17 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
 
   // As claudeGlobalConfigPath: the default profile keeps this file beside
   // ~/.claude, every other profile keeps it inside its own directory.
-  const mcpPath = root === claudeConfigDir()
-    ? claudeGlobalConfigPath()
-    : join(nativeRealPath(root) === nativeRealPath(join(homedir(), ".claude")) ? homedir() : root, ".claude.json");
+  const mcpPath = throughLink(other
+    ? join(nativeRealPath(root) === nativeRealPath(join(homedir(), ".claude")) ? homedir() : root, ".claude.json")
+    : claudeGlobalConfigPath());
+  // Found out here, before anything is written: a login that cannot be
+  // written is skipped whole, not left half wired or failing the others.
+  if (other) {
+    for (const file of [settingsPath, mcpPath]) {
+      accessSync(dirname(file), constants.W_OK);
+      if (existsSync(file)) accessSync(file, constants.W_OK);
+    }
+  }
   const mcpBefore = fileBytes(mcpPath);
   const mcpRoot = parseJsonFileObject(mcpPath, mcpBefore);
   if (mcpRoot.mcpServers !== undefined && (typeof mcpRoot.mcpServers !== "object" || mcpRoot.mcpServers === null || Array.isArray(mcpRoot.mcpServers))) {
@@ -9997,18 +10012,38 @@ function claudeProfileCandidates(): string[] {
   return [...roots];
 }
 
-// The profiles `enable claude` wires: candidates that hold a Claude Code
-// config, one per real directory. The active one always counts, as it did
-// when it was the only one wired.
+// A settings file linked to another profile's is written through the link: a
+// rename onto the link itself would replace it with a copy.
+function throughLink(file: string): string {
+  try { return lstatSync(file).isSymbolicLink() ? realpathSync(file) : file; } catch { return file; }
+}
+
+// Whether Claude Code has signed in from this directory. Plugins keep dirs
+// named ~/.claude-* too, with a settings.json of their own; only Claude Code
+// writes these. (.credentials.json alone would miss macOS, where the
+// credential is in the keychain.)
+function claudeLoginDir(root: string): boolean {
+  if (existsSync(join(root, ".credentials.json"))) return true;
+  try {
+    const state = parseJsonFileObject(join(root, ".claude.json"), fileBytes(join(root, ".claude.json")));
+    return ["numStartups", "userID", "firstStartTime", "oauthAccount"].some((key) => state[key] !== undefined);
+  } catch { return false; }
+}
+
+// The profiles `enable claude` wires, one per real directory. The active one
+// always counts, as it did when it was the only one wired; ~/.claude and a
+// profile wired before count while they hold any Claude Code config; any
+// other ~/.claude-* only once Claude Code has signed in from it.
 function claudeProfileRoots(): string[] {
   const active = claudeConfigDir();
+  const known = new Set([join(homedir(), ".claude"), ...rememberedClaudeProfiles()]);
   const seen = new Set<string>();
   return claudeProfileCandidates().filter((root) => {
     if (root !== active) {
       try {
         if (!statSync(root).isDirectory()) return false;
       } catch { return false; }
-      if (!["settings.json", ".credentials.json", ".claude.json", "projects"].some((name) => existsSync(join(root, name)))) return false;
+      if (!(known.has(root) ? ["settings.json", ".credentials.json", ".claude.json", "projects"].some((name) => existsSync(join(root, name))) : claudeLoginDir(root))) return false;
     }
     const real = nativeRealPath(root);
     return !seen.has(real) && Boolean(seen.add(real));
@@ -10020,13 +10055,22 @@ function claudeProfileRoots(): string[] {
 // does not count, or the install could never read as whole.
 function claudeUnwiredProfiles(journal: NativeJournal): string[] {
   try {
-    const wired = new Set(journal.operations.map((operation) => nativeRealPath(operation.file)));
+    const wired = new Set(journal.operations.filter((operation) => !claudeProfileGone(operation)).map((operation) => nativeRealPath(operation.file)));
     return claudeProfileRoots().filter((root) => {
       if (wired.has(nativeRealPath(join(root, "settings.json")))) return false;
       if (root === claudeConfigDir()) return true;
       try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch { return false; }
     });
   } catch { return []; }
+}
+
+// A journaled file of another Claude profile that no longer exists: the
+// profile was deleted, so there is nothing to restore or to check, and it
+// must not keep the remaining profiles from being disabled or repaired.
+function claudeProfileGone(operation: NativeJournal["operations"][number]): boolean {
+  if (operation.kind !== "claude-settings" && operation.kind !== "claude-mcp") return false;
+  const active = [join(claudeConfigDir(), "settings.json"), claudeGlobalConfigPath()].map(throughLink);
+  return !active.includes(operation.file) && !existsSync(operation.file);
 }
 
 function claudeProfileFiles(journal: NativeJournal | undefined): string[] {
@@ -10127,7 +10171,7 @@ function cleanClaudeProfile(root: Record<string, unknown>): boolean {
 function restoreNativeJournalFiles(journal: NativeJournal | undefined, allClaudeProfiles = false): Array<{ file: string; bytes: Buffer | null }> {
   // Resolve every merge/conflict before first write. A conflict therefore leaves
   // all host files and the journal byte-identical.
-  const restored = new Map((journal?.operations ?? []).map((operation) => [nativeRealPath(operation.file), restoreNativeOperation(operation)]));
+  const restored = new Map((journal?.operations ?? []).filter((operation) => !claudeProfileGone(operation)).map((operation) => [nativeRealPath(operation.file), restoreNativeOperation(operation)]));
   if (allClaudeProfiles) {
     for (const file of claudeProfileFiles(journal)) {
       const bytes = restored.has(file) ? restored.get(file) : fileBytes(file);
@@ -10267,7 +10311,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const available = host.launchable;
   const journal = readNativeJournal(agent);
   const transactionPending = Boolean(readPendingNativeJournal(agent));
-  const checks = journal?.operations.map((operation) => {
+  const checks = journal?.operations.filter((operation) => !claudeProfileGone(operation)).map((operation) => {
     const current = fileBytes(operation.file);
     let owned = false;
     if (current) {
