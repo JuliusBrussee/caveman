@@ -17043,7 +17043,7 @@ type LearnDiff = { days: number; gone: number; back: number; fresh: number };
 // older proxies omit it and always scanned 30d).
 function learnEmpty(plan: LearnPlan): string {
   const since = learnSince(plan.window?.since || "30d");
-  return `no Claude Code, Codex, Gemini CLI, opencode or aider sessions found in the last ${since}. A score needs the same text repeated in at least 3 sessions. Use your agent a few times (for example \`caveman claude\`), then run \`caveman learn\` again`;
+  return `no Claude Code, Codex, Gemini CLI, opencode, aider or Pi sessions found in the last ${since}. A score needs the same text repeated in at least 3 sessions. Use your agent a few times (for example \`caveman claude\`), then run \`caveman learn\` again`;
 }
 
 // learnNoScoreYet explains why there is no score: the score needs the same
@@ -17269,6 +17269,7 @@ function learnSourceLine(plan: LearnPlan, sessions: number): string {
     by.gemini ? `Gemini ${commaCount(by.gemini)}` : "",
     by.opencode ? `opencode ${commaCount(by.opencode)}` : "",
     by.aider ? `aider ${commaCount(by.aider)}` : "",
+    by.pi ? `Pi ${commaCount(by.pi)}` : "",
   ].filter(Boolean);
   return `${commaCount(sessions)} sessions read${sourceBits.length ? ` · ${sourceBits.join(" · ")}` : ""}`;
 }
@@ -17818,7 +17819,7 @@ export function renderLearnReconcile(raw: Record<string, any>): string {
 }
 
 function learnUsage(): void {
-  console.log(`${invokedAs()} learn [--all|--plain|--json|--md] [--since 30d] [--sources claude,codex,gemini,opencode,aider]
+  console.log(`${invokedAs()} learn [--all|--plain|--json|--md] [--since 30d] [--sources claude,codex,gemini,opencode,aider,pi]
   shows where your agent's tokens go, and what to fix first
   default       interactive Setup Score + top findings
   --plain       short text; no animation or keyboard menu

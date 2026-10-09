@@ -1255,7 +1255,7 @@ func normalizeSources(sources []string) map[string]bool {
 		}
 	}
 	if len(set) == 0 {
-		set = map[string]bool{"codex": true, "claude": true, "gemini": true, "opencode": true, "aider": true, "caveman": true}
+		set = map[string]bool{"codex": true, "claude": true, "gemini": true, "opencode": true, "aider": true, "pi": true, "caveman": true}
 	}
 	return set
 }
