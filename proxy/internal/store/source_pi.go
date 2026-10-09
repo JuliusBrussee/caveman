@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -122,7 +123,7 @@ func piContextTotal(usage map[string]any) (int, bool) {
 		sum := int64FromAny(usage["input"]) + int64FromAny(usage["cacheRead"]) + int64FromAny(usage["cacheCreation"]) + int64FromAny(usage["output"])
 		total = sum
 	}
-	if total <= 0 || uint64(total) > uint64(^uint(0)>>1) {
+	if total <= 0 || total > math.MaxInt {
 		return 0, false
 	}
 	return int(total), true
