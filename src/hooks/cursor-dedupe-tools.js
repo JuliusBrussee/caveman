@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const crypto = require('crypto');
 const { execSync } = require('child_process');
+const { safeWriteFlag } = require('./caveman-config');
 
 const STATE_VERSION = 1;
 const HOOK_SCRIPT_NAME = 'cursor-dedupe-tools.js';
@@ -47,9 +48,8 @@ function trimConversations(state, max = MAX_CONVERSATIONS) {
 }
 
 function saveState(stateDir, state) {
-  fs.mkdirSync(stateDir, { recursive: true });
   const trimmed = trimConversations(state);
-  fs.writeFileSync(stateFilePath(stateDir), `${JSON.stringify(trimmed, null, 2)}\n`, { mode: 0o600 });
+  safeWriteFlag(stateFilePath(stateDir), `${JSON.stringify(trimmed, null, 2)}\n`);
   return trimmed;
 }
 
