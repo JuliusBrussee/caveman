@@ -389,7 +389,16 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   for (const agent of refreshAgents(effects, unwire, state)) {
     const was = h.agentStaleRoute(agent);
     const detail = was ? `point ${agent} at ${target} (was ${was})` : h.agentIncomplete(agent) ? `wire the new ${agent} login` : `refresh ${agent} hooks`;
-    for (const file of h.wiredFiles(agent)) lines.push({ action: "UPDATE", target: tilde(file), detail });
+    const wired = h.wiredFiles(agent);
+    for (const file of wired) lines.push({ action: "UPDATE", target: tilde(file), detail });
+    // A login that appeared since brings files the journal does not hold yet.
+    if (h.agentIncomplete(agent)) {
+      try {
+        for (const file of h.planWiring(agent)) {
+          if (!wired.includes(file.file)) lines.push({ action: file.exists ? "UPDATE" : "CREATE", target: tilde(file.file), detail });
+        }
+      } catch { /* repair reports a real refusal when it runs */ }
+    }
   }
   // aider is wired without the runtime; every other agent starts it.
   if (wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) {

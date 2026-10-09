@@ -115,13 +115,22 @@ test("shell install ends by naming the first-run command when no terminal is att
 // The skills installer runs on Node 18, the CLI needs 22.13: on a Node in
 // between, the shim says so instead of handing over to a first run that fails.
 test("shell install on a Node older than the CLI's floor names the upgrade, not a first run that cannot start", { skip: process.platform === "win32" }, () => {
-  const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-old-node-"));
-  const fakeBin = join(cwd, "fake-bin");
-  mkdirSync(fakeBin);
-  writeFileSync(join(fakeBin, "node"), "#!/bin/sh\ncase \"$1\" in -p) echo 20 ;; -e) exit 1 ;; --version) echo v20.11.0 ;; esac\n", { mode: 0o755 });
-  writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
-  const out = spawnSync("bash", ["-s", "--"], { cwd, input: shellShim, encoding: "utf8", env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` } });
   const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
-  assert.equal(out.status, 0, out.stderr);
-  assert.equal(out.stdout, `installer-ran\n\ncaveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v20.11.0.\n  Upgrade Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@${cli}\n`);
+  const run = (version) => {
+    const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-old-node-"));
+    const fakeBin = join(cwd, "fake-bin");
+    mkdirSync(fakeBin);
+    // `node -p` answers the major to the shim's first question, the whole version to its second.
+    writeFileSync(join(fakeBin, "node"), `#!/bin/sh\ncase "$2" in *split*) echo ${version.split(".")[0]} ;; *) echo ${version} ;; esac\n`, { mode: 0o755 });
+    writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
+    return spawnSync("bash", ["-s", "--"], { cwd, input: shellShim, encoding: "utf8", env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` } });
+  };
+  for (const old of ["20.11.0", "22.12.0"]) {
+    const out = run(old);
+    assert.equal(out.status, 0, out.stderr);
+    assert.equal(out.stdout, `installer-ran\n\ncaveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v${old}.\n  Upgrade Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@${cli}\n`);
+  }
+  for (const fine of ["22.13.0", "24.1.0", "25.0.0-nightly20260101"]) {
+    assert.equal(run(fine).stdout, `installer-ran\nNext: npx -y @caveman-ai/cli@${cli} setup\n`, fine);
+  }
 });

@@ -49,9 +49,13 @@ first_run() {
     case "$arg" in -h|--help|--list|-u|--uninstall|--dry-run) return 0 ;; esac
   done
   # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
-  if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)'; then
+  node_version=$(node -p "process.versions.node")
+  node_minor=${node_version#*.}
+  node_minor=${node_minor%%.*}
+  case "$node_minor" in ''|*[!0-9]*) node_minor=0 ;; esac
+  if [ "$NODE_MAJOR" -lt 22 ] || { [ "$NODE_MAJOR" -eq 22 ] && [ "$node_minor" -lt 13 ]; }; then
     echo
-    echo "caveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is $(node --version)."
+    echo "caveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v$node_version."
     echo "  Upgrade Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@$CLI_VERSION"
     return 0
   fi

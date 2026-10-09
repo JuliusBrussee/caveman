@@ -51,7 +51,7 @@ import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
 import { cloudConfigPath, legacyCloudDir, mirrorToLegacy } from "./modules/config-home.js";
 import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
-import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardFound, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
+import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardDeps, type OnboardFound, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
 // RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
 export { nextDevicePollIntervalMs } from "./device-auth.generated.js";
 import {
@@ -3653,12 +3653,13 @@ async function setup(argv: string[] = []) {
 // Sign-in is the same `login` the verb runs, in its compact form.
 function runOnboarding(options: OnboardOptions, launching?: AgentProfile, offerLaunch = false): Promise<OnboardResult> {
   const agents = onboardAgents();
+  const handoff = runnerHandoff();
   return onboard(options, {
     cmd: runnableCommand(),
     agents,
     found: onboardFound(agents),
     addKey: (key) => void providersAdd([key.id, "--key-env", key.env], () => ""),
-    ...(cliIsEphemeral() && !durableCaveman() ? { installCli: { command: durableCliInstallCommand(), run: installDurableCli, apply: applyWithDurableCli } } : {}),
+    ...(handoff ? { installCli: handoff } : {}),
     offerLaunch,
     interactive: onboardInteractive(),
     signedIn: async () => Boolean((await config()).token),
@@ -3704,15 +3705,17 @@ function onboardFound(agents: OnboardAgent[]): OnboardFound {
 // caveman is on PATH.
 function runnableCommand(): string {
   if (!cliIsEphemeral()) return invokedAs();
-  return durableCaveman() ? "caveman" : "npx @caveman-ai/cli";
+  const durable = currentDurableCaveman();
+  return durable ? durableCommandName(durable) : "npx @caveman-ai/cli";
 }
 
-// A CLI run by a package runner (npx, bunx, pnpm dlx) lives in that runner's
-// cache: the next cache clean or version bump removes it. Wiring records this
-// CLI's own paths (hook commands, the native-hook adapter, bundled plugins),
-// which would then fail in every agent session. So setup from a runner
-// installs the CLI for good and has that copy do the wiring.
-const EPHEMERAL_PATH = /\/(?:_npx|dlx)\/|\/bunx-/;
+// A CLI run by a package runner (npx, bunx, pnpm dlx, yarn dlx) lives in that
+// runner's cache: the next cache clean or version bump removes it. Wiring
+// records this CLI's own paths (hook commands, the native-hook adapter,
+// bundled plugins), which would then fail in every agent session. So setup
+// from a runner never wires: it installs this version for good when it is not
+// installed yet, and has that copy do the wiring.
+const EPHEMERAL_PATH = /\/_npx\/|\/pnpm\/dlx\/|\/dlx-\d+\/|\/bunx-/;
 
 function isEphemeralPath(path: string): boolean {
   return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
@@ -3727,24 +3730,47 @@ function privateCliPrefix(): string {
   return join(cavemanHome(), "cli");
 }
 
-// The caveman command that outlives this process: one on PATH outside a
-// runner's cache, or the private install. Null when there is none.
-function durableCaveman(): string | null {
-  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+// npm puts a prefix's commands in <prefix>/bin, or in <prefix> itself on Windows.
+function privateCliBin(): string {
+  return process.platform === "win32" ? privateCliPrefix() : join(privateCliPrefix(), "bin");
+}
+
+// Every caveman command that outlives this process: the ones on PATH outside
+// a runner's cache, then the private install.
+function durableCavemen(): string[] {
+  const found: string[] = [];
+  for (const dir of [...(process.env.PATH ?? "").split(delimiter), privateCliBin()]) {
     if (!dir || isEphemeralPath(dir)) continue;
     for (const candidate of executableCandidateNames("caveman")) {
       const full = join(dir, candidate);
-      if (!isExecutable(full)) continue;
+      if (!isExecutable(full) || found.includes(full)) continue;
       try { if (isEphemeralPath(realpathSync(full))) continue; } catch { continue; }
-      return full;
+      found.push(full);
+      break;
     }
   }
-  // npm puts a prefix's commands in <prefix>/bin, or in <prefix> itself on Windows.
-  const bin = process.platform === "win32" ? privateCliPrefix() : join(privateCliPrefix(), "bin");
-  for (const candidate of executableCandidateNames("caveman")) {
-    if (isExecutable(join(bin, candidate))) return join(bin, candidate);
+  return found;
+}
+
+function durableCaveman(): string | null {
+  return durableCavemen()[0] ?? null;
+}
+
+// The installed caveman of this very version, which is the one a runner hands
+// its wiring to: an older install would write an older wiring.
+function currentDurableCaveman(): string | null {
+  const version = cliVersion();
+  for (const candidate of durableCavemen()) {
+    const invocation = portableInvocation(candidate, ["--version"]);
+    const run = spawnSync(invocation.command, invocation.args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, windowsHide: true });
+    try { if (run.status === 0 && (JSON.parse(run.stdout) as { version?: unknown }).version === version) return candidate; } catch { /* not this one */ }
   }
   return null;
+}
+
+// `caveman` when typing that reaches it, else its full path.
+function durableCommandName(durable: string): string {
+  return which("caveman") === durable ? "caveman" : durable;
 }
 
 function durableCliInstallCommand(): string {
@@ -3755,50 +3781,76 @@ function durableCliInstallCommand(): string {
 // it records is its own. Its step lines come back through `say`; the rest of
 // its report (the plan again, its own closing lines) is this process's to give.
 function applyWithDurableCli(selection: Record<string, boolean>, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }> {
-  const durable = durableCaveman();
+  const durable = currentDurableCaveman();
   if (!durable) return Promise.resolve({ ok: false, problems: ["the caveman command is not installed"] });
   const on = Object.keys(selection).filter((id) => selection[id]);
   // ponytail: flags only add agents and set modules; unticking an agent that
   // is already wired, from an npx run, still needs `caveman setup` afterwards.
-  const argv = ["setup", "--yes", ...(on.length ? ["--only", on.join(",")] : ["--skip", Object.keys(selection).join(",")]), ...(agents.length ? ["--agents", agents.join(",")] : [])];
+  const argv = ["setup", "--yes", ...(on.length ? ["--only", on.join(",")] : ["--skip", Object.keys(selection).join(",")]), "--agents", agents.join(",") || "none"];
   const invocation = portableInvocation(durable, argv);
   return new Promise((resolve) => {
     const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
     const problems: string[] = [];
-    let pending = "";
-    const take = (chunk: Buffer) => {
-      const lines = (pending + chunk.toString("utf8")).split(/\r?\n/);
-      pending = lines.pop() ?? "";
-      for (const line of lines) {
-        if (/^✗ /.test(line)) problems.push(line.slice(2));
-        else if (/^(?:[✓○] |downloading )/.test(line) && !/^✓ Ready|^○ routing is on/.test(line)) say(line);
-      }
+    let last = "";
+    const reader = () => {
+      let pending = "";
+      return (chunk: Buffer) => {
+        const lines = (pending + chunk.toString("utf8")).split(/\r?\n/);
+        pending = lines.pop() ?? "";
+        for (const line of lines) {
+          if (line.trim()) last = line.trim();
+          if (/^✗ Setup finished with problems/.test(line)) continue;
+          if (/^✗ /.test(line)) problems.push(line.slice(2));
+          else if (/^(?:[✓○] |downloading |claude profile )/.test(line) && !/^✓ Ready|^○ routing is on/.test(line)) say(line);
+        }
+      };
     };
-    child.stdout.on("data", take);
-    child.stderr.on("data", take);
+    child.stdout.on("data", reader());
+    child.stderr.on("data", reader());
     child.once("error", (error) => resolve({ ok: false, problems: [error.message] }));
-    child.once("close", (code) => resolve({ ok: code === 0 && problems.length === 0, problems: problems.length || code === 0 ? problems : [`${durable} setup exited ${code}`] }));
+    child.once("close", (code) => resolve({
+      ok: code === 0 && problems.length === 0,
+      problems: problems.length || code === 0 ? problems : [`${durable} setup exited ${code}${last ? `: ${last}` : ""}`],
+    }));
   });
 }
 
 // Installs this CLI version with npm: globally, or under ~/.caveman/cli when
-// the global prefix is not writable (a system Node). Returns the command
-// hints should name. Throws when neither works: nothing is wired then.
-function installDurableCli(): string {
+// the global prefix is not writable (a system Node) or still holds another
+// version. Returns the command hints should name. Throws when neither works:
+// nothing is wired then.
+async function installDurableCli(): Promise<string> {
   const npm = which("npm");
   if (!npm) throw new Error("npm not found: install the CLI yourself (npm install -g @caveman-ai/cli), then run caveman setup");
-  const run = (extra: string[]) => {
+  const run = (extra: string[]) => new Promise<string>((resolve) => {
     const invocation = portableInvocation(npm, ["install", "-g", ...extra, "--no-audit", "--no-fund", `@caveman-ai/cli@${cliVersion()}`]);
-    return spawnSync(invocation.command, invocation.args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 });
-  };
-  const global = run([]);
-  let found = durableCaveman();
-  if (global.status === 0 && found) return "caveman";
-  const local = run(["--prefix", privateCliPrefix()]);
-  found = durableCaveman();
-  if (local.status === 0 && found) return found;
-  const why = `${local.stderr || global.stderr || local.error?.message || ""}`.trim().split("\n").find((line) => /npm (?:error|ERR!)/.test(line)) ?? "npm install failed";
+    const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+    let stderr = "";
+    const timer = setTimeout(() => child.kill(), 180_000);
+    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+    child.once("error", (error) => { clearTimeout(timer); resolve(error.message); });
+    child.once("close", () => { clearTimeout(timer); resolve(stderr); });
+  });
+  const global = await run([]);
+  let found = currentDurableCaveman();
+  if (found) return durableCommandName(found);
+  const local = await run(["--prefix", privateCliPrefix()]);
+  found = currentDurableCaveman();
+  if (found) return durableCommandName(found);
+  const why = `${local}\n${global}`.split("\n").map((line) => line.trim()).find((line) => /^npm (?:error|ERR!)/.test(line)) ?? "npm install failed";
   throw new Error(`could not install the caveman command (${why.replace(/^npm (?:error|ERR!)\s*/, "")}) · run ${durableCliInstallCommand()}, then caveman setup`);
+}
+
+// From a runner: the handoff setup uses. `command` is set when this version
+// still has to be installed.
+function runnerHandoff(): OnboardDeps["installCli"] {
+  if (!cliIsEphemeral()) return undefined;
+  const installed = currentDurableCaveman();
+  return {
+    ...(installed ? {} : { command: durableCliInstallCommand() }),
+    run: async () => installed ? durableCommandName(installed) : installDurableCli(),
+    apply: applyWithDurableCli,
+  };
 }
 
 function agentShortName(agent: AgentProfile): string {

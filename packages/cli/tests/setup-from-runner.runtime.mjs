@@ -15,14 +15,15 @@ const skip = process.platform === "win32" ? "the npm and caveman stand-ins are s
 // The CLI copied to where npx keeps it, and an `npm` that "installs" it:
 // `global` puts a caveman on PATH; `private` fails the global install (a
 // system Node) and honours --prefix; `broken` fails both.
-function runner(npm) {
+// `preinstalled`: a caveman of that version is on PATH before the run.
+function runner(npm, { preinstalled } = {}) {
   const fx = modulesFixture({ agents: ["claude"] });
   const cached = join(fx.home, "_npx", "abc123", "node_modules", "@caveman-ai", "cli");
   mkdirSync(cached, { recursive: true });
   cpSync(join(pkg, "dist"), join(cached, "dist"), { recursive: true });
   cpSync(join(pkg, "package.json"), join(cached, "package.json"));
   const installed = join(fx.home, "installed");
-  const stub = (target) => `cp -R '${cached}' '${installed}'; mkdir -p "$(dirname '${target}')"; printf '#!/bin/sh\\nexec node %s/dist/index.js "$@"\\n' '${installed}' > '${target}'; chmod +x '${target}'`;
+  const stub = (target) => `rm -rf '${installed}'; cp -R '${cached}' '${installed}'; mkdir -p "$(dirname '${target}')"; printf '#!/bin/sh\\nexec node %s/dist/index.js "$@"\\n' '${installed}' > '${target}'; chmod +x '${target}'`;
   const prefixed = join(fx.env.CAVEMAN_HOME, "cli", "bin", "caveman");
   writeFileSync(join(fx.bin, "npm"), `#!/bin/sh
 echo "$*" >> '${join(fx.home, "npm.log")}'
@@ -33,6 +34,11 @@ case "${npm}:$*" in
   global:*) ${stub(join(fx.bin, "caveman"))} ;;
 esac
 `, { mode: 0o755 });
+  if (preinstalled) {
+    cpSync(cached, installed, { recursive: true });
+    writeFileSync(join(installed, "package.json"), JSON.stringify({ ...JSON.parse(readFileSync(join(cached, "package.json"), "utf8")), version: preinstalled }));
+    writeFileSync(join(fx.bin, "caveman"), `#!/bin/sh\nexec node ${installed}/dist/index.js "$@"\n`, { mode: 0o755 });
+  }
   const calls = () => existsSync(join(fx.home, "npm.log")) ? readFileSync(join(fx.home, "npm.log"), "utf8").trim().split("\n") : [];
   return { ...fx, cached, installed, prefixed, calls, cli: join(cached, "dist", "index.js") };
 }
@@ -67,17 +73,59 @@ test("setup from npx installs the CLI and wires through it: nothing points into 
     assert.equal(out.code, 0, out.stdout + out.stderr);
     assert.deepEqual(fx.calls(), [`install -g --no-audit --no-fund @caveman-ai/cli@${version}`]);
     assert.match(out.stdout, /✓ caveman command installed\n[^]*✓ Claude Code wired\n/);
+    assert.ok(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8").includes(fx.installed), "the installed copy did the wiring");
     assert.match(out.stdout, /✓ Ready\. Try: {2}caveman claude/, "hints name the installed command, not npx");
     const settings = readFileSync(join(fx.home, ".claude", "settings.json"), "utf8");
     assert.ok(settings.includes(join(fx.installed, "dist", "native-hook-fast.js")) || settings.includes(join(fx.bin, "caveman")), settings);
     assert.deepEqual(cacheReferences(fx), []);
     assert.deepEqual(JSON.parse(readFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), "utf8")).setupAgents, ["claude"]);
 
-    // Installed now: a second npx run wires in place and installs nothing more.
+    // Installed now: a second npx run installs nothing more.
     const again = await setup(fx, "--yes");
     assert.equal(again.code, 0, again.stdout + again.stderr);
     assert.equal(fx.calls().length, 1);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("with this version installed already, an npx run still wires through the installed copy and runs no npm", { skip }, async () => {
+  const fx = runner("broken", { preinstalled: version });
+  try {
+    const dry = await setup(fx, "--dry-run");
+    assert.doesNotMatch(dry.stdout, /npm install/);
+    const out = await setup(fx, "--yes");
+    assert.equal(out.code, 0, out.stdout + out.stderr);
+    assert.deepEqual(fx.calls(), []);
+    assert.doesNotMatch(out.stdout, /caveman command installed/);
+    assert.match(out.stdout, /✓ Claude Code wired\n[^]*Try: {2}caveman claude/);
+    assert.ok(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8").includes(fx.installed), "the installed copy did the wiring");
     assert.deepEqual(cacheReferences(fx), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("an installed caveman of another version is brought to this one before it wires", { skip }, async () => {
+  const fx = runner("global", { preinstalled: "0.0.1" });
+  try {
+    const out = await setup(fx, "--yes");
+    assert.equal(out.code, 0, out.stdout + out.stderr);
+    assert.deepEqual(fx.calls(), [`install -g --no-audit --no-fund @caveman-ai/cli@${version}`]);
+    assert.equal(JSON.parse(readFileSync(join(fx.installed, "package.json"), "utf8")).version, version);
+    assert.deepEqual(cacheReferences(fx), []);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+test("no agent ticked stays no agent through the handoff", { skip }, async () => {
+  const fx = runner("global");
+  try {
+    const out = await setup(fx, "--yes", "--agents", "none");
+    assert.equal(out.code, 0, out.stdout + out.stderr);
+    assert.doesNotMatch(out.stdout, /wired/);
+    assert.equal(existsSync(join(fx.home, ".claude", "settings.json")), false);
   } finally {
     fx.cleanup();
   }

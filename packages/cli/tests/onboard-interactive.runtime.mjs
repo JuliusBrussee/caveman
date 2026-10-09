@@ -26,12 +26,12 @@ await import(`${pathToFileURL(cli).href}?onboard-interactive`);
 const { onboard } = await import(pathToFileURL(join(here, "..", "dist", "modules", "onboard.js")).href);
 const configPath = join(fixture.env.CAVEMAN_HOME, "cloud.json");
 
-function terminal() {
+function terminal(columns = 100) {
   const input = new PassThrough();
   input.isTTY = true;
   input.setRawMode = () => input;
   const output = new PassThrough();
-  output.columns = 100;
+  output.columns = columns;
   let text = "";
   // What has been matched already: each press waits for text that came after
   // the one before it, so the first screen can be awaited twice.
@@ -203,14 +203,26 @@ test("found logins are shown; an exported key joins Auto's pool only when ticked
       found: { claudeLogins: ["/x/.claude", "/x/.claude-max"], codexLogin: "ChatGPT plan", keys: KEYS },
       addKey: (key) => added.push(key.id),
     }));
-    if (tick) await tty.press(/◻ let Auto use ANTHROPIC_API_KEY · Auto can spend on them\n[^]*k keys/, "k");
-    await tty.press(tick ? /◼ let Auto use ANTHROPIC_API_KEY[^]*esc cancels/ : /esc cancels/, "y");
+    if (tick) await tty.press(/◻ let Auto spend on ANTHROPIC_API_KEY\n[^]*k keys/, "k");
+    await tty.press(tick ? /◼ let Auto spend on ANTHROPIC_API_KEY[^]*esc cancels/ : /esc cancels/, "y");
     assert.equal((await run).ok, true);
     assert.match(tty.text(), / {2}Claude logins {2}\/x\/\.claude · \/x\/\.claude-max\n {2}Codex login {4}ChatGPT plan\n {2}API keys {7}ANTHROPIC_API_KEY · OPENROUTER_API_KEY \(in Auto's pool\)\n/);
     // A key already in the pool is never offered or added again.
     assert.deepEqual(added, tick ? ["anthropic"] : []);
     if (tick) assert.match(tty.text(), /✓ Anthropic key added for Auto · caveman providers remove anthropic takes it back\n/);
   }
+});
+
+test("a narrow terminal never draws a row wider than itself, and several keys lead with their count and the warning", async () => {
+  rmSync(configPath, { force: true });
+  const tty = terminal(40);
+  const keys = ["ANTHROPIC", "OPENAI", "OPENROUTER", "GROQ"].map((name) => ({ id: name.toLowerCase(), name, env: `${name}_API_KEY`, added: false }));
+  const run = onboard({ yes: false, dryRun: false }, deps(tty, { found: { keys }, addKey: () => {} }));
+  await tty.press(/◻ let Auto spend on 4 key[^\n]*\n\n› Set up\n/, "\t");
+  await tty.press(/› Customize\n/, "n");
+  await run;
+  const frames = tty.text().slice(tty.text().indexOf("Setup will"));
+  for (const line of frames.split("\n")) assert.ok(line.length <= 40, JSON.stringify(line));
 });
 
 test("a key that cannot be stored is a problem setup reports, not a silent skip", async () => {
@@ -221,7 +233,7 @@ test("a key that cannot be stored is a problem setup reports, not a silent skip"
     addKey: () => { throw new Error("caveman: that does not look like an API key"); },
   }));
   await tty.press(/k keys/, "k");
-  await tty.press(/◼ let Auto use[^]*esc cancels/, "y");
+  await tty.press(/◼ let Auto spend on[^]*esc cancels/, "y");
   assert.equal((await run).ok, false);
   assert.match(tty.text(), /✗ Anthropic key: that does not look like an API key\n/);
 });

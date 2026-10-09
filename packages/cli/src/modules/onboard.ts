@@ -46,13 +46,14 @@ export type OnboardDeps = {
   found?: OnboardFound;
   // Stores one found key in Auto's pool (`caveman providers add`).
   addKey?(key: FoundKey): void;
-  // Set when this CLI runs from a package runner's cache (npx): `run` installs
-  // it for good and returns the command to name in hints (it throws when it
-  // cannot, and setup then writes nothing); `apply` has that copy do the
-  // wiring, so nothing records a path into the cache.
+  // Set when this CLI runs from a package runner's cache (npx). `command` is
+  // the install it will run when this version is not installed yet; `run`
+  // does it and returns the command to name in hints (it throws when it
+  // cannot, and setup then writes nothing); `apply` has the installed copy do
+  // the wiring, so nothing records a path into the cache.
   installCli?: {
-    command: string;
-    run(): string;
+    command?: string;
+    run(): Promise<string>;
     apply(selection: ModuleSelection, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }>;
   };
   // Setup may end by offering to start the agent; `launch` in the result names it.
@@ -65,7 +66,7 @@ export type OnboardDeps = {
 export type OnboardResult = { confirmed: boolean; cancelled: boolean; ok: boolean; plan?: ModulePlan; launch?: string };
 
 const LEGACY_SETUP_FLAGS = new Set(["--json", "--install", "--remove", "--agent-native"]);
-export const ONBOARD_USAGE = "setup [--yes] [--dry-run] [--only a,b] [--skip a,b] [--agents a,b]";
+export const ONBOARD_USAGE = "setup [--yes] [--dry-run] [--only a,b] [--skip a,b] [--agents a,b|none]";
 
 // parseOnboardArgs returns undefined when the argv belongs to the older setup
 // verbs (--install, --json, --agent-native), which keep their own handler.
@@ -81,7 +82,8 @@ export function parseOnboardArgs(argv: string[]): OnboardOptions | { error: stri
     const value = arg.includes("=") ? arg.slice(flag.length + 1) : argv[++i];
     if (!value || value.startsWith("-")) return { error: `${flag} needs a comma-separated list` };
     const ids = value.split(",").map((id) => id.trim()).filter(Boolean);
-    if (flag === "--agents") { opts.agents = ids; continue; }
+    // `none`: no agent beyond the ones already wired (a list cannot be empty).
+    if (flag === "--agents") { opts.agents = ids.filter((id) => id !== "none"); continue; }
     const unknown = ids.filter((id) => !findModule(id));
     if (unknown.length) return { error: `unknown module ${unknown.join(", ")} · modules: ${MODULES.map((m) => m.id).join(", ")}` };
     opts[flag === "--only" ? "only" : "skip"] = ids as ModuleId[];
@@ -143,7 +145,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     for (;;) {
       plan = await planModules(selection, agents);
       const rows = summaryRows(plan, selection, agents.map((id) => byId.get(id)!.name), found);
-      if (deps.installCli) rows.push(["install", `the caveman command · ${deps.installCli.command}`]);
+      if (deps.installCli?.command) rows.push(["install", `the caveman command · ${deps.installCli.command}`]);
       const moved = await portMove(selection, agents);
       if (moved) rows.push(["port", `${moved.held} is in use by another program · the runtime will use ${moved.free}`]);
       const pick = await choose(input, out, c, rows, keys, plan.lines.length > 0 ? "Set up" : "Continue");
@@ -175,7 +177,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     out.write(`Agents   ${agents.map((id) => byId.get(id)!.name).join(" · ") || "none"}\n\n`);
     plan = await planModules(selection, agents);
     out.write(plan.lines.length ? renderPlan(plan) : `This will\n  ${c.dim("change nothing")}\n`);
-    if (deps.installCli) out.write(`  ${"RUN".padEnd(9)} ${deps.installCli.command}  the caveman command, kept after this run\n`);
+    if (deps.installCli?.command) out.write(`  ${"RUN".padEnd(9)} ${deps.installCli.command}  the caveman command, kept after this run\n`);
     const moved = await portMove(selection, agents);
     if (moved) out.write(`  ${"RUN".padEnd(9)} local runtime on port ${moved.free}  ${moved.held} is in use by another program\n`);
     if (opts.dryRun) {
@@ -192,34 +194,36 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   // One line that the download rewrites; each finished step prints over it.
   const busy = spinner(out, c, ask);
   let cmd = deps.cmd;
-  if (deps.installCli) {
-    busy.show("installing the caveman command");
-    try {
-      cmd = deps.installCli.run();
-      busy.say(`${c.green("✓")} caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} ${c.dim("· not on your PATH")}`}`);
-    } catch (error) {
-      busy.stop();
-      out.write(`${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${c.dim("Nothing else changed.")}\n`);
-      return { confirmed: true, cancelled: false, ok: false, plan };
-    }
-  }
   const progress = (line: string) => busy.say(line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○")));
   let result: { ok: boolean; problems: string[] };
-  if (deps.installCli) {
-    result = await deps.installCli.apply(selection, agents, (line) => line.startsWith("downloading ") ? busy.show(line) : progress(line));
-  } else {
-    // Before the first agent is wired: never to a port another program answers on.
-    const moved = await portMove(selection, agents);
-    if (moved) {
-      moduleHost().useRuntimePort(moved.free);
-      progress(`○ ${moved.held} is in use by another program · local runtime on port ${moved.free}`);
+  try {
+    if (deps.installCli) {
+      if (deps.installCli.command) busy.show("installing the caveman command");
+      try {
+        cmd = await deps.installCli.run();
+      } catch (error) {
+        busy.stop();
+        out.write(`${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${c.dim("Nothing else changed.")}\n`);
+        return { confirmed: true, cancelled: false, ok: false, plan };
+      }
+      if (deps.installCli.command) progress(`✓ caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} · not on your PATH`}`);
+      result = await deps.installCli.apply(selection, agents, (line) => line.startsWith("downloading ") ? busy.show(line) : progress(line));
+    } else {
+      // Before the first agent is wired: never to a port another program answers on.
+      const moved = await portMove(selection, agents);
+      if (moved) {
+        moduleHost().useRuntimePort(moved.free);
+        progress(`○ ${moved.held} is in use by another program · local runtime on port ${moved.free}`);
+      }
+      // The agents this setup chose: `caveman claude` re-wires Claude Code later
+      // only when it was one of them.
+      moduleHost().mutateConfig((out) => { out.setupAgents = [...agents]; });
+      result = await applyModules(plan, { yes: true, progress, downloading: (name) => busy.show(`downloading ${name}`) });
     }
-    // The agents this setup chose: `caveman claude` re-wires Claude Code later
-    // only when it was one of them.
-    moduleHost().mutateConfig((out) => { out.setupAgents = [...agents]; });
-    result = await applyModules(plan, { yes: true, progress, downloading: (name) => busy.show(`downloading ${name}`) });
+  } finally {
+    // Whatever throws, the progress line never stays under the error.
+    busy.stop();
   }
-  busy.stop();
   for (const key of keys.filter((item) => item.on)) {
     try {
       deps.addKey!(key);
@@ -585,14 +589,21 @@ function choose(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ro
   const render = (active: boolean): string[] => {
     const lines = ["Setup will", ...rows.map(([label, value]) => `  ${c.dim(label.padEnd(10))}${clip(value, width() - 12)}`)];
     if (found.length) {
-      const text = `let Auto use ${found.map((key) => key.env).join(", ")} · Auto can spend on them`;
+      // The count and what it costs come first: a long list is clipped at its end.
+      const text = found.length === 1
+        ? `let Auto spend on ${found[0]!.env}`
+        : `let Auto spend on ${found.length} keys · ${found.map((key) => key.env).join(", ")}`;
       lines.push(`  ${c.dim("keys".padEnd(10))}${found.some((key) => key.on) ? g.on : g.off} ${clip(text, width() - 14 - g.on.length)}`);
     }
     if (!active) return [...lines, `${c.dim(g.pointer)} ${options[at]!.label}`];
     return [
       ...lines,
       "",
-      options.map((option, i) => i === at ? c.cyan(`${g.pointer} ${option.label}`) : `  ${option.label}`).join("  "),
+      // A row that wraps breaks the redraw: a narrow terminal shows the current
+      // choice alone, and the arrows still move through all four.
+      width() < 48
+        ? c.cyan(`${g.pointer} ${options[at]!.label}`)
+        : options.map((option, i) => i === at ? c.cyan(`${g.pointer} ${option.label}`) : `  ${option.label}`).join("  "),
       c.dim(clip(`enter · c customize · d details${found.length ? " · k keys" : ""} · n not now · esc cancels`, width())),
     ];
   };

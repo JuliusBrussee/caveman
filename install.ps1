@@ -101,7 +101,8 @@ caveman: Node.js (>=18) required. Install:
   $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
   if ($skip.Count -gt 0) { exit 0 }
   # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
-  $nodeVersion = [version](& node -p "process.versions.node")
+  # A prerelease Node ("25.0.0-nightly…") is not a [version] until its suffix goes.
+  $nodeVersion = [version](([string](& node -p "process.versions.node")) -replace '[-+].*$', '')
   if ($nodeVersion -lt [version]"22.13.0") {
     Write-Host ""
     Write-Host "caveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v$nodeVersion."
