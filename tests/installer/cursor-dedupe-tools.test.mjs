@@ -259,3 +259,28 @@ test('saveState enforces conversation cap', () => {
   assert.equal(Object.keys(loaded.conversations).length, HOOK.MAX_CONVERSATIONS);
   fs.rmSync(dir, { recursive: true, force: true });
 });
+test('hook finishes on first complete JSON while stdin write end stays open', async () => {
+  const { spawn } = await import('node:child_process');
+  const payload = JSON.stringify({ conversation_id: 'pipe', tool_input: { path: HOOK_SCRIPT } });
+  const child = spawn(process.execPath, [HOOK_SCRIPT, 'read'], {
+    env: { ...process.env, CAVEMAN_CURSOR_HOOK_NO_SAVE: '1' },
+    stdio: ['pipe', 'pipe', 'inherit'],
+  });
+  child.stdin.write(payload);
+  let out = '';
+  child.stdout.on('data', (chunk) => { out += chunk; });
+  const start = Date.now();
+  const done = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('hook hung with open stdin')), 8000);
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      resolve({ code, ms: Date.now() - start });
+    });
+  });
+  return done.then(({ code, ms }) => {
+    assert.equal(code, 0);
+    assert.ok(ms < 5000, `expected fast exit, got ${ms}ms`);
+    assert.equal(JSON.parse(out).permission, 'allow');
+    child.stdin.end();
+  });
+});

@@ -373,14 +373,50 @@ function formatResponse(result) {
   return JSON.stringify({ permission: 'allow' });
 }
 
+const PAYLOAD_WATCHDOG_MS = 2000;
+
+function readHookPayload() {
+  return new Promise((resolve) => {
+    if (process.stdin.isTTY) {
+      resolve({});
+      return;
+    }
+    let input = '';
+    let done = false;
+    const finish = (value) => {
+      if (done) return;
+      done = true;
+      clearTimeout(watchdog);
+      try { process.stdin.pause(); } catch (_) {}
+      try { process.stdin.unref(); } catch (_) {}
+      resolve(value);
+    };
+    const watchdog = setTimeout(() => finish({}), PAYLOAD_WATCHDOG_MS);
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', (chunk) => {
+      input += chunk;
+      try { JSON.parse(input); } catch (_) { return; }
+      try {
+        finish(JSON.parse(input));
+      } catch (_) {
+        finish({});
+      }
+    });
+    process.stdin.on('error', () => finish({}));
+    process.stdin.on('end', () => {
+      if (!input.trim()) finish({});
+      else {
+        try { finish(JSON.parse(input)); } catch (_) { finish({}); }
+      }
+    });
+  });
+}
+
 async function main() {
   const mode = process.argv[2] || 'read';
   let input = {};
   try {
-    const chunks = [];
-    for await (const chunk of process.stdin) chunks.push(chunk);
-    const text = Buffer.concat(chunks).toString('utf8').trim();
-    if (text) input = JSON.parse(text);
+    input = await readHookPayload();
   } catch {
     process.stdout.write(formatResponse({ permission: 'allow' }));
     return;
