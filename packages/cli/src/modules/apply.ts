@@ -41,7 +41,9 @@ export type ModuleHost = {
   wiringKeys: readonly string[];
   binaryRelease: string;
   resolveBinary(name: string): string | null;
-  installBinaries(modules: ModuleId[]): Promise<void>;
+  // `downloading` is told each binary as its download starts; with it the
+  // install prints nothing itself.
+  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<void>;
   // Binaries the hub installed for a module, from modules.lock.json.
   lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
@@ -404,7 +406,7 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
 
 // `progress` gets one line per step as it completes ("✓ Claude Code wired");
 // failures come back in `problems` with their full message.
-export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
+export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void; downloading?: (name: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
   const h = moduleHost();
   if (plan.lines.length === 0) return { ok: true, problems: [] };
   if (!opts.yes) {
@@ -417,7 +419,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const needs = binaryNeeds(plan.selection, plan.only);
   if (needs.missing.length) {
     try {
-      await h.installBinaries(needs.modules);
+      await h.installBinaries(needs.modules, opts.downloading);
       // A release from before modules.json brings no external binary.
       const still = binaryNeeds(plan.selection, plan.only).missing;
       const got = needs.missing.filter((name) => !still.includes(name));

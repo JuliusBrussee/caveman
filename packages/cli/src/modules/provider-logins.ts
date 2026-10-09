@@ -213,6 +213,19 @@ export function providersAdd(argv: string[], readStdin: () => string): Record<st
   });
 }
 
+// API keys this shell already exports that the pool could use, for setup to
+// offer. Only the variable's name leaves here; the key is read when the user
+// adds it. `added`: that provider is in the pool already.
+export type FoundKey = { id: string; name: string; env: string; added: boolean };
+
+export function foundKeys(env: NodeJS.ProcessEnv = process.env): FoundKey[] {
+  const added = new Set(readIndex().logins.map((login) => login.id));
+  return PROVIDER_LOGINS.flatMap((provider) => {
+    const name = provider.kind === "api_key" ? provider.env.find((variable) => env[variable]?.trim()) : undefined;
+    return name ? [{ id: provider.id, name: provider.name, env: name, added: added.has(provider.id) }] : [];
+  });
+}
+
 function removeSecretFile(id: string) {
   try {
     unlinkSync(secretPath(id));

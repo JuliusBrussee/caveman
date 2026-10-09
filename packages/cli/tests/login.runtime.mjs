@@ -155,7 +155,7 @@ test("login rejects a non-2xx device-code response before polling", async () => 
   try {
     const result = await runCli(["login", "--no-browser", "--base-url", `http://127.0.0.1:${port}`], { ...process.env, HOME: home });
     assert.notEqual(result.code, 0);
-    assert.match(result.stderr, /device authorization failed: HTTP 503/);
+    assert.match(result.stderr, /127\.0\.0\.1:\d+ is not answering right now \(HTTP 503\)\./);
     assert.equal(polls, 0);
   } finally {
     server.close();

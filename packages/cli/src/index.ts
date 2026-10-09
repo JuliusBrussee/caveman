@@ -51,7 +51,7 @@ import { RESERVED_VERBS } from "./reserved-verbs.generated.js";
 import { VERIFIED_SAVINGS_METHODS } from "./verified-methods.mirror.js";
 import { cloudConfigPath, legacyCloudDir, mirrorToLegacy } from "./modules/config-home.js";
 import { DeviceAuthError, runCavemanDeviceFlow, type DeviceGrant } from "./device-auth.generated.js";
-import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
+import { onboard, onboardInteractive, ONBOARD_USAGE, parseOnboardArgs, setupDeclined, setupRan, type OnboardAgent, type OnboardFound, type OnboardOptions, type OnboardResult, type SignInUi } from "./modules/onboard.js";
 // RFC 8628 §3.5 slow_down pacing lives in the shared device flow.
 export { nextDevicePollIntervalMs } from "./device-auth.generated.js";
 import {
@@ -79,7 +79,7 @@ import { modulesDoctor } from "./modules/doctor.js";
 import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule, MODULES } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
 import { stopRuntime } from "./modules/stop.js";
-import { providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
+import { foundKeys, providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
 
 type TokenStore = "keychain" | "file";
 type TelemetryConfig = { enabled: boolean; anonymousId?: string; decidedAt: string; promptVersion: number };
@@ -486,9 +486,10 @@ setModuleHost({
   wiringKeys: ["think.shrink"],
   binaryRelease: BINARY_RELEASE,
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
-  installBinaries: async (modules) => {
+  installBinaries: async (modules, downloading) => {
+    installDownloading = downloading;
     try {
-      const { problems } = await ensureModuleBinaries(modules);
+      const { problems } = await ensureModuleBinaries(modules, downloading);
       if (problems.length > 0) throw new Error(problems.join("; "));
     } catch (error) {
       // A release cut before modules.json: install every signed hub binary
@@ -499,6 +500,8 @@ setModuleHost({
         return;
       }
       throw error;
+    } finally {
+      installDownloading = undefined;
     }
   },
   lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
@@ -2890,7 +2893,12 @@ export function cleanupPartial(path: string) {
   }
 }
 
+// Set while onboarding installs: it draws its own one-line progress, so the
+// per-binary lines below stay quiet and each download is reported to it.
+let installDownloading: ((name: string) => void) | undefined;
+
 function installProgressStart(name: string, platform: { os: string; arch: string }) {
+  if (installDownloading) return installDownloading(name);
   const line = `${name}  ${platform.os}/${platform.arch}  …`;
   if (interactive()) process.stderr.write(line);
   else console.error(line);
@@ -2901,6 +2909,7 @@ function installProgressComplete(
   platform: { os: string; arch: string },
   bytes: number,
 ) {
+  if (installDownloading) return;
   const line = `${name}  ${platform.os}/${platform.arch}  ${(bytes / 1_000_000).toFixed(1)} MB  checksum verified`;
   if (interactive()) process.stderr.write(`\r${line}\n`);
   else console.error(line);
@@ -2931,6 +2940,7 @@ function printInstallResult(
     });
     return;
   }
+  if (installDownloading) return;
   for (const item of installed) {
     const line = `${item.name}  ${platform.os}/${platform.arch}  ${item.path}  ${item.status} · checksum verified`;
     if (continuing) console.error(line);
@@ -3491,9 +3501,11 @@ async function setup(argv: string[] = []) {
     commandUsage(ONBOARD_USAGE);
   }
   if (onboarding) {
-    const result = await runOnboarding(onboarding);
+    const result = await runOnboarding(onboarding, undefined, true);
     if (result.cancelled) process.exitCode = 130;
     else if (!result.ok) process.exitCode = 1;
+    // "Start Claude Code now?" answered Yes: the same door as `caveman claude`.
+    else if (result.launch) await agentShortcut([result.launch]);
     return;
   }
   const json = argv.includes("--json");
@@ -3599,10 +3611,14 @@ async function setup(argv: string[] = []) {
 
 // runOnboarding hands the first run what it needs from the rest of the CLI.
 // Sign-in is the same `login` the verb runs, in its compact form.
-function runOnboarding(options: OnboardOptions, launching?: AgentProfile): Promise<OnboardResult> {
+function runOnboarding(options: OnboardOptions, launching?: AgentProfile, offerLaunch = false): Promise<OnboardResult> {
+  const agents = onboardAgents();
   return onboard(options, {
     cmd: runnableCommand(),
-    agents: onboardAgents(),
+    agents,
+    found: onboardFound(agents),
+    addKey: (key) => void providersAdd([key.id, "--key-env", key.env], () => ""),
+    offerLaunch,
     interactive: onboardInteractive(),
     signedIn: async () => Boolean((await config()).token),
     signIn: (ui) => login([], ui),
@@ -3626,6 +3642,20 @@ function onboardAgents(): OnboardAgent[] {
     const version = detected ? readNativeJournal(id)?.detected_agent_version : null;
     return { id, name: agentShortName(agent), installed: detected, wired, ...(version ? { version } : {}) };
   });
+}
+
+// Logins beside the agents, for the first screen. Read-only, and nothing here
+// may stop setup: a profile that cannot be read is left out.
+function onboardFound(agents: OnboardAgent[]): OnboardFound {
+  const has = (id: string) => agents.some((agent) => agent.id === id && agent.installed);
+  const found: OnboardFound = {};
+  try { found.keys = foundKeys(); } catch { /* shown as none */ }
+  if (has("codex")) {
+    try {
+      if (existsSync(join(codexHomeDir(), "auth.json"))) found.codexLogin = detectCodexWrapAuthMode() === "subscription" ? "ChatGPT plan" : "API key";
+    } catch { /* an unreadable CODEX_HOME is enable's to report */ }
+  }
+  return found;
 }
 
 // The command a hint can tell someone to type: under `npx` nothing named
@@ -11165,9 +11195,17 @@ function openLoginBrowser(url: string): void {
 // signInError turns "this Cloud does not take sign-ins" into one plain line:
 // 403 cave_device_login_disabled, or 404 where the device endpoint is absent.
 function signInError(error: unknown, baseURL: string): unknown {
+  // fetch's own failure (offline, DNS, refused) carries no HTTP status.
+  if (error instanceof TypeError) {
+    return Object.assign(new Error(`Could not reach ${new URL(baseURL).host}; check the network.`), { code: "cloud_unreachable" });
+  }
   if (!(error instanceof DeviceAuthError)) return error;
   if ((error.status === 403 && error.code === "cave_device_login_disabled") || error.status === 404) {
     return Object.assign(new Error(`Sign-in is not open on ${new URL(baseURL).host} yet.`), { code: "sign_in_closed" });
+  }
+  // A Cloud that is down is not the user's mistake: say so, and when to retry.
+  if (error.status >= 500) {
+    return Object.assign(new Error(`${new URL(baseURL).host} is not answering right now (HTTP ${error.status}).`), { code: "cloud_unreachable" });
   }
   return error;
 }
