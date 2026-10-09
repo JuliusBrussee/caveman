@@ -19,10 +19,10 @@
   },
   "command_hook": { "method": "codex-pretooluse", "file": "~/.codex/AGENTS.md" },
   "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "0.161.0",
+  "tested_agent_version": "0.162.0",
   "injection_completeness": "code-only",
-  "last_verified_at": "2026-10-08",
-  "verified_by": "local pinned-binary probe (codex 0.161.0 on Node 22.22.0, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-10-09",
+  "verified_by": "local pinned-binary probe (codex 0.162.0 on Node 22.22.0, agents/probe-installed.mjs)",
   "fallback": "generic-env",
   "maintainer": null
 }
