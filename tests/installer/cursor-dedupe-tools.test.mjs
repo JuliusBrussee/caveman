@@ -155,12 +155,17 @@ function grepToolPayload(rootDir, pattern, maxFiles = 500) {
   return out.join('\n');
 }
 
-function rowFromPayload(label, payloadText, denyMessage) {
+function rowFromPayload(label, payloadText, denyMessage, requirePositiveSavings = true) {
   const payload = charMeasure(payloadText);
   const deny = charMeasure(denyMessage);
   const savedTokens = payload.tokens - deny.tokens;
-  assert.ok(savedTokens > 0, label);
-  return { label, payload, deny, savedTokens };
+  if (requirePositiveSavings) {
+    assert.ok(savedTokens > 0, label);
+  }
+  const savedPercent = payload.tokens > 0
+    ? ((savedTokens / payload.tokens) * 100).toFixed(1)
+    : '0.0';
+  return { label, payload, deny, savedTokens, savedPercent };
 }
 
 test('first Read allowed, second unchanged Read denied, third allowed in same conversation', () => {
@@ -688,7 +693,7 @@ test('real repo dedupe token table for PR comment', () => {
     const second = HOOK.decideShell(input, { state, stateDir, cwd });
     state = second.state;
     assert.equal(second.permission, 'deny', label);
-    rows.push(rowFromPayload(label, payloadText, second.agent_message));
+    rows.push(rowFromPayload(label, payloadText, second.agent_message, false));
   }
 
   const indexTs = 'packages/cli/src/index.ts';
@@ -731,12 +736,12 @@ test('real repo dedupe token table for PR comment', () => {
     '',
     'Denied repeat replaces tool payload with short `agent_message`. Savings = payload that would re-enter context minus that message. Token estimate is `ceil(chars / 4)`.',
     '',
-    '| Repeat call | Payload | Deny message | Saved tokens |',
-    '|---|---:|---:|---:|',
+    '| Repeat call | Payload | Deny message | Saved tokens | Saved % |',
+    '|---|---:|---:|---:|---:|',
   ];
   for (const row of rows) {
     lines.push(
-      `| ${row.label} | ${fmtNum(row.payload.chars)} chars / ${fmtNum(row.payload.tokens)} tok | ${fmtNum(row.deny.chars)} / ${fmtNum(row.deny.tokens)} | **${fmtNum(row.savedTokens)}** |`,
+      `| ${row.label} | ${fmtNum(row.payload.chars)} chars / ${fmtNum(row.payload.tokens)} tok | ${fmtNum(row.deny.chars)} / ${fmtNum(row.deny.tokens)} | **${fmtNum(row.savedTokens)}** | **${row.savedPercent}%** |`,
     );
   }
   lines.push('');
