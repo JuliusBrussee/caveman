@@ -715,5 +715,30 @@ class SessionStartSourceTests(unittest.TestCase):
             os.close(write_fd)
 
 
+
+class CursorDedupeHookStdinTests(unittest.TestCase):
+    DEDUPE = "src/hooks/cursor-dedupe-tools.js"
+
+    def test_hook_never_blocks_on_stdin_that_never_closes(self):
+        read_fd, write_fd = os.pipe()
+        try:
+            payload = json.dumps({"conversation_id": "c1", "tool_input": {"path": __file__}}).encode("utf-8")
+            os.write(write_fd, payload)
+            r = subprocess.run(
+                ["node", self.DEDUPE, "read"],
+                cwd=REPO_ROOT,
+                env={**os.environ, "CAVEMAN_CURSOR_HOOK_NO_SAVE": "1"},
+                stdin=read_fd,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                timeout=15,
+            )
+            self.assertEqual(r.returncode, 0)
+            self.assertIn("permission", r.stdout)
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
 if __name__ == "__main__":
     unittest.main()

@@ -14,11 +14,15 @@ import { fileURLToPath } from 'node:url';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HOOKS = path.join(REPO_ROOT, 'src', 'hooks');
-// The manifest also pins caveman-host-session-start.js, which only the Cursor
-// and Copilot CLI installs copy; the Claude hook install never lands it.
+// The manifest also pins caveman-host-session-start.js and cursor-dedupe-tools.js,
+// which only Cursor / Copilot CLI installs copy; the Claude hook install never lands them.
+const CLAUDE_HOOK_INSTALL_EXCLUDES = new Set([
+  'caveman-host-session-start.js',
+  'cursor-dedupe-tools.js',
+]);
 const HOOK_FILES = fs.readFileSync(path.join(HOOKS, 'checksums.sha256'), 'utf8')
   .split('\n').filter(Boolean).map((line) => line.split(/\s+/)[1])
-  .filter((f) => f !== 'caveman-host-session-start.js');
+  .filter((f) => !CLAUDE_HOOK_INSTALL_EXCLUDES.has(f));
 
 function setup({ manifest = true, tamper = null } = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-hook-integrity-'));

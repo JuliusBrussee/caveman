@@ -105,6 +105,64 @@ test("root installer rejects non-Node command shims", () => {
   );
 });
 
+test("root installer parses official npm npx.cmd layout", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-npm-npx-"));
+  const shim = join(root, "npx.CMD");
+  const script = join(root, "node_modules", "npm", "bin", "npx-cli.js");
+  mkdirSync(dirname(script), { recursive: true });
+  writeFileSync(shim, [
+    "@ECHO OFF",
+    'SET "NODE_EXE=%~dp0\\node.exe"',
+    'SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"',
+    '"%NODE_EXE%" "%NPX_CLI_JS%" %*',
+  ].join("\r\n"));
+  writeFileSync(script, "");
+  assert.deepEqual(portable.portableInvocation(shim, ["-y", "skills", "version"], {
+    platform: "win32",
+    execPath: join(root, "node.exe"),
+  }), {
+    command: join(root, "node.exe"),
+    args: [script, "-y", "skills", "version"],
+  });
+  rmSync(root, { recursive: true, force: true });
+});
+
+test("parseWindowsNodeShim rejects assignment without NODE_EXE launch line", () => {
+  assert.equal(
+    portable.parseWindowsNodeShim([
+      "@ECHO OFF",
+      'SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"',
+      "echo unused",
+      "",
+    ].join("\r\n")),
+    null,
+  );
+});
+
+test("parseWindowsNodeShim rejects non-.js NPX_CLI_JS assignment even with launch line", () => {
+  assert.equal(
+    portable.parseWindowsNodeShim([
+      "@ECHO OFF",
+      'SET "NPX_CLI_JS=%~dp0\\payload.bat"',
+      '"%NODE_EXE%" "%NPX_CLI_JS%" %*',
+      "",
+    ].join("\r\n")),
+    null,
+  );
+});
+
+test("parseWindowsNodeShim rejects traversal .js path without guarded NPX_CLI_JS form", () => {
+  assert.equal(
+    portable.parseWindowsNodeShim([
+      "@ECHO OFF",
+      'SET "NPX_CLI_JS=%~dp0\\..\\..\\..\\Users\\Public\\x.js"',
+      "echo never launches",
+      "",
+    ].join("\r\n")),
+    null,
+  );
+});
+
 test("root installer parses pnpm cross-drive shims whose target is drive-absolute", () => {
   // pnpm emits an absolute target when the global bin dir and the store sit on
   // different drives (path.relative crosses drives as absolute). Only the CLI's

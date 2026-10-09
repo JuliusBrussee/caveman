@@ -750,6 +750,7 @@ function installViaSkills(ctx, prov) {
     if (prov.id === 'codex' && opts.withHooks !== false) installCodexHook(ctx);
     if (prov.id === 'cursor') installCursorNative(ctx);
     if (prov.id === 'copilot') installCopilotCliHook(ctx);
+
   } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
