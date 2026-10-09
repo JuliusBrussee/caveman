@@ -85,9 +85,9 @@ test("routing ticked and sign-in closed: setup still succeeds and routing waits 
   await tty.press(/esc cancels/, "\r");
   const result = await run;
   assert.deepEqual([result.confirmed, result.ok], [true, true]);
-  assert.match(tty.text(), /Setup will\n {2}agents {4}none\n {2}modules {3}output · input · waste fixes · routing · scripts · browse\n {2}routing {3}asks to Auto go to Cloud to pick model \+ effort · free account\n/);
-  assert.match(tty.text(), /Sign in to switch on Auto · free account · everything else already works without it\n {2}! Sign-in is not open on api\.caveman\.so yet\.\n○ routing is on and starts once sign-in opens · caveman login\n/);
-  assert.match(tty.text(), /✓ Ready\. Try: {2}caveman claude {6}See it: {2}caveman status\n\[disclosure\]\n$/, "telemetry disclosure is the last line");
+  assert.match(tty.text(), / {2}Setup\n {4}Agents {4}none\n {4}Modules {3}output · input · waste fixes · routing · scripts · browse\n {4}Routing {3}asks to Auto go to Cloud to pick model \+ effort · free account\n/);
+  assert.match(tty.text(), / {2}Sign in to switch on Auto {2}free account · everything else already works\n {2}○ Auto {6}Sign-in is not open on api\.caveman\.so yet · caveman login\n/);
+  assert.match(tty.text(), /\n {2}✓ Ready {5}caveman claude · caveman status\n\[disclosure\]\n$/, "telemetry disclosure is the last line");
   assert.equal(JSON.parse(readFileSync(configPath, "utf8")).modules.routing, true);
 });
 
@@ -98,7 +98,7 @@ test("answering No writes nothing", async () => {
   await tty.press(/esc cancels/, "n");
   const result = await run;
   assert.deepEqual([result.confirmed, result.cancelled], [false, false]);
-  assert.match(tty.text(), /› Not now\n\[declined\]\nNothing changed · caveman setup when you want it\n$/);
+  assert.match(tty.text(), /› Not now\n\[declined\]\n {2}Nothing changed · caveman setup when you want it\n$/);
   assert.equal(existsSync(configPath), false);
 });
 
@@ -125,7 +125,7 @@ test("a re-run shows the current state pre-checked, and Ctrl-C cancels", async (
   writeFileSync(configPath, JSON.stringify({ modules: { output: true, input: true, "waste-fixes": true, routing: true, scripts: true, browse: false } }));
   const tty = terminal();
   const run = onboard({ yes: false, dryRun: false }, deps(tty));
-  await tty.press(/modules {3}output · input · waste fixes · routing · scripts\n[^]*esc cancels/, "c");
+  await tty.press(/Modules {3}output · input · waste fixes · routing · scripts\n[^]*esc cancels/, "c");
   await tty.press(/space toggles/, "\x03");
   const result = await run;
   assert.equal(result.cancelled, true);
@@ -147,14 +147,14 @@ test("space unticks a module and esc skips sign-in", async () => {
   await tty.press(/esc cancels/, "c");
   await tty.press(/space toggles/, " ");
   await tty.press(/›◻ output/, "\r");
-  await tty.press(/Agents\n.*◼ Claude Code {3}◻ Gemini \(not installed\)/, "\r");
-  await tty.press(/modules {3}input · [^]*esc cancels/, "y");
+  await tty.press(/Agents · space toggles, enter continues\n.*◼ Claude Code {3}◻ Gemini \(not installed\)/, "\r");
+  await tty.press(/Modules {3}input · [^]*esc cancels/, "y");
   await tty.press(/esc skips/, "\x1b");
   const result = await run;
   assert.equal(result.ok, true);
   assert.deepEqual(result.plan.agents, ["claude"]);
-  assert.match(tty.text(), /Found Claude Code 2\.1\n/);
-  assert.match(tty.text(), / {2}Open https:\/\/app\.caveman\.so\/activate and enter ABCD-EFGH {3}\(esc skips\)\n○ routing is on and starts after you sign in · caveman login\n/);
+  assert.match(tty.text(), / {2}Found\n {4}● Claude Code 2\.1\n/);
+  assert.match(tty.text(), / {4}Open {2}https:\/\/app\.caveman\.so\/activate\n {4}Code {2}ABCD-EFGH\n {2}○ Auto {6}skipped · caveman login\n/);
   assert.equal(JSON.parse(readFileSync(configPath, "utf8")).modules.output, false);
 });
 
@@ -173,8 +173,8 @@ test("esc after the credentials are saved says signed in", async () => {
   await tty.press(/esc cancels/, "\r");
   await tty.press(/esc skips/, "\x1b");
   await run;
-  assert.match(tty.text(), /\(esc skips\)\n {2}✓ signed in\n/);
-  assert.doesNotMatch(tty.text(), /after you sign in/);
+  assert.match(tty.text(), /Code {2}ABCD-EFGH\n {2}✓ Auto {6}on · signed in\n {14}On Auto, your last two asks/);
+  assert.doesNotMatch(tty.text(), /skipped/);
 });
 
 test("a wired agent missing from PATH stays ticked, so the plan never unwires it silently", async () => {
@@ -183,7 +183,7 @@ test("a wired agent missing from PATH stays ticked, so the plan never unwires it
   const run = onboard({ yes: false, dryRun: false }, deps(tty, {
     agents: [{ id: "claude", name: "Claude Code", installed: false, wired: true }, { id: "codex", name: "Codex", installed: true, wired: false }],
   }));
-  await tty.press(/agents {4}Claude Code\n[^]*esc cancels/, "n");
+  await tty.press(/Agents {4}Claude Code\n[^]*esc cancels/, "n");
   const result = await run;
   assert.deepEqual(result.plan.agents, ["claude"], "re-run keeps the wired agent and adds nothing unasked");
 });
@@ -200,16 +200,20 @@ test("found logins are shown; an exported key joins Auto's pool only when ticked
     const added = [];
     const run = onboard({ yes: false, dryRun: false }, deps(tty, {
       signedIn: async () => true,
+      agents: [{ id: "claude", name: "Claude Code", installed: true, wired: false }, { id: "codex", name: "Codex", installed: true, wired: false }],
       found: { claudeLogins: ["/x/.claude", "/x/.claude-max"], codexLogin: "ChatGPT plan", keys: KEYS },
       addKey: (key) => added.push(key.id),
     }));
     if (tick) await tty.press(/◻ let Auto spend on ANTHROPIC_API_KEY\n[^]*k keys/, "k");
     await tty.press(tick ? /◼ let Auto spend on ANTHROPIC_API_KEY[^]*esc cancels/ : /esc cancels/, "y");
     assert.equal((await run).ok, true);
-    assert.match(tty.text(), / {2}Claude logins {2}\/x\/\.claude · \/x\/\.claude-max\n {2}Codex login {4}ChatGPT plan\n {2}API keys {7}ANTHROPIC_API_KEY · OPENROUTER_API_KEY \(in Auto's pool\)\n/);
+    assert.match(tty.text(), / {4}● Claude Code {3}2 logins {2}\/x\/\.claude · \/x\/\.claude-max\n {4}● Codex {9}ChatGPT plan\n {4}● 2 API keys {4}ANTHROPIC_API_KEY · OPENROUTER_API_KEY \(in Auto's pool\)\n/);
+    assert.match(tty.text(), / {4}Agents {4}Claude Code \(2 logins\) · Codex\n/);
     // A key already in the pool is never offered or added again.
     assert.deepEqual(added, tick ? ["anthropic"] : []);
-    if (tick) assert.match(tty.text(), /✓ Anthropic key added for Auto · caveman providers remove anthropic takes it back\n/);
+    if (tick) assert.match(tty.text(), / {2}✓ Keys {6}Anthropic added for Auto · undo: caveman providers remove <id>\n/);
+    // Signed in already: Auto's row, and what it sends in short.
+    assert.match(tty.text(), / {2}✓ Auto {6}on · signed in\n {14}On Auto, your last two asks \(with what the agent attaches\), the end of its\n {14}last reply and request facts go to Caveman Cloud; the Free plan may keep them\.\n {14}Stop: caveman off routing · every word: caveman on routing\n/);
   }
 });
 
@@ -218,13 +222,13 @@ test("a narrow terminal never draws a row wider than itself, and several keys le
   const tty = terminal(40);
   const keys = ["ANTHROPIC", "OPENAI", "OPENROUTER", "GROQ"].map((name) => ({ id: name.toLowerCase(), name, env: `${name}_API_KEY`, added: false }));
   const run = onboard({ yes: false, dryRun: false }, deps(tty, { found: { keys }, addKey: () => {} }));
-  await tty.press(/◻ let Auto spend on 4 key[^\n]*\n\n› Set up\n/, "\t");
+  await tty.press(/◻ let Auto spend on[^\n]*\n\n {2}› Set up\n/, "\t");
   await tty.press(/› Customize\n/, "n");
   await run;
   // Only the redrawn screen has to fit: a plain line after it may wrap.
-  const frames = tty.text().slice(tty.text().indexOf("Setup will"), tty.text().indexOf("[declined]"));
+  const frames = tty.text().slice(tty.text().indexOf("  Setup\n"), tty.text().indexOf("[declined]"));
   // A redrawn frame starts where the last one ended, with no newline between.
-  for (const line of frames.replaceAll("Setup will", "\nSetup will").split("\n")) assert.ok(line.length <= 40, JSON.stringify(line));
+  for (const line of frames.replaceAll("  Setup\n", "\n  Setup\n").split("\n")) assert.ok(line.length <= 40, JSON.stringify(line));
 });
 
 test("a key that cannot be stored is a problem setup reports, not a silent skip", async () => {
@@ -247,7 +251,7 @@ test("setup ends by offering the agent: Yes names it, Esc reads as No, and it is
     const tty = terminal();
     const run = onboard({ yes: false, dryRun: false }, deps(tty, { agents: [claude], signedIn: async () => true, offerLaunch: true }));
     await tty.press(/esc cancels/, "y");
-    await tty.press(/Auto is in the model picker · \/model in Claude Code\n\[disclosure\]\n\nStart Claude Code now\? › Yes \/ No/, key);
+    await tty.press(/Auto is in the model picker · \/model in Claude Code\n\[disclosure\]\n\n {2}Start Claude Code now\? › Yes \/ No/, key);
     assert.equal((await run).launch, launch);
     assert.match(tty.text(), new RegExp(`Start Claude Code now\\? › ${shown}\\n$`));
   }
@@ -270,7 +274,7 @@ test("a Cloud that is down reads as that, and setup still finishes", async () =>
   }));
   await tty.press(/esc cancels/, "\r");
   assert.equal((await run).ok, true);
-  assert.match(tty.text(), /\n {2}! api\.caveman\.so is not answering right now \(HTTP 503\)\.\n○ routing is on and starts after you sign in · caveman login\n/);
+  assert.match(tty.text(), /\n {2}○ Auto {6}api\.caveman\.so is not answering right now \(HTTP 503\) · caveman login\n/);
   assert.doesNotMatch(tty.text(), /sign-in failed|Auto is in the model picker/);
 });
 
@@ -350,7 +354,7 @@ test("end to end: before Continue nothing runs a detected agent, through a decli
   const agentRuns = () => existsSync(ran) ? readFileSync(ran, "utf8") : "";
   try {
     const declined = await expectRun(script, env);
-    assert.match(declined.text, /Found Claude Code, Codex, Gemini and opencode\n/, "no version without running the agent");
+    assert.match(declined.text, /● Claude Code {2}● Codex {2}● Gemini {2}● opencode\n/, "no version without running the agent");
     assert.match(declined.text, /CREATE +~\/\.config\/opencode\/plugins\/caveman-native\.js/, "Details still names every file");
     assert.match(declined.text, /Nothing changed · caveman setup when you want it/);
     assert.equal(agentRuns(), "", "a declined first run ran an agent");
@@ -454,14 +458,13 @@ test("end to end: caveman setup in a terminal against a Cloud that refuses sign-
       child.on("error", reject);
     });
     assert.equal(out.code, 0, out.text);
-    assert.match(out.text, /Found Claude Code and Codex\n/, "no version before the agent was ever wired");
-    assert.match(out.text, /routing +asks to Auto go to Cloud to pick model \+ effort · free account\n[\s\S]*esc cancels/, "the first screen says what routing sends before the key that agrees");
-    // One line per step between Set up and sign-in; enable's own report stays out.
-    assert.match(out.text, /› Set up\n\n✓ Claude Code wired\n✓ Codex wired\n○ local runtime starts with your next agent session\n○ scripts: caveman-blocks not installed yet\n\nSign in to switch on Auto · free account · everything else already works without it\n/);
+    assert.match(out.text, /● Claude Code {2}● Codex\n/, "no version before the agent was ever wired");
+    assert.match(out.text, /Routing +asks to Auto go to Cloud to pick model \+ effort · free account\n[\s\S]*esc cancels/, "the first screen says what routing sends before the key that agrees");
+    // One row per kind of step between Set up and sign-in; enable's own report stays out.
+    assert.match(out.text, / {2}○ Runtime {3}starts with your next agent session\n {2}✓ Agents {4}Claude Code · Codex wired\n {2}○ Scripts {3}caveman-blocks not installed yet\n/);
     assert.doesNotMatch(out.text, /planned user-scoped writes|native Caveman enabled|→ /);
-    assert.match(out.text, new RegExp(`! Sign-in is not open on 127\\.0\\.0\\.1:${port} yet\\.`));
-    assert.match(out.text, /routing is on and starts once sign-in opens · caveman login/);
-    assert.match(out.text, /✓ Ready\./);
+    assert.match(out.text, new RegExp(`○ Auto {6}Sign-in is not open on 127\\.0\\.0\\.1:${port} yet · caveman login\\n`));
+    assert.match(out.text, /✓ Ready/);
     assert.match(out.text, /Start Claude Code now\? › No\n/, "setup ends by offering the agent, and a No starts nothing");
     assert.equal(JSON.parse(readFileSync(join(box.env.CAVEMAN_HOME, "cloud.json"), "utf8")).modules.routing, true);
   } finally {

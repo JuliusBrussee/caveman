@@ -74,7 +74,7 @@ import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, u
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
 import { currentSelection, moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
-import { billingCommand, cloudMe, printSignInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
+import { billingCommand, cloudMe, printSignInLines, signInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule, MODULES } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
@@ -11600,7 +11600,9 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   await saveConfig(saved);
   await grant.acknowledge();
   syncAutoEntries();
-  await printSignInLines();
+  // The first-run screen says these its own way.
+  if (ui?.lines) ui.lines(await signInLines());
+  else await printSignInLines();
   const email = tokenClaim(accessToken, "email");
   if (instance) {
     print({ authenticated: true, baseURL, organization_id: organizationId ?? null, project_id: credentials.project_id, scope: tok.scope, credential_kind: "none", token_store: tokenStore });

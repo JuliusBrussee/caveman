@@ -9,7 +9,7 @@ import { sep } from "node:path";
 import { emitKeypressEvents } from "node:readline";
 
 import { applyModules, currentSelection, moduleHost, planModules, renderPlan, type ModulePlan, type ModuleSelection } from "./apply.js";
-import { ROUTING_ON_LINE } from "./cloud.js";
+import { ROUTING_ON_LINE, ROUTING_ON_SHORT } from "./cloud.js";
 import { cloudConfigPath } from "./config-home.js";
 import type { FoundKey } from "./provider-logins.js";
 import { MODULES, findModule, type ModuleId } from "./registry.js";
@@ -28,8 +28,9 @@ export type OnboardFound = {
   keys?: FoundKey[];
 };
 // `approved` is called once the browser step is done, before sign-in prints
-// its own lines (what routing sends).
-export type SignInUi = { signal: AbortSignal; code(url: string, userCode: string, opened: boolean): void; approved?(): void };
+// its own lines (what routing sends); with `lines` it hands those over instead
+// of printing them.
+export type SignInUi = { signal: AbortSignal; code(url: string, userCode: string, opened: boolean): void; approved?(): void; lines?(lines: string[]): void };
 export type OnboardDeps = {
   cmd: string;
   agents: OnboardAgent[];
@@ -132,7 +133,10 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   }
 
   const found = deps.found ?? {};
-  out.write(`${c.bold("caveman")} ${c.dim("· make your coding agent cheaper")}\n\n${foundBlock(deps.agents, found, c)}\n\n`);
+  // In a terminal the first run is a screen: padded, one accent colour, a row
+  // per fact. Everywhere else it stays the plain report scripts read.
+  if (ask) out.write(`\n${PAD}${c.accent(c.bold("caveman"))}  ${c.dim("make your coding agent cheaper")}\n\n${foundRows(deps.agents, found, c, out).join("\n")}\n\n`);
+  else out.write(`${c.bold("caveman")} ${c.dim("· make your coding agent cheaper")}\n\n${foundBlock(deps.agents, found, c)}\n\n`);
   let selection = initialSelection(opts);
   // Re-runs keep what is wired; a first run takes what is installed. --agents
   // adds to the wired ones: unwiring is `caveman off` or unticking here.
@@ -145,28 +149,26 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     for (;;) {
       plan = await planModules(selection, agents);
       const rows = summaryRows(plan, selection, agents.map((id) => byId.get(id)!.name), found);
-      if (deps.installCli?.command) rows.push(["install", `the caveman command · ${deps.installCli.command}`]);
+      if (deps.installCli?.command) rows.push(["Install", `the caveman command · ${deps.installCli.command}`]);
       const moved = await portMove(selection, agents);
-      if (moved) rows.push(["port", `${moved.held} is in use by another program · the runtime will use ${moved.free}`]);
+      if (moved) rows.push(["Port", `${moved.free} · ${moved.held.split(":").pop()} is in use by another program`]);
       const pick = await choose(input, out, c, rows, keys, plan.lines.length > 0 ? "Set up" : "Continue");
       if (pick === null) return cancelled(out, c);
       if (pick === "details") {
-        out.write(`\n${plan.lines.length ? renderPlan(plan) : `This will\n  ${c.dim("change nothing")}\n`}\n`);
+        out.write(`${indent(plan.lines.length ? renderPlan(plan) : `This will\n  ${c.dim("change nothing")}\n`)}\n`);
         continue;
       }
       if (pick === "customize") {
-        out.write("\n");
         const picked = await customize(input, out, c, selection, agents, keys, deps.agents.filter(usable), deps.agents.filter((a) => !usable(a)));
         if (!picked) return cancelled(out, c);
         ({ selection, agents } = picked);
-        out.write("\n");
         continue;
       }
       await deps.markFirstRun();
       if (pick === "no") {
         deps.markDeclined();
         const session = deps.launching ? ` · ${deps.launching} runs this session only` : "";
-        out.write(`${c.dim(`Nothing changed${session} · ${deps.cmd} setup when you want it`)}\n`);
+        out.write(`${PAD}${c.dim(`Nothing changed${session} · ${deps.cmd} setup when you want it`)}\n`);
         return { confirmed: false, cancelled: false, ok: true, plan };
       }
       break;
@@ -191,19 +193,27 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     }
   }
 
-  // One line that the download rewrites; each finished step prints over it.
-  const busy = spinner(out, c, ask);
+  // One line that the download rewrites. In a terminal the finished steps are
+  // held and shown grouped once the work is done; elsewhere each prints as it ends.
+  const busy = spinner(out, c, ask, ask ? PAD : "");
   let cmd = deps.cmd;
-  const progress = (line: string) => busy.say(line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○")));
+  const done: string[] = [];
+  const progress = (line: string) => {
+    if (!ask) return busy.say(line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○")));
+    done.push(line);
+    // The step just finished is what the waiting line says meanwhile.
+    if (line.startsWith("✓ ")) busy.show(line.slice(2));
+  };
   let result: { ok: boolean; problems: string[] };
   try {
+    if (ask) busy.show("setting up");
     if (deps.installCli) {
       if (deps.installCli.command) busy.show("installing the caveman command");
       try {
         cmd = await deps.installCli.run();
       } catch (error) {
         busy.stop();
-        out.write(`${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${c.dim("Nothing else changed.")}\n`);
+        out.write(`${ask ? PAD : ""}${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${ask ? PAD : ""}${c.dim("Nothing else changed.")}\n`);
         return { confirmed: true, cancelled: false, ok: false, plan };
       }
       if (deps.installCli.command) progress(`✓ caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} · not on your PATH`}`);
@@ -224,27 +234,38 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     // Whatever throws, the progress line never stays under the error.
     busy.stop();
   }
+  const added: string[] = [];
   for (const key of keys.filter((item) => item.on)) {
     try {
       deps.addKey!(key);
-      out.write(`${c.green("✓")} ${key.name} key added for Auto ${c.dim(`· ${cmd} providers remove ${key.id} takes it back`)}\n`);
+      if (ask) added.push(key.name);
+      else out.write(`${c.green("✓")} ${key.name} key added for Auto ${c.dim(`· ${cmd} providers remove ${key.id} takes it back`)}\n`);
     } catch (error) {
       result.problems.push(`${key.name} key: ${error instanceof Error ? error.message.replace(/^caveman: /, "") : String(error)}`);
       result.ok = false;
     }
   }
-  for (const problem of result.problems) out.write(`${c.red("✗")} ${problem}\n`);
-  out.write("\n");
-  const auto = selection.routing ? await routingStep(opts, { ...deps, cmd }, input, out, c) : false;
+  busy.stop();
+  if (added.length) done.push(`✓ keys: ${added.join(" · ")} added for Auto · undo: ${cmd} providers remove <id>`);
+  if (ask) for (const line of stepRows(done, c)) out.write(`${line}\n`);
+  for (const problem of result.problems) out.write(`${ask ? PAD : ""}${c.red("✗")} ${problem}\n`);
+  if (!ask) out.write("\n");
+  const auto = !selection.routing ? false
+    : ask ? await signInStep({ ...deps, cmd }, input, out, c)
+    : await routingStep(opts, { ...deps, cmd }, input, out, c);
   const tryAgent = ["claude", "codex"].find((id) => agents.includes(id)) ?? agents[0] ?? "claude";
   let launch: string | undefined;
-  if (!result.ok) {
+  if (ask) {
+    const hint = auto ? `\n${PAD}${" ".repeat(12)}${c.dim(`Auto is in the model picker${tryAgent === "claude" ? " · /model in Claude Code" : ""}`)}` : "";
+    out.write(!result.ok ? `\n${PAD}${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`
+      : deps.launching ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(`starting ${deps.launching}`)}\n`
+      : `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.cyan(`${cmd} ${tryAgent}`)} ${c.dim("·")} ${c.cyan(`${cmd} status`)}${hint}\n`);
+  } else if (!result.ok) {
     out.write(`${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`);
   } else if (deps.launching) {
     out.write(`${c.green("✓")} Ready. Starting ${deps.launching}.\n`);
   } else {
     out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${cmd} status`)}\n`);
-    if (auto) out.write(`${c.dim(`  Auto is in the model picker${tryAgent === "claude" ? " · /model in Claude Code" : ""}`)}\n`);
   }
   if (ask) await deps.discloseTelemetry();
   const startable = byId.get(tryAgent);
@@ -344,6 +365,150 @@ function tilde(path: string): string {
   return path === home || path.startsWith(home + sep) ? `~${path.slice(home.length)}` : path;
 }
 
+// The screen's left margin.
+const PAD = "  ";
+
+function indent(text: string): string {
+  return text.split("\n").map((line) => line ? `${PAD}${line}` : line).join("\n");
+}
+
+// What was found, a row per agent that has something to say (its logins, how
+// it signs in), the rest on one row, then the keys.
+function foundRows(agents: OnboardAgent[], found: OnboardFound, c: Colors, out: NodeJS.WriteStream): string[] {
+  const installed = agents.filter((agent) => agent.installed);
+  if (installed.length === 0) return [`${PAD}${c.dim("No coding agents found on this machine")}`];
+  const dot = c.green(glyphs().dot);
+  const width = Math.max(40, (out.columns || 80) - 1);
+  const told: [string, string, string][] = [];
+  const rest: string[] = [];
+  for (const agent of installed) {
+    const version = agent.version?.match(/\d+\.\d+/)?.[0];
+    const name = version ? `${agent.name} ${version}` : agent.name;
+    const logins = agent.id === "claude" ? found.claudeLogins ?? [] : [];
+    if (logins.length > 1) told.push([name, `${logins.length} logins`, logins.map(tilde).join(" · ")]);
+    else if (agent.id === "codex" && found.codexLogin) told.push([name, found.codexLogin, ""]);
+    else rest.push(name);
+  }
+  const keys = found.keys ?? [];
+  const keyLabel = `${keys.length} API ${keys.length === 1 ? "key" : "keys"}`;
+  const label = Math.max(0, ...told.map(([name]) => name.length), keys.length ? keyLabel.length : 0) + 3;
+  const lines = [`${PAD}${c.bold("Found")}`];
+  for (const [name, note, more] of told) {
+    const room = width - PAD.length - 4 - label - note.length - 2;
+    lines.push(`${PAD}  ${dot} ${name.padEnd(label)}${note}${more && room > 8 ? `  ${c.dim(clip(more, room))}` : ""}`);
+  }
+  if (rest.length) lines.push(`${PAD}  ${dot} ${rest.join(`  ${dot} `)}`);
+  if (keys.length) {
+    const names = keys.map((key) => key.added ? `${key.env} (in Auto's pool)` : key.env).join(" · ");
+    lines.push(`${PAD}  ${c.yellow(glyphs().dot)} ${keyLabel.padEnd(label)}${c.dim(clip(names, Math.max(8, width - PAD.length - 4 - label)))}`);
+  }
+  return lines;
+}
+
+// The finished steps as rows: one for the runtime, one per thing done to the
+// agents, then whatever else a step had to say, each under a short label.
+function stepRows(lines: string[], c: Colors): string[] {
+  const home = homedir();
+  const rows: [string, string, string][] = [];
+  const agents = new Map<string, string[]>();
+  const runtime: string[] = [];
+  let runtimeMark = "✓";
+  for (const raw of lines) {
+    const line = raw.split(home + sep).join(`~${sep}`);
+    const mark = line[0]!;
+    const text = line.slice(2);
+    const agent = text.match(/^(.+) (wired|unwired|hooks refreshed)$/);
+    const named = text.match(/^([a-z][a-z -]*): (.+)$/);
+    const moved = text.match(/^(\S+) is in use by another program · local runtime on port (\d+)$/);
+    if (mark === "✓" && agent) agents.set(agent[2]!, [...(agents.get(agent[2]!) ?? []), agent[1]!]);
+    else if (text.startsWith("downloaded ")) runtime.push(`${text.slice(11).split(", ").length} binaries downloaded`);
+    else if (text === "local runtime started") runtime.push("started");
+    else if (text === "local runtime starts with your next agent session") { runtime.push("starts with your next agent session"); runtimeMark = "○"; }
+    // Why it moved is on the screen above already.
+    else if (moved) runtime.push(`port ${moved[2]}`);
+    else if (text.startsWith("caveman command installed")) rows.push([mark, "Command", `caveman installed${text.slice(25)}`]);
+    else if (named) rows.push([mark, `${named[1]![0]!.toUpperCase()}${named[1]!.slice(1)}`, named[2]!]);
+    else rows.push([mark, "", text]);
+  }
+  for (const [verb, names] of agents) rows.unshift(["✓", "Agents", `${names.join(" · ")} ${verb === "hooks refreshed" ? "refreshed" : verb}`]);
+  if (runtime.length) rows.unshift([runtimeMark, "Runtime", runtime.join(" · ")]);
+  return rows.map(([mark, label, text]) => `${PAD}${mark === "✓" ? c.green(mark) : c.yellow(mark)} ${label ? `${label.padEnd(10)}${c.dim(text)}` : text}`);
+}
+
+// Sign-in on the screen: a heading, where to go and the code, one waiting
+// line; all of it gives way to a single Auto row once it ends. True when Auto
+// is live as setup ends.
+async function signInStep(deps: OnboardDeps, input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors): Promise<boolean> {
+  const row = (mark: string, text: string) => out.write(`${PAD}${mark} ${"Auto".padEnd(10)}${text}\n`);
+  const said = () => out.write(`${ROUTING_ON_SHORT.map((line) => `${PAD}${" ".repeat(12)}${c.dim(line)}`).join("\n")}\n`);
+  const later = (why: string) => {
+    row(c.yellow("○"), `${c.dim(`${why} ·`)} ${c.cyan(`${deps.cmd} login`)}`);
+    return false;
+  };
+  if (await deps.signedIn()) {
+    row(c.green("✓"), c.dim("on · signed in"));
+    said();
+    return true;
+  }
+  const columns = out.columns || 80;
+  out.write(`\n${PAD}${c.bold("Sign in to switch on Auto")}${columns >= 76 ? `  ${c.dim("free account · everything else already works")}` : ""}\n`);
+  // Rows this step has drawn below the blank line; the result replaces them.
+  let drawn = 1;
+  const skip = new AbortController();
+  const stop = keys(input, (key) => {
+    if (key.name === "escape" || key.name === "s" || key.name === "q" || (key.ctrl && key.name === "c")) skip.abort();
+  });
+  const busy = spinner(out, c, true, `${PAD}  `);
+  // Back over what was drawn, so the step ends as one row. Only where rewinding
+  // is exact: a real terminal, and no row long enough to have wrapped.
+  let wrapped = false;
+  const settle = () => {
+    busy.stop();
+    if (out.isTTY && !wrapped) out.write(`\x1b[${drawn + 1}A\x1b[J`);
+    drawn = 0;
+  };
+  let extra: string[] = [];
+  busy.show("reaching Caveman Cloud");
+  try {
+    const { email } = await deps.signIn({
+      signal: skip.signal,
+      code(url, userCode, opened) {
+        busy.stop();
+        wrapped = PAD.length + 8 + url.length >= columns;
+        out.write(`${PAD}  ${c.dim("Open")}  ${c.cyan(url)}\n${PAD}  ${c.dim("Code")}  ${c.bold(userCode)}\n`);
+        drawn += 2;
+        busy.show(`${opened ? "browser opened, " : ""}waiting for you to approve · esc skips`);
+      },
+      approved: () => busy.stop(),
+      // Routing's line is said short; runtime data's is kept as sign-in words
+      // it, when anything is sent.
+      lines: (lines) => { extra = lines.slice(1).filter((line) => !line.includes("nothing sent")); },
+    });
+    settle();
+    row(c.green("✓"), `${c.dim("on · signed in")}${email ? c.dim(` as ${email}`) : ""}`);
+    said();
+    for (const line of extra) out.write(`${PAD}${" ".repeat(12)}${c.dim(line)}\n`);
+    return true;
+  } catch (error) {
+    settle();
+    // Esc during the receipt step, after the credentials were saved.
+    if (skip.signal.aborted && await deps.signedIn()) {
+      row(c.green("✓"), c.dim("on · signed in"));
+      said();
+      return true;
+    }
+    if (skip.signal.aborted) return later("skipped");
+    const message = (error instanceof Error ? error.message : String(error)).replace(/\.$/, "");
+    const code = (error as { code?: unknown }).code;
+    if (code === "sign_in_closed" || code === "cloud_unreachable") return later(message);
+    row(c.red("✗"), `sign-in failed: ${message} · ${c.cyan(`${deps.cmd} login`)}`);
+    return false;
+  } finally {
+    busy.stop();
+    stop();
+  }
+}
+
 // The agents line, then one line per kind of login found beside them.
 function foundBlock(agents: OnboardAgent[], found: OnboardFound, c: Colors): string {
   const lines = [foundLine(agents)];
@@ -354,26 +519,28 @@ function foundBlock(agents: OnboardAgent[], found: OnboardFound, c: Colors): str
   return lines.join("\n");
 }
 
-// What Continue does, in four rows: the full file list is under Details.
+// What the confirming key does, in a few rows: the full file list is under Details.
 function summaryRows(plan: ModulePlan, selection: ModuleSelection, agentNames: string[], found: OnboardFound): [string, string][] {
   const logins = found.claudeLogins?.length ?? 0;
   const names = agentNames.map((name) => name === "Claude Code" && logins > 1 ? `${name} (${logins} logins)` : name);
-  const downloads = plan.lines.filter((line) => line.action === "DOWNLOAD").flatMap((line) => line.target.split(", "));
+  const downloads = plan.lines.filter((line) => line.action === "DOWNLOAD").flatMap((line) => line.target.split(", ")).length;
   const files = plan.lines.filter((line) => line.action === "CREATE" || line.action === "UPDATE").length;
-  const rows: [string, string][] = [
-    ["agents", names.join(" · ") || "none"],
-    ["modules", MODULES.filter((m) => selection[m.id]).map((m) => m.title).join(" · ") || "none"],
-    // What leaves the machine is said before the key that agrees to it.
-    ...MODULES.filter((m) => m.needsSignIn && selection[m.id]).map((m): [string, string] => [m.title, `${m.summary} · free account`]),
+  const changes = [
+    ...(files ? [`${files} config ${files === 1 ? "file" : "files"}`] : []),
+    ...(downloads ? [`${downloads} signed ${downloads === 1 ? "download" : "downloads"}`] : []),
+    ...(files ? ["undo: caveman off --all"] : []),
   ];
-  if (downloads.length) rows.push(["download", `${downloads.length} signed ${downloads.length === 1 ? "binary" : "binaries"}`]);
-  if (files) rows.push(["write", `${files} config ${files === 1 ? "file" : "files"}, your own lines kept · undo: caveman off --all`]);
-  if (plan.lines.length === 0) rows.push(["change", "nothing: this is already set up"]);
-  return rows;
+  return [
+    ["Agents", names.join(" · ") || "none"],
+    ["Modules", MODULES.filter((m) => selection[m.id]).map((m) => m.title).join(" · ") || "none"],
+    // What leaves the machine is said before the key that agrees to it.
+    ...MODULES.filter((m) => m.needsSignIn && selection[m.id]).map((m): [string, string] => [`${m.title[0]!.toUpperCase()}${m.title.slice(1)}`, `${m.summary} · free account`]),
+    ["Changes", plan.lines.length === 0 ? "nothing: this is already set up" : changes.join(" · ") || "runs only"],
+  ];
 }
 
 function cancelled(out: NodeJS.WriteStream, c: Colors): OnboardResult {
-  out.write(`${c.dim("Cancelled. Nothing changed.")}\n`);
+  out.write(`${PAD}${c.dim("Cancelled. Nothing changed.")}\n`);
   return { confirmed: false, cancelled: true, ok: true };
 }
 
@@ -393,8 +560,8 @@ type Pick = "go" | "customize" | "details" | "no";
 function glyphs() {
   const plain = process.platform === "win32" && !process.env.WT_SESSION && process.env.TERM_PROGRAM !== "vscode";
   return plain
-    ? { on: "[x]", off: "[ ]", pointer: ">", spin: ["|", "/", "-", "\\"] }
-    : { on: "◼", off: "◻", pointer: "›", spin: [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"] };
+    ? { on: "[x]", off: "[ ]", pointer: ">", dot: "*", spin: ["|", "/", "-", "\\"] }
+    : { on: "◼", off: "◻", pointer: "›", dot: "●", spin: [..."⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"] };
 }
 
 function clip(text: string, width: number): string {
@@ -403,13 +570,13 @@ function clip(text: string, width: number): string {
 
 // One line that work in progress rewrites. `say` prints a finished line above
 // it. Without a terminal to redraw in, each update is its own line.
-function spinner(out: NodeJS.WriteStream, c: Colors, animate: boolean) {
+function spinner(out: NodeJS.WriteStream, c: Colors, animate: boolean, pad = "") {
   const frames = glyphs().spin;
   let frame = 0;
   let text = "";
   let timer: ReturnType<typeof setInterval> | undefined;
   const erase = () => { if (animate && text) out.write("\r\x1b[2K"); };
-  const draw = () => out.write(`\r\x1b[2K${c.cyan(frames[frame++ % frames.length]!)} ${clip(text, Math.max(20, (out.columns || 80) - 3))}`);
+  const draw = () => out.write(`\r\x1b[2K${pad}${c.accent(frames[frame++ % frames.length]!)} ${c.dim(clip(text, Math.max(20, (out.columns || 80) - 3 - pad.length)))}`);
   return {
     show(next: string) {
       if (!animate) return void out.write(`${next}\n`);
@@ -435,7 +602,8 @@ function spinner(out: NodeJS.WriteStream, c: Colors, animate: boolean) {
 function colors(out: NodeJS.WriteStream) {
   const on = Boolean(out.isTTY) && !process.env.NO_COLOR;
   const paint = (code: string) => (s: string) => on ? `\x1b[${code}m${s}\x1b[0m` : s;
-  return { bold: paint("1"), dim: paint("2"), cyan: paint("36"), green: paint("32"), yellow: paint("33"), red: paint("31") };
+  // accent: the statusline badge's orange.
+  return { bold: paint("1"), dim: paint("2"), under: paint("4"), cyan: paint("36"), green: paint("32"), yellow: paint("33"), red: paint("31"), accent: paint("38;5;172") };
 }
 
 // Keys typed before a prompt is on screen (an Enter hit twice while the plan
@@ -458,7 +626,8 @@ function live(out: NodeJS.WriteStream, render: (active: boolean) => string[], on
   return new Promise((resolve) => {
     let rows = 0;
     const draw = (active: boolean) => {
-      const lines = render(active);
+      // No lines: the frame is taken off the screen (a view that gives way to the next).
+      const lines = render(active).map((line) => line ? `${PAD}${line}` : line);
       out.write(`${rows > 1 ? `\r\x1b[${rows - 1}A` : "\r"}\x1b[J${lines.join("\n")}`);
       rows = lines.length;
     };
@@ -482,7 +651,7 @@ function live(out: NodeJS.WriteStream, render: (active: boolean) => string[], on
       process.off("SIGHUP", onSignal);
       stop();
       draw(false);
-      out.write("\n\x1b[?25h");
+      out.write(`${rows ? "\n" : ""}\x1b[?25h`);
       resolve(ok);
     };
     const stop = keys(input, (key) => {
@@ -497,20 +666,23 @@ function live(out: NodeJS.WriteStream, render: (active: boolean) => string[], on
   });
 }
 
-function toggle(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, title: string, layout: "column" | "row", items: Item[]): Promise<boolean[] | null> {
+// `gone`: once answered, the picker leaves the screen (a cancelled one stays).
+function toggle(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, title: string, layout: "column" | "row", items: Item[], gone = false): Promise<boolean[] | null> {
+  let left = false;
   const enabled = items.map((item, i) => item.disabled ? -1 : i).filter((i) => i >= 0);
   let at = 0;
-  const width = () => Math.max(20, (out.columns || 80) - 1);
+  const width = () => Math.max(20, (out.columns || 80) - 1 - PAD.length);
   const labelWidth = Math.max(0, ...items.map((item) => item.label.length)) + 3;
   const g = glyphs();
   const box = (item: Item) => item.on ? g.on : g.off;
   const render = (active: boolean): string[] => {
+    if (!active && gone && !left) return [];
     const current = active ? enabled[at] : -1;
     if (layout === "column") {
       return [title, ...items.map((item, i) => {
         const label = item.label.padEnd(labelWidth);
         const hint = (item.hint ?? "").slice(0, Math.max(0, width() - 3 - labelWidth));
-        return `${i === current ? c.cyan(g.pointer) : " "}${box(item)} ${i === current ? c.cyan(label) : label}${c.dim(hint)}`;
+        return `${i === current ? c.accent(g.pointer) : " "}${box(item)} ${i === current ? c.accent(label) : label}${c.dim(hint)}`;
       })];
     }
     // Agents that are not installed share one dimmed entry at the end.
@@ -526,7 +698,7 @@ function toggle(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ti
         line = "";
         length = 0;
       }
-      const styled = cell.hot ? c.cyan(cell.text) : cell.text.endsWith("(not installed)") ? c.dim(cell.text) : cell.text;
+      const styled = cell.hot ? c.accent(cell.text) : cell.text.endsWith("(not installed)") ? c.dim(cell.text) : cell.text;
       line += `${length === 0 ? " " : "   "}${styled}`;
       length += (length === 0 ? 1 : 3) + cell.text.length;
     }
@@ -534,7 +706,7 @@ function toggle(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ti
     return lines;
   };
   if (enabled.length === 0) {
-    out.write(`${render(false).join("\n")}\n`);
+    if (!gone) out.write(`${indent(render(false).join("\n"))}\n`);
     return Promise.resolve(items.map((item) => item.on));
   }
   return live(out, render, (key, done) => {
@@ -547,7 +719,7 @@ function toggle(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ti
     } else if (["down", "right", "j", "l", "tab"].includes(key.name ?? "")) {
       at = (at + 1) % enabled.length;
     }
-  }, input).then((ok) => ok ? items.map((item) => item.on) : null);
+  }, input, () => { left = true; }).then((ok) => ok ? items.map((item) => item.on) : null);
 }
 
 // A Yes within the first moments after the question draws is the tail of a
@@ -559,7 +731,7 @@ function confirm(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, q
   const shownAt = Date.now();
   const pointer = c.dim(glyphs().pointer);
   const render = (active: boolean) => [active
-    ? `${question} ${pointer} ${yes ? c.cyan("Yes") : c.dim("Yes")} ${c.dim("/")} ${yes ? c.dim("No") : c.cyan("No")}`
+    ? `${question} ${pointer} ${yes ? c.accent(c.bold("Yes")) : c.dim("Yes")} ${c.dim("/")} ${yes ? c.dim("No") : c.accent(c.bold("No"))}`
     : `${question} ${pointer} ${yes ? "Yes" : "No"}`];
   return live(out, render, (key, done) => {
     const early = Date.now() - shownAt < CONFIRM_GRACE_MS;
@@ -584,27 +756,33 @@ function choose(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ro
   ];
   const g = glyphs();
   let at = 0;
+  let left = false;
+  const gaveWay = () => !left && (options[at]!.id === "customize" || options[at]!.id === "details");
   const shownAt = Date.now();
-  const width = () => Math.max(20, (out.columns || 80) - 1);
+  const width = () => Math.max(20, (out.columns || 80) - 1 - PAD.length);
   const render = (active: boolean): string[] => {
-    const lines = ["Setup will", ...rows.map(([label, value]) => `  ${c.dim(label.padEnd(10))}${clip(value, width() - 12)}`)];
+    const lines = [c.bold("Setup"), ...rows.map(([label, value]) => `  ${c.dim(label.padEnd(10))}${clip(value, width() - 12)}`)];
     if (found.length) {
       // The count and what it costs come first: a long list is clipped at its end.
       const text = found.length === 1
         ? `let Auto spend on ${found[0]!.env}`
         : `let Auto spend on ${found.length} keys · ${found.map((key) => key.env).join(", ")}`;
-      lines.push(`  ${c.dim("keys".padEnd(10))}${found.some((key) => key.on) ? g.on : g.off} ${clip(text, width() - 14 - g.on.length)}`);
+      const on = found.some((key) => key.on);
+      lines.push(`  ${c.dim("Keys".padEnd(10))}${on ? c.accent(g.on) : g.off} ${clip(text, width() - 14 - g.on.length)}`);
     }
-    if (!active) return [...lines, `${c.dim(g.pointer)} ${options[at]!.label}`];
+    // Customize and Details take this screen's place and bring it back after.
+    if (!active) return gaveWay() ? [] : [...lines, "", `${c.dim(g.pointer)} ${options[at]!.label}`];
+    // The letter that picks an option is underlined in it.
+    const label = (option: { label: string }, i: number) => i === 0 ? option.label : `${c.under(option.label[0]!)}${option.label.slice(1)}`;
     return [
       ...lines,
       "",
       // A row that wraps breaks the redraw: a narrow terminal shows the current
       // choice alone, and the arrows still move through all four.
       width() < 48
-        ? c.cyan(`${g.pointer} ${options[at]!.label}`)
-        : options.map((option, i) => i === at ? c.cyan(`${g.pointer} ${option.label}`) : `  ${option.label}`).join("  "),
-      c.dim(clip(`enter · c customize · d details${found.length ? " · k keys" : ""} · n not now · esc cancels`, width())),
+        ? c.accent(c.bold(`${g.pointer} ${options[at]!.label}`))
+        : options.map((option, i) => i === at ? c.accent(c.bold(`${g.pointer} ${option.label}`)) : `  ${label(option, i)}`).join("   "),
+      c.dim(clip(`enter selects${found.length ? " · k keys" : ""} · esc cancels`, width())),
     ];
   };
   return live(out, render, (key, done) => {
@@ -630,7 +808,7 @@ function choose(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ro
     } else if (["right", "down", "l", "tab"].includes(name)) {
       at = (at + 1) % options.length;
     }
-  }, input).then((ok) => ok ? options[at]!.id : null);
+  }, input, () => { left = true; }).then((ok) => ok ? options[at]!.id : null);
 }
 
 // Customize: the module, agent and key pickers in turn; null when cancelled.
@@ -639,21 +817,19 @@ async function customize(
   selection: ModuleSelection, agents: string[], found: FoundKeyChoice[], usable: OnboardAgent[], missing: OnboardAgent[],
 ): Promise<{ selection: ModuleSelection; agents: string[] } | null> {
   const modules = await toggle(input, out, c, `Modules ${c.dim("· space toggles, enter continues")}`, "column",
-    MODULES.map((m) => ({ label: m.title, hint: m.needsSignIn ? `${m.summary} · free account` : m.summary, on: selection[m.id] })));
+    MODULES.map((m) => ({ label: m.title, hint: m.needsSignIn ? `${m.summary} · free account` : m.summary, on: selection[m.id] })), true);
   if (!modules) return null;
   const picked = Object.fromEntries(MODULES.map((m, i) => [m.id, modules[i]!])) as ModuleSelection;
   const shown = [...usable, ...missing];
   if (shown.length > 0) {
-    out.write("\n");
-    const ticked = await toggle(input, out, c, "Agents", "row",
-      shown.map((a) => ({ label: a.name, on: agents.includes(a.id), disabled: missing.includes(a) })));
+    const ticked = await toggle(input, out, c, `Agents ${c.dim("· space toggles, enter continues")}`, "row",
+      shown.map((a) => ({ label: a.name, on: agents.includes(a.id), disabled: missing.includes(a) })), true);
     if (!ticked) return null;
     agents = shown.filter((_, i) => ticked[i]).map((a) => a.id);
   }
   if (found.length > 0) {
-    out.write("\n");
     const ticked = await toggle(input, out, c, `Keys for Auto ${c.dim("· Auto can spend on a key it is given")}`, "column",
-      found.map((key) => ({ label: key.env, hint: key.name, on: key.on })));
+      found.map((key) => ({ label: key.env, hint: key.name, on: key.on })), true);
     if (!ticked) return null;
     found.forEach((key, i) => { key.on = ticked[i]!; });
   }
