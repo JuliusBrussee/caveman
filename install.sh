@@ -48,6 +48,13 @@ first_run() {
   for arg in "$@"; do
     case "$arg" in -h|--help|--list|-u|--uninstall|--dry-run) return 0 ;; esac
   done
+  # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
+  if ! node -e 'const [a, b] = process.versions.node.split(".").map(Number); process.exit(a > 22 || (a === 22 && b >= 13) ? 0 : 1)'; then
+    echo
+    echo "caveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is $(node --version)."
+    echo "  Upgrade Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@$CLI_VERSION"
+    return 0
+  fi
   if command -v caveman >/dev/null 2>&1; then
     set -- caveman setup
   else

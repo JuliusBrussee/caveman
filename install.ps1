@@ -100,6 +100,14 @@ caveman: Node.js (>=18) required. Install:
   # End in the CLI's first run: modules, agents, one Continue.
   $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
   if ($skip.Count -gt 0) { exit 0 }
+  # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
+  $nodeVersion = [version](& node -p "process.versions.node")
+  if ($nodeVersion -lt [version]"22.13.0") {
+    Write-Host ""
+    Write-Host "caveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v$nodeVersion."
+    Write-Host "  Upgrade Node (winget install OpenJS.NodeJS.LTS), then run: npx -y @caveman-ai/cli@$CliVersion"
+    exit 0
+  }
   $setup = if (Get-Command caveman -ErrorAction SilentlyContinue) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup") }
   if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
     & $setup[0] $setup[1..($setup.Length - 1)]

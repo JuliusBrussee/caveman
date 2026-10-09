@@ -18,7 +18,7 @@ test("stdin shell install never executes caller cwd installer/install.js", { ski
 
   const fakeBin = join(cwd, "fake-bin");
   mkdirSync(fakeBin);
-  writeFileSync(join(fakeBin, "node"), "#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then echo 24; else exec /usr/bin/env node \"$@\"; fi\n", { mode: 0o755 });
+  writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\nprintf '%s\\n' \"$@\"\n", { mode: 0o755 });
 
   // Pin the ref via the shim's own CAVEMAN_REF override so this test checks
@@ -85,7 +85,7 @@ test("shell install ends by naming the first-run command when no terminal is att
   const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-first-run-"));
   const fakeBin = join(cwd, "fake-bin");
   mkdirSync(fakeBin);
-  writeFileSync(join(fakeBin, "node"), "#!/bin/sh\nif [ \"$1\" = \"-p\" ]; then echo 24; else exec /usr/bin/env node \"$@\"; fi\n", { mode: 0o755 });
+  writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
   writeFileSync(join(fakeBin, "caveman"), "#!/bin/sh\necho caveman-ran \"$@\"\n", { mode: 0o755 });
   const run = (args) => spawnSync("bash", ["-s", "--", ...args], {
@@ -110,4 +110,18 @@ test("shell install ends by naming the first-run command when no terminal is att
   });
   const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
   assert.equal(viaNpx.stdout, `installer-ran\nNext: npx -y @caveman-ai/cli@${cli} setup\n`);
+});
+
+// The skills installer runs on Node 18, the CLI needs 22.13: on a Node in
+// between, the shim says so instead of handing over to a first run that fails.
+test("shell install on a Node older than the CLI's floor names the upgrade, not a first run that cannot start", { skip: process.platform === "win32" }, () => {
+  const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-old-node-"));
+  const fakeBin = join(cwd, "fake-bin");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "node"), "#!/bin/sh\ncase \"$1\" in -p) echo 20 ;; -e) exit 1 ;; --version) echo v20.11.0 ;; esac\n", { mode: 0o755 });
+  writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
+  const out = spawnSync("bash", ["-s", "--"], { cwd, input: shellShim, encoding: "utf8", env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` } });
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  assert.equal(out.status, 0, out.stderr);
+  assert.equal(out.stdout, `installer-ran\n\ncaveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v20.11.0.\n  Upgrade Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@${cli}\n`);
 });
