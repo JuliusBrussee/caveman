@@ -27,17 +27,160 @@ function runHook(mode, payload, env = {}) {
   return JSON.parse(res.stdout);
 }
 
-test('first Read allowed, second unchanged Read denied in same conversation', () => {
+function estimatedTokens(text) {
+  return Math.ceil(Buffer.byteLength(String(text), 'utf8') / 4);
+}
+
+function readFileRangeText(filePath, offset, limit) {
+  const lines = fs.readFileSync(filePath, 'utf8').split('\n');
+  const start = Math.max(1, Number(offset) || 1);
+  const lim = Number(limit) || lines.length;
+  return lines.slice(start - 1, start - 1 + lim).join('\n');
+}
+
+function grepPayload(rootDir, pattern) {
+  const out = [];
+  const visit = (p) => {
+    let st;
+    try {
+      st = fs.statSync(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) {
+      for (const ent of fs.readdirSync(p, { withFileTypes: true })) {
+        if (ent.name === 'node_modules' || ent.name === '.git') continue;
+        visit(path.join(p, ent.name));
+      }
+      return;
+    }
+    let body;
+    try {
+      body = fs.readFileSync(p, 'utf8');
+    } catch {
+      return;
+    }
+    for (const line of body.split('\n')) {
+      if (line.includes(pattern)) out.push(line);
+    }
+  };
+  visit(rootDir);
+  return out.join('\n');
+}
+
+function globTxtPayload(rootDir) {
+  const files = [];
+  for (const name of fs.readdirSync(rootDir)) {
+    const full = path.join(rootDir, name);
+    try {
+      if (fs.statSync(full).isFile() && name.endsWith('.txt')) files.push(name);
+    } catch {
+      /* skip */
+    }
+  }
+  return files.join('\n');
+}
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+
+function charMeasure(text) {
+  const chars = String(text).length;
+  return { chars, tokens: Math.ceil(chars / 4) };
+}
+
+function fmtNum(n) {
+  return n.toLocaleString('en-US');
+}
+
+function globTestMjsPayload(testsDir, repoRoot, maxFiles = 500) {
+  const files = [];
+  let count = 0;
+  const visit = (p) => {
+    if (count >= maxFiles) return;
+    let st;
+    try {
+      st = fs.statSync(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) {
+      for (const ent of fs.readdirSync(p, { withFileTypes: true })) {
+        if (count >= maxFiles) return;
+        if (ent.name === 'node_modules' || ent.name === '.git') continue;
+        visit(path.join(p, ent.name));
+      }
+      return;
+    }
+    count++;
+    if (p.endsWith('.test.mjs')) {
+      files.push(path.relative(repoRoot, p).split(path.sep).join('/'));
+    }
+  };
+  visit(testsDir);
+  return files.sort().join('\n');
+}
+
+function grepToolPayload(rootDir, pattern, maxFiles = 500) {
+  const out = [];
+  let count = 0;
+  const visit = (p) => {
+    if (count >= maxFiles) return;
+    let st;
+    try {
+      st = fs.statSync(p);
+    } catch {
+      return;
+    }
+    if (st.isDirectory()) {
+      for (const ent of fs.readdirSync(p, { withFileTypes: true })) {
+        if (count >= maxFiles) return;
+        if (ent.name === 'node_modules' || ent.name === '.git') continue;
+        visit(path.join(p, ent.name));
+      }
+      return;
+    }
+    count++;
+    let body;
+    try {
+      body = fs.readFileSync(p, 'utf8');
+    } catch {
+      return;
+    }
+    const rel = path.relative(rootDir, p).split(path.sep).join('/');
+    for (const line of body.split('\n')) {
+      if (line.includes(pattern)) out.push(`${rel}:${line}`);
+    }
+  };
+  visit(rootDir);
+  return out.join('\n');
+}
+
+function rowFromPayload(label, payloadText, denyMessage) {
+  const payload = charMeasure(payloadText);
+  const deny = charMeasure(denyMessage);
+  const savedTokens = payload.tokens - deny.tokens;
+  assert.ok(savedTokens > 0, label);
+  return { label, payload, deny, savedTokens };
+}
+
+test('first Read allowed, second unchanged Read denied, third allowed in same conversation', () => {
   const { dir, file } = tempFile();
   const state = HOOK.loadState(path.join(dir, 'state'));
   const input = { conversation_id: 'c1', tool_input: { path: file } };
+  const stateDir = path.join(dir, 'state');
 
-  const first = HOOK.decideRead(input, { state, stateDir: path.join(dir, 'state') });
+  const first = HOOK.decideRead(input, { state, stateDir });
   assert.equal(first.permission, 'allow');
 
-  const second = HOOK.decideRead(input, { state: first.state, stateDir: path.join(dir, 'state') });
+  const second = HOOK.decideRead(input, { state: first.state, stateDir });
   assert.equal(second.permission, 'deny');
   assert.match(second.agent_message, /Already read/);
+  assert.doesNotMatch(second.agent_message, /offset|limit/i);
+  const readKey = process.platform === 'win32' ? file.toLowerCase() : file;
+  assert.equal(second.state.conversations.c1.reads[readKey].duplicateDenied, true);
+
+  const third = HOOK.decideRead(input, { state: second.state, stateDir });
+  assert.equal(third.permission, 'allow');
 
   fs.rmSync(dir, { recursive: true, force: true });
 });
@@ -114,6 +257,7 @@ test('new chat denies one full Read when fingerprint matches, then allows', () =
   );
   assert.equal(convBFirst.permission, 'deny');
   assert.match(convBFirst.agent_message, /previous chat/);
+  assert.doesNotMatch(convBFirst.agent_message, /offset|limit/i);
 
   const convBSecond = HOOK.decideRead(
     { conversation_id: 'chat-b', tool_input: { path: file } },
@@ -238,6 +382,385 @@ test('trimConversations drops oldest and keeps recent denies', () => {
     { state: trimmed, stateDir: '/tmp' },
   );
   assert.equal(denied.permission, 'deny');
+});
+
+test('mixed session scores dedupe effectiveness and fresh-call correctness', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-mixed-'));
+  const file = path.join(dir, 'sample.txt');
+  fs.writeFileSync(file, 'line1\nline2\nline3\nline4\nline5\n');
+  const stateDir = path.join(dir, 'state');
+  let state = HOOK.loadState(stateDir);
+  const conv = 'c-mixed';
+  const cwd = dir;
+
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'caveman-test',
+    GIT_AUTHOR_EMAIL: 'caveman-test@example.com',
+    GIT_COMMITTER_NAME: 'caveman-test',
+    GIT_COMMITTER_EMAIL: 'caveman-test@example.com',
+  };
+  assert.equal(spawnSync('git', ['init'], { cwd: dir, env: gitEnv }).status, 0);
+  fs.writeFileSync(path.join(dir, 'README'), 'hi\n');
+  assert.equal(spawnSync('git', ['add', 'README'], { cwd: dir, env: gitEnv }).status, 0);
+  assert.equal(spawnSync('git', ['commit', '-m', 'init'], { cwd: dir, env: gitEnv }).status, 0);
+
+  const score = {
+    dupCalls: 0,
+    dupDenied: 0,
+    freshCalls: 0,
+    intentionalDupAllow: 0,
+    tokensWithoutDedupe: 0,
+    tokensWithDedupe: 0,
+  };
+
+  function runStep({ label, dup, intentionalAllow, decide, input, denyPattern, toolResultPayload }) {
+    const result = decide(input, { state, stateDir, cwd });
+    state = result.state;
+    let stepTokens = 0;
+    if (toolResultPayload !== undefined) {
+      const text = typeof toolResultPayload === 'function' ? toolResultPayload() : toolResultPayload;
+      stepTokens = estimatedTokens(text);
+      score.tokensWithoutDedupe += stepTokens;
+      if (result.permission === 'allow') score.tokensWithDedupe += stepTokens;
+    }
+    if (dup) {
+      score.dupCalls++;
+      if (intentionalAllow) {
+        score.intentionalDupAllow++;
+        assert.equal(result.permission, 'allow', label);
+      } else {
+        assert.equal(result.permission, 'deny', label);
+        score.dupDenied++;
+        if (denyPattern) assert.match(result.agent_message, denyPattern);
+      }
+    } else {
+      score.freshCalls++;
+      assert.equal(result.permission, 'allow', label);
+    }
+    return result;
+  }
+
+  runStep({
+    label: 'first full Read',
+    dup: false,
+    decide: HOOK.decideRead,
+    input: { conversation_id: conv, tool_input: { path: file } },
+    toolResultPayload: () => fs.readFileSync(file, 'utf8'),
+  });
+  runStep({
+    label: 'repeat full Read',
+    dup: true,
+    decide: HOOK.decideRead,
+    input: { conversation_id: conv, tool_input: { path: file } },
+    denyPattern: /Already read this unchanged file/,
+    toolResultPayload: () => fs.readFileSync(file, 'utf8'),
+  });
+  runStep({
+    label: 'third full Read second chance',
+    dup: true,
+    intentionalAllow: true,
+    decide: HOOK.decideRead,
+    input: { conversation_id: conv, tool_input: { path: file } },
+    toolResultPayload: () => fs.readFileSync(file, 'utf8'),
+  });
+
+  fs.appendFileSync(file, 'line6\n');
+
+  const narrow = { conversation_id: conv, tool_input: { path: file, offset: 2, limit: 2 } };
+  runStep({
+    label: 'ranged Read after edit',
+    dup: false,
+    decide: HOOK.decideRead,
+    input: narrow,
+    toolResultPayload: () => readFileRangeText(file, 2, 2),
+  });
+  runStep({
+    label: 'repeat narrow range',
+    dup: true,
+    decide: HOOK.decideRead,
+    input: narrow,
+    denyPattern: /line range/,
+    toolResultPayload: () => readFileRangeText(file, 2, 2),
+  });
+  runStep({
+    label: 'wider range Read',
+    dup: false,
+    decide: HOOK.decideRead,
+    input: { conversation_id: conv, tool_input: { path: file, offset: 2, limit: 4 } },
+    toolResultPayload: () => readFileRangeText(file, 2, 4),
+  });
+
+  runStep({
+    label: 'full Read for coverage',
+    dup: false,
+    decide: HOOK.decideRead,
+    input: { conversation_id: conv, tool_input: { path: file } },
+    toolResultPayload: () => fs.readFileSync(file, 'utf8'),
+  });
+  runStep({
+    label: 'subset range after full Read',
+    dup: true,
+    decide: HOOK.decideRead,
+    input: { conversation_id: conv, tool_input: { path: file, offset: 2, limit: 1 } },
+    denyPattern: /line range/,
+    toolResultPayload: () => readFileRangeText(file, 2, 1),
+  });
+
+  const grepBase = { conversation_id: conv, tool_input: { pattern: 'line2', path: dir } };
+  runStep({
+    label: 'first Grep',
+    dup: false,
+    decide: HOOK.decideGrep,
+    input: grepBase,
+    toolResultPayload: () => grepPayload(dir, 'line2'),
+  });
+  runStep({
+    label: 'repeat Grep',
+    dup: true,
+    decide: HOOK.decideGrep,
+    input: grepBase,
+    denyPattern: /grep/i,
+    toolResultPayload: () => grepPayload(dir, 'line2'),
+  });
+  runStep({
+    label: 'Grep new pattern',
+    dup: false,
+    decide: HOOK.decideGrep,
+    input: { conversation_id: conv, tool_input: { pattern: 'line6', path: dir } },
+    toolResultPayload: () => grepPayload(dir, 'line6'),
+  });
+  fs.appendFileSync(file, 'line7\n');
+  runStep({
+    label: 'Grep after tree change',
+    dup: false,
+    decide: HOOK.decideGrep,
+    input: grepBase,
+    toolResultPayload: () => grepPayload(dir, 'line2'),
+  });
+
+  const globBase = { conversation_id: conv, tool_input: { glob_pattern: '*.txt', path: dir } };
+  runStep({
+    label: 'first Glob',
+    dup: false,
+    decide: HOOK.decideGlob,
+    input: globBase,
+    toolResultPayload: () => globTxtPayload(dir),
+  });
+  runStep({
+    label: 'repeat Glob',
+    dup: true,
+    decide: HOOK.decideGlob,
+    input: globBase,
+    denyPattern: /glob/i,
+    toolResultPayload: () => globTxtPayload(dir),
+  });
+  runStep({
+    label: 'Glob other conversation',
+    dup: false,
+    decide: HOOK.decideGlob,
+    input: { conversation_id: 'c-other', tool_input: { glob_pattern: '*.txt', path: dir } },
+    toolResultPayload: () => globTxtPayload(dir),
+  });
+
+  runStep({
+    label: 'npm test first',
+    dup: false,
+    decide: HOOK.decideShell,
+    input: { conversation_id: conv, command: 'npm test' },
+    toolResultPayload: 'npm test\n',
+  });
+  runStep({
+    label: 'npm test repeat',
+    dup: true,
+    decide: HOOK.decideShell,
+    input: { conversation_id: conv, command: 'npm test' },
+    denyPattern: /npm test/,
+    toolResultPayload: 'npm test\n',
+  });
+
+  const gitStatus = { conversation_id: conv, command: 'git status' };
+  runStep({
+    label: 'git status first',
+    dup: false,
+    decide: HOOK.decideShell,
+    input: gitStatus,
+    toolResultPayload: () => spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout,
+  });
+  runStep({
+    label: 'git status repeat',
+    dup: true,
+    decide: HOOK.decideShell,
+    input: gitStatus,
+    denyPattern: /git status/,
+    toolResultPayload: () => spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout,
+  });
+  fs.appendFileSync(path.join(dir, 'README'), 'more\n');
+  runStep({
+    label: 'git status after worktree change',
+    dup: false,
+    decide: HOOK.decideShell,
+    input: gitStatus,
+    toolResultPayload: () => spawnSync('git', ['status', '--porcelain'], { cwd: dir, encoding: 'utf8' }).stdout,
+  });
+  runStep({
+    label: 'git status -sb not keyed',
+    dup: false,
+    decide: HOOK.decideShell,
+    input: { conversation_id: conv, command: 'git status -sb' },
+    toolResultPayload: () => spawnSync('git', ['status', '-sb'], { cwd: dir, encoding: 'utf8' }).stdout,
+  });
+  runStep({
+    label: 'npm install not keyed',
+    dup: false,
+    decide: HOOK.decideShell,
+    input: { conversation_id: conv, command: 'npm install' },
+    toolResultPayload: 'npm install\n',
+  });
+
+  const targetDupDenied = score.dupCalls - score.intentionalDupAllow;
+  assert.equal(score.dupDenied, targetDupDenied);
+  assert.equal(score.freshCalls > 0, true);
+  const savedTokens = score.tokensWithoutDedupe - score.tokensWithDedupe;
+  assert.ok(savedTokens > 0);
+  assert.ok(score.tokensWithoutDedupe > score.tokensWithDedupe);
+  const savedPercent = Math.round((savedTokens / score.tokensWithoutDedupe) * 100);
+
+  score.reportLine = `dedupe effectiveness ${score.dupDenied}/${targetDupDenied} duplicate calls blocked; correctness ${score.freshCalls}/${score.freshCalls} fresh calls allowed (${score.intentionalDupAllow} intentional duplicate allow: third full Read); estimated tool-result tokens without dedupe: ${score.tokensWithoutDedupe}; with dedupe: ${score.tokensWithDedupe}; saved: ${savedTokens} (${savedPercent}%, ceil(bytes/4))`;
+  console.log(score.reportLine);
+
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('real repo dedupe token table for PR comment', () => {
+  const repoRoot = REPO_ROOT;
+  const cwd = repoRoot;
+  const stateDir = path.join(fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-table-')), 'state');
+  let state = HOOK.loadState(stateDir);
+  const conv = 'c-dedupe-measure';
+  const rows = [];
+
+  function denyRepeatRead(label, fileRel) {
+    const filePath = path.join(repoRoot, fileRel);
+    const input = { conversation_id: conv, tool_input: { path: filePath } };
+    const first = HOOK.decideRead(input, { state, stateDir, cwd });
+    state = first.state;
+    assert.equal(first.permission, 'allow', label);
+    const payloadText = fs.readFileSync(filePath, 'utf8');
+    const second = HOOK.decideRead(input, { state, stateDir, cwd });
+    state = second.state;
+    assert.equal(second.permission, 'deny', label);
+    rows.push(rowFromPayload(label, payloadText, second.agent_message));
+  }
+
+  function denyRepeatGrep(label, pattern, searchPathRel) {
+    const searchPath = path.join(repoRoot, searchPathRel);
+    const input = { conversation_id: conv, tool_input: { pattern, path: searchPath } };
+    const first = HOOK.decideGrep(input, { state, stateDir, cwd });
+    state = first.state;
+    assert.equal(first.permission, 'allow', label);
+    const payloadText = grepToolPayload(searchPath, pattern);
+    const second = HOOK.decideGrep(input, { state, stateDir, cwd });
+    state = second.state;
+    assert.equal(second.permission, 'deny', label);
+    rows.push(rowFromPayload(label, payloadText, second.agent_message));
+  }
+
+  function denyRepeatGlob(label, globPattern, testsRel) {
+    const searchPath = path.join(repoRoot, testsRel);
+    const input = { conversation_id: conv, tool_input: { glob_pattern: globPattern, path: searchPath } };
+    const first = HOOK.decideGlob(input, { state, stateDir, cwd });
+    state = first.state;
+    assert.equal(first.permission, 'allow', label);
+    const payloadText = globTestMjsPayload(searchPath, repoRoot);
+    const second = HOOK.decideGlob(input, { state, stateDir, cwd });
+    state = second.state;
+    assert.equal(second.permission, 'deny', label);
+    rows.push(rowFromPayload(label, payloadText, second.agent_message));
+  }
+
+  function denyRepeatGitStatus(label) {
+    const input = { conversation_id: conv, command: 'git status' };
+    const first = HOOK.decideShell(input, { state, stateDir, cwd });
+    state = first.state;
+    assert.equal(first.permission, 'allow', label);
+    const payloadText = spawnSync('git', ['status'], { cwd: repoRoot, encoding: 'utf8' }).stdout;
+    const second = HOOK.decideShell(input, { state, stateDir, cwd });
+    state = second.state;
+    assert.equal(second.permission, 'deny', label);
+    rows.push(rowFromPayload(label, payloadText, second.agent_message));
+  }
+
+  const indexTs = 'packages/cli/src/index.ts';
+  denyRepeatRead('`src/hooks/cursor-dedupe-tools.js`', 'src/hooks/cursor-dedupe-tools.js');
+  denyRepeatRead('`installer/lib/cursor-dedupe-hooks.js`', 'installer/lib/cursor-dedupe-hooks.js');
+  denyRepeatRead('`CLAUDE.md`', 'CLAUDE.md');
+  denyRepeatRead(`\`${indexTs}\` (full file)`, indexTs);
+  denyRepeatRead('`tests/installer/cursor-dedupe-tools.test.mjs`', 'tests/installer/cursor-dedupe-tools.test.mjs');
+  {
+    const label = '`index.ts` lines 1–80 (already covered by the full read)';
+    const filePath = path.join(repoRoot, indexTs);
+    const input = { conversation_id: conv, tool_input: { path: filePath, offset: 1, limit: 80 } };
+    const payloadText = readFileRangeText(filePath, 1, 80);
+    const denied = HOOK.decideRead(input, { state, stateDir, cwd });
+    state = denied.state;
+    assert.equal(denied.permission, 'deny', label);
+    rows.push(rowFromPayload(label, payloadText, denied.agent_message));
+  }
+  denyRepeatGrep('Grep `decideRead` in `src/hooks`', 'decideRead', 'src/hooks');
+  denyRepeatGrep('Grep `cursor-dedupe` in the repo', 'cursor-dedupe', '.');
+  denyRepeatGlob('Glob `tests/**/*.test.mjs`', '**/*.test.mjs', 'tests');
+  denyRepeatGitStatus('`git status`');
+
+  assert.equal(rows.length, 10);
+
+  let totalPayloadChars = 0;
+  let totalPayloadTokens = 0;
+  let totalDenyTokens = 0;
+  let totalSavedTokens = 0;
+  for (const row of rows) {
+    totalPayloadChars += row.payload.chars;
+    totalPayloadTokens += row.payload.tokens;
+    totalDenyTokens += row.deny.tokens;
+    totalSavedTokens += row.savedTokens;
+  }
+  const savedPercent = Math.round((totalSavedTokens / totalPayloadTokens) * 100);
+
+  const lines = [
+    '## Cursor dedupe-hook token measurement (generated)',
+    '',
+    'Denied repeat replaces tool payload with short `agent_message`. Savings = payload that would re-enter context minus that message. Token estimate is `ceil(chars / 4)`.',
+    '',
+    '| Repeat call | Payload | Deny message | Saved tokens |',
+    '|---|---:|---:|---:|',
+  ];
+  for (const row of rows) {
+    lines.push(
+      `| ${row.label} | ${fmtNum(row.payload.chars)} chars / ${fmtNum(row.payload.tokens)} tok | ${fmtNum(row.deny.chars)} / ${fmtNum(row.deny.tokens)} | **${fmtNum(row.savedTokens)}** |`,
+    );
+  }
+  lines.push('');
+  lines.push(
+    `**${rows.length} denied repeats: ${fmtNum(totalPayloadChars)} characters, about ${fmtNum(totalPayloadTokens)} tokens without dedupe; about ${fmtNum(totalDenyTokens)} tokens with dedupe (deny messages only); saved ${fmtNum(totalSavedTokens)} tokens (${savedPercent}%).**`,
+  );
+
+  const indexRow = rows.find((r) => r.label.includes('full file'));
+  if (indexRow) {
+    const withoutIndex = rows.filter((r) => r !== indexRow);
+    let chars = 0;
+    let saved = 0;
+    for (const row of withoutIndex) {
+      chars += row.payload.chars;
+      saved += row.savedTokens;
+    }
+    lines.push(
+      `Without the full \`${indexTs}\` read, the other ${withoutIndex.length} repeats still save **${fmtNum(chars)} characters, about ${fmtNum(saved)} tokens**.`,
+    );
+  }
+
+  console.log(lines.join('\n'));
+
+  fs.rmSync(path.dirname(stateDir), { recursive: true, force: true });
 });
 
 test('hook CLI fails open on invalid JSON and missing path', () => {
