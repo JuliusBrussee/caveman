@@ -33,10 +33,6 @@ function resolveWindowsCommand(command, env = process.env) {
 }
 
 function parseWindowsNodeShim(source) {
-  // Official npm npx.cmd / npm.cmd (Node 20+): SET "NPX_CLI_JS=%~dp0\node_modules\..."
-  const npmBundled = source.match(/SET\s+"(?:NPX|NPM)_CLI_JS=%~dp0\\([^"\r\n]+)"/i);
-  if (npmBundled) return npmBundled[1];
-
   for (const line of source.split(/\r?\n/)) {
     if (!/(?:\bnode(?:\.exe)?\b|_prog)/i.test(line) || !/%\*/.test(line)) continue;
     // Shim-relative target (npm cmd-shim, pnpm/yarn-classic @zkochan forms), or
