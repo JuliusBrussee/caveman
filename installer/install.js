@@ -32,7 +32,6 @@ const HOST_HOOKS = require('./lib/host-hooks');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 const { parseCommandArgs } = require('./lib/command-args');
-const CURSOR_HOOKS = require('./lib/cursor-hooks');
 
 const REPO = 'JuliusBrussee/caveman';
 // Mirrors the `engines.node` floor in package.json. Hardcoded rather than read
@@ -751,13 +750,7 @@ function installViaSkills(ctx, prov) {
     if (prov.id === 'codex' && opts.withHooks !== false) installCodexHook(ctx);
     if (prov.id === 'cursor') installCursorNative(ctx);
     if (prov.id === 'copilot') installCopilotCliHook(ctx);
-    if (prov.id === 'cursor' && opts.withHooks !== false) {
-      try {
-        CURSOR_HOOKS.installCursorHooks({ note, dryRun: opts.dryRun });
-      } catch (error) {
-        warn(`  Cursor dedupe hook pilot failed: ${error.message}`);
-      }
-    }
+
   } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
@@ -1934,13 +1927,6 @@ function uninstall(ctx) {
   say('🪨 caveman uninstall');
 
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
-
-  try {
-    CURSOR_HOOKS.uninstallCursorHooks({ note, dryRun: opts.dryRun });
-  } catch (error) {
-    cleanupFailed = true;
-    warn(`  Cursor dedupe hook uninstall failed: ${error.message}`);
-  }
 
   // Native integrations (`caveman enable <agent>`) journal their prior state
   // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own

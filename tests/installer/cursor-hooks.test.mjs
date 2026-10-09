@@ -4,15 +4,21 @@ import { createRequire } from 'node:module';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const require = createRequire(import.meta.url);
-const CURSOR = require('../../installer/lib/cursor-hooks.js');
+const DEDUPE = require('../../installer/lib/cursor-dedupe-hooks.js');
+const CURSOR_NATIVE = require('../../installer/lib/cursor-native.js');
+const HOST_HOOKS = require('../../installer/lib/host-hooks.js');
+
+const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 
 function freshHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-home-'));
 }
 
-test('merge keeps unrelated hooks and adds caveman entries', () => {
+test('merge keeps unrelated hooks and adds caveman dedupe entries', () => {
+  const root = path.join(os.tmpdir(), 'cursor-merge-doc');
   const doc = {
     version: 1,
     hooks: {
@@ -20,10 +26,10 @@ test('merge keeps unrelated hooks and adds caveman entries', () => {
       preToolUse: [{ command: './hooks/other.js', matcher: 'Write' }],
     },
   };
-  const merged = CURSOR.mergeHooksDocument(doc);
+  const merged = DEDUPE.mergeDedupeHooksDocument(doc, root, process.execPath);
   assert.equal(merged.hooks.beforeShellExecution.length, 2);
   assert.equal(merged.hooks.preToolUse.length, 4);
-  const cavemanPre = merged.hooks.preToolUse.filter((e) => CURSOR.isCavemanHookEntry(e));
+  const cavemanPre = merged.hooks.preToolUse.filter((e) => DEDUPE.isDedupeHookEntry(e, root));
   assert.equal(cavemanPre.length, 3);
   assert.ok(cavemanPre.some((e) => e.matcher === 'Read'));
   assert.ok(cavemanPre.some((e) => e.matcher === 'Grep'));
@@ -32,63 +38,87 @@ test('merge keeps unrelated hooks and adds caveman entries', () => {
 });
 
 test('merge replaces older caveman Read entry without duplicating', () => {
+  const root = path.join(os.tmpdir(), 'cursor-merge-replace');
   const doc = {
     version: 1,
     hooks: {
       preToolUse: [{ command: 'node "./hooks/cursor-dedupe-tools.js" read', matcher: 'Read' }],
     },
   };
-  const merged = CURSOR.mergeHooksDocument(doc);
-  const cavemanPre = merged.hooks.preToolUse.filter((e) => CURSOR.isCavemanHookEntry(e));
+  const merged = DEDUPE.mergeDedupeHooksDocument(doc, root, process.execPath);
+  const cavemanPre = merged.hooks.preToolUse.filter((e) => DEDUPE.isDedupeHookEntry(e, root));
   assert.equal(cavemanPre.length, 3);
 });
 
-test('strip removes only caveman hook entries', () => {
-  const merged = CURSOR.mergeHooksDocument({ version: 1, hooks: { beforeShellExecution: [{ command: './hooks/user.sh' }] } });
-  const { changed, doc } = CURSOR.stripCavemanHooks(merged);
+test('strip removes only caveman dedupe hook entries', () => {
+  const root = path.join(os.tmpdir(), 'cursor-strip');
+  const merged = DEDUPE.mergeDedupeHooksDocument({
+    version: 1,
+    hooks: { beforeShellExecution: [{ command: './hooks/user.sh' }] },
+  }, root, process.execPath);
+  const { changed, doc } = DEDUPE.stripDedupeHooks(merged, root);
   assert.equal(changed, true);
   assert.equal(doc.hooks.preToolUse, undefined);
   assert.deepEqual(doc.hooks.beforeShellExecution, [{ command: './hooks/user.sh' }]);
 });
 
-test('install pilot prints plan and writes nothing', () => {
+test('installCursorNative copies dedupe script and merges hooks.json', () => {
   const home = freshHome();
   try {
     const notes = [];
-    CURSOR.installCursorHooks({ home, note: (line) => notes.push(line) });
-    assert.ok(notes.some((line) => line.includes('cursor-dedupe-tools.js')));
-    assert.ok(notes.some((line) => line.includes('hooks.json')));
-    assert.equal(fs.existsSync(CURSOR.hookScriptPath(home)), false);
-    assert.equal(fs.existsSync(CURSOR.hooksJsonPath(home)), false);
+    CURSOR_NATIVE.installCursorNative({
+      repoRoot: REPO_ROOT,
+      home,
+      node: process.execPath,
+      withHooks: true,
+      force: true,
+      note: (line) => notes.push(line),
+    });
+    const dedupePath = path.join(home, '.cursor', 'caveman', 'hooks', 'cursor-dedupe-tools.js');
+    assert.ok(fs.existsSync(dedupePath));
+    const manifest = JSON.parse(fs.readFileSync(CURSOR_NATIVE.hooksJsonPath(path.join(home, '.cursor')), 'utf8'));
+    assert.ok(manifest.hooks.sessionStart?.length >= 1);
+    assert.equal(manifest.hooks.preToolUse.filter((e) => DEDUPE.isDedupeHookEntry(e, path.join(home, '.cursor'))).length, 3);
+    assert.equal(manifest.hooks.beforeShellExecution.filter((e) => DEDUPE.isDedupeHookEntry(e, path.join(home, '.cursor'))).length, 1);
+    assert.ok(notes.some((line) => line.includes('dedupe')));
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
-test('uninstall of a home with no Cursor hook stays silent', () => {
+test('uninstallCursorNative removes dedupe hooks and payload', () => {
   const home = freshHome();
+  const root = path.join(home, '.cursor');
   try {
-    const notes = [];
-    CURSOR.uninstallCursorHooks({ home, note: (line) => notes.push(line) });
-    assert.deepEqual(notes, []);
+    CURSOR_NATIVE.installCursorNative({
+      repoRoot: REPO_ROOT,
+      home,
+      node: process.execPath,
+      withHooks: true,
+      force: true,
+      note: () => {},
+    });
+    CURSOR_NATIVE.uninstallCursorNative({ home, note: () => {}, warn: () => {} });
+    assert.equal(fs.existsSync(path.join(root, HOST_HOOKS.PAYLOAD_DIR)), false);
+    assert.equal(fs.existsSync(CURSOR_NATIVE.hooksJsonPath(root)), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
 
-test('uninstall pilot prints plan and writes nothing', () => {
+test('install dry-run writes nothing', () => {
   const home = freshHome();
   try {
-    fs.mkdirSync(path.join(home, '.cursor', 'hooks'), { recursive: true });
-    fs.writeFileSync(CURSOR.hookScriptPath(home), '# stub\n');
-    fs.writeFileSync(CURSOR.hooksJsonPath(home), '{"version":1,"hooks":{}}\n');
-
     const notes = [];
-    CURSOR.uninstallCursorHooks({ home, note: (line) => notes.push(line) });
-    assert.ok(notes.some((line) => line.includes('would remove')));
-    assert.ok(notes.some((line) => line.includes('would prune')));
-    assert.equal(fs.existsSync(CURSOR.hookScriptPath(home)), true);
-    assert.equal(fs.readFileSync(CURSOR.hooksJsonPath(home), 'utf8'), '{"version":1,"hooks":{}}\n');
+    CURSOR_NATIVE.installCursorNative({
+      repoRoot: REPO_ROOT,
+      home,
+      dryRun: true,
+      withHooks: true,
+      note: (line) => notes.push(line),
+    });
+    assert.ok(notes.some((line) => line.includes('dedupe')));
+    assert.equal(fs.existsSync(path.join(home, '.cursor')), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
