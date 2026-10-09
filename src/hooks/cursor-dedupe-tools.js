@@ -179,11 +179,14 @@ function decideRead(input, options = {}) {
 
   const seen = c.reads[norm];
   if (seen && seen.mtimeMs === fp.mtimeMs && seen.hash === fp.hash && seen.full) {
-    return {
-      permission: 'deny',
-      agent_message: 'Already read this unchanged file in this chat. Use the earlier tool result or request a line range (offset/limit).',
-      state,
-    };
+    if (!seen.duplicateDenied) {
+      c.reads[norm] = { ...seen, duplicateDenied: true };
+      return {
+        permission: 'deny',
+        agent_message: 'Already read this unchanged file in this chat. Use the earlier tool result.',
+        state,
+      };
+    }
   }
 
   const stored = state.fingerprints[norm];
@@ -191,7 +194,7 @@ function decideRead(input, options = {}) {
     c.crossWarned[norm] = true;
     return {
       permission: 'deny',
-      agent_message: 'File unchanged since a previous chat. Request a line range (offset/limit) unless you need the whole file.',
+      agent_message: 'File unchanged since a previous chat. Use the earlier tool result unless you need the whole file.',
       state,
     };
   }
