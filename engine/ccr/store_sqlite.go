@@ -97,6 +97,12 @@ const busyRetryBudget = 30 * time.Second
 // budget; one already-running SQLite call may finish after that deadline, but no
 // new attempt starts after it.
 // Callers must be idempotent because fn may run more than once.
+// The budget is wall-clock, not an attempt count, so it absorbs a call that
+// consumed its whole busy_timeout before reporting SQLITE_BUSY and still has a
+// retry left. Ordinary in-process contention is covered by busy_timeout alone
+// and must NOT be wrapped here — a retry loop around it would mask a real stall.
+// The two exceptions are cold-start schema work and mem's idempotent Remember
+// insert, both of which race across short-lived processes.
 func RetryOnBusy(fn func() error) error {
 	return retryOnBusy(fn, busyRetryBudget, time.Now, time.Sleep)
 }
