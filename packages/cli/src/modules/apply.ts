@@ -51,6 +51,8 @@ export type ModuleHost = {
   // Files `enable <agent>` would write, computed without writing them.
   planWiring(agent: string): { file: string; exists: boolean; kind: string }[];
   wiredFiles(agent: string): string[];
+  // Claude Code config dirs `enable claude` wires, absolute, the active one first.
+  claudeProfiles(): string[];
   agentName(agent: string): string;
   // Wiring is quiet: applyModules reports each step through its progress line.
   wireAgent(agent: string): void;
