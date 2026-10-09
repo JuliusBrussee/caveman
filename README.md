@@ -79,9 +79,10 @@ Every reply runs a check before it sends: opener that announces the plan, delete
 ## Install
 
 ```bash
-npm install -g @caveman-ai/cli && caveman setup --install
-caveman claude        # or codex · gemini · aider · kilo · qwen · opencode · hermes · openclaw · pi
+npx @caveman-ai/cli
 ```
+
+One command, same on Mac, Linux and Windows. Caveman look at your machine, find your agents and your logins, show what it change. Press Enter. It set up, then offer to start Claude Code. Later, `caveman claude` (or codex · gemini · aider · kilo · qwen · opencode · hermes · openclaw · pi).
 
 **This is the proxy, the big rock.** Your agent reads 33.2% fewer input tokens across whole sessions, same answers. It runs on your machine, with your keys and your Claude Pro/Max login. Needs Node.js 22.13+. After the first run, plain `claude` stays caveman'd. One rock. That it.
 
