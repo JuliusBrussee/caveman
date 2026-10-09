@@ -518,6 +518,7 @@ setModuleHost({
   })),
   planWiring: (agent) => nativeMutationsFor(agent as NativeAgent, gatewayURL(), probeMcpBinary()?.binary ?? "caveman-mcp", { plan: true })
     .map((mutation) => ({ file: mutation.file, exists: mutation.before !== null, kind: mutation.kind })),
+  claudeProfiles: () => { try { return claudeProfileRoots(); } catch { return [claudeConfigDir()]; } },
   wiredFiles: (agent) => (readNativeJournal(agent) ?? readPendingNativeJournal(agent))?.operations.map((operation) => operation.file) ?? [],
   agentName: (agent) => agentShortName(findAgent(agent)!),
   wireAgent: (agent) => enableNative([agent], { quiet: true }),
@@ -3838,59 +3839,68 @@ export function syncAutoEntries(): void {
     try {
       withIntegrationLock(agent, () => {
         const journal = readNativeJournal(agent);
-        const operation = journal?.operations.find((op) => op.kind === (agent === "claude" ? "claude-settings" : "opencode-config"));
-        if (!journal || !operation) {
+        // Claude journals one settings file per profile; each gets the edit.
+        const operations = journal?.operations.filter((op) => op.kind === (agent === "claude" ? "claude-settings" : "opencode-config")) ?? [];
+        if (!journal || operations.length === 0) {
           // Not wired, yet a session-only `caveman claude` offers Auto too:
           // once it is gone a saved choice of it would reach Anthropic directly.
           if (agent === "claude" && !(gwLocal && autoModelOffered("anthropic"))) clearAutoModelChoice(agent);
           return;
         }
-        const before = fileBytes(operation.file);
-        if (!before) return;
-        const root = parseJsonFileObject(operation.file, before);
-        const owned = { ...(operation.owned ?? {}) };
-        if (agent === "claude") {
-          const env = objectValue(root.env);
-          const ours = Array.isArray(owned.auto_env) ? owned.auto_env.filter((key): key is string => typeof key === "string") : [];
-          if (gwLocal && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env)) {
-            owned.auto_env = [...new Set([...ours, ...addClaudeAutoEnv(env)])];
-          } else {
-            for (const key of ours) if (env[key] === CLAUDE_AUTO_ENV[key]) delete env[key];
-            owned.auto_env = [];
-            if (isClaudeAutoModel(root.model)) delete root.model;
-          }
-          if (Object.keys(env).length > 0) root.env = env; else delete root.env;
-        } else {
-          const providers = objectValue(root.provider);
-          const ours = Array.isArray(owned.auto_models) ? owned.auto_models.filter((id): id is string => typeof id === "string") : [];
-          const next: string[] = [];
-          for (const id of ["openai", "anthropic"] as const) {
-            if (!isPlainObject(providers[id])) continue;
-            const provider = providers[id] as Record<string, unknown>;
-            const models = objectValue(provider.models);
-            if (gwLocal && autoModelOffered(id)) {
-              if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = opencodeAutoModel(id);
-              if (ours.includes(id) || objectValue(models[AUTO_MODEL]).name === AUTO_NAME) next.push(id);
-            } else if (ours.includes(id) && objectValue(models[AUTO_MODEL]).name === AUTO_NAME) {
-              delete models[AUTO_MODEL];
+        let failure: unknown;
+        let changed = false;
+        for (const operation of operations) {
+          try {
+            const before = fileBytes(operation.file);
+            if (!before) continue;
+            const root = parseJsonFileObject(operation.file, before);
+            const owned = { ...(operation.owned ?? {}) };
+            if (agent === "claude") {
+              const env = objectValue(root.env);
+              const ours = Array.isArray(owned.auto_env) ? owned.auto_env.filter((key): key is string => typeof key === "string") : [];
+              if (gwLocal && autoModelOffered("anthropic") && !claudeOffProxyLane(env, process.env)) {
+                owned.auto_env = [...new Set([...ours, ...addClaudeAutoEnv(env)])];
+              } else {
+                for (const key of ours) if (env[key] === CLAUDE_AUTO_ENV[key]) delete env[key];
+                owned.auto_env = [];
+                if (isClaudeAutoModel(root.model)) delete root.model;
+              }
+              if (Object.keys(env).length > 0) root.env = env; else delete root.env;
+            } else {
+              const providers = objectValue(root.provider);
+              const ours = Array.isArray(owned.auto_models) ? owned.auto_models.filter((id): id is string => typeof id === "string") : [];
+              const next: string[] = [];
+              for (const id of ["openai", "anthropic"] as const) {
+                if (!isPlainObject(providers[id])) continue;
+                const provider = providers[id] as Record<string, unknown>;
+                const models = objectValue(provider.models);
+                if (gwLocal && autoModelOffered(id)) {
+                  if (models[AUTO_MODEL] === undefined) models[AUTO_MODEL] = opencodeAutoModel(id);
+                  if (ours.includes(id) || objectValue(models[AUTO_MODEL]).name === AUTO_NAME) next.push(id);
+                } else if (ours.includes(id) && objectValue(models[AUTO_MODEL]).name === AUTO_NAME) {
+                  delete models[AUTO_MODEL];
+                }
+                if (Object.keys(models).length > 0) provider.models = models; else delete provider.models;
+              }
+              owned.auto_models = next;
+              // A saved choice of Auto goes with its provider's entry, not only
+              // when the last one does.
+              const saved = typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`) ? root.model.slice(0, -AUTO_MODEL.length - 1) : undefined;
+              if (saved !== undefined && !next.includes(saved) && (!next.length || saved === "openai" || saved === "anthropic")) delete root.model;
             }
-            if (Object.keys(models).length > 0) provider.models = models; else delete provider.models;
-          }
-          owned.auto_models = next;
-          // A saved choice of Auto goes with its provider's entry, not only
-          // when the last one does.
-          const saved = typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`) ? root.model.slice(0, -AUTO_MODEL.length - 1) : undefined;
-          if (saved !== undefined && !next.includes(saved) && (!next.length || saved === "openai" || saved === "anthropic")) delete root.model;
+            // Compared as values: a file in another layout (or with comments)
+            // that needs no change is not rewritten.
+            if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) continue;
+            atomicWriteFile(operation.file, jsonBytes(root));
+            operation.owned = owned;
+            changed = true;
+          } catch (error) { failure ??= error; }
         }
-        // Compared as values: a file in another layout (or with comments)
-        // that needs no change is not rewritten.
-        if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) return;
-        const after = jsonBytes(root);
-        atomicWriteFile(operation.file, after);
-        operation.owned = owned;
         // after_sha256 stays enable's: the backup is from before enable, so a
         // synced file must take disable's merge path, never the wholesale restore.
-        atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
+        if (changed) atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
+        // One unreadable profile does not keep the others from the edit.
+        if (failure) throw failure;
       });
     } catch (error) {
       process.stderr.write(`${mark("warn")} ${agent}: Auto model not updated (${(error as Error).message}) · caveman doctor ${agent} --fix\n`);
@@ -3903,10 +3913,14 @@ export function syncAutoEntries(): void {
 function clearAutoModelChoice(agent: NativeAgent): void {
   try {
     if (agent === "claude") {
-      const path = claudeSettingsPath();
-      const bytes = fileBytes(path);
-      const root = parseJsonFileObject(path, bytes);
-      if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+      for (const dir of claudeProfileRoots()) {
+        const path = join(dir, "settings.json");
+        try {
+          const bytes = fileBytes(path);
+          const root = parseJsonFileObject(path, bytes);
+          if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+        } catch { /* this profile only; the others still lose the choice */ }
+      }
     } else if (agent === "opencode") {
       const path = join(homedir(), ".config", "opencode", "opencode.json");
       const bytes = fileBytes(path);
@@ -7938,8 +7952,30 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
 
 function detectedAgentVersion(agent: AgentProfile): string | null { return nativeHostProbe(agent).version; }
 
-function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
-  const settingsPath = claudeSettingsPath();
+// One wiring per Claude Code profile: people keep several logins as sibling
+// config dirs and pick one with CLAUDE_CONFIG_DIR, and a profile left out
+// would silently bypass Caveman. A profile that cannot be wired is skipped
+// with a warning, except the active one, which fails as it always has.
+function claudeNativeMutations(gw: string, mcpBinary: string, plan = false): NativeMutation[] {
+  const active = claudeConfigDir();
+  const files = new Set<string>();
+  return claudeProfileRoots().flatMap((root) => {
+    let mutations: NativeMutation[];
+    try { mutations = claudeProfileMutations(root, gw, mcpBinary); } catch (error) {
+      if (root === active) throw error;
+      if (!plan) process.stderr.write(`${mark("warn")} claude profile ${root} skipped: ${(error as Error).message}\n`);
+      return [];
+    }
+    // Profiles that share a file through a link get it written once.
+    return mutations.filter((mutation) => {
+      const real = nativeRealPath(mutation.file);
+      return !files.has(real) && Boolean(files.add(real));
+    });
+  });
+}
+
+function claudeProfileMutations(root: string, gw: string, mcpBinary: string): NativeMutation[] {
+  const settingsPath = join(root, "settings.json");
   const settingsBefore = fileBytes(settingsPath);
   const settings = parseJsonFileObject(settingsPath, settingsBefore);
   if (settings.env !== undefined && (typeof settings.env !== "object" || settings.env === null || Array.isArray(settings.env))) {
@@ -7982,7 +8018,11 @@ function claudeNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   settings.env = env;
   const withHooks = nativeHooksDocument("claude", nativeShrinkEnabled(), settings);
 
-  const mcpPath = claudeGlobalConfigPath();
+  // As claudeGlobalConfigPath: the default profile keeps this file beside
+  // ~/.claude, every other profile keeps it inside its own directory.
+  const mcpPath = root === claudeConfigDir()
+    ? claudeGlobalConfigPath()
+    : join(nativeRealPath(root) === nativeRealPath(join(homedir(), ".claude")) ? homedir() : root, ".claude.json");
   const mcpBefore = fileBytes(mcpPath);
   const mcpRoot = parseJsonFileObject(mcpPath, mcpBefore);
   if (mcpRoot.mcpServers !== undefined && (typeof mcpRoot.mcpServers !== "object" || mcpRoot.mcpServers === null || Array.isArray(mcpRoot.mcpServers))) {
@@ -9308,7 +9348,7 @@ function recoverPendingNativeInstallUnlocked(agent: NativeAgent): boolean {
 // `plan`: only the files and their kinds are wanted, so nothing runs the agent.
 function nativeMutationsFor(agent: NativeAgent, gw: string, mcpBinary: string | undefined, { plan = false } = {}): NativeMutation[] {
   return agent === "claude"
-    ? claudeNativeMutations(gw, mcpBinary!)
+    ? claudeNativeMutations(gw, mcpBinary!, plan)
     : agent === "codex"
       ? codexNativeMutations(gw, mcpBinary!)
       : agent === "hermes"
@@ -9399,7 +9439,8 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
         // is not the current target); it is re-wired below, outside the lock.
         // Module apply (quiet) writes only the files its plan showed, so the
         // voice skills ride along with an explicit `caveman enable` only.
-        if (agentStaleRoute(agent)) {
+        // A Claude profile the journal does not cover is re-wired the same way.
+        if (agentStaleRoute(agent) || existing.unwired_profiles.length > 0) {
           if (!quiet) installNativeVoiceSkills(agent);
           return "stale" as const;
         }
@@ -9455,7 +9496,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     if (outcome === "stale") {
       const was = agentStaleRoute(agent);
       repairNativeAgent(agent, { quiet: true });
-      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: routing: ${was} → ${new URL(gw).origin}\n`);
+      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: ${was ? `routing: ${was} → ${new URL(gw).origin}` : "native Caveman now covers every profile"}\n`);
     }
     ensureLocalProxyForNative(agent, gw);
     if (quiet || outcome === "stale") continue;
@@ -9757,13 +9798,51 @@ function nativeRealPath(file: string): string {
   }
 }
 
-function claudeProfileFiles(journal: NativeJournal | undefined): string[] {
-  const roots = new Set([join(homedir(), ".claude"), claudeConfigDir(), ...rememberedClaudeProfiles()]);
+// Every directory that may be a Claude Code profile, the active one first.
+function claudeProfileCandidates(): string[] {
+  const roots = new Set([claudeConfigDir(), join(homedir(), ".claude"), ...rememberedClaudeProfiles()]);
   for (const entry of readdirSync(homedir(), { withFileTypes: true })) {
     if (/^\.claude[-_].+/.test(entry.name) && (entry.isDirectory() || entry.isSymbolicLink())) {
       roots.add(join(homedir(), entry.name));
     }
   }
+  return [...roots];
+}
+
+// The profiles `enable claude` wires: candidates that hold a Claude Code
+// config, one per real directory. The active one always counts, as it did
+// when it was the only one wired.
+function claudeProfileRoots(): string[] {
+  const active = claudeConfigDir();
+  const seen = new Set<string>();
+  return claudeProfileCandidates().filter((root) => {
+    if (root !== active) {
+      try {
+        if (!statSync(root).isDirectory()) return false;
+      } catch { return false; }
+      if (!["settings.json", ".credentials.json", ".claude.json", "projects"].some((name) => existsSync(join(root, name)))) return false;
+    }
+    const real = nativeRealPath(root);
+    return !seen.has(real) && Boolean(seen.add(real));
+  });
+}
+
+// Profiles the journal does not cover: a login added after enable, or an
+// install from before every profile was wired. One that enable would skip
+// does not count, or the install could never read as whole.
+function claudeUnwiredProfiles(journal: NativeJournal): string[] {
+  try {
+    const wired = new Set(journal.operations.map((operation) => nativeRealPath(operation.file)));
+    return claudeProfileRoots().filter((root) => {
+      if (wired.has(nativeRealPath(join(root, "settings.json")))) return false;
+      if (root === claudeConfigDir()) return true;
+      try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch { return false; }
+    });
+  } catch { return []; }
+}
+
+function claudeProfileFiles(journal: NativeJournal | undefined): string[] {
+  const roots = new Set(claudeProfileCandidates());
   for (const operation of journal?.operations ?? []) {
     if (operation.kind === "claude-settings") roots.add(dirname(operation.file));
   }
@@ -10067,6 +10146,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const packCurrent = installed ? packVersion === expectedPackVersion : null;
   const drifted = checks.some((check) => !check.exact);
   const ownedHealthy = installed && checks.length > 0 && checks.every((check) => check.owned);
+  const unwiredProfiles = agent === "claude" && journal ? claudeUnwiredProfiles(journal) : [];
   const runtimeConfig = wrapRuntimeConfig();
   const coreResolution = runtimeConfig.resolution.values["think.core"];
   const coreConfigured = coreResolution.value === true;
@@ -10115,10 +10195,11 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
     ? Object.entries(opencodeNativeRoutes(gatewayURL())).every(([providerID, route]) => (routeOperation?.owned?.routes as Record<string, unknown> | undefined)?.[providerID] === route)
-    : agent === "pi" ? piBundleCurrent : routeOperation?.owned?.route === expectedRoute);
+    // Claude journals one route per profile; each has to be the current one.
+    : agent === "pi" ? piBundleCurrent : Boolean(routeOperation) && journal!.operations.every((operation) => operation.kind !== routeKind || operation.owned?.route === expectedRoute));
   const proxyHealthy = wrapMode(gatewayURL()) === "managed" || Boolean(probeProxyVersion()?.capabilities.includes("native_runtime_v1"));
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
-  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent ? "degraded" : "installed";
+  const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent || unwiredProfiles.length > 0 ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
@@ -10129,6 +10210,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     const unrouted = opencodeUnroutedActiveProvider(routed);
     if (unrouted) warnings.push(`OpenCode's active provider "${unrouted}" is not routed through Caveman; its requests go direct and are not compressed or counted (routed: ${routed.join(", ")})`);
   }
+  for (const root of unwiredProfiles) warnings.push(`Claude profile ${root} is not routed through Caveman; run \`caveman enable claude\``);
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
@@ -10179,6 +10261,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     expected_pack_version: expectedPackVersion,
     pack_current: packCurrent,
     drifted,
+    unwired_profiles: unwiredProfiles,
     components,
     warnings,
     capabilities: nativeCapabilityReport(agent, components, versionStatus),
