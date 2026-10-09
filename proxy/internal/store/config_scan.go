@@ -127,6 +127,17 @@ func aiderRoot() string {
 	return os.Getenv("CAVEMAN_AIDER_ROOT")
 }
 
+func piRoot() string {
+	if r := os.Getenv("CAVEMAN_PI_ROOT"); r != "" {
+		return r
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(home, ".pi")
+}
+
 // estimateTokens is the project's inferred token heuristic (bytes/4), matching the
 // usage importer's roughJSONSize/4 convention. Conservative, deterministic, no deps.
 func estimateTokens(text string) int {
