@@ -16,6 +16,35 @@
     "writing"
   ],
   "skills": "./skills/",
+  "hooks": {
+    "hooks": {
+      "SessionStart": [
+        {
+          "matcher": "startup|resume|clear|compact",
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node \"${PLUGIN_ROOT}/src/hooks/caveman-activate.js\"",
+              "timeout": 5,
+              "statusMessage": "Loading caveman mode"
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "hooks": [
+            {
+              "type": "command",
+              "command": "node \"${PLUGIN_ROOT}/src/hooks/caveman-mode-tracker.js\"",
+              "timeout": 5,
+              "statusMessage": "Tracking caveman mode"
+            }
+          ]
+        }
+      ]
+    }
+  },
   "interface": {
     "displayName": "Caveman",
     "shortDescription": "Talk like caveman. Cut filler. Keep technical accuracy.",

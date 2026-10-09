@@ -78,6 +78,16 @@ const PREV_BASENAME = '.caveman-active.prev';
 // colliding with Claude Code's own directories (projects/, hooks/, ...).
 const SESSIONS_DIRNAME = '.caveman-sessions';
 
+// PLUGIN_DATA is supplied by Codex plugin hooks. Standalone and Claude plugin
+// installs keep their existing config directory and compatibility behavior.
+function getHookRuntime() {
+  return {
+    isCodex: Boolean(process.env.PLUGIN_DATA),
+    dataDir: process.env.PLUGIN_DATA
+      || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'),
+  };
+}
+
 function getConfigDir() {
   if (process.env.XDG_CONFIG_HOME) {
     return path.join(process.env.XDG_CONFIG_HOME, 'caveman');
@@ -551,12 +561,15 @@ function offToNull(mode) {
 
 // "What mode is in effect right now" — for every reader (per-turn
 // reinforcement gate, ruleset re-emission, statusline, stats).
-function resolveActiveMode(claudeDir, sessionId) {
+function resolveActiveMode(claudeDir, sessionId, options) {
   const sessionPath = sessionActivePath(claudeDir, sessionId);
   if (sessionPath) {
     const stored = readFlag(sessionPath);
     if (stored !== null) return offToNull(stored);
   }
+  // Codex has no legacy session state to migrate. A missing session must never
+  // inherit the mode most recently written by a different chat.
+  if (options && options.legacyFallback === false) return null;
   return offToNull(readFlag(legacyFlagPath(claudeDir)));
 }
 
@@ -809,6 +822,7 @@ function rulesetBanner(mode) {
 }
 
 module.exports = {
+  getHookRuntime,
   getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
   canonicalMode,
   safeWriteFlag, safeDeleteFlag, readFlag, appendFlag, readHistory,

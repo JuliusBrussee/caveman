@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// caveman — Claude Code SessionStart activation hook
+// caveman — shared Claude Code / Codex SessionStart activation hook
 //
 // Runs on every session start:
 //   1. Resolves THIS session's mode and persists it (statusline reads it)
@@ -27,7 +27,7 @@ const os = require('os');
 // is the exact failure this guards against.
 function reportDegraded(name, detail) {
   process.stderr.write('caveman: ' + detail + '\n'
-    + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+    + (process.env.PLUGIN_DATA ? 'Update the Caveman marketplace plugin in Codex. ' : 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. ')
     + 'Continuing with reduced functionality.\n');
 }
 
@@ -152,7 +152,10 @@ const { getDefaultMode, safeWriteFlag, recordModeChange, readFlag, VALID_MODES }
   VALID_MODES: FALLBACK_VALID_MODES,
 };
 
-const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const { isCodex, dataDir: claudeDir } = cavemanConfig && typeof cavemanConfig.getHookRuntime === 'function'
+  ? cavemanConfig.getHookRuntime()
+  : { isCodex: Boolean(process.env.PLUGIN_DATA),
+      dataDir: process.env.PLUGIN_DATA || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude') };
 const flagPath = path.join(claudeDir, '.caveman-active');
 const settingsPath = path.join(claudeDir, 'settings.json');
 
@@ -197,7 +200,7 @@ const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 // Apply per-agent model overrides from env vars before emitting rules.
 // Best-effort: any error is swallowed so SessionStart is never blocked.
 // SessionStart only: the subagent path writes nothing.
-if (!SUBAGENT) {
+if (!SUBAGENT && !isCodex) {
   try {
     const { applyOverrides, resolvePluginRoot } = require('./cavecrew-model-overrides');
     applyOverrides(resolvePluginRoot(__dirname));
@@ -250,7 +253,7 @@ const RESET_SOURCES = new Set(['startup', 'clear']);
 // claude-desktop, ...) never match; CAVEMAN_DEFAULT_MODE in env opts back in.
 function startMode(sessionCwd) {
   const mode = getDefaultMode(sessionCwd);
-  if (mode !== 'off' && !process.env.CAVEMAN_DEFAULT_MODE
+  if (!isCodex && mode !== 'off' && !process.env.CAVEMAN_DEFAULT_MODE
       && /^sdk-/.test(process.env.CLAUDE_CODE_ENTRYPOINT || '')) return 'manual';
   return mode;
 }
@@ -385,6 +388,10 @@ return rulesetBanner(mode) + '\n\n'
 }
 
 function run(source, sessionCwd, sessionId) {
+if (isCodex && !sessionId) return;
+const emitContext = (text) => process.stdout.write(isCodex
+  ? JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: text } })
+  : text);
 let mode;
 if (RESET_SOURCES.has(source)) {
   mode = startMode(sessionCwd);
@@ -400,7 +407,7 @@ if (RESET_SOURCES.has(source)) {
   // the legacy mirror. Falling through to the default there would re-derive on
   // the very compaction #691 fixed. The mirror never holds the literal 'off',
   // so this can only ever supply a real mode.
-  if (stored === null) stored = readFlag(legacyFlagPath(claudeDir));
+  if (stored === null && !isCodex) stored = readFlag(legacyFlagPath(claudeDir));
   if (stored && VALID_MODES.includes(stored)) {
     mode = stored;
   } else {
@@ -417,6 +424,7 @@ if (RESET_SOURCES.has(source)) {
 if (mode === 'off' || mode === 'manual') {
   recordModeChange(claudeDir, null, sessionId); // #601: timestamped transition log
   writeSessionMode(claudeDir, sessionId, null);
+  if (isCodex) return;
   process.stdout.write('OK');
   process.exit(0);
 }
@@ -434,11 +442,13 @@ writeSessionMode(claudeDir, sessionId, mode);
 
 // Independent modes get a short activation line; the skill handles behavior.
 if (INDEPENDENT_MODES.has(mode)) {
-  process.stdout.write('CAVEMAN MODE ACTIVE — mode: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  emitContext('CAVEMAN MODE ACTIVE — mode: ' + mode + '. Behavior defined by /caveman-' + mode + ' skill.');
+  if (isCodex) return;
   process.exit(0);
 }
 
 let output = buildRuleset(mode);
+if (isCodex) { emitContext(output); return; }
 
 // 3. Detect missing statusline config — nudge Claude to help set it up.
 // One-shot (#661): the nudge costs ~90 tokens per session, so a marker file

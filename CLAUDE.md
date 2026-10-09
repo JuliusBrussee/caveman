@@ -75,7 +75,7 @@ caveman/
 ├── commands/                    # Codex/Gemini TOML command stubs (root for plugin auto-discovery)
 │
 ├── src/                         # Internal source — not auto-discovered by plugin
-│   ├── hooks/                   # Claude Code hooks (installer reads here)
+│   ├── hooks/                   # Shared Claude Code / Codex hooks (installer reads here)
 │   ├── rules/                   # Auto-activation rule body (single source)
 │   ├── tools/                   # caveman-init.js (per-repo rule writer)
 │   └── mcp-servers/             # caveman-shrink npm-published MCP middleware
@@ -93,6 +93,8 @@ caveman/
 ├── shared/                       # Provider catalog + platform libraries
 │
 ├── .claude-plugin/              # Claude Code plugin manifest (REQUIRED at root)
+├── .codex-plugin/               # Codex plugin manifest, inline shared hooks
+├── assets/                     # Codex plugin display icons
 ├── .cursor-plugin/plugin.json   # Cursor plugin: skills/, hooks/hooks-cursor.json, agents/ (default scan)
 ├── hooks/hooks-cursor.json      # Cursor plugin sessionStart hook ONLY. Never add hooks/hooks.json:
 │                                #   Claude Code and Gemini auto-load it from the plugin/extension root
@@ -121,7 +123,8 @@ caveman/
 | `skills/caveman/SKILL.md` | The caveman voice: rules, auto-clarity, persistence. Sibling skills `skills/ultracave/SKILL.md` (grammar stripped) and `skills/megacave/SKILL.md` (文言文) are self-contained and each map 1:1 to a stored mode. Edit these three for behavior changes. |
 | `src/rules/caveman-activate.md` | Always-on auto-activation rule body, consumed by `src/tools/caveman-init.js` (per-repo IDE rule files) and by the opencode `AGENTS.md` block. GENERATED: `skills/compile.mjs` derives it from `skills/caveman/SKILL.md` (thesis line + rule headlines) plus the fixed tail in `skills/activation-rule.mjs`, and rewrites the `RULE_BODY` fallback in `caveman-init.js` to match. Edit the skill or the tail, rerun `node packages/cli/scripts/compile-registries.mjs`; `tests/installer/rule-copies.test.mjs` fails on drift. |
 | `src/rules/caveman-openclaw-bootstrap.md` | Marker-fenced bootstrap snippet appended to `~/.openclaw/workspace/SOUL.md` by `installer/lib/openclaw.js`. Drives always-on caveman through the OpenClaw gateway. Must include the SENTINEL `Respond terse like smart caveman` and stay well under OpenClaw's 12K-per-bootstrap-file cap. |
-| `.codex/codex-sessionstart.js` | Repo-local Codex SessionStart hook. Resolves the configured default mode through `src/hooks/caveman-config.js` and emits the active skill's ruleset whole, replacing the hardcoded `full`-level echo `.codex/hooks.json` used to carry — so `CAVEMAN_DEFAULT_MODE`, a repo-local `.caveman.json` and a user-config `defaultMode: "off"` all take effect on Codex. Also the user-level always-on hook (#573): `installer/install.js --only codex` copies it (shipped via `package.json` `files`) into the owned payload `$CODEX_HOME/caveman/hooks/` beside `caveman-config.js` and `package.json`, with `caveman/skills/{caveman,ultracave,megacave}/SKILL.md`, and merges one SessionStart entry into `$CODEX_HOME/hooks.json`, identified by that script path so foreign and caveman-CLI `native-hook` entries are never touched. `--no-hooks`/`--minimal` skip it; uninstall unmerges before removing the payload. Codex asks the user to trust a new hook via `/hooks`; never pre-trust it. Carries a hand-copied `FALLBACK_VALID_MODES` for when the shared resolver is absent; `tests/hooks/codex-sessionstart.test.mjs` fails if it drifts from `VALID_MODES`. |
+| `.codex-plugin/plugin.json` | Codex marketplace plugin manifest at the repository root. Declares `skills/`, display metadata and inline SessionStart + UserPromptSubmit hooks shared with Claude Code. Display icons live in `assets/`. |
+| `.codex/codex-sessionstart.js` | Standalone Codex SessionStart hook. Resolves the configured default mode through `src/hooks/caveman-config.js` and emits the active skill's ruleset whole, so `CAVEMAN_DEFAULT_MODE`, a repo-local `.caveman.json` and a user-config `defaultMode: "off"` all take effect on Codex. User-level always-on hook (#573): `installer/install.js --only codex` copies it (shipped via `package.json` `files`) into the owned payload `$CODEX_HOME/caveman/hooks/` beside `caveman-config.js` and `package.json`, with `caveman/skills/{caveman,ultracave,megacave}/SKILL.md`, and merges one SessionStart entry into `$CODEX_HOME/hooks.json`, identified by that script path so foreign and caveman-CLI `native-hook` entries are never touched. `--no-hooks`/`--minimal` skip it; uninstall unmerges before removing the payload. Codex asks the user to trust a new hook via `/hooks`; never pre-trust it. Carries a hand-copied `FALLBACK_VALID_MODES` for when the shared resolver is absent; `tests/hooks/codex-sessionstart.test.mjs` fails if it drifts from `VALID_MODES`. |
 | `installer/lib/openclaw.js` | OpenClaw install/uninstall helper. Frontmatter merge (`version`, `always: true`), SOUL.md marker append/strip, idempotent. Shared by `installer/install.js` and `src/tools/caveman-init.js`. |
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
@@ -213,9 +216,11 @@ The old steps that mirrored SKILL.md and rules into root dotdirs (`.cursor/`, `.
 
 ---
 
-## Hook system (Claude Code)
+## Hook system (Claude Code and Codex)
 
 Four hooks in `src/hooks/` plus a `caveman-config.js` shared module, a `caveman-parse.js` shared mode-change parser and a `package.json` CommonJS marker.
+
+Codex declares inline SessionStart + UserPromptSubmit hooks with the required `hooks: { hooks: { ... } }` wrapper. `getHookRuntime()` selects Codex when `PLUGIN_DATA` is present and stores its state there, separate from Claude. Codex requires a valid `session_id`, reads only that session (never the legacy mirror), emits JSON additional context without UI warnings, and skips Claude statusline, Cavecrew model overrides, and Claude statistics. Repo-local `.codex/hooks.json` and `.codex/config.toml` were removed to avoid double activation; the standalone installer still uses `.codex/codex-sessionstart.js`. Native Codex `$skill` / `[$skill](path)` invocations opt into the shared parser with `codexSkills: true`; trailing task prose is not an invalid mode argument.
 
 **Mode state is per session.** Each session's mode lives in `$CLAUDE_CONFIG_DIR/.caveman-sessions/<session_id>.mode`, keyed by the `session_id` Claude Code puts in every hook payload *and* in the statusline's stdin JSON. `$CLAUDE_CONFIG_DIR/.caveman-active` survives as a last-write-wins compat mirror (falls back to `~/.claude/`).
 
@@ -246,6 +251,7 @@ All hooks honor `CLAUDE_CONFIG_DIR` for non-default Claude Code config locations
 ### `src/hooks/caveman-config.js` — shared module
 
 Exports:
+- `getHookRuntime()` — returns `{ isCodex, dataDir }` from `PLUGIN_DATA` or the existing Claude config directory. No new runtime dependency.
 - `getDefaultMode()` — resolves default mode in order: `CAVEMAN_DEFAULT_MODE` env var → repo-local config (`<cwd>/.caveman/config.json` or `<cwd>/.caveman.json`, walking up to the filesystem root) → user config (`$XDG_CONFIG_HOME/caveman/config.json` / `~/.config/caveman/config.json` / `%APPDATA%\caveman\config.json`) → `'caveman'`. The env var short-circuits before any cwd walk. Repo-local config lets a team check in a per-project default without polluting every contributor's env or user config.
 - `findRepoConfigPath(start)` — walks up from `start` (default `process.cwd()`) looking for the first `.caveman/config.json` or `.caveman.json`. Bounded to 64 ancestors. Refuses symlinked files (symmetric with `safeWriteFlag` / `readFlag`).
 - `safeWriteFlag(flagPath, content)` — symlink-safe flag write. Refuses if flag target or its immediate parent is a symlink. Opens with `O_NOFOLLOW` where supported. Atomic temp + rename. Creates with `0600`. Protects against local attackers replacing the predictable flag path with a symlink to clobber files writable by the user. Used by both write hooks. Silent-fails on all filesystem errors.
@@ -257,7 +263,7 @@ Exports:
 - `gcSessionStore(claudeDir, opts)` — mtime sweep of `.caveman-sessions/`, 14-day TTL (`CAVEMAN_SESSION_TTL_MS` overrides for tests), `maxDeletes` cap, refuses symlinks. Called from SessionStart on new sessions only — never on `compact`, which is frequent and shares the 5s hook budget.
 - `recordModeChange(claudeDir, newMode, sessionId)` — third arg tags the log entry; omitted (not null) when unknown, so pre-existing readers see the old shape.
 
-**Every function above accepts a `sessionId` that may be `null` or malformed and degrades to the legacy machine-wide behavior.** That is the entire backward-compatibility story: the old code path *is* the fallback branch, which is why the existing tests — none of which send a `session_id` — pass unchanged. The three hook entrypoints resolve these helpers individually (`cfg.writeSessionMode || <legacy stub>`) rather than adding them to their `requireSibling` shape checks: a `caveman-config.js` from before per-session state satisfies those checks, and hard-failing over the newer exports would trade "machine-wide mode, as it always worked" for "no state at all" on exactly the plugin-cache-drift scenario #848 is about.
+**The state functions above accept a `sessionId` that may be `null` or malformed and degrade to the legacy machine-wide behavior by default.** Codex passes `{ legacyFallback: false }` to `resolveActiveMode` and refuses invalid session ids at its entrypoints. That is the entire backward-compatibility story: the old code path *is* the fallback branch, which is why the existing tests — none of which send a `session_id` — pass unchanged. The three hook entrypoints resolve these helpers individually (`cfg.writeSessionMode || <legacy stub>`) rather than adding them to their `requireSibling` shape checks: a `caveman-config.js` from before per-session state satisfies those checks, and hard-failing over the newer exports would trade "machine-wide mode, as it always worked" for "no state at all" on exactly the plugin-cache-drift scenario #848 is about.
 
 ### `src/hooks/caveman-activate.js` — SessionStart hook
 
@@ -362,7 +368,7 @@ How caveman reaches each agent type:
 | Agent | Mechanism | Auto-activates? |
 |-------|-----------|----------------|
 | Claude Code | Plugin (hooks + skills) or standalone hooks | Yes — SessionStart hook injects rules; SubagentStart passes the session's mode to subagents |
-| Codex | `npx skills add -a codex` plus an owned SessionStart hook in `$CODEX_HOME/hooks.json` (installer, default on); plugin in `plugins/caveman/`; repo `.codex/hooks.json` and `.codex/config.toml` for this checkout | Yes — SessionStart hook, after the user trusts it once via `/hooks` |
+| Codex | Root `.codex-plugin/plugin.json` declares skills and inline shared SessionStart + UserPromptSubmit hooks; modes persist per chat through resume/compact. Alternatively, the standalone installer adds an owned SessionStart hook to `$CODEX_HOME/hooks.json`. | Yes after trusting the chosen installation’s hooks |
 | Gemini CLI | Extension with `GEMINI.md` context file | Yes — context file loads every session |
 | opencode | Native plugin (`src/plugins/opencode/`) copied into `~/.config/opencode/plugins/caveman/` + `AGENTS.md` ruleset + skills/agents/commands directories. Plugin uses `session.created` and `tui.prompt.append` lifecycle hooks. No statusline (opencode TUI exposes no plugin-writable badge). | Yes — `session.created` writes flag, `AGENTS.md` carries always-on ruleset |
 | OpenClaw | Workspace skill at `~/.openclaw/workspace/skills/caveman/SKILL.md` (frontmatter merged with `version` + `always: true`) plus a marker-fenced bootstrap block in `~/.openclaw/workspace/SOUL.md`. Both writes go through `installer/lib/openclaw.js`; workspace path is overridable via `OPENCLAW_WORKSPACE`. | Yes — SOUL.md is auto-injected each turn under "Project Context" (subject to OpenClaw's 12K-per-file / 60K-total bootstrap caps) |

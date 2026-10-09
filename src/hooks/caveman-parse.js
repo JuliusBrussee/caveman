@@ -34,6 +34,8 @@
 //                          characters wrapping the whole prompt (opencode's
 //                          non-interactive `run` path delivers messages this
 //                          way).
+//   codexSkills         — accept a leading $skill or [$skill](path) reference.
+//                          Its trailing prose is a task, not a mode argument.
 
 // Sibling require that tolerates the opencode install layout, where this
 // file is copied next to a renamed `caveman-config.cjs` (the plugin dir is
@@ -211,6 +213,24 @@ function parseModeChange(promptRaw, options) {
   const getDefaultMode = options.getDefaultMode || cavemanConfig.getDefaultMode;
 
   let prompt = (promptRaw || '').trim();
+  if (options.codexSkills) {
+    const ref = /^(?:\[\$([a-z0-9:_-]+)\]\([^\r\n]*?\)|\$([a-z0-9:_-]+))(?=\s|$)/i.exec(prompt);
+    if (ref) {
+      const name = (ref[1] || ref[2]).toLowerCase();
+      const cmd = '/' + name;
+      const arg = prompt.slice(ref[0].length).trim().split(/\s+/, 1)[0];
+      // Reuse the existing argument resolver only for known mode arguments.
+      // "$caveman fix the bug" is a skill invocation with a task, not a typo.
+      const normalized = normalizeModeArg(arg.toLowerCase());
+      const knownArg = canonicalMode(normalized)
+        || ['stop', 'disable', 'status'].includes(normalized);
+      // Route back through the slash-command path; no second mode parser.
+      // Arguments to another skill must not trigger natural-language changes.
+      return parseModeChange(cmd + (knownArg ? ' ' + arg : ''), {
+        ...options, codexSkills: false, skipNaturalLanguage: true,
+      });
+    }
+  }
   if (options.unwrapQuotes) {
     const wrapped = /^(["'`])([\s\S]*)\1$/.exec(prompt);
     if (wrapped) prompt = wrapped[2].trim();

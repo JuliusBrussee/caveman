@@ -15,7 +15,7 @@ const root = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const requireCjs = createRequire(import.meta.url);
 const { VALID_MODES } = requireCjs(join(root, 'src', 'hooks', 'caveman-config.js'));
 
-// Full layout copy — .codex (hook + manifest), src (shared resolver) and
+// Full layout copy — .codex (standalone hook), src (shared resolver) and
 // skills (SKILL.md) — so every test runs the fixture's own copy of the hook
 // exactly as a repo checkout would resolve it, with no reads escaping into
 // the developer's real config. A space in the temp name stress-tests quoting.
@@ -46,21 +46,6 @@ function runHook(item, cwd, extraEnv = {}) {
     timeout: 20_000,
   });
 }
-
-test('.codex/hooks.json manifest is valid and points at the hook script', () => {
-  const manifest = JSON.parse(readFileSync(join(root, '.codex', 'hooks.json'), 'utf8'));
-  const entries = manifest.hooks.SessionStart;
-  assert.ok(Array.isArray(entries) && entries.length === 1);
-  assert.equal(entries[0].matcher, 'startup|resume');
-  const hook = entries[0].hooks[0];
-  assert.equal(hook.type, 'command');
-  // Codex runs command hooks with the SESSION cwd as working directory and
-  // may be launched from a subdirectory, so the documented pattern for
-  // repo-local hooks is git-root resolution — a bare relative path would
-  // make node fail to find the script and caveman silently never activate.
-  assert.match(hook.command, /git rev-parse --show-toplevel/);
-  assert.match(hook.command, /node .*codex-sessionstart\.js/);
-});
 
 test('hand-copied fallback whitelist stays equal to caveman-config VALID_MODES', async () => {
   const source = readFileSync(join(root, '.codex', 'codex-sessionstart.js'), 'utf8');

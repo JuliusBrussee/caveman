@@ -37,7 +37,7 @@ function requireSibling(name, isUsable) {
     process.stderr.write('caveman: ' + (absent
       ? name + '.js is missing from ' + __dirname + ' — the install is incomplete.'
       : name + ' could not load — ' + message.split('\n')[0]) + '\n'
-      + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+      + (process.env.PLUGIN_DATA ? 'Update the Caveman marketplace plugin in Codex. ' : 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. ')
       + 'Continuing with reduced functionality.\n');
     return null;
   }
@@ -46,7 +46,7 @@ function requireSibling(name, isUsable) {
   // undefined — the raw stack trace this guard exists to remove.
   if (!isUsable(mod)) {
     process.stderr.write('caveman: ' + name + ' loaded but is missing expected exports — the install is inconsistent.\n'
-      + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+      + (process.env.PLUGIN_DATA ? 'Update the Caveman marketplace plugin in Codex. ' : 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. ')
       + 'Continuing with reduced functionality.\n');
     return null;
   }
@@ -76,7 +76,7 @@ const { getDefaultMode, safeWriteFlag, readFlag, recordModeChange } = cavemanCon
 // pre-per-session behavior against the legacy flag instead.
 const cfg = cavemanConfig || {};
 const validateSessionId = cfg.validateSessionId || (() => null);
-const resolveActiveMode = cfg.resolveActiveMode || (() => {
+const resolveMode = cfg.resolveActiveMode || (() => {
   const m = readFlag(flagPath);
   return (!m || m === 'off') ? null : m;
 });
@@ -102,7 +102,11 @@ const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (
   INDEPENDENT_MODES: new Set(['commit', 'review', 'compress']),
 };
 
-const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+const { isCodex, dataDir: claudeDir } = typeof cfg.getHookRuntime === 'function'
+  ? cfg.getHookRuntime()
+  : { isCodex: Boolean(process.env.PLUGIN_DATA),
+      dataDir: process.env.PLUGIN_DATA || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude') };
+const resolveActiveMode = (dir, sid) => resolveMode(dir, sid, { legacyFallback: !isCodex });
 const flagPath = path.join(claudeDir, '.caveman-active');
 // Remembers the prose mode active before a one-shot independent mode
 // (/caveman-commit etc.) so the next ordinary prompt can restore it (#599).
@@ -148,6 +152,7 @@ function handle(raw) {
     // malformed, in which case the helpers above fall back to the legacy
     // machine-wide flag — i.e. exactly the pre-per-session behavior.
     const sessionId = validateSessionId(data.session_id);
+    if (isCodex && !sessionId) return;
 
     // Collapse whitespace so phrase triggers still match multiline prompts —
     // every regex below sees a single-line prompt (#598).
@@ -193,7 +198,7 @@ function handle(raw) {
     // verbatim. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
     const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
-    if (statsMatch) {
+    if (statsMatch && !isCodex) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
       // Resolved once, outside the try, because the failure message needs it
       // too. A hardcoded `hooks/caveman-stats.js` is only real for a standalone
@@ -237,7 +242,7 @@ function handle(raw) {
     // opencode plugin for slash commands, namespaced /caveman:caveman-*,
     // natural-language activation/deactivation, and brevity triggers.
     const change = parseModeChange(prompt, {
-      getDefaultMode: () => getDefaultMode(data.cwd), skipNaturalLanguage,
+      getDefaultMode: () => getDefaultMode(data.cwd), skipNaturalLanguage, codexSkills: isCodex,
     });
 
     // Status is observational: do not consume a one-shot mode's pending
@@ -323,6 +328,7 @@ function handle(raw) {
       recordModeChange(claudeDir, null, sessionId); // #601
       writeSessionMode(claudeDir, sessionId, null);
       clearSessionPrev(claudeDir, sessionId);
+      if (isCodex) notice = 'CAVEMAN MODE OFF. Stop applying Caveman, Ultracave, or Megacave style until explicitly activated again.';
     }
 
     // Per-turn reinforcement: emit a short reminder when caveman is active.

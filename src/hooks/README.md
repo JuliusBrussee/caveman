@@ -1,8 +1,15 @@
 # Caveman Hooks
 
-These hooks are **bundled with the caveman plugin** and activate automatically when the plugin is installed. No manual setup required.
+The activation and mode-tracking hooks are **shared by the Claude Code and Codex plugins**, declared inline in each manifest. Codex users must review and trust both hooks in Hooks before they run. Standalone installation below is for Claude Code.
 
 If you installed caveman standalone (without the plugin), the unified Node installer at `installer/install.js` wires them into your `settings.json` for you — run `node installer/install.js --only claude` from a clone, or `npx -y github:JuliusBrussee/caveman -- --only claude` for the curl-pipe path.
+
+Codex stores per-session modes in `$PLUGIN_DATA/.caveman-sessions/`, never
+falls back to another chat's legacy flag, and requires a valid `session_id`.
+It emits JSON `additionalContext` without `systemMessage`. Startup/clear apply
+the default; resume/compact preserve the stored mode, including `off`. Native
+`$skill` and Markdown skill references use the common parser; Claude-only
+statusline, model overrides and usage scripts do not run in Codex.
 
 ## What's Included
 
@@ -37,8 +44,8 @@ literal `off` in a session file (the new, durable one).
 - Sweeps session files older than 14 days (`CAVEMAN_SESSION_TTL_MS` overrides), on new sessions only
 - Detects missing statusline config and emits setup nudge (Claude will offer to help)
 
-**Why `source` matters.** The hook is registered with no matcher, so it fires
-for every source — deliberately, because compaction is what prunes the ruleset
+**Why `source` matters.** Claude registers the hook with no matcher; Codex matches startup, resume,
+clear and compact. Both fire for every supported continuation — deliberately, because compaction is what prunes the ruleset
 out of context and lets the model drift back to verbose prose, so the rules must
 be re-injected afterwards. What it must *not* do on a continuation (`compact`,
 `resume`, `fork`) is re-derive the configured default and overwrite the
