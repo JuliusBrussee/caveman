@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 
 import { parseWindowsNodeShim, portableInvocation } from "../dist/portable-command.js";
@@ -98,7 +98,6 @@ test("nested shims reject unsafe wrappers, missing targets, cycles and excessive
     for (const content of [
       '"%~dp0child.bat" %*\r\necho unsafe\r\n',
       '"%~dp0child.bat" %* & echo unsafe\r\n',
-      '"%~dp0child.exe" %*\r\n',
       '"%~dp0child.ps1" %*\r\n',
       '"%~dp0child.bat" %*\r\nnode "%~dp0missing.js" %*\r\n',
       '"%~dp0child.bat" %*\r\nnode "%~dp0cli.js" %*\r\n',
@@ -106,6 +105,12 @@ test("nested shims reject unsafe wrappers, missing targets, cycles and excessive
       writeFileSync(shim, content);
       assert.throws(invoke, /cannot safely launch non-Node Windows command shim/);
     }
+    // A forward to an executable is run directly (next test), so only a
+    // missing one is refused; with anything after it, the whole shim is.
+    writeFileSync(shim, '"%~dp0child.exe" %*\r\n');
+    assert.throws(invoke, /Windows command shim target is missing/);
+    writeFileSync(shim, '"%~dp0child.exe" %* & echo unsafe\r\n');
+    assert.throws(invoke, /cannot safely launch non-Node Windows command shim/);
     writeFileSync(shim, '"%~dp0child.bat" %*\r\n');
     assert.throws(invoke, /Windows command shim target is missing/);
     writeFileSync(child, '"%~dp0pi.cmd" %*\r\n');
@@ -128,6 +133,27 @@ test("non-Node Windows shims fail closed instead of using injectable shell mode"
       () => portableInvocation(shim, ["unsafe&arg"], "win32"),
       /cannot safely launch non-Node Windows command shim/,
     );
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// npm's shim for a package whose bin is a native executable (Claude Code).
+test("a Windows shim that forwards to an .exe beside it runs that executable directly", () => {
+  const root = mkdtempSync(join(tmpdir(), "cave-win-exe-shim-"));
+  try {
+    const exe = join(root, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+    mkdirSync(dirname(exe), { recursive: true });
+    writeFileSync(exe, "");
+    const shim = join(root, "claude.cmd");
+    writeFileSync(shim, [
+      "@ECHO off", "GOTO start", ":find_dp0", "SET dp0=%~dp0", "EXIT /b", ":start", "SETLOCAL", "CALL :find_dp0",
+      '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*', "",
+    ].join("\r\n"));
+    assert.deepEqual(portableInvocation(shim, ["--version", "a&b"], "win32"), { command: exe, args: ["--version", "a&b"] });
+    // The target must exist: a shim naming a missing executable is refused.
+    rmSync(exe);
+    assert.throws(() => portableInvocation(shim, [], "win32"), /shim target is missing/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

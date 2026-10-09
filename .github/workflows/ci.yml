@@ -63,7 +63,17 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile --filter "@caveman-ai/cli..."
       - run: pnpm --dir packages/cli build
+      # Unpinned on purpose: the job is here to meet the Claude Code people install today.
       - run: npm install -g @anthropic-ai/claude-code
+      # How npm exposes `claude` here (a .cmd that forwards to a node script or
+      # to a native .exe) decides how the CLI launches it; print it for a red run.
+      - name: How claude is installed
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $claude = (Get-Command claude -All | Select-Object -ExpandProperty Source)
+          $claude
+          $claude | Where-Object { $_ -match '\.cmd$' } | ForEach-Object { Get-Content $_ }
       - run: node --test --test-force-exit packages/cli/tests/setup-real.e2e.mjs
 
   # The Windows surface nothing else covers.
