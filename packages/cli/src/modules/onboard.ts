@@ -44,6 +44,15 @@ export type OnboardDeps = {
   found?: OnboardFound;
   // Stores one found key in Auto's pool (`caveman providers add`).
   addKey?(key: FoundKey): void;
+  // Set when this CLI runs from a package runner's cache (npx): `run` installs
+  // it for good and returns the command to name in hints (it throws when it
+  // cannot, and setup then writes nothing); `apply` has that copy do the
+  // wiring, so nothing records a path into the cache.
+  installCli?: {
+    command: string;
+    run(): string;
+    apply(selection: ModuleSelection, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }>;
+  };
   // Setup may end by offering to start the agent; `launch` in the result names it.
   offerLaunch?: boolean;
   // Set when `caveman <agent>` continues into the agent after setup.
@@ -132,6 +141,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     for (;;) {
       plan = await planModules(selection, agents);
       const rows = summaryRows(plan, selection, agents.map((id) => byId.get(id)!.name), found);
+      if (deps.installCli) rows.push(["install", `the caveman command · ${deps.installCli.command}`]);
       const pick = await choose(input, out, c, rows, keys, plan.lines.length > 0 ? "Set up" : "Continue");
       if (pick === null) return cancelled(out, c);
       if (pick === "details") {
@@ -161,6 +171,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     out.write(`Agents   ${agents.map((id) => byId.get(id)!.name).join(" · ") || "none"}\n\n`);
     plan = await planModules(selection, agents);
     out.write(plan.lines.length ? renderPlan(plan) : `This will\n  ${c.dim("change nothing")}\n`);
+    if (deps.installCli) out.write(`  ${"RUN".padEnd(9)} ${deps.installCli.command}  the caveman command, kept after this run\n`);
     if (opts.dryRun) {
       out.write(`${c.dim("Dry run: nothing was written.")}\n`);
       return { confirmed: false, cancelled: false, ok: true, plan };
@@ -172,21 +183,35 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     }
   }
 
-  // The agents this setup chose: `caveman claude` re-wires Claude Code later
-  // only when it was one of them.
-  moduleHost().mutateConfig((out) => { out.setupAgents = [...agents]; });
   // One line that the download rewrites; each finished step prints over it.
   const busy = spinner(out, c, ask);
-  const result = await applyModules(plan, {
-    yes: true,
-    progress: (line) => busy.say(line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○"))),
-    downloading: (name) => busy.show(`downloading ${name}`),
-  });
+  let cmd = deps.cmd;
+  if (deps.installCli) {
+    busy.show("installing the caveman command");
+    try {
+      cmd = deps.installCli.run();
+      busy.say(`${c.green("✓")} caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} ${c.dim("· not on your PATH")}`}`);
+    } catch (error) {
+      busy.stop();
+      out.write(`${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${c.dim("Nothing else changed.")}\n`);
+      return { confirmed: true, cancelled: false, ok: false, plan };
+    }
+  }
+  const progress = (line: string) => busy.say(line.replace(/^✓/, c.green("✓")).replace(/^○/, c.yellow("○")));
+  let result: { ok: boolean; problems: string[] };
+  if (deps.installCli) {
+    result = await deps.installCli.apply(selection, agents, (line) => line.startsWith("downloading ") ? busy.show(line) : progress(line));
+  } else {
+    // The agents this setup chose: `caveman claude` re-wires Claude Code later
+    // only when it was one of them.
+    moduleHost().mutateConfig((out) => { out.setupAgents = [...agents]; });
+    result = await applyModules(plan, { yes: true, progress, downloading: (name) => busy.show(`downloading ${name}`) });
+  }
   busy.stop();
   for (const key of keys.filter((item) => item.on)) {
     try {
       deps.addKey!(key);
-      out.write(`${c.green("✓")} ${key.name} key added for Auto ${c.dim(`· ${deps.cmd} providers remove ${key.id} takes it back`)}\n`);
+      out.write(`${c.green("✓")} ${key.name} key added for Auto ${c.dim(`· ${cmd} providers remove ${key.id} takes it back`)}\n`);
     } catch (error) {
       result.problems.push(`${key.name} key: ${error instanceof Error ? error.message.replace(/^caveman: /, "") : String(error)}`);
       result.ok = false;
@@ -194,15 +219,15 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   }
   for (const problem of result.problems) out.write(`${c.red("✗")} ${problem}\n`);
   out.write("\n");
-  const auto = selection.routing ? await routingStep(opts, deps, input, out, c) : false;
+  const auto = selection.routing ? await routingStep(opts, { ...deps, cmd }, input, out, c) : false;
   const tryAgent = ["claude", "codex"].find((id) => agents.includes(id)) ?? agents[0] ?? "claude";
   let launch: string | undefined;
   if (!result.ok) {
-    out.write(`${c.red("✗")} Setup finished with problems. Fix them, then run ${deps.cmd} setup again.\n`);
+    out.write(`${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`);
   } else if (deps.launching) {
     out.write(`${c.green("✓")} Ready. Starting ${deps.launching}.\n`);
   } else {
-    out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${deps.cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${deps.cmd} status`)}\n`);
+    out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${cmd} status`)}\n`);
     if (auto) out.write(`${c.dim(`  Auto is in the model picker${tryAgent === "claude" ? " · /model in Claude Code" : ""}`)}\n`);
   }
   if (ask) await deps.discloseTelemetry();

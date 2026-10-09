@@ -117,23 +117,29 @@ test("--only, --skip and --agents pick modules and agents; a re-run keeps the cu
   }
 });
 
-// Under npx nothing named caveman is on PATH, so every hint names the npx form.
-test("under npx the hints print the npx command, and Try prefers Claude Code", { skip }, async () => {
+// Under npx nothing named caveman is on PATH: hints name the npx form until
+// setup has installed the command (tests/setup-from-runner covers that), and
+// without npm to install it nothing is wired from the runner's cache.
+test("under npx the hints print the npx command, and setup without npm writes nothing", { skip }, async () => {
   const fx = modulesFixture({ agents: ["codex", "claude"] });
   const npxDist = join(fx.home, "_npx", "0a1b", "node_modules", "@caveman-ai", "cli");
   cpSync(join(here, "..", "dist"), join(npxDist, "dist"), { recursive: true });
   cpSync(join(here, "..", "package.json"), join(npxDist, "package.json"));
+  const run = (...argv) => new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [join(npxDist, "dist", "index.js"), "setup", ...argv], { env: fx.env, stdio: ["ignore", "pipe", "pipe"] });
+    let stdout = "";
+    child.stdout.on("data", (d) => (stdout += d));
+    child.on("exit", (code) => resolve({ code, stdout }));
+    child.on("error", reject);
+  });
   try {
-    const out = await new Promise((resolve, reject) => {
-      const child = spawn(process.execPath, [join(npxDist, "dist", "index.js"), "setup", "--yes", "--agents", "codex,claude"], { env: fx.env, stdio: ["ignore", "pipe", "pipe"] });
-      let stdout = "";
-      child.stdout.on("data", (d) => (stdout += d));
-      child.on("exit", (code) => resolve({ code, stdout }));
-      child.on("error", reject);
-    });
-    assert.equal(out.code, 0, out.stdout);
-    assert.match(out.stdout, /routing is on and starts after you sign in · npx @caveman-ai\/cli login/);
-    assert.match(out.stdout, /Try: {2}npx @caveman-ai\/cli claude {6}See it: {2}npx @caveman-ai\/cli status/);
+    const asked = await run("--agents", "codex,claude");
+    assert.equal(asked.code, 0, asked.stdout);
+    assert.match(asked.stdout, /Nothing changed: pass --yes to apply · npx @caveman-ai\/cli setup --yes\n$/);
+    const out = await run("--yes", "--agents", "codex,claude");
+    assert.equal(out.code, 1, out.stdout);
+    assert.match(out.stdout, /✗ npm not found: install the CLI yourself \(npm install -g @caveman-ai\/cli\), then run caveman setup\nNothing else changed\.\n$/);
+    assert.equal(existsSync(join(fx.home, ".claude", "settings.json")), false);
   } finally {
     fx.cleanup();
   }

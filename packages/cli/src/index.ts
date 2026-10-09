@@ -3626,6 +3626,7 @@ function runOnboarding(options: OnboardOptions, launching?: AgentProfile, offerL
     agents,
     found: onboardFound(agents),
     addKey: (key) => void providersAdd([key.id, "--key-env", key.env], () => ""),
+    ...(cliIsEphemeral() && !durableCaveman() ? { installCli: { command: durableCliInstallCommand(), run: installDurableCli, apply: applyWithDurableCli } } : {}),
     offerLaunch,
     interactive: onboardInteractive(),
     signedIn: async () => Boolean((await config()).token),
@@ -3670,7 +3671,102 @@ function onboardFound(agents: OnboardAgent[]): OnboardFound {
 // The command a hint can tell someone to type: under `npx` nothing named
 // caveman is on PATH.
 function runnableCommand(): string {
-  return telemetryInstallChannel() === "npx" ? "npx @caveman-ai/cli" : invokedAs();
+  if (!cliIsEphemeral()) return invokedAs();
+  return durableCaveman() ? "caveman" : "npx @caveman-ai/cli";
+}
+
+// A CLI run by a package runner (npx, bunx, pnpm dlx) lives in that runner's
+// cache: the next cache clean or version bump removes it. Wiring records this
+// CLI's own paths (hook commands, the native-hook adapter, bundled plugins),
+// which would then fail in every agent session. So setup from a runner
+// installs the CLI for good and has that copy do the wiring.
+const EPHEMERAL_PATH = /\/(?:_npx|dlx)\/|\/bunx-/;
+
+function isEphemeralPath(path: string): boolean {
+  return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
+}
+
+function cliIsEphemeral(): boolean {
+  return isEphemeralPath(fileURLToPath(import.meta.url));
+}
+
+// Where a private install lands when the global npm prefix is not writable.
+function privateCliPrefix(): string {
+  return join(cavemanHome(), "cli");
+}
+
+// The caveman command that outlives this process: one on PATH outside a
+// runner's cache, or the private install. Null when there is none.
+function durableCaveman(): string | null {
+  for (const dir of (process.env.PATH ?? "").split(delimiter)) {
+    if (!dir || isEphemeralPath(dir)) continue;
+    for (const candidate of executableCandidateNames("caveman")) {
+      const full = join(dir, candidate);
+      if (!isExecutable(full)) continue;
+      try { if (isEphemeralPath(realpathSync(full))) continue; } catch { continue; }
+      return full;
+    }
+  }
+  // npm puts a prefix's commands in <prefix>/bin, or in <prefix> itself on Windows.
+  const bin = process.platform === "win32" ? privateCliPrefix() : join(privateCliPrefix(), "bin");
+  for (const candidate of executableCandidateNames("caveman")) {
+    if (isExecutable(join(bin, candidate))) return join(bin, candidate);
+  }
+  return null;
+}
+
+function durableCliInstallCommand(): string {
+  return `npm install -g @caveman-ai/cli@${cliVersion()}`;
+}
+
+// The installed CLI applies the setup that was confirmed here, so every path
+// it records is its own. Its step lines come back through `say`; the rest of
+// its report (the plan again, its own closing lines) is this process's to give.
+function applyWithDurableCli(selection: Record<string, boolean>, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }> {
+  const durable = durableCaveman();
+  if (!durable) return Promise.resolve({ ok: false, problems: ["the caveman command is not installed"] });
+  const on = Object.keys(selection).filter((id) => selection[id]);
+  // ponytail: flags only add agents and set modules; unticking an agent that
+  // is already wired, from an npx run, still needs `caveman setup` afterwards.
+  const argv = ["setup", "--yes", ...(on.length ? ["--only", on.join(",")] : ["--skip", Object.keys(selection).join(",")]), ...(agents.length ? ["--agents", agents.join(",")] : [])];
+  const invocation = portableInvocation(durable, argv);
+  return new Promise((resolve) => {
+    const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "pipe", "pipe"], windowsHide: true });
+    const problems: string[] = [];
+    let pending = "";
+    const take = (chunk: Buffer) => {
+      const lines = (pending + chunk.toString("utf8")).split(/\r?\n/);
+      pending = lines.pop() ?? "";
+      for (const line of lines) {
+        if (/^✗ /.test(line)) problems.push(line.slice(2));
+        else if (/^(?:[✓○] |downloading )/.test(line) && !/^✓ Ready|^○ routing is on/.test(line)) say(line);
+      }
+    };
+    child.stdout.on("data", take);
+    child.stderr.on("data", take);
+    child.once("error", (error) => resolve({ ok: false, problems: [error.message] }));
+    child.once("close", (code) => resolve({ ok: code === 0 && problems.length === 0, problems: problems.length || code === 0 ? problems : [`${durable} setup exited ${code}`] }));
+  });
+}
+
+// Installs this CLI version with npm: globally, or under ~/.caveman/cli when
+// the global prefix is not writable (a system Node). Returns the command
+// hints should name. Throws when neither works: nothing is wired then.
+function installDurableCli(): string {
+  const npm = which("npm");
+  if (!npm) throw new Error("npm not found: install the CLI yourself (npm install -g @caveman-ai/cli), then run caveman setup");
+  const run = (extra: string[]) => {
+    const invocation = portableInvocation(npm, ["install", "-g", ...extra, "--no-audit", "--no-fund", `@caveman-ai/cli@${cliVersion()}`]);
+    return spawnSync(invocation.command, invocation.args, { encoding: "utf8", stdio: ["ignore", "pipe", "pipe"], timeout: 180_000 });
+  };
+  const global = run([]);
+  let found = durableCaveman();
+  if (global.status === 0 && found) return "caveman";
+  const local = run(["--prefix", privateCliPrefix()]);
+  found = durableCaveman();
+  if (local.status === 0 && found) return found;
+  const why = `${local.stderr || global.stderr || local.error?.message || ""}`.trim().split("\n").find((line) => /npm (?:error|ERR!)/.test(line)) ?? "npm install failed";
+  throw new Error(`could not install the caveman command (${why.replace(/^npm (?:error|ERR!)\s*/, "")}) · run ${durableCliInstallCommand()}, then caveman setup`);
 }
 
 function agentShortName(agent: AgentProfile): string {
@@ -15317,7 +15413,8 @@ function shouldShrink(command: string): boolean {
 // cavemanBinForHook is the invocation a Claude hook uses to call back into this
 // CLI, robust to PATH: a resolved `caveman`/`cave`, else this very script's node.
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
-  const command = which("caveman") ?? which("cave");
+  // Never a package runner's cached copy when a lasting one exists.
+  const command = durableCaveman() ?? which("caveman") ?? which("cave");
   return command
     ? hookExecutableInvocation(command, undefined, process.platform, powershell)
     : hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
