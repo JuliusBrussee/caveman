@@ -221,8 +221,10 @@ test("a narrow terminal never draws a row wider than itself, and several keys le
   await tty.press(/◻ let Auto spend on 4 key[^\n]*\n\n› Set up\n/, "\t");
   await tty.press(/› Customize\n/, "n");
   await run;
-  const frames = tty.text().slice(tty.text().indexOf("Setup will"));
-  for (const line of frames.split("\n")) assert.ok(line.length <= 40, JSON.stringify(line));
+  // Only the redrawn screen has to fit: a plain line after it may wrap.
+  const frames = tty.text().slice(tty.text().indexOf("Setup will"), tty.text().indexOf("[declined]"));
+  // A redrawn frame starts where the last one ended, with no newline between.
+  for (const line of frames.replaceAll("Setup will", "\nSetup will").split("\n")) assert.ok(line.length <= 40, JSON.stringify(line));
 });
 
 test("a key that cannot be stored is a problem setup reports, not a silent skip", async () => {
