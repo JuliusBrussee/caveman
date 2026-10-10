@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -71,7 +72,9 @@ function isolatedEnv(root, extraBinDirs = []) {
 // A fake `caveman` CLI that records each invocation (one argument per line,
 // invocations separated by a blank line) into `record` and exits 0, the same
 // shape `disableNativeAgent`'s real command uses for `caveman disable --all`.
-function fakeCavemanDir(root, record) {
+// With `version` it answers `--version` the way the real CLI does.
+function fakeCavemanDir(root, record, version) {
+  const reply = version ? JSON.stringify({ version }) : '';
   const dir = path.join(root, 'fake-caveman-bin');
   fs.mkdirSync(dir, { recursive: true });
   if (process.platform === 'win32') {
@@ -82,7 +85,8 @@ function fakeCavemanDir(root, record) {
     // shape the gemini fixture in gemini-install.test.mjs already uses.
     fs.writeFileSync(path.join(dir, 'caveman.js'),
       "const fs = require('node:fs');\n"
-      + `fs.appendFileSync(${JSON.stringify(record)}, process.argv.slice(2).join('\\n') + '\\n\\n');\n`);
+      + `fs.appendFileSync(${JSON.stringify(record)}, process.argv.slice(2).join('\\n') + '\\n\\n');\n`
+      + `if (process.argv[2] === '--version') console.log(${JSON.stringify(reply)});\n`);
     fs.writeFileSync(path.join(dir, 'caveman.cmd'),
       '@echo off\r\n'
       + '"%~dp0\\node.exe" "%~dp0\\caveman.js" %*\r\n');
@@ -91,6 +95,7 @@ function fakeCavemanDir(root, record) {
     fs.writeFileSync(file,
       '#!/bin/sh\n'
       + `{ for a in "$@"; do echo "$a"; done; echo; } >> "${record}"\n`
+      + `[ "$1" = --version ] && echo '${reply}'\n`
       + 'exit 0\n');
     fs.chmodSync(file, 0o755);
   }
@@ -144,7 +149,7 @@ test('uninstall hands native agent integrations to `caveman disable --all` when 
     const removed = runInstaller(['--uninstall'], configDir, env);
     assert.equal(removed.status, 0, removed.stderr || removed.stdout);
 
-    const calls = fs.readFileSync(record, 'utf8').trim().split(/\n\s*\n/).filter(Boolean);
+    const calls = fs.readFileSync(record, 'utf8').trim().split(/\n\s*\n/).filter((c) => c && c !== '--version');
     assert.equal(calls.length, 1, `expected exactly one \`caveman\` invocation, got:\n${calls.join('\n---\n')}`);
     assert.deepEqual(calls[0].split('\n'), ['disable', '--all']);
   } finally {
@@ -161,6 +166,34 @@ test('uninstall does not invoke `caveman` when it is not on PATH', () => {
     assert.equal(installed.status, 0, installed.stderr || installed.stdout);
     const removed = runInstaller(['--uninstall'], configDir, env);
     assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// An older global `caveman` cannot undo what a newer CLI wrote (1.x left Claude
+// Code on the caveman-auto model with no route), so when the CLI this package
+// depends on is newer, uninstall runs that one instead.
+const BUNDLED_CLI = (() => {
+  try { return createRequire(INSTALLER).resolve('@caveman-ai/cli/package.json'); } catch (_) { return null; }
+})();
+
+test('uninstall runs the bundled CLI when the caveman on PATH is older', { skip: !BUNDLED_CLI && 'no node_modules/@caveman-ai/cli; run pnpm install' }, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const record = path.join(dir, 'caveman-record.txt');
+  try {
+    for (const [version, runsBundled] of [['1.3.4', true], ['999.0.0', false]]) {
+      const env = isolatedEnv(dir, [fakeCavemanDir(dir, record, version)]);
+      const r = runInstaller(['--uninstall', '--dry-run'], configDir, env);
+      assert.equal(r.status, 0, r.stderr || r.stdout);
+      const line = r.stdout.split('\n').find((l) => l.includes('disable --all')) || '';
+      if (runsBundled) {
+        assert.ok(line.includes(path.dirname(BUNDLED_CLI)), `PATH caveman ${version} ran instead of the bundled CLI: ${line}`);
+      } else {
+        assert.match(line, /would run: caveman disable --all/, `bundled CLI ran over a newer PATH caveman: ${line}`);
+      }
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

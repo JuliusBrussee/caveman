@@ -78,6 +78,16 @@ test("both shims pin the first-run CLI to packages/cli/package.json", () => {
   assert.doesNotMatch(shellShim + powershellShim, /@caveman-ai\/cli@latest/);
 });
 
+// `npx github:JuliusBrussee/caveman -- --uninstall` puts this package's own CLI
+// dependency first on PATH, so that CLI runs `caveman disable --all`. One older
+// than the release cannot undo what the release wrote: 1.x left Claude Code on
+// the caveman-auto model with its route gone.
+test("installer package depends on the CLI this repo releases", () => {
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  const pkg = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+  assert.equal(pkg.dependencies["@caveman-ai/cli"], `^${cli}`, "package.json @caveman-ai/cli drifted from packages/cli/package.json");
+});
+
 // The install ends in the CLI's first run. Without a terminal (CI, a pipe) the
 // shim prints the one command instead of running it; flags like --help never
 // lead into it.

@@ -1920,6 +1920,27 @@ function remainingNativeIntegrations() {
   }
 }
 
+// The CLI this package depends on, when it is newer than the `caveman` first on
+// PATH. An older CLI cannot undo state a newer one wrote: 1.x removed the route
+// but left Claude Code on the caveman-auto model it never knew. Under npx the
+// bundled CLI is already first on PATH; this covers a clone or global install.
+function newerBundledCli() {
+  try {
+    const manifest = require.resolve('@caveman-ai/cli/package.json');
+    const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!pkg.bin || typeof pkg.bin.caveman !== 'string') return null;
+    const bin = path.join(path.dirname(manifest), pkg.bin.caveman);
+    const want = /^(\d+)\.(\d+)\.(\d+)/.exec(pkg.version || '');
+    const probe = captureSpawn('caveman', ['--version']);
+    const have = /(\d+)\.(\d+)\.(\d+)/.exec(probe.stdout || '');
+    if (!want || !have || !spawnOk(probe) || !fs.existsSync(bin)) return null;
+    for (let i = 1; i <= 3; i++) {
+      if (Number(want[i]) !== Number(have[i])) return Number(want[i]) > Number(have[i]) ? bin : null;
+    }
+  } catch (_) { /* no bundled CLI: use the one on PATH */ }
+  return null;
+}
+
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
   let cleanupFailed = false;
@@ -1931,7 +1952,10 @@ function uninstall(ctx) {
   // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
   // `disable --all` rather than re-deriving that logic here.
   if (hasCmd('caveman')) {
-    const r = runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
+    const bundled = newerBundledCli();
+    const r = bundled
+      ? runSpawn(process.execPath, [bundled, 'disable', '--all'], null, opts.dryRun)
+      : runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
     if (spawnOk(r)) ok('  disabled native agent integrations');
   }
 
