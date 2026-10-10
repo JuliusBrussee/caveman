@@ -1411,11 +1411,14 @@ const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
 // hazard over different state files, and a second copy of this spin is how the
 // two would drift apart. Callers supply their own stale window because their
 // hold times differ by orders of magnitude — see refreshClaimLock.
-function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, reclaimDeadOwner = false): string | null {
+//
+// null: another holder kept it past the budget. undefined: it cannot be
+// created at all (a read-only home, a full disk).
+function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, reclaimDeadOwner = false): string | null | undefined {
   try {
     mkdirSync(dirname(lockPath), { recursive: true });
   } catch {
-    return null;
+    return undefined;
   }
   // The token names THIS holder. releaseClaimLock unlinks only a lock that
   // still carries it, so a holder that was reclaimed as stale mid-section
@@ -1425,14 +1428,18 @@ function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, r
   for (;;) {
     try {
       const fd = openSync(lockPath, "wx");
+      let written = false;
       try {
         writeSync(fd, token);
+        written = true;
       } finally {
         closeSync(fd);
+        // An empty lock reads as a holder still writing its token.
+        if (!written) try { unlinkSync(lockPath); } catch { /* already gone */ }
       }
       return token;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
       try {
         if (Date.now() - statSync(lockPath).mtimeMs > staleMs || (reclaimDeadOwner && claimLockOwnerDead(lockPath))) {
           // Reclaim by rename, not unlink. Two waiters can both see the same
@@ -1454,9 +1461,12 @@ function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, r
 }
 
 // Whether the process a lock's token (`<pid>:<uuid>`) names has exited. A
-// holder between its create and its write reads as alive.
+// holder between its create and its write reads as alive; a lock still empty
+// seconds later is a write that failed, and holds nothing.
 function claimLockOwnerDead(lockPath: string): boolean {
-  const pid = Number(readFileSync(lockPath, "utf8").split(":")[0]);
+  const token = readFileSync(lockPath, "utf8");
+  if (!token) return Date.now() - statSync(lockPath).mtimeMs > 5000;
+  const pid = Number(token.split(":")[0]);
   return Number.isSafeInteger(pid) && pid > 0 && !processAlive(pid);
 }
 
@@ -3193,7 +3203,8 @@ async function setupInstall(json: boolean, options: { continuing?: boolean; expl
     }
     // Not creatable at all (a read-only home): the install itself says why.
     // Downloads are per-process, so running beside another one is still safe.
-    if (!existsSync(lock)) return setupInstallLocked(json, options);
+    // A holder that just released it is tried again.
+    if (token === undefined) return setupInstallLocked(json, options);
     if (Date.now() >= deadline) throw new Error("another Caveman is still installing the runtime — try again once it finishes");
     if (!told) process.stderr.write(dim("→ another Caveman is installing the runtime; waiting for it\n"));
     told = true;

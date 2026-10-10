@@ -5,7 +5,7 @@ import assert from "node:assert";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -256,6 +256,27 @@ test("concurrent installs download each binary once and all succeed", { skip: he
     assert.equal(server.binaries(), Object.keys(HUB_BINS).length);
     for (const name of Object.keys(HUB_BINS)) assert.equal(readFileSync(join(env.CAVEMAN_HOME, "bin", name), "utf8"), binaryBody, name);
     assert.deepEqual(readdirSync(join(env.CAVEMAN_HOME, "bin")).filter((name) => name.endsWith(".part")), []);
+  } finally {
+    fx.cleanup();
+    await server.close();
+  }
+});
+
+// A lock whose token write failed (a full disk) is left empty. Read as a
+// holder still writing its token, it held every install for ten minutes; one
+// seconds old holds nothing.
+test("an empty install lock a failed write left does not hold installs", { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+  const server = await serve(fixtureRelease());
+  const fx = modulesFixture();
+  try {
+    const env = { ...fx.env, CAVE_BINARY_RELEASE_BASE: server.base, CAVE_SETUP_TIMEOUT: "20" };
+    const lock = join(env.CAVEMAN_HOME, ".install.lock");
+    writeFileSync(lock, "");
+    const before = new Date(Date.now() - 30_000);
+    utimesSync(lock, before, before);
+    const run = await runCli(["setup", "--install"], env, { cli, timeoutMs: 60_000 });
+    assert.equal(run.code, 0, run.stdout + run.stderr);
+    assert.doesNotMatch(run.stderr, /another Caveman is installing/);
   } finally {
     fx.cleanup();
     await server.close();
