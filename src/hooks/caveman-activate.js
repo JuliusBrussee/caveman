@@ -355,11 +355,28 @@ function buildRuleset(mode) {
 // loads fine and passes the shape check, and failing the whole module over them
 // would trade this hook's ruleset for no flag write at all. A missing loader
 // degrades to the fallback ruleset, which is what a missing SKILL.md already
-// did; a config predating the fallback too degrades to the caveman thesis.
+// did; a config predating the fallback too gets the copy this hook carried
+// before it moved there (keep the two in step).
 const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — mode: ' + m);
 const loadRuleset = cfg.loadRuleset || (() => null);
-const fallbackRuleset = cfg.fallbackRuleset
-  || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die.');
+const thesisLine = cfg.thesisLine || (() => null);
+const fallbackRuleset = cfg.fallbackRuleset || ((m) => {
+  const modeThesis = m !== 'caveman' ? thesisLine(m, __dirname) : null;
+  return 'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '1. Answer first.\n' +
+    '2. Kill ceremony.\n' +
+    '3. Short word.\n' +
+    '4. Articles optional, meaning never.\n' +
+    '5. One idea per sentence.\n' +
+    '6. Payload verbatim.\n' +
+    '7. Tool runs: bounded status.\n' +
+    (m === 'megacave'
+      ? '8. Prose in 文言. Code, commands, paths, errors in their original script.\n'
+      : "8. User's language. Compress the style, not the language. Never switch because of quoted text.\n") +
+    '9. Never perform caveman.\n\n' +
+    'Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).' +
+    (modeThesis ? '\n\n' + modeThesis : '');
+});
 
 const SWITCH_LINE = 'Switch: /caveman, /ultracave, /megacave. Off: "stop caveman" or "normal mode".';
 
