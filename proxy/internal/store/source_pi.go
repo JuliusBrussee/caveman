@@ -42,6 +42,11 @@ func (s piSessionSource) discover(deadline *behaviorDeadline) ([]sessionRef, boo
 	return refs, timeBoxed
 }
 
+// scanSession reads Pi's JSONL tree: every line is a session entry carrying
+// type/id/parentId/timestamp, and message entries nest an AgentMessage under
+// "message". Assistant messages hold the provider usage, toolCall content
+// blocks, and text/thinking; tool results arrive as their own role:"toolResult"
+// entries keyed by toolCallId, so calls are completed from a later line.
 func (s piSessionSource) scanSession(ref sessionRef, since time.Time, emit func(turnEvent), deadline *behaviorDeadline) bool {
 	if deadline != nil && deadline.expired() {
 		return true
@@ -68,59 +73,67 @@ func (s piSessionSource) scanSession(ref sessionRef, since time.Time, emit func(
 		if json.Unmarshal(line, &obj) != nil {
 			continue
 		}
-		repo = firstString(obj["cwd"], repo)
+		msg := asMap(obj["message"])
+		// The working directory lives in the system message's sections, not the
+		// entry, so decode it from there before falling back to any path guess.
+		repo = firstString(asMap(msg["sections"])["cwd"], obj["cwd"], repo)
 		ts := timestampFromObject(obj)
 		if !since.IsZero() && !ts.IsZero() && ts.Before(since) {
 			continue
 		}
-		payloads := piTextPayloads(obj)
-		msg := asMap(obj["message"])
 		role := firstString(msg["role"])
-		// pi uses OpenAI-style responses; extract usage from message/usage if present
+		payloads := piTextPayloads(role, msg)
+		toolCalls := piToolCalls(msg, pendingTools)
 		if role == "assistant" {
 			usage := asMap(msg["usage"])
 			ctx, hasUsage := piContextTotal(usage)
 			cacheRead, cacheCreation, hasCache := piCacheUsage(usage)
 			fresh, out, hasBilling := piBillingUsage(usage)
-			provider := firstString(obj["provider"], "pi")
-			model := firstString(obj["model"], msg["model"], modelFromPi(obj))
 			emit(turnEvent{
 				Timestamp: ts, ContextTotal: ctx, ContextUsagePresent: hasUsage,
 				CacheReadInputTokens: cacheRead, CacheCreationInputTokens: cacheCreation, CacheUsagePresent: hasCache,
 				InputFreshTokens: fresh, OutputTokens: out, BillingUsagePresent: hasBilling,
-				UsageMessageID: firstString(obj["id"], msg["id"], firstString(obj["responseId"])),
-				Model:          model, ProviderKey: provider,
-				ToolCalls:      piToolCalls(msg, pendingTools), TextPayloads: payloads,
-				TaskSpawns:     piTaskSpawns(msg), JSONLLine: lineNo, RelPath: ref.relPath, Repo: repo,
+				UsageMessageID: firstString(obj["id"], msg["id"], obj["responseId"]),
+				Model:          firstString(msg["model"], obj["model"]), ProviderKey: firstString(msg["provider"], obj["provider"], "pi"),
+				ToolCalls: toolCalls, TextPayloads: payloads,
+				TaskSpawns: piTaskSpawns(msg), JSONLLine: lineNo, RelPath: ref.relPath, Repo: repo,
 			})
-		} else {
-			emit(turnEvent{
-				Timestamp: ts, TextPayloads: payloads, JSONLLine: lineNo, RelPath: ref.relPath, Repo: repo,
-			})
+			continue
 		}
+		emit(turnEvent{
+			Timestamp: ts, ToolCalls: toolCalls, TextPayloads: payloads,
+			JSONLLine: lineNo, RelPath: ref.relPath, Repo: repo,
+		})
 	}
 	return false
 }
 
-func modelFromPi(obj map[string]any) string {
-	m := asMap(obj["message"])
-	if firstString(m["model"]) != "" {
-		return firstString(m["model"])
+// piField returns the first present key's value, so a payload that carries two
+// spellings of the same field (Pi's bundle emits both `cacheRead` and
+// `cache_read`, `cache_creation` and `cacheCreation`) is read once, never summed.
+func piField(usage map[string]any, keys ...string) (int64, bool) {
+	for _, key := range keys {
+		if value, ok := usage[key]; ok {
+			return int64FromAny(value), true
+		}
 	}
-	return ""
+	return 0, false
 }
 
 func piContextTotal(usage map[string]any) (int, bool) {
 	if len(usage) == 0 {
 		return 0, false
 	}
-	// Pi/Codeex-like: total context not always split; prefer input_total or sum
-	total := int64FromAny(usage["total_tokens"])
-	if total <= 0 {
-		total = int64FromAny(usage["input_total_tokens"])
-	}
-	if total <= 0 {
-		sum := int64FromAny(usage["input"]) + int64FromAny(usage["cacheRead"]) + int64FromAny(usage["cacheCreation"]) + int64FromAny(usage["output"])
+	total, ok := piField(usage, "totalTokens", "total_tokens", "input_total_tokens")
+	if !ok || total <= 0 {
+		input, _ := piField(usage, "input", "input_tokens")
+		cacheRead, _ := piField(usage, "cacheRead", "cache_read")
+		cacheWrite, _ := piField(usage, "cacheWrite", "cache_write", "cache_creation", "cacheCreation")
+		output, _ := piField(usage, "output", "output_tokens")
+		sum, ok := checkedNonNegativeSum(input, cacheRead, cacheWrite, output)
+		if !ok {
+			return 0, false
+		}
 		total = sum
 	}
 	if total <= 0 || total > math.MaxInt {
@@ -133,93 +146,134 @@ func piCacheUsage(usage map[string]any) (read, creation int, present bool) {
 	if len(usage) == 0 {
 		return 0, 0, false
 	}
-	r := int64FromAny(usage["cache_read"]) + int64FromAny(usage["cacheRead"])
-	c := int64FromAny(usage["cache_write"]) + int64FromAny(usage["cacheWrite"]) + int64FromAny(usage["cache_creation"]) + int64FromAny(usage["cacheCreation"])
-	if r < 0 || c < 0 {
+	read64, hasRead := piField(usage, "cacheRead", "cache_read")
+	creation64, hasCreation := piField(usage, "cacheWrite", "cache_write", "cache_creation", "cacheCreation")
+	if !hasRead && !hasCreation {
 		return 0, 0, false
 	}
-	if r == 0 && c == 0 {
+	if read64 < 0 || creation64 < 0 || read64 > math.MaxInt || creation64 > math.MaxInt {
 		return 0, 0, false
 	}
-	return int(r), int(c), true
+	if read64 == 0 && creation64 == 0 {
+		return 0, 0, false
+	}
+	return int(read64), int(creation64), true
 }
 
 func piBillingUsage(usage map[string]any) (fresh, output int, present bool) {
 	if len(usage) == 0 {
 		return 0, 0, false
 	}
-	f := int64FromAny(usage["input"]) + int64FromAny(usage["input_tokens"])
-	cached := int64FromAny(usage["cache_read"]) + int64FromAny(usage["cacheRead"])
-	if f < cached {
-		f = cached
-	}
-	fresh64 := f - cached
-	out := int64FromAny(usage["output"]) + int64FromAny(usage["output_tokens"])
-	if fresh64 < 0 || out < 0 {
+	input64, hasInput := piField(usage, "input", "input_tokens")
+	cached64, _ := piField(usage, "cacheRead", "cache_read")
+	out64, hasOutput := piField(usage, "output", "output_tokens")
+	if !hasInput && !hasOutput {
 		return 0, 0, false
 	}
-	if fresh64 == 0 && out == 0 {
+	if input64 < 0 || cached64 < 0 || out64 < 0 {
 		return 0, 0, false
 	}
-	return int(fresh64), int(out), true
+	// Pi's prompt count is inclusive of the cached share (OpenAI-style), so the
+	// fresh bucket is the difference; a cached share larger than the total is
+	// clamped rather than emitted as a negative.
+	fresh64 := input64
+	if cached64 > fresh64 {
+		fresh64 = cached64
+	}
+	fresh64 -= cached64
+	if fresh64 == 0 && out64 == 0 {
+		return 0, 0, false
+	}
+	if fresh64 > math.MaxInt || out64 > math.MaxInt {
+		return 0, 0, false
+	}
+	return int(fresh64), int(out64), true
 }
 
-func piTextPayloads(obj map[string]any) []string {
-	var out []string
-	msg := asMap(obj["message"])
-	content := msg["content"]
-	if arr, ok := content.([]any); ok {
-		for _, item := range arr {
-			if m, ok := item.(map[string]any); ok {
-				if s, ok := m["text"].(string); ok && s != "" {
-					out = append(out, s)
-				}
-				if t, ok := m["thought"].(string); ok && t != "" {
-					out = append(out, t)
-				}
-			}
+// piTextPayloads collects only human/assistant text; tool-result text is
+// attached to its completed tool call instead so it never becomes repaste
+// evidence (the same exclusion the sibling sources make).
+func piTextPayloads(role string, msg map[string]any) []string {
+	if role != "user" && role != "assistant" {
+		return nil
+	}
+	content, ok := msg["content"].([]any)
+	if !ok {
+		if text, ok := msg["content"].(string); ok && text != "" {
+			return []string{text}
 		}
-	} else if s, ok := content.(string); ok && s != "" {
-		out = append(out, s)
+		return nil
+	}
+	var out []string
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok || firstString(block["type"]) != "text" {
+			continue
+		}
+		if text := firstString(block["text"]); text != "" {
+			out = append(out, text)
+		}
 	}
 	return out
 }
 
+// piToolCalls pairs an assistant toolCall with the later toolResult entry that
+// carries its output, so the completed call reaches the analysis with its
+// output text and error status.
 func piToolCalls(msg map[string]any, pending map[string]turnToolCall) []turnToolCall {
-	content := msg["content"]
-	if arr, ok := content.([]any); ok {
-		var calls []turnToolCall
-		for _, item := range arr {
-			if m, ok := item.(map[string]any); ok {
-				if tc, ok := m["toolCall"].(map[string]any); ok {
-					name := firstString(tc["name"], tc["tool"])
-					input := tc["arguments"]
-					calls = append(calls, turnToolCall{Name: name, InputSummary: toolInputSummary(input)})
-				}
-				if tr, ok := m["toolResult"].(map[string]any); ok {
-					callID := firstString(tr["toolCallId"])
-					res := tr["content"]
-					pending[callID] = turnToolCall{OutputText: toolResultText(res), IsError: firstString(tr["status"]) == "error"}
-				}
-			}
+	if firstString(msg["role"]) == "toolResult" {
+		id := firstString(msg["toolCallId"], msg["tool_call_id"])
+		call, ok := pending[id]
+		if !ok {
+			return nil
 		}
-		return calls
+		delete(pending, id)
+		call.IsError, _ = msg["isError"].(bool)
+		call.OutputText = toolResultText(msg["content"])
+		return []turnToolCall{call}
+	}
+	content, ok := msg["content"].([]any)
+	if !ok {
+		return nil
+	}
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok || firstString(block["type"]) != "toolCall" {
+			continue
+		}
+		id := firstString(block["id"])
+		name := firstString(block["name"])
+		if id != "" && name != "" {
+			pending[id] = turnToolCall{Name: name, InputSummary: toolInputSummary(block["arguments"])}
+		}
 	}
 	return nil
 }
 
+// piTaskSpawns counts only subagent-spawning tool calls; an ordinary tool-using
+// turn reports zero, matching isSubagentSpawnTool for the sibling sources plus
+// Pi's `subagent` extension tool.
 func piTaskSpawns(msg map[string]any) int {
-	content := msg["content"]
-	if arr, ok := content.([]any); ok {
-		n := 0
-		for _, item := range arr {
-			if m, ok := item.(map[string]any); ok {
-				if _, ok := m["toolCall"].(map[string]any); ok {
-					n++
-				}
-			}
-		}
-		return n
+	content, ok := msg["content"].([]any)
+	if !ok {
+		return 0
 	}
-	return 0
+	spawns := 0
+	for _, item := range content {
+		block, ok := item.(map[string]any)
+		if !ok || firstString(block["type"]) != "toolCall" {
+			continue
+		}
+		if piSubagentSpawn(firstString(block["name"])) {
+			spawns++
+		}
+	}
+	return spawns
+}
+
+func piSubagentSpawn(name string) bool {
+	if isSubagentSpawnTool(name) {
+		return true
+	}
+	return strings.EqualFold(strings.TrimSpace(name), "subagent")
 }
