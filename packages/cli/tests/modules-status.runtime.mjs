@@ -176,6 +176,41 @@ test("status and doctor do not call a runtime whose status probe is slow another
   }
 });
 
+// Proving a listener foreign waits out the whole 3 s poll (at most 31 asks,
+// one per 100 ms). Status and doctor --fix each ask about the port more than
+// once; the second answer is the first one, not a second poll.
+test("status and doctor --fix poll a foreign listener once per command", async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  let asks = 0;
+  const holder = createHttpServer((req, res) => {
+    if (req.url === "/health/live") asks++;
+    res.writeHead(200);
+    res.end("ok");
+  });
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const { port } = holder.address();
+  const env = { ...fx.env, CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`, CAVEMAN_LISTEN: `127.0.0.1:${port}` };
+  try {
+    assert.equal((await runCli(["enable", "claude"], env)).code, 0);
+    // A record a crash left behind, which the listener does not vouch for
+    // (so the real status calls it unknown).
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${port}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "start", instance_token: "tok", pid: 1, port,
+    }));
+    writeFileSync(env.CAVEMAN_PROXY_BIN, readFileSync(env.CAVEMAN_PROXY_BIN, "utf8").replace("status) ", `status) echo '{"owner":"unknown"}'; exit 0; `));
+    asks = 0;
+    assert.equal(JSON.parse((await runCli(["status", "--json"], env)).stdout).agent_traffic.runtime, "other");
+    assert.ok(asks > 0 && asks <= 31, `status asked ${asks} times`);
+    asks = 0;
+    const doctor = await runCli(["doctor", "claude", "--fix"], env);
+    assert.match(doctor.stdout, /another program/);
+    assert.ok(asks > 0 && asks <= 31, `doctor --fix asked ${asks} times`);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
 test("doctor reports degraded agent wiring with its fix", async () => {
   const fx = modulesFixture({ agents: ["claude"] });
   try {

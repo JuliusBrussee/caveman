@@ -182,14 +182,21 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
 // listener directly keeps a status probe that times out from calling our own
 // runtime foreign. Without caveman-proxy nothing here can be ours; a runtime
 // too old to keep that record cannot be told apart, so it counts as ours.
+// Proving a listener foreign waits out the whole poll, and status and doctor
+// ask more than once, so the first verdict per port holds for the process.
+const portVerdicts = new Map<string, Promise<boolean>>();
 async function portHeldByOther(host: string, port: number, version = probeProxyVersion()): Promise<boolean> {
   if (!version) return true;
   if (!version.capabilities.includes("run_state")) return false;
-  for (const deadline = Date.now() + 3000; ; await sleep(100)) {
-    const token = readRawProxyRunState(port).instance_token;
-    if (token && await liveInstanceToken(host, port) === token) return false;
-    if (Date.now() >= deadline) return true;
-  }
+  const key = `${host}:${port}`;
+  if (!portVerdicts.has(key)) portVerdicts.set(key, (async () => {
+    for (const deadline = Date.now() + 3000; ; await sleep(100)) {
+      const token = readRawProxyRunState(port).instance_token;
+      if (token && await liveInstanceToken(host, port) === token) return false;
+      if (Date.now() >= deadline) return true;
+    }
+  })());
+  return portVerdicts.get(key)!;
 }
 
 // The instance token a runtime's /health/live publishes (to loopback callers
