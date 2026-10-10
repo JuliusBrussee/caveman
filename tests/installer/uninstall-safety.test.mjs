@@ -153,9 +153,10 @@ test('uninstall also runs the private CLI setup installed under $CAVEMAN_HOME/cl
 
     const removed = runInstaller(['--uninstall'], configDir, env);
     assert.equal(removed.status, 0, removed.stderr || removed.stdout);
-    for (const file of [privateRecord, record]) {
-      assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n'), ['disable', '--all'], file);
-    }
+    // The PATH caveman is asked its --version first (an older one hands its
+    // turn to the bundled CLI); the private one is only asked to disable.
+    assert.deepEqual(fs.readFileSync(privateRecord, 'utf8').trim().split('\n'), ['disable', '--all']);
+    assert.deepEqual(fs.readFileSync(record, 'utf8').trim().split('\n').slice(-2), ['disable', '--all']);
     assert.doesNotMatch(`${removed.stdout}${removed.stderr}`, /still installed/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
