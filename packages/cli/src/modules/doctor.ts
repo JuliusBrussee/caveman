@@ -36,7 +36,7 @@ export async function modulesDoctor(): Promise<void> {
   const wired = h.nativeAgents().filter((agent) => agent.wired);
   for (const agent of wired) {
     const state = h.agentState(agent.id);
-    if (state === "degraded") failures.push(`${agent.id}: wiring degraded · fix: caveman doctor ${agent.id} --fix`);
+    if (state === "degraded") failures.push(`${agent.id}: wiring degraded · fix: ${h.agentFix(agent.id)}`);
     else if (state === "unavailable") failures.push(`${agent.id}: wired but not runnable · fix: reinstall ${agent.id}, or caveman disable ${agent.id}`);
   }
   const traffic = h.agentTraffic();

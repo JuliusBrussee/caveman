@@ -78,6 +78,9 @@ export type ModuleHost = {
   // Whether the local runtime answers, waiting up to waitMs for it.
   runtimeListening(waitMs: number): Promise<boolean>;
   agentState(agent: string): string;
+  // What clears a degraded agent: `caveman doctor <agent> --fix`, or the way
+  // out when that repair would refuse (a user edit to what Caveman wrote).
+  agentFix(agent: string): string;
   coreActive(): boolean;
   signedIn(): boolean;
   cloudCheck(): Promise<void>;

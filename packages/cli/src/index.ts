@@ -606,6 +606,7 @@ setModuleHost({
     return !(await portListening(host, port));
   },
   agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
+  agentFix: (agent) => nativeRepairFix(agent as NativeAgent),
   coreActive: () => nativeCoreRuntimeState().active,
   signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
   // A thrown error carries the HTTP status; 0 means no answer at all.
@@ -9207,6 +9208,24 @@ function codexNativeRouted(lines: ReturnType<typeof codexTomlLines>): boolean {
   return lines.some((line) => line.section === "" && line.key === "model_provider" && line.value === '"caveman"');
 }
 
+// The way out of Caveman Codex tables the user edited, which repair refuses
+// to overwrite (codexNativeRestoreText): doctor names it instead of a --fix
+// that would refuse the same way.
+function codexEditedTablesFix(journal: NativeJournal | undefined): string | undefined {
+  const operation = journal?.operations.find((item) => item.kind === "codex-config");
+  const block = operation?.owned?.tables_block;
+  const text = operation ? fileBytes(operation.file)?.toString("utf8") : undefined;
+  if (typeof block !== "string" || text === undefined) return undefined;
+  const edited = [...codexNativeTables(codexTomlLines(text.replace(/^﻿/, "")), block)].filter(([, owned]) => !owned).map(([table]) => `[${table}]`);
+  if (!edited.length) return undefined;
+  return `undo your edit to Codex ${edited.join(", ")} in ${operation!.file} or delete ${edited.length > 1 ? "those tables" : "that table"}, then caveman doctor codex --fix`;
+}
+
+// What clears a degraded native agent: --fix, or the way out when repair would refuse.
+function nativeRepairFix(agent: NativeAgent): string {
+  return (agent === "codex" ? codexEditedTablesFix(readNativeJournal(agent)) : undefined) ?? `caveman doctor ${agent} --fix`;
+}
+
 // Disable once Codex has rewritten config.toml: take out exactly what enable
 // wrote, put back the root model_provider it replaced, keep everything else
 // where Codex put it. A Caveman table whose values the user changed is theirs
@@ -10849,7 +10868,7 @@ async function nativeDoctor(argv: string[]) {
   const result = nativeIntegrationStatus(target);
   print({
     ...result,
-    repair: result.installed ? `caveman doctor ${target} --fix` : `caveman enable ${target}`,
+    repair: result.installed ? nativeRepairFix(target) : `caveman enable ${target}`,
     trust: target === "codex" && result.installed ? "review through Codex /hooks" : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
   });

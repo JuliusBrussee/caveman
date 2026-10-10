@@ -298,6 +298,25 @@ test("codex rewriting config.toml around Caveman's tables keeps doctor and disab
   assert.match(after, /^\[\[skills\.config\]\]\npath = "\/x\/SKILL\.md"\nenabled = false$/m);
 });
 
+// A value the user changed in Caveman's own table is theirs: repair refuses to
+// overwrite it, so doctor names the way out instead of a --fix that refuses.
+test("doctor names the way out of an edited Caveman Codex table, not a --fix that refuses", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  writeFileSync(configPath, readFileSync(configPath, "utf8").replace('name = "Caveman"', 'name = "My Caveman"'));
+  const way = `undo your edit to Codex [model_providers.caveman] in ${configPath} or delete that table, then caveman doctor codex --fix`;
+  const bare = await run(["doctor"], fx.env);
+  assert.ok(bare.stdout.includes(`✗ codex: wiring degraded · fix: ${way}\n`), bare.stdout);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).repair, way);
+  // Taking that way out: --fix writes the table again.
+  writeFileSync(configPath, readFileSync(configPath, "utf8").replace(/^\[model_providers\.caveman\]\n(?:.+\n)+\n/m, ""));
+  const fixed = await run(["doctor", "codex", "--fix"], fx.env);
+  assert.equal(fixed.code, 0, fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).state, "installed");
+});
+
 // Enable takes the user's own root model_provider out to route through
 // Caveman. Disable has to put it back even after Codex saved something else
 // in the file (a /model choice, a trusted folder), or Codex silently falls
