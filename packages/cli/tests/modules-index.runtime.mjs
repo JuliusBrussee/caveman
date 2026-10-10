@@ -194,6 +194,7 @@ process.on("SIGTERM", () => { fs.rmSync(file, { force: true }); process.exit(0);
 case "$1" in
   version) printf '%s\\n' '{"version":"bin-new","capabilities":["run_state"]}' ;;
   status) if [ -f "$CAVEMAN_HOME/run/$4.json" ]; then cat "$CAVEMAN_HOME/run/$4.json"; else printf '%s\\n' '{"owner":"unknown"}'; fi ;;
+  stats) printf '%s\\n' '[]' ;;
   "") exec ${JSON.stringify(process.execPath)} -e '${serveJs}' ;;
 esac
 `;
