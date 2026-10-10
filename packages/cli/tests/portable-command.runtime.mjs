@@ -280,3 +280,33 @@ test("every copy of the Windows shim launcher agrees", async () => {
     }
   }
 });
+
+// `caveman mcp install` writes this into every agent's MCP config. On Windows
+// `npx` is Node's npx.cmd, which a host that spawns without a shell cannot start.
+test("MCP configs get node and npx's script on Windows, not npx.cmd", async () => {
+  const { mcpServerLaunch } = await import("../dist/index.js");
+  const root = mkdtempSync(join(tmpdir(), "cave mcp launch "));
+  try {
+    const script = join(root, "node_modules", "npm", "bin", "npx-cli.js");
+    mkdirSync(dirname(script), { recursive: true });
+    writeFileSync(script, "");
+    const npx = join(root, "npx.CMD");
+    writeFileSync(npx, NPM_SHIM("npx"));
+    const env = { PATH: root, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+    assert.deepEqual(mcpServerLaunch(npx, ["-y", "caveman-mcp"], "win32", env), {
+      command: process.execPath, args: [script, "-y", "caveman-mcp"],
+    });
+    // A caveman-mcp.exe stays as it is; a shim we cannot read is written as before.
+    const exe = join(root, "caveman-mcp.exe");
+    writeFileSync(exe, "MZ");
+    assert.deepEqual(mcpServerLaunch(exe, [], "win32", env), { command: exe, args: [] });
+    const odd = join(root, "odd.cmd");
+    writeFileSync(odd, "@echo off\r\necho %*\r\n");
+    assert.deepEqual(mcpServerLaunch(odd, [], "win32", env), { command: odd, args: [] });
+    assert.deepEqual(mcpServerLaunch("/usr/bin/npx", ["-y", "caveman-mcp"], "darwin", env), {
+      command: "/usr/bin/npx", args: ["-y", "caveman-mcp"],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
