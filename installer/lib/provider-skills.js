@@ -81,7 +81,7 @@ function ownershipOptions(provider, root) {
 // run uses the installer's portable process launcher; staging never targets HOME.
 function install({
   provider, root = skillsRoot(provider), repoRoot, force = false, dryRun = false,
-  note = () => {}, run,
+  note = () => {}, run, ref,
 }) {
   const ownership = ownershipOptions(provider, root);
   if (dryRun) {
@@ -99,7 +99,7 @@ function install({
       // The universal profile is only a disposable download destination. --copy
       // materializes every selected skill without touching any agent profile.
       const result = run('npx', [
-        '-y', 'skills', 'add', REPO, '--skill', '*', '-a', 'codex', '--yes', '--copy',
+        '-y', 'skills', 'add', ref ? `${REPO}#${ref}` : REPO, '--skill', '*', '-a', 'codex', '--yes', '--copy',
       ], { cwd: temporary });
       if (!result || result.status !== 0 || result.error || result.signal) {
         throw new Error(`skill download failed${result?.error?.message ? `: ${result.error.message}` : ''}`);

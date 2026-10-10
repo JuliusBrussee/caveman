@@ -27,13 +27,13 @@ for (const { id, profile } of profiles) {
     fs.mkdirSync(home);
     fs.mkdirSync(cwd);
     nodeStub(bin, 'npx', `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(ARGV));`);
-    const env = stubEnv({ ...process.env, HOME: home, USERPROFILE: home, IFLOW_HOME: '', CRUSH_SKILLS_DIR: '' }, bin);
+    const env = stubEnv({ ...process.env, HOME: home, USERPROFILE: home, IFLOW_HOME: '', CRUSH_SKILLS_DIR: '', CAVEMAN_REF: 'v9.9.9' }, bin);
     const result = spawnSync(process.execPath, [INSTALLER, '--only', id, '--non-interactive'], {
       encoding: 'utf8', cwd, env,
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), [
-      '-y', 'skills', 'add', 'JuliusBrussee/caveman', '--skill', '*', '-a', profile, '--yes', ...(projectOnly ? [] : ['-g']),
+      '-y', 'skills', 'add', 'JuliusBrussee/caveman#v9.9.9', '--skill', '*', '-a', profile, '--yes', ...(projectOnly ? [] : ['-g']),
     ]);
     if (projectOnly) assert.ok(result.stdout.includes(`Installing into this project: ${fs.realpathSync(cwd)}`), result.stdout);
     assert.deepEqual(fs.readdirSync(cwd), [], 'install must not use the caller directory');
@@ -48,6 +48,8 @@ test('dry run plans a global install without creating directories or invoking np
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /-g\b/);
+  // Copy-pastable: an unquoted * would glob-expand to the files in cwd.
+  assert.match(result.stdout, /would run: npx -y skills add 'JuliusBrussee\/caveman#[^']+' --skill '\*' -a cursor/);
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 

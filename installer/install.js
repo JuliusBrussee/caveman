@@ -444,8 +444,11 @@ function spawnXplat(cmd, args, opts) {
 }
 
 function runSpawn(cmd, args, opts, dry) {
-  if (dry) { process.stdout.write(`  would run: ${cmd} ${args.join(' ')}\n`); return { status: 0 }; }
-  process.stdout.write(`  $ ${cmd} ${args.join(' ')}\n`);
+  // Display only: quote what a pasted line would mangle (`--skill *` globbed
+  // to cwd). The spawn below gets the raw argv, no shell.
+  const shown = args.map(a => /[^\w@%+=:,./-]/.test(a) ? shellEscape(a) : a).join(' ');
+  if (dry) { process.stdout.write(`  would run: ${cmd} ${shown}\n`); return { status: 0 }; }
+  process.stdout.write(`  $ ${cmd} ${shown}\n`);
   const result = spawnXplat(cmd, args, Object.assign({ stdio: 'inherit' }, opts || {}));
   if (result && result.error) process.stderr.write(`  ${result.error.message}\n`);
   return result;
@@ -716,6 +719,7 @@ function installViaSkills(ctx, prov) {
         force: opts.force,
         dryRun: opts.dryRun,
         note,
+        ref: PINNED_REF,
         run: (command, args, options) => runSpawn(command, args, options, false),
       });
       if (!opts.dryRun) note(`  copied ${installed.count} skills into ${installed.root}`);
@@ -742,7 +746,8 @@ function installViaSkills(ctx, prov) {
   // Use the vendor's supported scope. Replit reads project-local skills; its
   // workspace-wide library is managed in the UI, not a home-directory scan.
   // Other adapters resolve their user directories and supported home overrides.
-  const args = ['-y', 'skills', 'add', REPO, '--skill', '*', '-a', prov.profile, '--yes'];
+  // `#ref` pins skill content to this release, like the hook downloads.
+  const args = ['-y', 'skills', 'add', `${REPO}#${PINNED_REF}`, '--skill', '*', '-a', prov.profile, '--yes'];
   if (prov.skillsScope === 'project') note(`  Installing into this project: ${process.cwd()}`);
   else args.push('-g');
   const r = runSpawn('npx', args, null, opts.dryRun);

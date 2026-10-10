@@ -183,10 +183,11 @@ test('detached real installer stages the source with --copy and then owns the ve
   const log = path.join(f.directory, 'stage.json');
   nodeStub(f.bin, 'npx', `import fs from 'node:fs'; import path from 'node:path'; fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify({ args: ARGV, cwd: process.cwd() })); fs.cpSync(${JSON.stringify(path.join(ROOT, 'skills'))}, path.join(process.cwd(), '.agents', 'skills'), { recursive: true });`);
   f.env.CONTINUE_GLOBAL_DIR = path.join(f.directory, 'continue configured');
+  f.env.CAVEMAN_REF = 'v9.9.9';
   const installed = f.run(['--only', 'continue'], path.join(detached, 'installer', 'install.js'));
   assert.equal(installed.status, 0, installed.stdout + installed.stderr);
   const stage = JSON.parse(fs.readFileSync(log, 'utf8'));
-  assert.deepEqual(stage.args, ['-y', 'skills', 'add', 'JuliusBrussee/caveman', '--skill', '*', '-a', 'codex', '--yes', '--copy']);
+  assert.deepEqual(stage.args, ['-y', 'skills', 'add', 'JuliusBrussee/caveman#v9.9.9', '--skill', '*', '-a', 'codex', '--yes', '--copy']);
   assert.equal(fs.existsSync(stage.cwd), false);
   assert.ok(fs.existsSync(path.join(f.env.CONTINUE_GLOBAL_DIR, 'skills', 'caveman', 'SKILL.md')));
   assert.equal(fs.existsSync(path.join(f.home, '.agents')), false);
