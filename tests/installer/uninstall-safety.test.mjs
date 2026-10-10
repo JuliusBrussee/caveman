@@ -320,3 +320,23 @@ test("install and uninstall leave another plugin's hooks/package.json alone", ()
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// Node gives every .js in hooks/ the module type of hooks/package.json. When
+// another plugin's manifest says "module", caveman's CommonJS hooks crash on
+// every event, so wiring them only adds errors while reporting success.
+test("standalone hooks refuse a foreign hooks/package.json that says type:module", () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedEnv(dir);
+  try {
+    fs.mkdirSync(path.join(configDir, 'hooks'), { recursive: true });
+    fs.writeFileSync(path.join(configDir, 'hooks', 'package.json'), '{"type": "module"}\n');
+    const r = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.match(r.stderr, /claude-hooks — .*"type":"module"/, r.stdout + r.stderr);
+    assert.doesNotMatch(r.stdout, /• claude-hooks/);
+    assert.equal(fs.existsSync(path.join(configDir, 'settings.json')), false, 'hooks wired that cannot load');
+    assert.equal(fs.existsSync(path.join(configDir, 'hooks', 'caveman-activate.js')), false);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

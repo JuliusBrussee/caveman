@@ -1657,6 +1657,17 @@ async function installHooks(ctx) {
   const settingsPath = path.join(configDir, 'settings.json');
   const sourceDir = repoRoot ? path.join(repoRoot, 'src', 'hooks') : null;
 
+  // Node gives every .js in hooks/ the module type of hooks/package.json. If
+  // another plugin's manifest says "module", caveman's CommonJS hooks crash on
+  // every event, so wiring them would only add errors.
+  const manifest = path.join(hooksDir, HOOKS_MANIFEST);
+  let foreignType = null;
+  try { if (!hooksManifestIsOurs(manifest)) foreignType = JSON.parse(fs.readFileSync(manifest, 'utf8')).type; } catch (_) {}
+  if (foreignType === 'module') {
+    warn(`  ${manifest} belongs to another plugin and says "type":"module", so caveman's hooks cannot run there.`);
+    return `${manifest} says "type":"module"; nothing changed. Use the plugin install instead`;
+  }
+
   if (opts.dryRun) {
     note(`  would mkdir -p ${hooksDir}`);
     for (const f of HOOK_FILES) note(`  would install ${path.join(hooksDir, f)}`);
@@ -1677,7 +1688,6 @@ async function installHooks(ctx) {
     const dest = path.join(hooksDir, f);
     if (f === HOOKS_MANIFEST && fs.existsSync(dest) && !hooksManifestIsOurs(dest)) {
       warn(`  ${dest} belongs to another plugin — left untouched.`);
-      warn("  caveman's hooks are CommonJS; if that file declares \"type\":\"module\" they will not load.");
       continue;
     }
     const local = sourceDir && path.join(sourceDir, f);
