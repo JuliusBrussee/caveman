@@ -827,12 +827,16 @@ function installGemini(ctx) {
   }
   if (spawnOk(r)) results.installed.push('gemini');
   else if (r) results.failed.push(['gemini', 'gemini extensions install failed']);
-  if (!spawnOk(r) && saved && !fs.existsSync(extDir)) {
+  // r is set once the uninstall succeeded: whatever the failed install left
+  // in extDir goes, and the old one comes back.
+  if (!spawnOk(r) && saved && (r || !fs.existsSync(extDir))) {
     try {
+      fs.rmSync(extDir, { recursive: true, force: true });
       fs.cpSync(path.join(saved, 'caveman'), extDir, { recursive: true, verbatimSymlinks: true });
       note('  put the old caveman extension back');
     } catch (_) {
-      warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+      warn(`  could not put the old caveman extension back. A copy is kept at ${path.join(saved, 'caveman')}: copy it to ${extDir}, or install it again with: gemini extensions install ${url}`);
+      saved = null;
     }
   }
   if (saved) { try { fs.rmSync(saved, { recursive: true, force: true }); } catch (_) {} }
