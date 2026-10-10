@@ -248,15 +248,16 @@ function referencesManagedScript(command) {
 }
 
 // `[&] <node> <managed script> [--flags]` is every shape this installer has
-// written; returns `<script> <flags>` for it, null for anything else (an env
-// prefix or a wrapper means the user edited it).
+// written; returns `<script path> <flags>` for it, null for anything else (an
+// env prefix or a wrapper means the user edited it). The path is compared with
+// `/` separators and case folded, so the old `C:\…` form matches the new
+// `C:/…` one, while a hook pointed at another copy of the script stays.
 function installerHookShape(command) {
   const t = tokenizeCommand(command);
   if (t[0] === '&') t.shift();
   if (t.length < 2 || !/^node(\.exe)?$/i.test(path.win32.basename(t[0]))) return null;
-  const script = path.win32.basename(t[1]);
-  if (!MANAGED_HOOK_BASENAMES.has(script) || !t.slice(2).every((a) => a.startsWith('--'))) return null;
-  return [script, ...t.slice(2)].join(' ');
+  if (!MANAGED_HOOK_BASENAMES.has(path.win32.basename(t[1])) || !t.slice(2).every((a) => a.startsWith('--'))) return null;
+  return [t[1].replace(/\\/g, '/').toLowerCase(), ...t.slice(2)].join(' ');
 }
 
 // ── removeCavemanHooks ────────────────────────────────────────────────────

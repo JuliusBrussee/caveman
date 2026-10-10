@@ -153,15 +153,21 @@ test('addCommandHook is idempotent on substring marker', () => {
 test('addCommandHook rewrites our stale hook command in place', () => {
   const opts = (command) => ({ command, marker: 'caveman-activate' });
   const fresh = '"/opt/homebrew/bin/node" "/h/hooks/caveman-activate.js"';
-  for (const stale of [
-    '"/opt/homebrew/Cellar/node/26.5.0/bin/node" "/h/hooks/caveman-activate.js"',
-    "& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\h\\hooks\\caveman-activate.js'",
+  for (const [stale, now] of [
+    ['"/opt/homebrew/Cellar/node/26.5.0/bin/node" "/h/hooks/caveman-activate.js"', fresh],
+    ["& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\me\\.claude\\hooks\\caveman-activate.js'",
+      '"C:/Program Files/nodejs/node.exe" "C:/Users/me/.claude/hooks/caveman-activate.js"'],
   ]) {
     const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: stale, timeout: 30 }] }] } };
-    assert.ok(SETTINGS.addCommandHook(s, 'SessionStart', opts(fresh)), `not repaired: ${stale}`);
-    assert.deepEqual(s.hooks.SessionStart, [{ hooks: [{ type: 'command', command: fresh, timeout: 30 }] }]);
-    assert.equal(SETTINGS.addCommandHook(s, 'SessionStart', opts(fresh)), false);
+    assert.ok(SETTINGS.addCommandHook(s, 'SessionStart', opts(now)), `not repaired: ${stale}`);
+    assert.deepEqual(s.hooks.SessionStart, [{ hooks: [{ type: 'command', command: now, timeout: 30 }] }]);
+    assert.equal(SETTINGS.addCommandHook(s, 'SessionStart', opts(now)), false);
   }
+  // A hook pointed at another copy of the script (a dev clone) stays put.
+  const clone = '"/usr/bin/node" "/src/caveman/src/hooks/caveman-activate.js"';
+  const elsewhere = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: clone }] }] } };
+  assert.equal(SETTINGS.addCommandHook(elsewhere, 'SessionStart', opts(fresh)), false);
+  assert.equal(elsewhere.hooks.SessionStart[0].hooks[0].command, clone);
   const record = { hooks: { SessionEnd: [{ hooks: [{ type: 'command', command: '"/gone/node" "/h/caveman-stats.js" --record' }] }] } };
   SETTINGS.addCommandHook(record, 'SessionEnd', { command: '"/new/node" "/h/caveman-stats.js" --record', marker: 'caveman-stats' });
   assert.equal(record.hooks.SessionEnd[0].hooks[0].command, '"/new/node" "/h/caveman-stats.js" --record');
