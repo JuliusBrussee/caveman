@@ -9,7 +9,7 @@ import { nativeStub, nodeStub, stubEnv } from "./harness/stub-bin.mjs";
 
 const cli = fileURLToPath(new URL("../dist/index.js", import.meta.url));
 
-function fixture(t) {
+function fixture(t, unset = []) {
   const root = mkdtempSync(join(tmpdir(), "cave-codex recovery "));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   const home = join(root, "home");
@@ -46,15 +46,16 @@ else if (ARGV[0] === "status") console.log(JSON.stringify({owner:"unknown"}));
     CAVEMAN_OFFLINE: "1", CAVEMAN_TELEMETRY: "0", NO_COLOR: "1",
     OPENAI_API_KEY: "sk-synthetic-do-not-forward-to-mcp",
   }, bin);
+  for (const name of unset) delete env[name];
   const run = (args) => spawnSync(process.execPath, [cli, ...args], { env, cwd: root, encoding: "utf8", timeout: 20_000 });
   return { run, config: join(codexHome, "config.toml") };
 }
 
-function assertRecoveryEnvironment(config) {
+function assertRecoveryEnvironment(config, expected = ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"]) {
   const table = config.match(/^\[mcp_servers\.caveman\]\s*\n([\s\S]*?)(?=^\[|$(?![\s\S]))/m)?.[1];
   assert.ok(table, "Caveman MCP registration must exist");
   const names = JSON.parse(table.match(/^env_vars\s*=\s*(\[[^\n]+\])/m)?.[1] ?? "null");
-  assert.deepEqual(names, ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"]);
+  assert.deepEqual(names, expected);
   assert.doesNotMatch(table, /OPENAI_API_KEY|sk-synthetic|NODE_OPTIONS|approval_mode/);
 }
 
@@ -70,6 +71,22 @@ for (const door of ["wrap", "enable", "mcp"]) {
       assert.equal(fx.run(args).status, 0);
       assert.equal(readFileSync(fx.config, "utf8"), before, "repeat install must remain idempotent");
     }
+  });
+}
+
+// `codex doctor` warns "env var CAVEMAN_CCR_DB is not set" for every name
+// env_vars forwards that is unset, so only the ones set are named.
+for (const door of ["wrap", "enable", "mcp"]) {
+  test(`Codex ${door} names only the recovery variables that are set`, (t) => {
+    const homeOnly = fixture(t, ["CAVEMAN_CCR_DB"]);
+    const args = door === "mcp" ? ["mcp", "install", "codex"] : [door, "codex"];
+    let out = homeOnly.run(args);
+    assert.equal(out.status, 0, out.stderr);
+    assertRecoveryEnvironment(door === "wrap" ? out.stdout : readFileSync(homeOnly.config, "utf8"), ["CAVEMAN_HOME"]);
+    const neither = fixture(t, ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"]);
+    out = neither.run(args);
+    assert.equal(out.status, 0, out.stderr);
+    assertRecoveryEnvironment(door === "wrap" ? out.stdout : readFileSync(neither.config, "utf8"), null);
   });
 }
 

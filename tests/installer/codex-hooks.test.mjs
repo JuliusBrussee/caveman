@@ -159,3 +159,37 @@ test('uninstall keeps the payload when our hooks.json turns unparseable', (t) =>
   assert.match(r.stdout + r.stderr, /could not parse/);
   assert.ok(fs.existsSync(path.join(codexHome, ...HOOK_REL.split('/'))), 'payload must stay while hooks.json may point at it');
 });
+
+// The native codex binary does not run a login shell: with PATH=/usr/bin:/bin a
+// bare `node` is not found and the hook silently injects nothing. POSIX gets the
+// absolute node, as the Claude hooks do; Windows keeps bare `node`, since a
+// quoted leading path is a string, not a command, in PowerShell. An entry an
+// older installer wrote with bare `node` is still ours to replace and remove.
+test('the hook runs node by its absolute path, and replaces an older bare-node entry', (t) => {
+  const { codexHome, hooksPath, readHooks, run } = sandbox(t);
+  const script = path.join(codexHome, ...HOOK_REL.split('/'));
+  const older = { matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command: `node "${script.replace(/\\/g, '/')}"`, timeout: 5 }] };
+  fs.writeFileSync(hooksPath, JSON.stringify({ hooks: { SessionStart: [older] } }, null, 2) + '\n');
+  assert.equal(run('--only', 'codex').status, 0);
+  const ours = readHooks().hooks.SessionStart.filter(isOurs);
+  assert.equal(ours.length, 1, JSON.stringify(readHooks()));
+  const command = ours[0].hooks[0].command;
+  if (process.platform === 'win32') assert.match(command, /^node "/);
+  else assert.ok(command.startsWith(`"${path.dirname(process.execPath)}/node" "`), command);
+  assert.equal(run('--uninstall').status, 0);
+  assert.equal(fs.existsSync(hooksPath), false);
+});
+
+// Once the caveman CLI wires Codex natively (a `caveman enable` journal), its
+// output module is the one injection and `caveman off` switches it. A second,
+// always-on voice hook would inject again and outlive `caveman off`.
+test('install skips the hook while the caveman CLI wires Codex', (t) => {
+  const { dir, hooksPath, codexHome, run } = sandbox(t);
+  fs.mkdirSync(path.join(dir, '.caveman', 'integrations'), { recursive: true });
+  fs.writeFileSync(path.join(dir, '.caveman', 'integrations', 'codex.json'), '{}\n');
+  const r = run('--only', 'codex');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout + r.stderr, /caveman already wires Codex/);
+  assert.equal(fs.existsSync(hooksPath), false);
+  assert.deepEqual(fs.readdirSync(codexHome), []);
+});

@@ -33,6 +33,11 @@ fi
   writeFileSync(proxy, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
   printf '%s\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}'
+elif [ "$1" = "status" ]; then
+  # A Caveman runtime answers where agents are wired, unless the test stopped it.
+  if [ -f "$CAVEMAN_HOME/runtime-stopped" ]; then printf '%s\n' '{"owner":"unknown"}'; else printf '%s\n' '{"owner":"start"}'; fi
+elif [ $# -eq 0 ] && [ -f "$CAVEMAN_HOME/runtime-stopped" ]; then
+  rm -f "$CAVEMAN_HOME/runtime-stopped"
 elif [ -n "$CAVEMAN_PROXY_SPAWN_LOG" ]; then
   printf 'listen=%s recovery=%s owner=%s cwd=%s\n' "$CAVEMAN_LISTEN" "$CAVEMAN_RECOVERY" "$CAVEMAN_PROXY_OWNER" "$(pwd -P)" >> "$CAVEMAN_PROXY_SPAWN_LOG"
 fi
@@ -235,7 +240,10 @@ test("enable/disable codex owns marked config blocks and preserves unrelated dri
   const installedHooks = JSON.parse(readFileSync(hooksPath, "utf8")).hooks;
   assert.match(JSON.stringify(installedHooks.PreToolUse), /native-hook codex/);
   assert.match(JSON.stringify(installedHooks.PermissionRequest), /native-hook codex/);
-  assert.match(JSON.stringify(installedHooks.PostToolUseFailure), /native-hook codex/);
+  // Codex has no PostToolUseFailure event (hooks/list drops it), and shrink-hook
+  // declines every Codex tool call (#1037): neither is written.
+  assert.equal(installedHooks.PostToolUseFailure, undefined);
+  assert.doesNotMatch(JSON.stringify(installedHooks), /shrink-hook/);
 
   writeFileSync(configPath, `${installed}\n# later user comment\n`);
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
@@ -570,21 +578,124 @@ test("disable refuses a removed pre-existing file and keeps journal", async () =
   assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
 });
 
-// `caveman enable codex` still writes a shrink-hook entry into ~/.codex/hooks.json,
-// but since #1037 that hook declines every Codex tool event. Reporting the component
-// off a substring of the hooks file therefore claimed a rewrite that no longer
-// happens. Codex is an installed, healthy integration WITHOUT command-output rewrite.
+// The installer's always-on Codex hook (`--only codex`) injects the caveman voice
+// every session. Once Caveman wires Codex natively, output is the one injection:
+// enable leaves the installer's entry out, and disable does not bring it back,
+// so `caveman disable codex` / `off --all` leave Codex with none.
+test("enable codex takes over from the installer's always-on hook, and disable leaves neither", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  const foreign = { hooks: [{ type: "command", command: "echo foreign" }] };
+  const installer = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `node "${join(fx.home, ".codex", "caveman", "hooks", "codex-sessionstart.js")}"`, timeout: 5 }] };
+  writeFileSync(hooksPath, JSON.stringify({ hooks: { SessionStart: [foreign, installer] } }, null, 2) + "\n");
+
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const wired = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  assert.doesNotMatch(JSON.stringify(wired), /codex-sessionstart/);
+  assert.deepEqual(wired[0], foreign);
+  assert.match(JSON.stringify(wired), /native-hook codex/);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).state, "installed");
+
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(hooksPath, "utf8")), { hooks: { SessionStart: [foreign] } });
+});
+
+// An install from before carries a shrink-hook entry (a second PreToolUse hook
+// on every Codex tool call that declines it) and a PostToolUseFailure entry
+// Codex never runs. Doctor sends it to --fix, which takes both out.
+test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of an older Codex install", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+  const native = hooks.hooks.SessionStart.find((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  hooks.hooks.PreToolUse.push({ hooks: [{ type: "command", command: `${join(fx.home, "bin", "caveman")} shrink-hook` }] });
+  hooks.hooks.PostToolUseFailure = [native];
+  writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
+
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).state, "degraded");
+  const fixed = await run(["doctor", "codex", "--fix"], fx.env);
+  assert.equal(fixed.code, 0, fixed.stdout + fixed.stderr);
+  const after = JSON.parse(readFileSync(hooksPath, "utf8")).hooks;
+  assert.equal(after.PostToolUseFailure, undefined);
+  assert.doesNotMatch(JSON.stringify(after), /shrink-hook/);
+  assert.equal(after.PreToolUse.length, 1);
+});
+
+// What Codex's /hooks records once the user trusts Caveman's SessionStart hook.
+// The key names CODEX_HOME canonicalized when it is set, ~/.codex as is otherwise.
+function trustCodexHooks(home, { canonical = true } = {}) {
+  const hooksPath = join(home, ".codex", "hooks.json");
+  const configPath = join(home, ".codex", "config.toml");
+  const group = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  const key = `${canonical ? realpathSync(hooksPath) : hooksPath}:session_start:${group}:0`;
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "sha256:test"\n`);
+}
+
+// Codex runs a hook from hooks.json only once the user trusts it in /hooks.
+// Until then no Caveman hook runs: no Core, and nothing restarts the runtime
+// after a reboot. Untrusted is the default (Caveman never trusts for the user),
+// so it is not a broken install; doctor says it and how to trust them.
+test("doctor codex reports Caveman's hooks untrusted until /hooks trusts them", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const untrusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(untrusted.state, "installed");
+  assert.equal(untrusted.components.lifecycle_hooks, false);
+  assert.equal(untrusted.core_active, false);
+  assert.equal(untrusted.capabilities.session_start.active, false);
+  assert.deepEqual(untrusted.warnings, ["Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself"]);
+  trustCodexHooks(fx.home, { canonical: false });
+  const trusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(trusted.components.lifecycle_hooks, true);
+  assert.equal(trusted.core_active, true);
+  assert.equal(trusted.capabilities.session_start.active, true);
+  assert.deepEqual(trusted.warnings, []);
+});
+
+// Codex declines command-output rewrite since #1037, so doctor never claims one.
 test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
   writeFileSync(join(fx.home, ".codex", "config.toml"), 'approval_policy = "never"\n');
   assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  trustCodexHooks(fx.home);
   const out = await run(["doctor", "codex"], fx.env);
   const result = JSON.parse(out.stdout);
   assert.equal(result.components.tool_rewrite, false, "Codex commands are no longer rewritten");
   // The rest of the integration is untouched: this is a claim fix, not a downgrade.
   assert.equal(result.components.lifecycle_hooks, true);
   assert.equal(result.components.routing, true);
+});
+
+// A reboot or `caveman stop` leaves Codex wired to a runtime that is down, and
+// `codex exec` retries forever. Doctor says so instead of "installed", and
+// --fix starts it the way enable does.
+test("doctor codex reads degraded while the runtime is down, and --fix starts it", async () => {
+  const fx = fixture();
+  // Port 9: nothing listens there, so the runtime is the stub's, never this machine's 8787.
+  const spawned = join(fx.home, "proxy-spawns.log");
+  const env = { ...fx.env, CAVE_GATEWAY_URL: "http://127.0.0.1:9", CAVEMAN_LISTEN: "127.0.0.1:9", CAVEMAN_PROXY_SPAWN_LOG: spawned };
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  assert.equal((await run(["enable", "codex"], env)).code, 0);
+  // Enable starts the runtime detached; it has to have run before it is stopped.
+  for (let i = 0; i < 100 && !existsSync(spawned); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  writeFileSync(join(fx.home, ".caveman", "runtime-stopped"), "");
+  const down = await run(["doctor", "codex"], env);
+  assert.notEqual(down.code, 0);
+  const result = JSON.parse(down.stdout);
+  assert.equal(result.state, "degraded");
+  assert.equal(result.components.routing, false);
+  assert.equal(result.components.shared_runtime, false);
+  assert.equal(result.warnings[0], "the local runtime is not running · start it: caveman doctor codex --fix");
+  const fixed = await run(["doctor", "codex", "--fix"], env);
+  assert.equal(fixed.code, 0, fixed.stdout + fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).fix.result, "started");
+  assert.equal(JSON.parse(fixed.stdout).state, "installed");
 });
 
 // Everyone who ran `caveman enable codex` on an api key before #1045 has the

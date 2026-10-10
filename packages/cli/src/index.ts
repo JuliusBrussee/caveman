@@ -191,6 +191,34 @@ async function portHeldByOther(port: number): Promise<boolean> {
   }
 }
 
+// What answers where wired agents send their requests: "running" (a Caveman
+// runtime: its run state validates against its own listener), "down"
+// (nothing: a reboot, `caveman stop`) or "other". Undefined for a managed
+// gateway, or without caveman-proxy to tell (binary-missing says so). Wiring
+// cannot see any of this: an agent wired to a runtime that is down fails every
+// request, and Codex retries forever.
+async function agentRuntimeState(): Promise<"running" | "down" | "other" | undefined> {
+  const gw = gatewayURL();
+  const version = probeProxyVersion();
+  if (wrapMode(gw) !== "local" || !version) return undefined;
+  const { host, port } = gatewayHostPort(gw);
+  if (version.capabilities.includes("run_state") && readProxyRuntimeState(port, version).owner !== "unknown") return "running";
+  if (!(await portListening(host, port))) return "down";
+  return version.capabilities.includes("run_state") ? "other" : "running";
+}
+
+// What status and doctor say about it, with the fix. `doctor <agent> --fix`
+// starts the runtime in the background the way the agent's own hooks do;
+// aider's wiring starts none.
+function agentRuntimeLine(state: "down" | "other", agents: string[]): string {
+  const { host, port } = gatewayHostPort();
+  const agent = agents.find((id) => id !== "aider");
+  const fix = agent ? `caveman doctor ${agent} --fix` : "caveman start";
+  return state === "down"
+    ? `the local runtime is not running · start it: ${fix}`
+    : `another program holds ${host}:${port}, where your agents send their requests · stop it, then ${fix}`;
+}
+
 // Whether the runtime could bind the port. Nothing answers on a port inside a
 // Windows excluded range (Hyper-V, WSL, Docker), yet binding it fails.
 function portBindable(host: string, port: number): Promise<boolean> {
@@ -660,6 +688,11 @@ setModuleHost({
       const token = proxyShutdownToken(port, state.instance_token);
       return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(token ? { token } : {}), ...(stale ? { stale } : {}) };
     }));
+  },
+  agentAsk: (agent) => agent === "codex" && readNativeJournal("codex") && !codexHooksTrusted() ? CODEX_TRUST_ASK : undefined,
+  runtimeDown: async () => {
+    const wired = (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).filter((agent) => readNativeJournal(agent));
+    return wired.length && await agentRuntimeState() === "down" ? agentRuntimeLine("down", wired) : undefined;
   },
   interactive,
   confirm: promptYesNo,
@@ -7634,7 +7667,13 @@ function codexGatewayBase(gw: string, subscription: boolean): string {
 // Codex clears the stdio MCP environment, including these non-secret store
 // selectors. Forward their names so the proxy and recovery server share the
 // current launch's store without persisting provider credentials or stale paths.
-const CODEX_RECOVERY_ENV = 'env_vars = ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"]';
+// Only the ones set: `codex doctor` warns on every run about a name that is not.
+// Empty when neither is set; the recovery server then finds the default store
+// under HOME, which Codex keeps.
+function codexRecoveryEnv(): string {
+  const names = ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"].filter((name) => process.env[name]);
+  return names.length ? `env_vars = [${names.map((name) => JSON.stringify(name)).join(", ")}]` : "";
+}
 
 function codexCavemanProviderToml(gw: string, subscription = true): string {
   return [
@@ -7890,7 +7929,8 @@ function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShri
   const lifecycle = agentId === "gemini"
     ? ["SessionStart", "BeforeAgent", "BeforeModel", "BeforeTool", "AfterTool", "AfterModel", "PreCompress", "AfterAgent", "SessionEnd"]
     : agentId === "codex"
-    ? ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]
+    // Codex runs no PostToolUseFailure event; hooks/list drops the entry.
+    ? ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]
     : ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"];
   const command = nativeHookCommand(agentId);
   const identity = `native-hook:${agentId}`;
@@ -8057,7 +8097,7 @@ function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claud
     : undefined;
   if (!hooks) return false;
   if (!managedHookTargetsExist(root)) return false;
-  const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
+  const expected = nativeHooksDocument(agentId, agentId !== "codex" && nativeShrinkEnabled()).hooks as Record<string, unknown>;
   const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
     const actualEntries = new Set(actual.map(canonicalManagedHookEntry).filter(Boolean));
@@ -8108,8 +8148,9 @@ function buildCodexEphemeralHome(
   const providerLines = codexCavemanProviderToml(gw, subscription).split("\n");
   const providerRoot = providerLines.shift()!;
   const providerTables = providerLines.join("\n");
+  const recoveryEnv = codexRecoveryEnv();
   const mcp = mcpBinary
-    ? `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n${CODEX_RECOVERY_ENV}\n`
+    ? `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n${recoveryEnv ? `${recoveryEnv}\n` : ""}`
     : "\n";
   const delegateArgs = delegateMcp?.args.length
     ? `\nargs = [${delegateMcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]`
@@ -8524,6 +8565,15 @@ function refuseOwnEndpoint(agent: NativeAgent, key: string, value: unknown, file
   if (!own) return;
   const name = findAgent(agent)?.display_name ?? agent;
   throw Object.assign(new Error(`${name} sends its requests to its own endpoint ${own} (${key} in ${file ?? "your shell"}). Caveman would send them, with their key, to the provider's public API instead, so ${name} was left as is. To route it through Caveman anyway, remove ${key} ${file ? "there" : "from your shell"} and run \`caveman enable ${agent}\`.`), { ownEndpoint: own });
+}
+
+// Why enable leaves an agent as is, when it is on an endpoint of its own
+// (refuseOwnEndpoint), worked out without writing anything.
+function nativeOwnEndpoint(agent: NativeAgent): string | undefined {
+  try { nativeMutationsFor(agent, gatewayURL(), "caveman-mcp", { plan: true }); } catch (error) {
+    if ((error as { ownEndpoint?: string }).ownEndpoint) return (error as Error).message;
+  }
+  return undefined;
 }
 
 // A YAML or dotenv scalar: comment and quotes off.
@@ -9490,7 +9540,7 @@ function codexNativeConfig(source: string, gw: string, subscription: boolean, mc
     "",
     "[mcp_servers.caveman]",
     `command = ${JSON.stringify(mcpBinary)}`,
-    CODEX_RECOVERY_ENV,
+    ...[codexRecoveryEnv()].filter(Boolean),
     CODEX_NATIVE_TABLES_END,
   ].join("\n");
   const middle = stripped ? `\n\n${stripped}` : "";
@@ -9583,12 +9633,71 @@ function codexNativeRestoreText(file: string, text: string, tablesBlock: string,
   return body ? `${bom}${body}\n` : bom;
 }
 
+// The always-on hook Caveman's installer merges into Codex's hooks.json
+// (`--only codex`, $CODEX_HOME/caveman/hooks/codex-sessionstart.js) injects the
+// caveman voice every session. Once Codex is wired natively, output is the one
+// injection and `caveman off`/`disable` must stop it, so the native document
+// leaves that entry out and disable does not restore it. The payload stays for
+// the installer's own uninstall.
+function withoutInstallerCodexHook(root: Record<string, unknown>): Record<string, unknown> {
+  const out = JSON.parse(JSON.stringify(root)) as Record<string, unknown>;
+  const hooks = out.hooks && typeof out.hooks === "object" && !Array.isArray(out.hooks) ? out.hooks as Record<string, unknown> : undefined;
+  if (!hooks || !Array.isArray(hooks.SessionStart)) return out;
+  const installer = (handler: unknown) => typeof (handler as { command?: unknown })?.command === "string"
+    && (handler as { command: string }).command.replace(/\\/g, "/").includes("/caveman/hooks/codex-sessionstart.js");
+  hooks.SessionStart = (hooks.SessionStart as Array<Record<string, unknown>>).filter((group) => {
+    if (!Array.isArray(group?.hooks) || !group.hooks.some(installer)) return true;
+    group.hooks = (group.hooks as unknown[]).filter((handler) => !installer(handler));
+    return (group.hooks as unknown[]).length > 0;
+  });
+  if ((hooks.SessionStart as unknown[]).length === 0) delete hooks.SessionStart;
+  if (Object.keys(hooks).length === 0) delete out.hooks;
+  return out;
+}
+
+// Codex runs a hook from hooks.json only once the user trusts it in /hooks,
+// which records [hooks.state."<hooks.json>:session_start:<group>:<handler>"]
+// trusted_hash in config.toml. Caveman never writes that itself. Read for the
+// SessionStart hook, the one that restarts the runtime. The path in the key is
+// CODEX_HOME canonicalized when set, ~/.codex as is otherwise, so it is
+// compared as a file. A hash recorded for an older command still reads as
+// trusted here; Codex then asks again in /hooks.
+function codexHooksTrusted(): boolean {
+  const hooksPath = codexHooksPath();
+  let group = -1;
+  try {
+    const hooks = parseJsonFileObject(hooksPath, fileBytes(hooksPath)).hooks as Record<string, unknown> | undefined;
+    const list = hooks && Array.isArray(hooks.SessionStart) ? hooks.SessionStart as Array<Record<string, unknown>> : [];
+    group = list.findIndex((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") === "native-hook:codex");
+  } catch { return false; }
+  if (group === -1) return false;
+  const real = (path: string) => { try { return realpathSync(path.replace(/^\\\\\?\\/, "")); } catch { return undefined; } };
+  const target = real(hooksPath);
+  let trusting = false;
+  for (const line of (fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "").split(/\r?\n/)) {
+    const section = codexTomlSectionName(line);
+    if (section !== undefined) {
+      const quoted = section.match(/^hooks\.state\.("(?:[^"\\]|\\.)*"|'[^']*')$/)?.[1];
+      let key: unknown;
+      try { key = quoted === undefined ? undefined : quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted); } catch { key = undefined; }
+      const at = typeof key === "string" ? key.match(/^(.*):session_start:(\d+):0$/) : null;
+      trusting = Boolean(at && Number(at[2]) === group && target && real(at[1]!) === target);
+    } else if (trusting && /^\s*trusted_hash\s*=/.test(line)) return true;
+  }
+  return false;
+}
+
+// What Codex still asks before Caveman's hooks run.
+const CODEX_TRUST_ASK = "Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself";
+
 function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooksPath = codexHooksPath();
   const hooksBefore = fileBytes(hooksPath);
   const hooksRoot = parseJsonFileObject(hooksPath, hooksBefore);
   assertNativeHooksShape(hooksPath, hooksRoot, "codex");
-  const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
+  // No shrink-hook: it declines every Codex tool call (#1037), so it would only
+  // run a second process per call. An older install's entry goes too.
+  const hooks = nativeHooksDocument("codex", false, withoutInstallerCodexHook(hooksRoot));
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
   const own = codexOwnEndpoint(configBefore?.toString("utf8") ?? "", configPath);
@@ -10439,7 +10548,13 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     if (operation.before_exists) throw new Error(`${operation.file} was removed after enable; refusing destructive disable`);
     return null;
   }
-  if (bytesHash(current) === operation.after_sha256) return before;
+  if (bytesHash(current) === operation.after_sha256) {
+    // Enable took the installer's Codex hook out; disable leaves it out.
+    if (operation.kind !== "codex-hooks" || !before) return before;
+    const root = parseJsonFileObject(operation.file, before);
+    const stripped = withoutInstallerCodexHook(root);
+    return JSON.stringify(stripped) === JSON.stringify(root) ? before : Object.keys(stripped).length ? jsonBytes(stripped) : null;
+  }
 
   if (operation.kind === "claude-settings") {
     const currentRoot = parseJsonFileObject(operation.file, current);
@@ -10502,7 +10617,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     return jsonBytes(currentRoot, current);
   }
   if (operation.kind === "codex-hooks") {
-    return jsonBytes(removeNativeHookEntries(parseJsonFileObject(operation.file, current), "codex"), current);
+    return jsonBytes(removeNativeHookEntries(withoutInstallerCodexHook(parseJsonFileObject(operation.file, current)), "codex"), current);
   }
   if (operation.kind === "gemini-settings") {
     const currentRoot = removeNativeHookEntries(parseJsonFileObject(operation.file, current), "gemini");
@@ -11104,9 +11219,11 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
   const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent || unwiredProfiles.length > 0 ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
+  // Codex runs none of the hooks until the user trusts them; Core rides on them.
+  const hooksTrusted = agent !== "codex" || !installed || codexHooksTrusted();
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
-	  : coreSupported && nativeCoreRuntimeState().active;
+	  : coreSupported && hooksTrusted && nativeCoreRuntimeState().active;
   const warnings: string[] = [];
   if (host.error === "version_probe_timeout") warnings.push(`could not read the ${profile.display_name} version: \`${binOf(profile)} --version\` did not answer in time`);
   if (agent === "gemini" && installed) {
@@ -11125,15 +11242,12 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
-    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent,
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
     core: coreActive,
     mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
-    // Codex is false for the same reason hermes is: no command rewrite happens. The
-    // shrink-hook entry is still written into ~/.codex/hooks.json (removing it from
-    // nativeHooksDocument would make every existing install read as degraded, since
-    // nativeHookEntriesHealthy rejects a managed entry the expected document lacks),
-    // but since #1037 shrinkHook declines every Codex tool event, so the presence of
-    // that entry no longer evidences a rewrite. Report the behavior, not the file.
+    // Codex is false for the same reason hermes is: no command rewrite happens.
+    // Since #1037 shrinkHook declines every Codex tool event, so Codex gets no
+    // shrink-hook entry; an older install's entry reads degraded until --fix.
     tool_rewrite: agent !== "aider" && ownedHealthy && (agent === "hermes" || agent === "codex" ? false : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes("shrink-hook")),
     shared_runtime: proxyHealthy,
   };
@@ -11229,7 +11343,7 @@ async function nativeDoctor(argv: string[]) {
     return;
   }
   const before = nativeIntegrationStatus(target);
-  let fixResult: "not_needed" | "enabled" | "repaired" | "recovered" | undefined;
+  let fixResult: "not_needed" | "enabled" | "repaired" | "recovered" | "started" | undefined;
   if (fix) {
     if (!before.available && before.transaction_pending) {
       withIntegrationLock(target, () => recoverPendingNativeInstallUnlocked(target));
@@ -11246,12 +11360,32 @@ async function nativeDoctor(argv: string[]) {
       repairNativeAgent(target);
       fixResult = "repaired";
     }
+    // The wiring holds and the runtime it points at is down: start it the way
+    // enable does (enable just did), and give it a moment to answer.
+    if (fixResult !== "recovered" && target !== "aider" && await agentRuntimeState() === "down") {
+      if (fixResult !== "enabled") ensureLocalProxyForNative(target, gatewayURL());
+      for (const deadline = Date.now() + 5000; Date.now() < deadline && await agentRuntimeState() === "down";) await sleep(200);
+      if (fixResult === "not_needed" && await agentRuntimeState() === "running") fixResult = "started";
+    }
   }
   const result = nativeIntegrationStatus(target);
+  const runtime = result.installed ? await agentRuntimeState() : undefined;
+  if (runtime === "down" || runtime === "other") {
+    if (result.state === "installed") result.state = "degraded";
+    result.components.routing = false;
+    result.components.shared_runtime = false;
+    result.capabilities = nativeCapabilityReport(target, result.components, result.version_status);
+    result.warnings.unshift(agentRuntimeLine(runtime, [target]));
+  }
+  const untrusted = target === "codex" && result.installed && !codexHooksTrusted();
+  if (untrusted) result.warnings.push(CODEX_TRUST_ASK);
+  // Enable refuses an agent on its own endpoint; the warning says what would.
+  const own = !result.installed && result.available ? nativeOwnEndpoint(target) : undefined;
+  if (own) result.warnings.push(own);
   print({
     ...result,
-      repair: result.installed ? nativeRepairFix(target) : `caveman enable ${target}`,
-      trust: target === "codex" && result.installed ? "review through Codex /hooks"
+      repair: result.installed ? nativeRepairFix(target) : own ? null : `caveman enable ${target}`,
+      trust: target === "codex" && result.installed ? untrusted ? "not trusted yet · open /hooks in Codex" : "trusted in Codex /hooks"
         : target === "gemini" && result.installed ? `with folder trust on, Gemini CLI skips ${join(geminiConfigDir(), ".env")} in a folder you have not trusted, so its requests there go direct; trust the folder with /permissions`
         : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
@@ -15899,7 +16033,7 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
   }
   const header = `[mcp_servers.${serverName}]`;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((s) => JSON.stringify(s)).join(", ")}]` : "";
-  const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
+  const recoveryEnv = serverName === "caveman" && codexRecoveryEnv() ? `\n${codexRecoveryEnv()}` : "";
   const expectedBlock = `${header}\ncommand = ${JSON.stringify(mcp.command)}${argsLine}${recoveryEnv}\n`;
   if (existing.includes(header)) {
     const headerMatch = new RegExp(`(^|\\n)[ \\t]*\\[mcp_servers\\.${escapeRegExp(serverName)}\\][ \\t]*(?:\\r?\\n|$)`, "m").exec(existing);
@@ -15953,7 +16087,7 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
   const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
   const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]` : "";
-  const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
+  const recoveryEnv = serverName === "caveman" && codexRecoveryEnv() ? `\n${codexRecoveryEnv()}` : "";
   const expected = `[mcp_servers.${serverName}]\ncommand = ${JSON.stringify(mcp.command)}${argsLine}${recoveryEnv}`;
   return existing.slice(blockStart, blockEnd).trim() === expected.trim();
 }
@@ -20480,8 +20614,11 @@ async function status(argv: string[]) {
   const integrations = [...native, { ...genericIntegrationStatus(listening), runtime_reachable: listening }];
   const modules = await moduleStates();
   const traffic = agentTraffic();
+  // Wired agents send every request to the runtime; while it is down each fails.
+  const wired = native.filter((integration) => integration.installed).map((integration) => integration.agent);
+  const runtimeState = wired.length ? await agentRuntimeState() : undefined;
   if (argv.includes("--json")) {
-    print({ ...view, agent_traffic: { target: traffic.target, line: traffic.line, ...(traffic.fix ? { fix: traffic.fix } : {}) }, native_integrations: integrations, modules });
+    print({ ...view, agent_traffic: { target: traffic.target, line: traffic.line, ...(traffic.fix ? { fix: traffic.fix } : {}), ...(runtimeState ? { runtime: runtimeState } : {}) }, native_integrations: integrations, modules });
     return;
   }
   const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
@@ -20491,10 +20628,15 @@ async function status(argv: string[]) {
     ...(routing.note ? { routing: routing.note } : {}),
   };
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
+  if (runtimeState === "down" || runtimeState === "other") degraded.push(...wired.filter((agent) => !degraded.includes(agent)));
   const lines = [...(routing.notice ? [routing.notice] : []), ...view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line)];
   lines.push(traffic.fix ? `${traffic.line} · ${traffic.fix}` : traffic.line);
+  // Another program on the port is the foreign-process line above.
+  if (runtimeState === "down") lines.push(agentRuntimeLine("down", wired));
   lines.push(...native.flatMap((integration) => integration.warnings));
-  const step = nextStep(modules, { degraded: degraded[0], fallback: next });
+  // `enable` refuses an agent on its own endpoint: it is no next step.
+  const leftAlone = native.filter((integration) => !integration.installed && integration.binary_present).map((integration) => integration.agent).filter((agent) => nativeOwnEndpoint(agent));
+  const step = nextStep(modules, { degraded: degraded[0], fallback: next, leftAlone });
   process.stdout.write(renderModuleGrid(modules, { notes, next: traffic.next && step !== "caveman setup --install" ? traffic.next : step, degraded, lines }));
 }
 

@@ -38,6 +38,61 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   }
 });
 
+// Codex runs none of Caveman's hooks until the user trusts them in /hooks, and
+// Caveman never trusts them itself: without them nothing restarts the runtime
+// after a reboot. Setup says so once; bare doctor keeps it as a note.
+test("setup --yes tells a Codex user once to trust Caveman's hooks in /hooks", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  const ask = "○ Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself\n";
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout.split(ask).length, 2, out.stdout);
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.match(doctor.stdout, /^· codex: Caveman's hooks do not run until Codex trusts them · open \/hooks in Codex once and trust them, so the local runtime restarts by itself$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Codex on an endpoint of its own (Ollama here) is left as is. Setup says why
+// once, as the step's result (the plan only notes it ahead), and the closing
+// line suggests only an agent it actually wired.
+test("setup --yes says once why Codex on its own endpoint is left alone, and does not suggest it", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  try {
+    mkdirSync(join(fx.home, ".codex"), { recursive: true });
+    writeFileSync(join(fx.home, ".codex", "config.toml"), 'model_provider = "ollama"\n');
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout.split("Caveman would send them, with their key").length, 2, out.stdout);
+    assert.match(out.stdout, /^note: Codex stays as is: it sends its requests to its own endpoint ollama$/m);
+    assert.doesNotMatch(out.stdout, /caveman codex/);
+    assert.match(out.stdout, /✓ Ready\. See it: {2}caveman status\n/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// `caveman enable codex` refuses while Codex has a model_provider of its own,
+// so neither status nor doctor may offer it as the next step.
+test("status and doctor do not offer enable for Codex on its own endpoint", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  try {
+    mkdirSync(join(fx.home, ".codex"), { recursive: true });
+    writeFileSync(join(fx.home, ".codex", "config.toml"), 'model_provider = "ollama"\n');
+    assert.equal((await runCli(["setup", "--yes"], fx.env)).code, 0);
+    const status = await runCli(["status"], fx.env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.doesNotMatch(status.stdout, /next: caveman enable/);
+    const doctor = JSON.parse((await runCli(["doctor", "codex"], fx.env)).stdout);
+    assert.equal(doctor.repair, null);
+    assert.match(doctor.warnings.join("\n"), /its own endpoint ollama/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 // With no agent on PATH there is nothing to try: never suggest `caveman claude`.
 test("setup --yes with no agent installed says to install one instead of naming an agent", { skip }, async () => {
   const fx = modulesFixture({ agents: [] });

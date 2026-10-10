@@ -85,6 +85,12 @@ export type ModuleHost = {
   signedIn(): boolean;
   cloudCheck(): Promise<void>;
   localRuntimes(): Promise<LocalRuntime[]>;
+  // What doctor says, with the fix, when wired agents send their requests to a
+  // local runtime that is not running; undefined otherwise.
+  runtimeDown(): Promise<string | undefined>;
+  // What a wired agent still asks of the user before Caveman's hooks run
+  // (Codex: trust them in /hooks); undefined when nothing.
+  agentAsk(agent: string): string | undefined;
   interactive(): boolean;
   confirm(question: string): Promise<boolean>;
   // Where new wiring sends agent traffic, and the line status prints; `fix`
@@ -390,9 +396,11 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
         lines.push({ action: file.exists ? "UPDATE" : "CREATE", target: tilde(file.file), detail: file.kind.replace("-", " ") });
       }
     } catch (error) {
-      // An agent on its own endpoint is left as is, and the plan says so.
-      if ((error as { ownEndpoint?: boolean }).ownEndpoint) {
-        notes.push((error as Error).message);
+      // An agent on its own endpoint is left as is. The plan says so in short;
+      // the step's result says why and how to route it anyway, once.
+      const own = (error as { ownEndpoint?: string }).ownEndpoint;
+      if (own) {
+        notes.push(`${h.agentName(agent)} stays as is: it sends its requests to its own endpoint ${own}`);
         continue;
       }
       // The binaries the plan downloads first are what this needs; enable
@@ -530,6 +538,10 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
     if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}${output ? `\n${output}` : ""}`);
     else if (run.install) for (const line of externalReady(run.def, run.bin, run.flags, run.before)) say(line);
     else say(`✓ ${run.def.id}: ${name} ${run.args.join(" ")}`);
+  }
+  for (const agent of wire) {
+    const ask = h.agentAsk(agent);
+    if (ask) say(`○ ${ask}`);
   }
   return { ok: problems.length === 0, problems };
 }

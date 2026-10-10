@@ -59,6 +59,11 @@ esac`),
   };
   if (!binaries) for (const key of Object.keys(bins)) bins[key] = join(home, "missing", key);
   if (blocks) script("caveman-blocks", FAKE_BLOCKS);
+  // A Caveman runtime answers where the agents are wired (port 9 below): the
+  // proxy stub's `status` prints this record. No pid, so `caveman stop` has
+  // nothing to end. Tests about a stopped runtime delete it.
+  mkdirSync(join(home, ".caveman", "run"), { recursive: true });
+  writeFileSync(join(home, ".caveman", "run", "9.json"), '{"owner":"start"}\n');
   return {
     home,
     bin,

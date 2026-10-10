@@ -925,6 +925,14 @@ function installCodexHook(ctx) {
     results.skipped.push(['codex-hooks', 'needs the full caveman package']);
     return;
   }
+  // The caveman CLI wires Codex natively: its output module is the one
+  // injection, and `caveman off` switches it. This hook would inject again
+  // and outlive `caveman off`.
+  if (remainingNativeIntegrations().includes('codex')) {
+    note('  skipped Codex always-on hook: caveman already wires Codex (caveman on|off output switches it)');
+    results.skipped.push(['codex-hooks', 'caveman already wires Codex']);
+    return;
+  }
   if (opts.dryRun) {
     note(`  would install the owned caveman hook payload under ${path.join(home, CODEX_PAYLOAD_DIR)}`);
     note(`  would merge a caveman SessionStart entry into ${hooksPath}`);
@@ -962,7 +970,10 @@ function installCodexHook(ctx) {
     list.splice(at === -1 ? list.length : Math.min(at, list.length), 0, {
       // compact: Codex 0.160 sends it, and compaction prunes the injected ruleset.
       matcher: 'startup|resume|clear|compact',
-      hooks: [{ type: 'command', command: 'node ' + PLATFORM_PATHS.hookCommand(script, []), timeout: 5, statusMessage: 'Loading caveman mode' }],
+      // Absolute node on POSIX: the native codex binary does not run a login
+      // shell, so bare `node` can miss PATH. Windows keeps bare `node`: a quoted
+      // leading path is a string, not a command, in PowerShell (host-hooks.js).
+      hooks: [{ type: 'command', command: IS_WIN ? 'node ' + PLATFORM_PATHS.hookCommand(script, []) : PLATFORM_PATHS.hookCommand(absoluteNodePath(), [script]), timeout: 5, statusMessage: 'Loading caveman mode' }],
     });
     doc.hooks.SessionStart = list;
     if (JSON.stringify(doc) === before) {
