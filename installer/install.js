@@ -278,7 +278,7 @@ const PROVIDERS = [
   { id: 'devin',      label: 'Devin (terminal)',    mech: 'npx skills add (devin)',        detect: 'command:devin', profile: 'devin' },
   { id: 'droid',      label: 'Droid (Factory)',     mech: 'npx skills add (droid)',        detect: 'command:droid', profile: 'droid' },
   { id: 'forgecode',  label: 'ForgeCode',           mech: 'npx skills add (forgecode)',    detect: 'command:forge&&dir:$HOME/.forge', profile: 'forgecode' },
-  { id: 'goose',      label: 'Block Goose',         mech: 'npx skills add (goose)',        detect: 'command:goose&&dir:$HOME/.config/goose', profile: 'goose' },
+  { id: 'goose',      label: 'Block Goose',         mech: 'npx skills add (goose)',        detect: 'command:goose&&dir:$XDG_CONFIG_HOME/goose||command:goose&&dir:$APPDATA/Block/goose', profile: 'goose' },
   { id: 'grok',       label: 'Grok Build',          mech: 'native skills copy',     detect: 'command:grok' },
   { id: 'iflow',      label: 'iFlow CLI',           mech: 'npx skills add (iflow-cli)',    detect: 'command:iflow', profile: 'iflow-cli' },
   { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro-cli||command:kiro', profile: 'kiro-cli' },
@@ -318,6 +318,16 @@ function hasCmd(cmd) {
 function shellEscape(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 
 function expandHome(p) { return p.replace(/^\$HOME/, os.homedir()).replace(/^~/, os.homedir()); }
+
+// A detect path may also start with $XDG_CONFIG_HOME (unset or relative:
+// ~/.config, as XDG says) or $APPDATA (Windows; unset, it names nothing: null).
+function expandDetectPath(p) {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const roots = { XDG_CONFIG_HOME: xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), '.config'), APPDATA: process.env.APPDATA };
+  const m = /^\$(XDG_CONFIG_HOME|APPDATA)(?=\/|$)/.exec(p);
+  if (!m) return expandHome(p);
+  return roots[m[1]] ? roots[m[1]] + p.slice(m[0].length) : null;
+}
 
 function vscodeExtPresent(needle) {
   const home = os.homedir();
@@ -393,7 +403,8 @@ function detectMatch(spec) {
 function detectTerm(c) {
   const colon = c.indexOf(':');
   const kind = colon === -1 ? c : c.slice(0, colon);
-  const val  = colon === -1 ? '' : expandHome(c.slice(colon + 1));
+  const val  = colon === -1 ? '' : expandDetectPath(c.slice(colon + 1));
+  if (val === null) return false;
   switch (kind) {
     case 'command':           return hasCmd(val);
     case 'dir':               return safeStat(val, 'isDirectory');

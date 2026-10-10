@@ -137,6 +137,35 @@ test('CodeBuddy Code executable triggers the codebuddy profile', (t) => {
   assert.match(result.stdout, /-a codebuddy --yes -g/);
 });
 
+// Goose keeps its config in $XDG_CONFIG_HOME/goose (~/.config/goose when that
+// is unset) and on Windows in %APPDATA%\Block\goose.
+test('Goose is found in its XDG or Windows config dir', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman goose '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'bin');
+  nodeStub(bin, 'goose', 'process.exit(0);');
+  const preload = path.join(dir, 'hide-system-apps.cjs');
+  fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => !['path', 'xdg_config_home'].includes(key.toLowerCase())));
+  Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: path.join(dir, 'appdata'), LOCALAPPDATA: dir });
+  const detected = (extra = {}) => {
+    const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
+      encoding: 'utf8', cwd: dir, env: { ...env, ...extra },
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return /Block Goose detected/.test(result.stdout);
+  };
+  const xdg = { XDG_CONFIG_HOME: path.join(dir, 'xdg') };
+  fs.mkdirSync(path.join(dir, '.config', 'goose'), { recursive: true });
+  assert.equal(detected(), true, '~/.config/goose with XDG_CONFIG_HOME unset');
+  assert.equal(detected(xdg), false, 'goose reads $XDG_CONFIG_HOME/goose, not ~/.config/goose');
+  fs.mkdirSync(path.join(dir, 'xdg', 'goose'), { recursive: true });
+  assert.equal(detected(xdg), true, '$XDG_CONFIG_HOME/goose');
+  fs.rmSync(path.join(dir, 'xdg', 'goose'), { recursive: true });
+  fs.mkdirSync(path.join(dir, 'appdata', 'Block', 'goose'), { recursive: true });
+  assert.equal(detected(xdg), true, '%APPDATA%\\Block\\goose');
+});
+
 // Cline ships as saoudrizwan.claude-dev, so a bare /cline/ never matched it but
 // did match Roo Code (rooveterinaryinc.roo-cline); /roo/ matched any Groovy
 // extension. goose, forge and bob are also a DB migrator, Foundry and a neovim
@@ -161,7 +190,8 @@ test('detection finds real Cline/Roo extensions and ignores look-alike names', (
   };
   assert.doesNotMatch(run(), /(IBM Bob|ForgeCode|Block Goose|Roo Code|Cline) detected/);
 
-  for (const name of ['.bob', '.forge', path.join('.config', 'goose')]) fs.mkdirSync(path.join(dir, name), { recursive: true });
+  // XDG_CONFIG_HOME is `dir` here, so Goose's config dir is dir/goose.
+  for (const name of ['.bob', '.forge', 'goose']) fs.mkdirSync(path.join(dir, name), { recursive: true });
   fs.mkdirSync(path.join(ext, 'saoudrizwan.claude-dev-4.1.23'));
   const found = run();
   for (const label of ['IBM Bob', 'ForgeCode', 'Block Goose', 'Cline']) assert.match(found, new RegExp(`${label} detected`));
