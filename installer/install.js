@@ -2376,9 +2376,11 @@ function uninstall(ctx) {
       } else if (original && current && JSON.stringify(original) === JSON.stringify(current)) {
         try {
           fs.copyFileSync(ocBak, ocJson);
-          fs.unlinkSync(ocBak);
+          // The copy is the restore; a backup left behind is only clutter.
+          try { fs.unlinkSync(ocBak); } catch (_) {}
           note(`  restored ${ocJson} as it was before install`);
         } catch (error) {
+          cleanupFailed = true;
           warn(`  could not restore ${ocJson} from ${ocBak}: ${error.message}`);
         }
       } else {
