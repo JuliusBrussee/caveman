@@ -35,7 +35,7 @@ function fixtureRelease({ skip = [] } = {}) {
   return { "checksums.txt": checksums, "checksums.txt.keysig": sign(checksums), "modules.json": modules, unlisted };
 }
 
-async function serve(files) {
+async function serve(files, { delayMs = 0 } = {}) {
   let binaries = 0;
   const server = createServer((request, response) => {
     const name = (request.url ?? "").slice(`/${release}/`.length);
@@ -43,7 +43,7 @@ async function serve(files) {
     if (files[name] === null) return response.writeHead(404).end();
     if (name in files) return response.end(files[name]);
     binaries++;
-    response.end(binaryBody);
+    setTimeout(() => response.end(binaryBody), delayMs);
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   return {
@@ -237,6 +237,95 @@ esac
     await server.close();
   }
 });
+
+// Every agent launched right after a CLI upgrade installs at once. One
+// downloads; the others wait and reuse its install instead of sharing, and
+// deleting, its half-written download. One a killed install left is removed.
+test("concurrent installs download each binary once and all succeed", { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+  const server = await serve(fixtureRelease(), { delayMs: 200 });
+  const fx = modulesFixture();
+  try {
+    const env = { ...fx.env, CAVE_BINARY_RELEASE_BASE: server.base, CAVE_SETUP_TIMEOUT: "20" };
+    mkdirSync(join(env.CAVEMAN_HOME, "bin"), { recursive: true });
+    writeFileSync(join(env.CAVEMAN_HOME, "bin", `caveman-proxy.${spawnSync(process.execPath, ["-e", ""]).pid}.part`), "killed");
+    const runs = await Promise.all([1, 2, 3].map(() => runCli(["setup", "--install"], env, { cli, timeoutMs: 120_000 })));
+    for (const run of runs) assert.equal(run.code, 0, run.stdout + run.stderr);
+    assert.equal(server.binaries(), Object.keys(HUB_BINS).length);
+    for (const name of Object.keys(HUB_BINS)) assert.equal(readFileSync(join(env.CAVEMAN_HOME, "bin", name), "utf8"), binaryBody, name);
+    assert.deepEqual(readdirSync(join(env.CAVEMAN_HOME, "bin")).filter((name) => name.endsWith(".part")), []);
+  } finally {
+    fx.cleanup();
+    await server.close();
+  }
+});
+
+// An agent launch or `caveman on` updates implicitly. A restart would cut every
+// stream another session has in flight, so a runtime in use keeps running on
+// the old binary with a hint; an idle one restarts.
+for (const [name, { marker, rows, restarts }] of Object.entries({
+  "a live caveman session": { marker: true, rows: "[]", restarts: false },
+  "a request in the last 30 minutes": { marker: false, rows: JSON.stringify([{ ts: new Date().toISOString() }]), restarts: false },
+  "nothing recent": { marker: false, rows: "[]", restarts: true },
+})) {
+  test(`on after an upgrade ${restarts ? "restarts" : "leaves running"} a runtime with ${name}`, { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+    const serveJs = `const fs = require("node:fs"); const port = Number(process.env.CAVEMAN_LISTEN.split(":").pop());
+const file = process.env.CAVEMAN_HOME + "/run/" + port + ".json";
+require("node:net").createServer().listen(port, "127.0.0.1", () => {
+  fs.writeFileSync(file, JSON.stringify({ owner: process.env.CAVEMAN_PROXY_OWNER, pid: process.pid, port, version: "bin-new", mode: process.env.CAVEMAN_MODE, instance_token: "n" }));
+});
+process.on("SIGTERM", () => { fs.rmSync(file, { force: true }); process.exit(0); });`;
+    const proxy = `#!/bin/sh
+case "$1" in
+  version) printf '%s\\n' '{"version":"bin-new","capabilities":["run_state"]}' ;;
+  status) if [ -f "$CAVEMAN_HOME/run/$4.json" ]; then cat "$CAVEMAN_HOME/run/$4.json"; else printf '%s\\n' '{"owner":"unknown"}'; fi ;;
+  stats) printf '%s\\n' "$STATS_ROWS" ;;
+  "") exec ${JSON.stringify(process.execPath)} -e '${serveJs}' ;;
+esac
+`;
+    const artifact = releaseArtifactName("caveman-proxy", here.os, here.arch);
+    const unlisted = fixtureRelease().unlisted.replace(`${sha256(binaryBody)}  ${artifact}\n`, `${sha256(proxy)}  ${artifact}\n`);
+    const modules = `${JSON.stringify(modulesIndex(unlisted, release), null, 2)}\n`;
+    const checksums = `${unlisted}${sha256(modules)}  modules.json\n`;
+    const server = await serve({ "checksums.txt": checksums, "checksums.txt.keysig": sign(checksums), "modules.json": modules, [artifact]: proxy });
+    const fx = modulesFixture();
+    const port = await new Promise((resolve) => {
+      const probe = createServer().listen(0, "127.0.0.1", () => {
+        const { port } = probe.address();
+        probe.close(() => resolve(port));
+      });
+    });
+    const env = { ...fx.env, CAVE_BINARY_RELEASE_BASE: server.base, CAVE_SETUP_TIMEOUT: "5", CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`, CAVEMAN_LISTEN: `127.0.0.1:${port}`, STATS_ROWS: rows };
+    managedInstall(env, "bin-v0.0.1");
+    const runFile = join(env.CAVEMAN_HOME, "run", `${port}.json`);
+    mkdirSync(dirname(runFile), { recursive: true });
+    if (marker) {
+      mkdirSync(join(env.CAVEMAN_HOME, "run", `${port}.sessions`), { recursive: true });
+      writeFileSync(join(env.CAVEMAN_HOME, "run", `${port}.sessions`, `${process.pid}-session`), "");
+    }
+    const old = spawn(process.execPath, ["-e", `
+      const fs = require("node:fs");
+      require("node:net").createServer().listen(${port}, "127.0.0.1", () => {
+        fs.writeFileSync(${JSON.stringify(runFile)}, JSON.stringify({ owner: "wrap", pid: process.pid, port: ${port}, version: "bin-old", mode: "compress", instance_token: "o" }));
+        process.stdout.write("ready\\n");
+      });
+      process.on("SIGTERM", () => { fs.rmSync(${JSON.stringify(runFile)}, { force: true }); process.exit(0); });
+    `], { stdio: ["ignore", "pipe", "inherit"] });
+    await new Promise((resolve) => old.stdout.once("data", resolve));
+    const oldExit = new Promise((resolve) => old.once("exit", resolve));
+    try {
+      const on = await runCli(["on", "browse", "--yes"], env, { cli });
+      assert.equal(on.code, 0, on.stdout + on.stderr);
+      const stopped = await Promise.race([oldExit.then(() => true), new Promise((resolve) => setTimeout(resolve, restarts ? 10_000 : 1_000, false))]);
+      assert.equal(stopped, restarts, on.stdout + on.stderr);
+      if (!restarts) assert.match(on.stderr, new RegExp(`caveman-proxy bin-old still runs on 127\\.0\\.0\\.1:${port} — run \`caveman stop\`, then start your agent again to use bin-new`));
+    } finally {
+      old.kill("SIGKILL");
+      try { process.kill(JSON.parse(readFileSync(runFile, "utf8")).pid, "SIGTERM"); } catch { /* not started */ }
+      fx.cleanup();
+      await server.close();
+    }
+  });
+}
 
 test("a tampered modules.json is refused and nothing is written", async () => {
   const files = fixtureRelease();
