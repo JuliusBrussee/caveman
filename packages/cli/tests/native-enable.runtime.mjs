@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -1088,18 +1089,35 @@ test("disable preserves foreign routes and MCP registrations while removing only
   assert.equal(readFileSync(join(root, ".claude.json"), "utf8"), mcp);
 });
 
-test("disable preflights every profile before restoring a journal or changing any settings", async () => {
+test("disable preflights every file Caveman wrote, names one it cannot read, and skips unreadable files it never wrote", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
-  const installed = readFileSync(join(fx.home, ".claude", "settings.json"), "utf8");
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  const installed = readFileSync(settingsPath, "utf8");
+  const journalPath = join(fx.home, ".caveman", "integrations", "claude.json");
+  // A file Caveman wrote that no longer parses stops disable before any write.
+  const mcpPath = join(fx.home, ".claude.json");
+  const mcp = readFileSync(mcpPath, "utf8");
+  writeFileSync(mcpPath, '{"mcpServers":');
+  const refused = await run(["disable", "claude"], fx.env);
+  assert.notEqual(refused.code, 0);
+  assert.ok(refused.stderr.includes(`${mcpPath} is not valid JSON`), refused.stderr);
+  assert.equal(readFileSync(settingsPath, "utf8"), installed);
+  assert.ok(existsSync(journalPath));
+  writeFileSync(mcpPath, mcp);
+  // Files Caveman never wrote, empty or not JSON: Claude Code cannot read them
+  // either, so they hold no hook to remove and must not block the undo.
+  writeFileSync(join(fx.home, ".claude", "settings.local.json"), "");
   const bad = join(fx.home, ".claude-broken");
   mkdirSync(bad);
-  writeFileSync(join(bad, "settings.json"), '{"env":');
+  writeFileSync(join(bad, "settings.json"), "not json at all");
   const out = await run(["disable", "claude"], fx.env);
-  assert.notEqual(out.code, 0);
-  assert.equal(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8"), installed);
-  assert.equal(readFileSync(join(bad, "settings.json"), "utf8"), '{"env":');
-  assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stderr, /left \S*\.claude-broken\/settings\.json as is: it is not a JSON object/);
+  assert.equal(existsSync(settingsPath), false);
+  assert.equal(existsSync(mcpPath), false);
+  assert.equal(readFileSync(join(bad, "settings.json"), "utf8"), "not json at all");
+  assert.equal(existsSync(journalPath), false);
 });
 
 test("native and shared fixtures isolate inherited Claude profiles from enable and disable", async () => {
@@ -1362,7 +1380,9 @@ test("enable/disable opencode installs one native plugin, routed providers and r
   writeFileSync(configPath, JSON.stringify({
     theme: "keep",
     provider: {
-      openai: { options: { baseURL: "https://openai.before", keep: true } },
+      // An older Caveman route: re-pointed, and put back on disable. A
+      // baseURL of the user's own is left as is (see below).
+      openai: { options: { baseURL: "http://127.0.0.1:9999/w/opencode/openai/v1", keep: true } },
       custom: { options: { baseURL: "https://custom.example" } },
     },
     mcp: { other: { type: "local", command: ["other"] } },
@@ -1429,7 +1449,7 @@ test("enable/disable opencode installs one native plugin, routed providers and r
   const restored = JSON.parse(readFileSync(configPath, "utf8"));
   assert.equal(restored.theme, "keep");
   assert.equal(restored.later, "preserve");
-  assert.equal(restored.provider.openai.options.baseURL, "https://openai.before");
+  assert.equal(restored.provider.openai.options.baseURL, "http://127.0.0.1:9999/w/opencode/openai/v1");
   assert.equal(restored.provider.openai.options.later, 1);
   assert.equal(restored.provider.anthropic, undefined);
   assert.equal(restored.provider["opencode-go"], undefined);
@@ -1769,7 +1789,8 @@ test("enable/disable aider stays shallow, preserves native repo map, and restore
   const fx = fixture();
   const configPath = join(fx.home, ".aider.conf.yml");
   const before = [
-    "openai-api-base: https://before.example/v1",
+    // An older Caveman route; the user's own endpoint is left as is (below).
+    "openai-api-base: http://127.0.0.1:9999/w/aider/openai/v1",
     "read:",
     "  - USER_CONVENTIONS.md",
     "map-tokens: 2048",
@@ -1815,7 +1836,7 @@ test("enable/disable aider stays shallow, preserves native repo map, and restore
   const disabled = await run(["disable", "aider"], fx.env);
   assert.equal(disabled.code, 0, disabled.stderr);
   const restored = readFileSync(configPath, "utf8");
-  assert.match(restored, /openai-api-base: https:\/\/before\.example\/v1/);
+  assert.match(restored, /openai-api-base: http:\/\/127\.0\.0\.1:9999\/w\/aider\/openai\/v1/);
   assert.match(restored, /USER_CONVENTIONS\.md/);
   assert.match(restored, /map-tokens: 2048/);
   assert.match(restored, /later-user-option: keep/);
@@ -2250,4 +2271,146 @@ test("logout clears a saved choice of Auto made in a session-only caveman claude
   writeFileSync(settingsPath, '// mine\n{"model":"opus"}\n');
   assert.equal((await syncAuto(fx.env)).code, 0);
   assert.equal(readFileSync(settingsPath, "utf8"), '// mine\n{"model":"opus"}\n', "any other choice is left alone");
+});
+
+// A config kept in a dotfiles repo stays a link, and a 0644 file stays 0644.
+test("a linked or 0644 agent config keeps its link and mode through enable and disable", async () => {
+  const fx = fixture();
+  const dotfiles = join(fx.home, "dotfiles");
+  mkdirSync(dotfiles);
+  const target = join(dotfiles, "config.toml");
+  writeFileSync(target, 'model = "gpt-5.5"\n');
+  const link = join(fx.home, ".codex", "config.toml");
+  mkdirSync(dirname(link), { recursive: true });
+  symlinkSync(target, link);
+  const hooks = join(fx.home, ".codex", "hooks.json");
+  writeFileSync(hooks, "{}\n");
+  chmodSync(hooks, 0o644);
+  const enabled = await run(["enable", "codex"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  assert.ok(lstatSync(link).isSymbolicLink(), "enable replaced the link with a copy");
+  assert.match(readFileSync(target, "utf8"), /caveman:native-root/);
+  assert.equal(statSync(hooks).mode & 0o777, 0o644);
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.ok(lstatSync(link).isSymbolicLink(), "disable replaced the link with a copy");
+  assert.equal(readFileSync(target, "utf8"), 'model = "gpt-5.5"\n');
+  assert.equal(statSync(hooks).mode & 0o777, 0o644);
+});
+
+// OpenCode reads $XDG_CONFIG_HOME/opencode and prefers opencode.jsonc there.
+test("enable opencode writes where OpenCode reads: XDG_CONFIG_HOME and opencode.jsonc", async () => {
+  const fx = fixture();
+  const xdg = join(fx.home, "xdg");
+  const env = { ...fx.env, XDG_CONFIG_HOME: xdg };
+  const configPath = join(xdg, "opencode", "opencode.jsonc");
+  mkdirSync(dirname(configPath), { recursive: true });
+  const original = '{\n  // mine\n  "model": "openai/gpt-5.5",\n}\n';
+  writeFileSync(configPath, original);
+  const enabled = await run(["enable", "opencode"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  assert.equal(installed.model, "openai/gpt-5.5");
+  assert.equal(installed.provider.openai.options.baseURL, "http://127.0.0.1:8787/w/opencode/openai/v1");
+  assert.ok(existsSync(join(xdg, "opencode", "plugins", "caveman-native.js")));
+  assert.equal(existsSync(join(fx.home, ".config", "opencode")), false);
+  assert.equal(existsSync(join(xdg, "opencode", "opencode.json")), false);
+  // Rewritten as plain JSON: the comment goes, and enable says where it is kept.
+  const kept = enabled.stderr.match(/comments in \S+opencode\.jsonc were not kept; the original is saved at (\S+)/);
+  assert.ok(kept, enabled.stderr);
+  assert.equal(readFileSync(kept[1], "utf8"), original);
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], env)).stdout).state, "installed");
+  assert.equal((await run(["disable", "opencode"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// An endpoint of the user's own (a gateway, LiteLLM, a local model) is never
+// swapped for the proxy, whose upstream is the provider's public API: the
+// agent's requests and key would go there. Enable names it and writes nothing.
+test("enable leaves an agent on its own endpoint as is and says how to opt in", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  const cases = [
+    ["codex", join(fx.home, ".codex", "config.toml"), 'model_provider = "ollama"\n', /its own endpoint ollama \(model_provider in \S+config\.toml\)/],
+    ["aider", join(fx.home, ".aider.conf.yml"), "openai-api-base: \"http://localhost:1234/v1\" # LM Studio\n", /its own endpoint http:\/\/localhost:1234\/v1 \(openai-api-base in /],
+    ["opencode", join(fx.home, ".config", "opencode", "opencode.json"), JSON.stringify({ provider: { anthropic: { options: { baseURL: "https://llm-gw.corp.example/anthropic", apiKey: "{env:CORP_KEY}" } } } }) + "\n", /\(provider\.anthropic\.options\.baseURL in /],
+    ["gemini", join(fx.home, ".gemini", ".env"), "GOOGLE_GEMINI_BASE_URL=https://llm-gw.corp.example/gemini\n", /\(GOOGLE_GEMINI_BASE_URL in \S+\.env\)/],
+    ["hermes", join(hermesHome, "config.yaml"), "model:\n  provider: custom\n  base_url: http://localhost:11434/v1\n", /\(model\.base_url in \S+config\.yaml\)/],
+  ];
+  for (const [agent, file, body, where] of cases) {
+    mkdirSync(dirname(file), { recursive: true });
+    writeFileSync(file, body);
+    const out = await run(["enable", agent], { ...fx.env, HERMES_HOME: hermesHome });
+    assert.notEqual(out.code, 0, agent);
+    assert.match(out.stderr, where, agent);
+    assert.match(out.stderr, new RegExp(`was left as is\\. To route it through Caveman anyway, remove \\S+ there and run \`caveman enable ${agent}\``), agent);
+    assert.equal(readFileSync(file, "utf8"), body, agent);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", `${agent}.json`)), false, agent);
+  }
+  // `--detected` says so for each and goes on to wire the rest.
+  const detected = await run(["enable", "--detected"], { ...fx.env, HERMES_HOME: hermesHome });
+  assert.equal(detected.code, 0, detected.stderr);
+  assert.equal(detected.stderr.match(/was left as is/g)?.length, cases.length, detected.stderr);
+  assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
+  // Codex's built-in provider takes its endpoint from the shell, and Caveman's
+  // provider would replace it.
+  writeFileSync(cases[0][1], "");
+  const shell = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: "https://user:secret@llm-gw.corp.example/v1?key=k" });
+  assert.notEqual(shell.code, 0);
+  assert.match(shell.stderr, /its own endpoint https:\/\/llm-gw\.corp\.example\/v1 \(OPENAI_BASE_URL in your shell\).* remove OPENAI_BASE_URL from your shell and run `caveman enable codex`/);
+  assert.doesNotMatch(shell.stderr, /secret|key=k/, "credentials in the URL are not printed");
+  // Not the user's own: the provider's public API, where the proxy sends it
+  // anyway, and the gateway a wrapped shell exports, with or without a route.
+  for (const value of ["https://api.openai.com/v1", "http://127.0.0.1:8787", "http://127.0.0.1:8787/w/codex"]) {
+    const out = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: value });
+    assert.equal(out.code, 0, `${value}: ${out.stderr}`);
+    assert.equal((await run(["disable", "codex"], fx.env)).code, 0, value);
+  }
+});
+
+// An install from before this check routes the user's own endpoint; a repair
+// must not call that "left as is".
+test("repairing an earlier install over the user's own endpoint says how to put it back", async () => {
+  const fx = fixture();
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, "{}\n");
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  // Rewind the journal to what an earlier enable over a gateway recorded.
+  const journalPath = join(fx.home, ".caveman", "integrations", "claude.json");
+  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+  const op = journal.operations.find((item) => item.kind === "claude-settings");
+  const original = JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://llm-gw.corp.example/anthropic" } }) + "\n";
+  writeFileSync(op.backup, original);
+  op.before_sha256 = `sha256:${createHash("sha256").update(original).digest("hex")}`;
+  op.owned.previous_route = "https://llm-gw.corp.example/anthropic";
+  writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+  const wired = readFileSync(settingsPath, "utf8");
+  // A moved runtime port makes the next enable repair the route.
+  const out = await run(["enable", "claude"], { ...fx.env, CAVE_GATEWAY_URL: "http://127.0.0.1:8799" });
+  assert.notEqual(out.code, 0);
+  assert.match(out.stderr, /was routed through Caveman before, over its own endpoint https:\/\/llm-gw\.corp\.example\/anthropic.* Run `caveman disable claude` to put that endpoint back/);
+  assert.equal(readFileSync(settingsPath, "utf8"), wired);
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  assert.equal(readFileSync(settingsPath, "utf8"), original);
+});
+
+// Gemini CLI reads the first .env walking up from where it runs; the global
+// one holding Caveman's route is skipped in a folder that has its own.
+test("doctor gemini warns where a project .env or the shell overrides Caveman's route", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "gemini"], fx.env)).code, 0);
+  const project = join(fx.home, "project");
+  mkdirSync(project);
+  const doctor = (env, cwd) => JSON.parse(spawnSync(process.execPath, [cli, "doctor", "gemini"], { env, cwd, encoding: "utf8" }).stdout);
+  assert.deepEqual(doctor(fx.env, project).warnings, []);
+  writeFileSync(join(project, ".env"), "FOO=bar\n");
+  assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here instead of \S+\.gemini\/\.env/);
+  writeFileSync(join(project, ".env"), "FOO=bar\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787/w/gemini\n");
+  assert.deepEqual(doctor(fx.env, project).warnings, []);
+  assert.match(doctor({ ...fx.env, GOOGLE_GEMINI_BASE_URL: "https://llm-gw.corp.example" }, fx.home).warnings.join("\n"), /takes GOOGLE_GEMINI_BASE_URL from your shell/);
+  // A virtualenv named .env is still the first hit; it must not crash doctor.
+  rmSync(join(project, ".env"));
+  mkdirSync(join(project, ".env"));
+  assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here/);
 });

@@ -2032,13 +2032,21 @@ function uninstall(ctx) {
 
   // Native integrations (`caveman enable <agent>`) journal their prior state
   // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
-  // `disable --all` rather than re-deriving that logic here.
+  // `disable --all` rather than re-deriving that logic here. Setup puts the CLI
+  // under $CAVEMAN_HOME/cli when the global npm prefix is not writable, so an
+  // older caveman can stay first on PATH; only the newer one undoes all it
+  // wrote, and a second run finds nothing left, so both run. A caveman on PATH
+  // older than the bundled CLI hands its turn to the bundled one.
+  const privateCli = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'cli',
+    ...(process.platform === 'win32' ? ['caveman.cmd'] : ['bin', 'caveman']));
+  const disables = [];
+  if (fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
   if (hasCmd('caveman')) {
     const bundled = newerBundledCli();
-    const r = bundled
-      ? runSpawn(process.execPath, [bundled, 'disable', '--all'], null, opts.dryRun)
-      : runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
-    if (spawnOk(r) && !opts.dryRun) ok('  disabled native agent integrations');
+    disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all']] : ['caveman', ['disable', '--all']]);
+  }
+  if (disables.map(([cmd, args]) => spawnOk(runSpawn(cmd, args, null, opts.dryRun))).some(Boolean) && !opts.dryRun) {
+    ok('  disabled native agent integrations');
   }
 
   // ...and say so when one survived. `disable` removes the journal it restored

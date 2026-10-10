@@ -211,7 +211,9 @@ test("found logins are shown; an exported key joins Auto's pool only when ticked
     assert.match(tty.text(), / {4}Agents {4}Claude Code \(2 logins\) · Codex\n/);
     // A key already in the pool is never offered or added again.
     assert.deepEqual(added, tick ? ["anthropic"] : []);
-    if (tick) assert.match(tty.text(), / {2}✓ Keys {6}Anthropic added for Auto · undo: caveman providers remove <id>\n/);
+    // `off --all` leaves a stored key: the screen and the result name its own undo.
+    if (tick) assert.match(tty.text(), /◼ let Auto spend on ANTHROPIC_API_KEY · undo: caveman providers remove anthropic\n/);
+    if (tick) assert.match(tty.text(), / {2}✓ Keys {6}Anthropic added for Auto · undo: caveman providers remove anthropic\n/);
     // Signed in already: Auto's row, and what it sends in short.
     assert.match(tty.text(), / {2}✓ Auto {6}on · signed in\n {14}On Auto, your last two asks \(with what the agent attaches\), the end of its\n {14}last reply and request facts go to Caveman Cloud; the Free plan may keep them\.\n {14}Stop: caveman off routing · every word: caveman on routing\n/);
   }

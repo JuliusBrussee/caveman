@@ -386,7 +386,12 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
       for (const file of h.planWiring(agent)) {
         lines.push({ action: file.exists ? "UPDATE" : "CREATE", target: tilde(file.file), detail: file.kind.replace("-", " ") });
       }
-    } catch {
+    } catch (error) {
+      // An agent on its own endpoint is left as is, and the plan says so.
+      if ((error as { ownEndpoint?: boolean }).ownEndpoint) {
+        notes.push((error as Error).message);
+        continue;
+      }
       // The binaries the plan downloads first are what this needs; enable
       // reports any real refusal when it runs.
       lines.push({ action: "UPDATE", target: `${agent} config`, detail: "route + hooks" });
@@ -479,7 +484,10 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
     try {
       act();
       say(`✓ ${h.agentName(agent)} ${done}`);
-    } catch (error) { fail(agent, error); }
+    } catch (error) {
+      if ((error as { ownEndpoint?: boolean }).ownEndpoint) say(`○ ${(error as Error).message}`);
+      else fail(agent, error);
+    }
   };
   for (const agent of unwire) step(agent, "unwired", () => h.unwireAgent(agent));
   for (const agent of wire) step(agent, "wired", () => h.wireAgent(agent));

@@ -114,6 +114,18 @@ test('writeSettings removes its temporary file when rename fails', () => {
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
+test('writeSettings writes a linked settings file at its target and keeps the link', { skip: process.platform === 'win32' }, () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-settings-link-'));
+  const target = path.join(dir, 'dotfiles-settings.json');
+  fs.writeFileSync(target, '{}\n');
+  const link = path.join(dir, 'settings.json');
+  fs.symlinkSync(target, link);
+  SETTINGS.writeSettings(link, { a: 1 });
+  assert.equal(fs.lstatSync(link).isSymbolicLink(), true);
+  assert.deepEqual(JSON.parse(fs.readFileSync(target, 'utf8')), { a: 1 });
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
 test('validateHookFields preserves foreign and unknown hook shapes', () => {
   const s = {
     hooks: {

@@ -237,11 +237,11 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     // Whatever throws, the progress line never stays under the error.
     busy.stop();
   }
-  const added: string[] = [];
+  const added: typeof keys = [];
   for (const key of keys.filter((item) => item.on)) {
     try {
       deps.addKey!(key);
-      if (ask) added.push(key.name);
+      if (ask) added.push(key);
       else out.write(`${c.green("✓")} ${key.name} key added for Auto ${c.dim(`· ${cmd} providers remove ${key.id} takes it back`)}\n`);
     } catch (error) {
       result.problems.push(`${key.name} key: ${error instanceof Error ? error.message.replace(/^caveman: /, "") : String(error)}`);
@@ -249,7 +249,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     }
   }
   busy.stop();
-  if (added.length) done.push(`✓ keys: ${added.join(" · ")} added for Auto · undo: ${cmd} providers remove <id>`);
+  if (added.length) done.push(`✓ keys: ${added.map((key) => key.name).join(" · ")} added for Auto · undo: ${added.map((key) => `${cmd} providers remove ${key.id}`).join(" · ")}`);
   if (ask) for (const line of stepRows(done, c)) out.write(`${line}\n`);
   for (const problem of result.problems) out.write(`${ask ? PAD : ""}${c.red("✗")} ${problem}\n`);
   if (!ask) out.write("\n");
@@ -775,8 +775,10 @@ function choose(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ro
       const text = found.length === 1
         ? `let Auto spend on ${found[0]!.env}`
         : `let Auto spend on ${found.length} keys · ${found.map((key) => key.env).join(", ")}`;
-      const on = found.some((key) => key.on);
-      lines.push(`  ${c.dim("Keys".padEnd(10))}${on ? c.accent(g.on) : g.off} ${clip(text, width() - 14 - g.on.length)}`);
+      const on = found.filter((key) => key.on);
+      // `off --all` (the Changes row's undo) leaves a stored key in place.
+      const undo = on.length ? ` · undo: ${on.map((key) => `caveman providers remove ${key.id}`).join(" · ")}` : "";
+      lines.push(`  ${c.dim("Keys".padEnd(10))}${on.length ? c.accent(g.on) : g.off} ${clip(text + undo, width() - 14 - g.on.length)}`);
     }
     // Customize and Details take this screen's place and bring it back after.
     if (!active) return gaveWay() ? [] : [...lines, "", `${c.dim(g.pointer)} ${options[at]!.label}`];

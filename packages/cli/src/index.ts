@@ -4270,7 +4270,7 @@ function clearAutoModelChoice(agent: NativeAgent): void {
         } catch { /* this profile only; the others still lose the choice */ }
       }
     } else if (agent === "opencode") {
-      const path = join(homedir(), ".config", "opencode", "opencode.json");
+      const path = opencodeConfigPath();
       const bytes = fileBytes(path);
       const root = parseJsonFileObject(path, bytes);
       if (bytes && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
@@ -8197,6 +8197,10 @@ function bytesHash(bytes: Buffer): string {
 }
 
 function atomicWriteFile(path: string, bytes: Buffer, mode = 0o600): void {
+  // A linked config (a dotfiles repo) is written at its target, or the rename
+  // would replace the link with a copy. An existing file keeps its permissions.
+  path = throughLink(path);
+  try { mode = statSync(path).mode & 0o777; } catch { /* new file */ }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temp = join(dirname(path), `.${basename(path)}.caveman-${process.pid}-${randomUUID()}.tmp`);
   try {
@@ -8309,7 +8313,10 @@ function durableUnlink(path: string): void {
 function parseJsonFileObject(path: string, bytes: Buffer | null): Record<string, unknown> {
   if (!bytes || bytes.length === 0) return {};
   // JSONC-tolerant: Claude Code and OpenCode both accept comments here.
-  const parsed = parseJsonc(bytes.toString("utf8"));
+  let parsed: unknown;
+  try { parsed = parseJsonc(bytes.toString("utf8")); } catch (error) {
+    throw new Error(`${path} is not valid JSON (${(error as Error).message}); fix it and try again`);
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${path} is not a JSON object`);
   return parsed as Record<string, unknown>;
 }
@@ -8347,6 +8354,47 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
 
 function detectedAgentVersion(agent: AgentProfile): string | null { return nativeHostProbe(agent).version; }
 
+// A base URL Caveman wrote: the gateway itself (a raw `caveman wrap` exports
+// it), or a /w/ route on the local runtime or a Caveman gateway. A wrapped
+// session exports one in every vendor variable.
+function isCavemanRoute(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.origin === new URL(gatewayURL()).origin
+      || url.pathname.startsWith("/w/") && ["localhost", "127.0.0.1", "[::1]", "gateway.caveman.so", "gw.caveman.so", "api.caveman.so"].includes(url.hostname);
+  } catch { return false; }
+}
+
+// The user's own endpoint a base URL names, shown without credentials, or
+// null: Caveman's routes are not, nor the providers' public APIs, where the
+// proxy sends the requests anyway.
+function ownEndpoint(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim() || isCavemanRoute(value)) return null;
+  try {
+    if (["api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com"].includes(new URL(value).hostname)) return null;
+  } catch { /* not a URL: a provider name */ }
+  return value.replace(/\/\/[^/@]*@/, "//").replace(/[?#].*$/, "");
+}
+
+// An agent that already sends its requests to an endpoint of its own (a
+// company gateway, LiteLLM, a local model) is left as is. Its route would
+// swap that endpoint for the local proxy, whose upstream is the provider's
+// public API, so the requests and the key meant for the user's endpoint would
+// go there. The proxy has one upstream per provider for every agent, so it
+// cannot forward this one agent to the user's endpoint instead. Thrown before
+// any write; setup reports it as a skip.
+function refuseOwnEndpoint(agent: NativeAgent, key: string, value: unknown, file?: string): void {
+  const own = ownEndpoint(value);
+  if (!own) return;
+  const name = findAgent(agent)?.display_name ?? agent;
+  throw Object.assign(new Error(`${name} sends its requests to its own endpoint ${own} (${key} in ${file ?? "your shell"}). Caveman would send them, with their key, to the provider's public API instead, so ${name} was left as is. To route it through Caveman anyway, remove ${key} ${file ? "there" : "from your shell"} and run \`caveman enable ${agent}\`.`), { ownEndpoint: own });
+}
+
+// A YAML or dotenv scalar: comment and quotes off.
+function configValue(raw: string | undefined): string | undefined {
+  return raw?.replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
+}
+
 // One wiring per Claude Code profile: people keep several logins as sibling
 // config dirs and pick one with CLAUDE_CONFIG_DIR, and a profile left out
 // would silently bypass Caveman. A profile that cannot be wired is skipped
@@ -8381,11 +8429,12 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
-  // Another login that points somewhere else on purpose (its own gateway, a
-  // cloud provider lane) keeps doing so. The active one is the user's ask.
-  if (other && env.ANTHROPIC_BASE_URL !== undefined && env.ANTHROPIC_BASE_URL !== "" && !isCavemanClaudeRoute(env.ANTHROPIC_BASE_URL, false)) {
-    throw new Error("it sets its own ANTHROPIC_BASE_URL");
-  }
+  // A login that points somewhere else on purpose (its own gateway) keeps
+  // doing so, the active one too. Settings env outranks the shell's, so an
+  // exported endpoint would be replaced as well. Another login on a cloud
+  // provider lane keeps it.
+  refuseOwnEndpoint("claude", "ANTHROPIC_BASE_URL", env.ANTHROPIC_BASE_URL, settingsPath);
+  if (!env.ANTHROPIC_BASE_URL) refuseOwnEndpoint("claude", "ANTHROPIC_BASE_URL", process.env.ANTHROPIC_BASE_URL);
   if (other && claudeOffProxyLane(env)) throw new Error("it uses a provider lane that bypasses ANTHROPIC_BASE_URL");
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
@@ -8482,6 +8531,31 @@ function geminiNativeEnv(source: string, route: string): { text: string; block: 
   return { text: `${stripped}${stripped ? "\n\n" : ""}${block}\n`, block };
 }
 
+// Gemini CLI loads one .env: the first .gemini/.env or .env walking up from
+// the working directory, the global one only when there is none, and never
+// over a variable the shell exports. The route in the global file then does
+// not apply, while the install reads healthy.
+function geminiRouteShadow(): string | null {
+  for (const key of ["GOOGLE_GEMINI_BASE_URL", "GEMINI_BASE_URL"]) {
+    const value = process.env[key];
+    if (value && !isCavemanRoute(value)) return `Gemini CLI takes ${key} from your shell, so its requests go direct and are not compressed or counted; unset it to use Caveman's route`;
+  }
+  const global = join(geminiConfigDir(), ".env");
+  for (let dir = resolve(process.cwd()); ; dir = dirname(dir)) {
+    for (const file of [join(dir, ".gemini", ".env"), join(dir, ".env")]) {
+      if (!existsSync(file)) continue;
+      if (nativeRealPath(file) === nativeRealPath(global)) return null;
+      // A .env Gemini cannot read (a directory, no permission) loads nothing.
+      let text = "";
+      try { text = readFileSync(file, "utf8"); } catch { /* not routed */ }
+      const routed = text.split(/\r?\n/)
+        .some((line) => /^\s*(?:export\s+)?GOOGLE_GEMINI_BASE_URL\s*=/.test(line) && isCavemanRoute(configValue(line.slice(line.indexOf("=") + 1)) ?? ""));
+      return routed ? null : `Gemini CLI reads ${file} here instead of ${global}, so its requests from this folder go direct and are not compressed or counted; copy the Caveman lines from ${global} into it`;
+    }
+    if (dirname(dir) === dir) return null;
+  }
+}
+
 function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   if (wrapMode(gw) === "managed") {
     throw new Error("managed Gemini CLI routing is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials");
@@ -8506,6 +8580,11 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const envBefore = fileBytes(envPath);
   const route = appendUrlPath(gw, "/w/gemini");
   const nativeEnv = geminiNativeEnv(envBefore?.toString("utf8") ?? "", route);
+  // The block goes last in the file, so it would win over the user's own.
+  for (const line of nativeEnv.text.replace(nativeEnv.block, "").split(/\r?\n/)) {
+    const own = line.match(/^\s*(?:export\s+)?(GEMINI_BASE_URL|GOOGLE_GEMINI_BASE_URL|GOOGLE_VERTEX_BASE_URL)\s*=(.*)$/);
+    if (own) refuseOwnEndpoint("gemini", own[1]!, configValue(own[2]), envPath);
+  }
   return [
     {
       file: settingsPath,
@@ -8524,8 +8603,19 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   ];
 }
 
+// OpenCode reads $XDG_CONFIG_HOME/opencode, else ~/.config/opencode on every
+// platform, and opencode.jsonc over opencode.json when both are there.
+function opencodeConfigDir(): string {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
+}
+
+function opencodeConfigPath(): string {
+  const jsonc = join(opencodeConfigDir(), "opencode.jsonc");
+  return existsSync(jsonc) ? jsonc : join(opencodeConfigDir(), "opencode.json");
+}
+
 function opencodeNativePluginPath(): string {
-  return join(homedir(), ".config", "opencode", "plugins", "caveman-native.js");
+  return join(opencodeConfigDir(), "plugins", "caveman-native.js");
 }
 
 function opencodePluginMajor(): number | null {
@@ -8949,7 +9039,7 @@ function opencodeNativeRoutes(gw: string): Record<string, string> {
 function opencodeUnroutedActiveProvider(routed: string[]): string | null {
   for (const name of ["opencode.jsonc", "opencode.json"]) {
     try {
-      const model = (parseJsonc(readFileSync(join(homedir(), ".config", "opencode", name), "utf8")) as Record<string, unknown> | null)?.model;
+      const model = (parseJsonc(readFileSync(join(opencodeConfigDir(), name), "utf8")) as Record<string, unknown> | null)?.model;
       if (typeof model === "string" && model.includes("/")) {
         const provider = model.slice(0, model.indexOf("/"));
         return routed.includes(provider) ? null : provider;
@@ -8968,7 +9058,7 @@ function opencodeUnroutedActiveProvider(routed: string[]): string | null {
 }
 
 function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): NativeMutation[] {
-  const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+  const configPath = opencodeConfigPath();
   const before = fileBytes(configPath);
   const root = parseJsonFileObject(configPath, before);
   if (root.provider !== undefined && (typeof root.provider !== "object" || root.provider === null || Array.isArray(root.provider))) {
@@ -8984,6 +9074,10 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
   for (const [providerID, route] of Object.entries(routes)) {
     const provider = providers[providerID] && typeof providers[providerID] === "object" && !Array.isArray(providers[providerID]) ? providers[providerID] as Record<string, unknown> : {};
     const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options) ? provider.options as Record<string, unknown> : {};
+    // The provider SDKs read these when the config names no baseURL.
+    const shellKey = providerID === "openai" ? "OPENAI_BASE_URL" : providerID === "anthropic" ? "ANTHROPIC_BASE_URL" : undefined;
+    refuseOwnEndpoint("opencode", `provider.${providerID}.options.baseURL`, options.baseURL, configPath);
+    if (options.baseURL === undefined && shellKey) refuseOwnEndpoint("opencode", shellKey, process.env[shellKey]);
     previousRoutes[providerID] = options.baseURL ?? null;
     options.baseURL = route;
     provider.options = options;
@@ -9111,6 +9205,7 @@ function aiderNativeMutations(gw: string): NativeMutation[] {
   }
   const route = appendUrlPath(gw, "/w/aider/openai/v1");
   const native = aiderNativeConfig(configBefore?.toString("utf8") ?? "", route, corePath);
+  refuseOwnEndpoint("aider", "openai-api-base", configValue(native.previousRouteLine?.replace(/^openai-api-base\s*:/, "")), configPath);
   return [
     {
       file: configPath,
@@ -9229,6 +9324,15 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
+  // A provider of the user's own (Ollama, Azure, a gateway) is replaced by
+  // Caveman's, and so is the endpoint the built-in openai one takes from the shell.
+  let section = "";
+  const provider = (configBefore?.toString("utf8") ?? "").split(/\r?\n/).map((line) => {
+    section = codexTomlSectionName(line) ?? section;
+    return section === "" ? line.match(/^\s*model_provider\s*=\s*["']?([^"'#\s]*)/)?.[1] : undefined;
+  }).find(Boolean);
+  if (provider !== "openai" && provider !== "caveman") refuseOwnEndpoint("codex", "model_provider", provider, configPath);
+  if (provider !== "caveman") refuseOwnEndpoint("codex", "OPENAI_BASE_URL", process.env.OPENAI_BASE_URL);
   const subscription = detectCodexWrapAuthMode() === "subscription";
   const native = codexNativeConfig(configBefore?.toString("utf8") ?? "", gw, subscription, mcpBinary);
   const route = codexGatewayBase(gw, subscription);
@@ -9523,6 +9627,9 @@ function hermesNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const configPath = hermesConfigPath();
   const configBefore = fileBytes(configPath);
   const native = hermesNativeConfig(configBefore?.toString("utf8") ?? "", gw, mcpBinary);
+  // A custom provider is the user's own endpoint; a named one is the vendor's.
+  const previous = Object.fromEntries((native.owned.previous_route_lines as string[]).map((line) => [line.match(/^  ([^:]+):/)![1]!, configValue(line.slice(line.indexOf(":") + 1))]));
+  if (!previous.provider || previous.provider === "custom" || previous.provider === "auto") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
   const pluginDir = hermesNativePluginDir();
   const manifestPath = join(pluginDir, "plugin.yaml");
   const initPath = join(pluginDir, "__init__.py");
@@ -9689,6 +9796,14 @@ function applyNativeMutations(agent: NativeAgent, profile: AgentProfile, mutatio
     if (agent === "claude") rememberClaudeProfile();
     atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
     unlinkSync(nativePendingJournalPath(agent));
+    // A JSON config is rewritten as plain JSON, so its comments go: say where
+    // the original is kept.
+    mutations.forEach((mutation, index) => {
+      if (!mutation.before?.length || !/\.jsonc?$/.test(mutation.file)) return;
+      try { JSON.parse(mutation.before.toString("utf8")); } catch {
+        process.stderr.write(`${mark("warn")} comments in ${mutation.file} were not kept; the original is saved at ${journal.operations[index]!.backup}\n`);
+      }
+    });
     return journal;
   } catch (error) {
     for (const mutation of written.reverse()) {
@@ -9899,7 +10014,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
   const gw = gatewayURL();
   for (const profile of profiles) {
     const agent = profile.id as NativeAgent;
-    const outcome = withIntegrationLock(agent, () => {
+    const wire = () => withIntegrationLock(agent, () => {
       recoverPendingNativeInstallUnlocked(agent);
       if (!which(binOf(profile))) throw new Error(`${profile.display_name} not found on PATH`);
       const mcpBinary = agent === "aider" ? undefined : nativeMcpBinaryRequired();
@@ -9948,6 +10063,13 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
       installNativeVoiceSkills(agent);
       return "enabled" as const;
     });
+    let outcome: ReturnType<typeof wire>;
+    try { outcome = wire(); } catch (error) {
+      // `--detected` goes on past an agent on its own endpoint; one named alone fails.
+      if (!detected || !(error as { ownEndpoint?: string }).ownEndpoint) throw error;
+      process.stderr.write(`${mark("warn")} ${(error as Error).message}\n`);
+      continue;
+    }
     // Outside the lock, and on BOTH outcomes. The native SessionStart hook
     // autostarts the proxy, but only once the host has approved the installed
     // hooks (Codex gates this behind /hooks), and `enable` run on its own —
@@ -9978,6 +10100,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman enabled; run ${agent} normally\n`);
     if (agent !== "aider") process.stderr.write(dim(`→ host trust remains authoritative; approve Caveman hooks/plugin when ${profile.display_name} asks\n`));
     if (agent === "codex") process.stderr.write(dim("→ review/approve hook hashes through Codex /hooks; Caveman does not bypass native trust\n"));
+    if (agent === "gemini") process.stderr.write(dim(`→ Gemini CLI skips ${join(geminiConfigDir(), ".env")} in a folder with its own .env; copy the Caveman lines into that one\n`));
     if (agent === "aider") {
       process.stderr.write(dim(`→ coding policy: Core ${NATIVE_PACK.version} static on; Aider cannot apply think.core live; \`caveman disable aider\` removes it\n`));
     } else {
@@ -10321,8 +10444,10 @@ function claudeUnwiredProfiles(journal: NativeJournal): string[] {
     const wired = new Set(journal.operations.filter((operation) => !claudeProfileGone(operation)).map((operation) => nativeRealPath(operation.file)));
     return claudeProfileRoots().filter((root) => {
       if (wired.has(nativeRealPath(join(root, "settings.json")))) return false;
-      if (root === claudeConfigDir()) return true;
-      try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch { return false; }
+      // The active one counts unless it is on its own endpoint.
+      try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch (error) {
+        return root === claudeConfigDir() && !(error as { ownEndpoint?: boolean }).ownEndpoint;
+      }
     });
   } catch { return []; }
 }
@@ -10438,10 +10563,16 @@ function restoreNativeJournalFiles(journal: NativeJournal | undefined, allClaude
   if (allClaudeProfiles) {
     for (const file of claudeProfileFiles(journal)) {
       const bytes = restored.has(file) ? restored.get(file) : fileBytes(file);
-      if (!bytes) continue;
-      const root = parseJsonc(bytes.toString("utf8"));
-      if (!root || typeof root !== "object" || Array.isArray(root)) throw new Error(`${file} is not a JSON object`);
-      if (cleanClaudeProfile(root as Record<string, unknown>)) restored.set(file, jsonBytes(root as Record<string, unknown>));
+      if (!bytes || bytes.length === 0) continue;
+      let root: Record<string, unknown>;
+      try { root = parseJsonFileObject(file, bytes); } catch (error) {
+        // A file Caveman wrote must parse. Any other one Claude Code cannot
+        // read either, so it holds no hook to remove: it must not block undo.
+        if (restored.has(file)) throw error;
+        process.stderr.write(`${mark("warn")} left ${file} as is: it is not a JSON object\n`);
+        continue;
+      }
+      if (cleanClaudeProfile(root)) restored.set(file, jsonBytes(root));
     }
   }
   const current = [...restored].map(([file]) => ({ file, bytes: fileBytes(file) }));
@@ -10536,6 +10667,10 @@ function repairNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boo
         try { writeNativeRestoration(item.file, item.bytes); } catch { /* original error remains authority */ }
       }
       atomicWriteFile(nativeJournalPath(target), journalBytes);
+      // An install from before that check routes the user's own endpoint: it
+      // was not left as is.
+      const own = (error as { ownEndpoint?: string }).ownEndpoint;
+      if (own) throw new Error(`${profile.display_name} was routed through Caveman before, over its own endpoint ${own}, so its requests go to the provider's public API. Run \`caveman disable ${target}\` to put that endpoint back.`);
       throw error;
     }
     if (!quiet) installNativeVoiceSkills(target);
@@ -10703,6 +10838,10 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
 	  ? ownedHealthy
 	  : coreSupported && nativeCoreRuntimeState().active;
   const warnings: string[] = [];
+  if (agent === "gemini" && installed) {
+    const shadow = geminiRouteShadow();
+    if (shadow) warnings.push(shadow);
+  }
   if (agent === "opencode" && installed) {
     const routed = Object.keys((routeOperation?.owned?.routes as Record<string, unknown> | undefined) ?? {});
     const unrouted = opencodeUnroutedActiveProvider(routed);
@@ -13281,7 +13420,7 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
     case "codex":
       return removeMcpCodexToml(serverName);
     case "opencode":
-      return removeMcpJson(join(homedir(), ".config", "opencode", "opencode.json"), ["mcp", serverName]);
+      return removeMcpJson(join(opencodeConfigDir(), "opencode.json"), ["mcp", serverName]);
     case "kilo":
     case "qwen":
       throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
@@ -14706,6 +14845,19 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
+  // The wrap would replace an endpoint of the user's own with the proxy, which
+  // cannot forward to it, and send its key to the provider's public API.
+  // Claude Code's settings env outranks the shell's.
+  const key = agent.id === "claude" ? "ANTHROPIC_BASE_URL" : agent.id === "codex" ? "OPENAI_BASE_URL" : undefined;
+  let settingsUrl: unknown;
+  if (agent.id === "claude") {
+    try {
+      const path = throughLink(join(claudeConfigDir(), "settings.json"));
+      settingsUrl = objectValue(parseJsonFileObject(path, fileBytes(path)).env).ANTHROPIC_BASE_URL;
+    } catch { /* unreadable: the shell decides */ }
+  }
+  const own = key ? ownEndpoint(settingsUrl || process.env[key]) : null;
+  if (key && own) return { surface: key, reason: `points at your own endpoint ${own}, which the proxy cannot forward to` };
   return null;
 }
 
@@ -15341,7 +15493,7 @@ function installMcpForAgent(a: AgentProfile, mcp: { command: string; args: strin
     case "codex":
       return installMcpCodexToml(mcp, serverName);
     case "opencode":
-      return installMcpJson(join(homedir(), ".config", "opencode", "opencode.json"), ["mcp", serverName], {
+      return installMcpJson(join(opencodeConfigDir(), "opencode.json"), ["mcp", serverName], {
         type: "local",
         command: [mcp.command, ...mcp.args],
         enabled: true,
@@ -17187,7 +17339,7 @@ function opencodePluginPath(): string {
   // opencode auto-loads global plugins from ~/.config/opencode/plugins/ (PLURAL — the
   // documented path; a file under the wrong dir is silently ignored, which would make
   // this a fake hook). See https://opencode.ai/docs/plugins.
-  return join(homedir(), ".config", "opencode", "plugins", "caveman-shrink.js");
+  return join(opencodeConfigDir(), "plugins", "caveman-shrink.js");
 }
 // cavemanInvocation returns how to call back into THIS CLI from a generated plugin,
 // baked at install time so it is independent of the agent's PATH: a resolved

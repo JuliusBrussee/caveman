@@ -276,6 +276,30 @@ test("caveman claude --remote-control names the native install that still routes
   assert.equal(baseURL, "", "the bypass must still launch unrouted");
 });
 
+// An endpoint of the user's own (a gateway, LiteLLM) is never swapped for the
+// proxy, which cannot forward to it: the launch goes direct and says why.
+test("caveman claude on its own endpoint launches directly and writes nothing", async () => {
+  const { env, home } = nativeShortcutEnv();
+  const gateway = "https://llm-gw.corp.example/anthropic";
+  const out = await runWithEnv({ ...env, ANTHROPIC_BASE_URL: gateway }, ["claude", "-p", "hi"]);
+  assert.equal(out.code, 0, `cli exited ${out.code}: ${out.stderr}`);
+  assert.match(out.stderr, /ANTHROPIC_BASE_URL points at your own endpoint https:\/\/llm-gw\.corp\.example\/anthropic, which the proxy cannot forward to; launching directly/);
+  const [agentArgs, baseURL] = out.stdout.split("|");
+  assert.equal(agentArgs, "-p hi");
+  assert.equal(baseURL, gateway, "the user's own endpoint reaches the host untouched");
+  assert.equal(existsSync(join(home, ".claude", "settings.json")), false);
+  // Claude Code's settings env outranks the shell's: the same from there.
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  const settings = JSON.stringify({ env: { ANTHROPIC_BASE_URL: gateway } }) + "\n";
+  writeFileSync(join(home, ".claude", "settings.json"), settings);
+  const fromSettings = await runWithEnv(env, ["claude", "-p", "hi"]);
+  assert.equal(fromSettings.code, 0, `cli exited ${fromSettings.code}: ${fromSettings.stderr}`);
+  assert.match(fromSettings.stderr, /points at your own endpoint .* launching directly/);
+  assert.equal(fromSettings.stdout.split("|")[1], "", "no proxy route injected");
+  assert.equal(readFileSync(join(home, ".claude", "settings.json"), "utf8"), settings);
+  assert.equal(existsSync(join(home, "integrations", "claude.json")), false);
+});
+
 test("caveman claude --help never installs persistent integration", async () => {
   const { env, home } = nativeShortcutEnv();
   const out = await runWithEnv(env, ["claude", "--help"]);
