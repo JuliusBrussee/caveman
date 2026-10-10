@@ -684,7 +684,7 @@ test('opencode system.transform degrades to the banner when caveman-config.cjs p
     // rather than a corrupt file.
     const cfgPath = path.join(xdg, 'opencode', 'plugins', 'caveman', 'caveman-config.cjs');
     const body = fs.readFileSync(cfgPath, 'utf8');
-    const stripped = body.replace(/^\s*skillPathCandidates, loadRuleset, thesisLine, rulesetBanner,\n/m, '');
+    const stripped = body.replace(/^\s*skillPathCandidates, loadRuleset, thesisLine, rulesetBanner, fallbackRuleset,\n/m, '');
     assert.notEqual(stripped, body, 'export line to strip not found — test is stale');
     fs.writeFileSync(cfgPath, stripped);
 
