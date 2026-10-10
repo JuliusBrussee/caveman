@@ -2078,7 +2078,9 @@ function uninstall(ctx) {
       note,
       warn,
     });
+    if (ocOwnership.changed.length) cleanupFailed = true;
   } catch (error) {
+    cleanupFailed = true;
     warn(`  opencode ownership journal invalid; left integration untouched: ${error.message}`);
   }
   if (ocOwnership.hadJournal) {
@@ -2192,8 +2194,10 @@ function uninstall(ctx) {
       note,
       warn,
     });
-    if (hermesOwnership.hadJournal) ok('  pruned owned caveman skills from Hermes');
+    if (hermesOwnership.hadJournal && hermesOwnership.changed.length === 0) ok('  pruned owned caveman skills from Hermes');
+    if (hermesOwnership.changed.length) cleanupFailed = true;
   } catch (error) {
+    cleanupFailed = true;
     warn(`  Hermes ownership journal invalid; left integration untouched: ${error.message}`);
   }
 

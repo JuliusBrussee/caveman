@@ -238,8 +238,9 @@ test('opencode uninstall leaves modified owned files and keeps journal evidence'
     fs.appendFileSync(command, '\nUSER EDIT\n');
 
     const removed = runInstaller(['--uninstall'], env);
-    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(removed.status, 1, removed.stderr);
     assert.match(removed.stderr, /left modified/);
+    assert.match(removed.stderr, /uninstall incomplete/);
     assert.match(fs.readFileSync(command, 'utf8'), /USER EDIT/);
     assert.ok(fs.existsSync(path.join(ocDir, '.caveman-opencode-ownership.json')));
   } finally {

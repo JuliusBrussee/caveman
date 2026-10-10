@@ -162,8 +162,9 @@ test('hermes uninstall leaves modified installed content and retains ownership r
     fs.appendFileSync(changed, '\n# local edit\n');
 
     const removed = runInstaller(['--uninstall'], home);
-    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(removed.status, 1, removed.stderr);
     assert.match(removed.stderr, /left modified/);
+    assert.match(removed.stderr, /uninstall incomplete/);
     assert.match(fs.readFileSync(changed, 'utf8'), /# local edit/);
     assert.ok(fs.existsSync(path.join(prod, '.caveman-hermes-ownership.json')));
   } finally {
