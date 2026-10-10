@@ -465,7 +465,12 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   on: (argv) => moduleSwitchCommand(true, argv),
   off: (argv) => moduleSwitchCommand(false, argv),
   stop: () => stopRuntime(),
-  enable: async (argv) => { await claimRuntimePort(); enableNative(argv); },
+  // The port moves only for an agent that routes through the runtime and is
+  // on PATH: help, a typo or aider never touch it.
+  enable: async (argv) => {
+    if (enableProfiles(argv).profiles.some((profile) => profile.id !== "aider" && which(binOf(profile)))) await claimRuntimePort();
+    enableNative(argv);
+  },
   disable: (argv) => disableNative(argv),
   inspect: (argv) => nativeInspect(argv),
   why: (argv) => nativeWhy(argv),
@@ -10016,9 +10021,8 @@ function installNativeVoiceSkills(agent: NativeAgent): void {
   }
 }
 
-// `quiet` is for module apply (onboarding, `caveman on|off`), which prints one
-// progress line per step itself; refusals still throw with their full message.
-function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {}) {
+// The agents `enable <argv>` names; a bad argv prints usage and exits.
+function enableProfiles(argv: string[]): { detected: boolean; profiles: AgentProfile[] } {
   const detected = argv.includes("--detected");
   const target = argv.find((arg) => !arg.startsWith("--"));
   if ((!detected && !target) || (detected && target) || argv.some((arg) => arg !== "--detected" && arg !== target)) {
@@ -10031,6 +10035,13 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     console.error(detected ? "no supported native agent detected on PATH" : `caveman enable: supported agents are claude, codex, hermes, gemini, opencode, pi, and aider (got ${target ?? ""})`);
     process.exit(1);
   }
+  return { detected, profiles };
+}
+
+// `quiet` is for module apply (onboarding, `caveman on|off`), which prints one
+// progress line per step itself; refusals still throw with their full message.
+function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {}) {
+  const { detected, profiles } = enableProfiles(argv);
   const gw = gatewayURL();
   for (const profile of profiles) {
     const agent = profile.id as NativeAgent;
@@ -10984,7 +10995,7 @@ async function nativeDoctor(argv: string[]) {
     } else if (!before.available) {
       throw new Error(`${findAgent(target)?.display_name ?? target} is unavailable; repair host installation first`);
     } else if (!before.installed) {
-      await claimRuntimePort();
+      if (target !== "aider") await claimRuntimePort();
       enableNative([target]);
       fixResult = "enabled";
     } else if (before.state === "installed" && !agentStaleRoute(target)) {
