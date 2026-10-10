@@ -31,6 +31,19 @@ test("MCP shrink unwraps Windows upstream shims without shell interpolation", ()
   });
 });
 
+// Node's own npx.cmd, which the README's `npx @modelcontextprotocol/...`
+// upstream resolves to on every stock Windows Node install.
+test("MCP shrink unwraps Node's own npx.cmd", () => {
+  assert.equal(
+    options.parseWindowsNodeShim([
+      "@ECHO OFF", "SETLOCAL", 'SET "NODE_EXE=%~dp0\\node.exe"',
+      'SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"',
+      '"%NODE_EXE%" "%NPX_CLI_JS%" %*', "",
+    ].join("\r\n")),
+    "node_modules\\npm\\bin\\npx-cli.js",
+  );
+});
+
 test("pnpm cross-drive shims with a drive-absolute target parse", () => {
   // pnpm emits an absolute target when the global bin dir and the store sit on
   // different drives (path.relative crosses drives as absolute). This parser

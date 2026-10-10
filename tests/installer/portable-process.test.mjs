@@ -95,6 +95,29 @@ test("root installer unwraps the Node.js npm npx.cmd variable form", () => {
   });
 });
 
+// npm.cmd has the same shape; `npm view` (--with-mcp-shrink) runs through it.
+test("root installer unwraps the Node.js npm npm.cmd variable form", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-installer-npm-"));
+  const shim = join(root, "npm.CMD");
+  const script = join(root, "node_modules", "npm", "bin", "npm-cli.js");
+  mkdirSync(dirname(script), { recursive: true });
+  writeFileSync(shim, [
+    "@ECHO OFF",
+    "SETLOCAL",
+    'SET "NPM_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npm-cli.js"',
+    '"%NODE_EXE%" "%NPM_CLI_JS%" %*',
+    "",
+  ].join("\r\n"));
+  writeFileSync(script, "");
+  assert.deepEqual(portable.portableInvocation(shim, ["view", "x"], {
+    platform: "win32",
+    execPath: "node.exe",
+  }), {
+    command: "node.exe",
+    args: [script, "view", "x"],
+  });
+});
+
 test("root installer rejects non-Node command shims", () => {
   const root = mkdtempSync(join(tmpdir(), "caveman-installer-win-"));
   const shim = join(root, "unsafe.cmd");
