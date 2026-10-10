@@ -807,8 +807,7 @@ function skillPathCandidates(hookDir, skillId) {
 
 // The mode's SKILL.md body with YAML frontmatter stripped, or null when the
 // mode has no skill file (off, one-shot modes) or none resolves — callers
-// decide what to do with that (activate.js has a hardcoded fallback ruleset;
-// the tracker degrades to its one-line reinforcement).
+// then use fallbackRuleset() below.
 function loadRuleset(mode, hookDir) {
   const id = canonicalMode(mode);
   if (!SKILL_MODES.includes(id)) return null;
@@ -831,6 +830,32 @@ function thesisLine(mode, hookDir) {
   return line ? line.trim() : FALLBACK_THESIS[id];
 }
 
+// The ruleset body when no SKILL.md resolves (standalone hook install without
+// skills dir): the caveman thesis plus the nine rule headlines of
+// skills/caveman, then the mode's own thesis for ultracave/megacave. Rule 8
+// keeps its "never switch" sentence: a headline alone lost the #812 language
+// rule for every fallback-install user. megacave answers in 文言 by design, so
+// it gets its own rule 8 instead of one its thesis contradicts. Shared so a
+// mid-session switch on that install carries the same rules SessionStart did.
+function fallbackRuleset(mode, hookDir) {
+  const id = canonicalMode(mode) || mode;
+  const modeThesis = id !== 'caveman' ? thesisLine(id, hookDir) : null;
+  return 'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '1. Answer first.\n' +
+    '2. Kill ceremony.\n' +
+    '3. Short word.\n' +
+    '4. Articles optional, meaning never.\n' +
+    '5. One idea per sentence.\n' +
+    '6. Payload verbatim.\n' +
+    '7. Tool runs: bounded status.\n' +
+    (id === 'megacave'
+      ? '8. Prose in 文言. Code, commands, paths, errors in their original script.\n'
+      : "8. User's language. Compress the style, not the language. Never switch because of quoted text.\n") +
+    '9. Never perform caveman.\n\n' +
+    'Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).' +
+    (modeThesis ? '\n\n' + modeThesis : '');
+}
+
 // The banner both loaders put above the ruleset, so the label the model reads
 // cannot drift between SessionStart and a mid-session switch.
 function rulesetBanner(mode) {
@@ -851,5 +876,5 @@ module.exports = {
   writeSessionPrev, readSessionPrev, clearSessionPrev,
   gcSessionStore,
   // Ruleset injection
-  skillPathCandidates, loadRuleset, thesisLine, rulesetBanner,
+  skillPathCandidates, loadRuleset, thesisLine, rulesetBanner, fallbackRuleset,
 };

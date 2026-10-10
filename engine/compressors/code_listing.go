@@ -2,6 +2,7 @@ package compressors
 
 import (
 	"bytes"
+	"regexp"
 	"strconv"
 )
 
@@ -126,7 +127,11 @@ func splitLineNumberGutter(line []byte) (number int, rest []byte, ok bool) {
 //
 // Lines the compressor introduced (body-elision markers, reflowed formatting)
 // match nothing; they take the number of the source line the cursor is sitting
-// on, which is where the elided region began.
+// on, which is where the elided region began. A marker that states how many
+// lines it replaced moves the cursor past them, so a kept line that repeats an
+// earlier one is not numbered from that earlier copy. A blank line the
+// compressor introduced (a separator between kept sections) has no source line
+// and gets no number; a listing's blank lines may carry none.
 //
 // Some transforms do not preserve lines at all — re-encoding a JSON document
 // rewrites nearly every one — and there the original numbering describes
@@ -158,7 +163,7 @@ func RestoreLineNumberedListing(compressed, source []byte, numbers []int) ([]byt
 
 	var out bytes.Buffer
 	out.Grow(len(compressed) + len(outLines)*6)
-	cursor := 0
+	cursor, last := 0, 0
 	traceable, tracked := 0, 0
 	for i, line := range outLines {
 		position := cursor
@@ -166,24 +171,36 @@ func RestoreLineNumberedListing(compressed, source []byte, numbers []int) ([]byt
 			position = len(numbers) - 1
 		}
 		number := numbers[position]
-		// Blank lines are matched by nothing in particular — they occur
-		// everywhere, and a compressor that reflows formatting (gofmt collapsing
-		// the gap a removed body left) emits them in places the source never had
-		// one. Letting them drive the cursor skips it past real code and
-		// mis-numbers everything after. They take the cursor's number instead.
 		if len(bytes.TrimSpace(line)) > 0 {
 			tracked++
 			if at, found := nextMatch(index, string(line), cursor); found {
 				number = numbers[at]
 				cursor = at + 1
 				traceable++
+			} else if m := elidedCountRe.FindSubmatch(line); m != nil {
+				elided, _ := strconv.Atoi(string(m[1]))
+				cursor = min(cursor+elided, len(sourceLines))
 			}
+		} else if cursor < len(sourceLines) && len(bytes.TrimSpace(sourceLines[cursor])) == 0 {
+			// Blank lines are matched by nothing in particular — they occur
+			// everywhere, and a compressor that reflows formatting (gofmt
+			// collapsing the gap a removed body left) emits them in places the
+			// source never had one. Searching ahead for one skips the cursor past
+			// real code, so a blank is only ever the source blank at the cursor.
+			cursor++
+		} else {
+			number = 0
 		}
 		if i > 0 {
 			out.WriteByte('\n')
 		}
-		out.WriteString(strconv.Itoa(number))
-		out.WriteByte('\t')
+		// A blank with no source line of its own, or one whose source line had
+		// no gutter (it repeats the previous number), is written bare.
+		if number > last || len(bytes.TrimSpace(line)) > 0 {
+			out.WriteString(strconv.Itoa(number))
+			out.WriteByte('\t')
+			last = number
+		}
 		out.Write(line)
 	}
 	if trailingNewline {
@@ -198,6 +215,12 @@ func RestoreLineNumberedListing(compressed, source []byte, numbers []int) ([]byt
 	}
 	return out.Bytes(), true
 }
+
+// elidedCountRe reads the count from the compressors' run markers ("… 645 lines
+// elided (caveman) …", "# … 3 config lines elided (caveman) …", "… caveman: 9
+// identical lines elided …", rows, sections). A row or section is at least one
+// line, so the count never moves the cursor past the end of the elided run.
+var elidedCountRe = regexp.MustCompile(`(\d+) [a-z ]*(?:lines|rows|sections) elided (?:\(caveman\)|…)`)
 
 // indexSourceLines maps each distinct source line to the ascending positions it
 // occupies, so matching an output line is a lookup plus a short scan rather than

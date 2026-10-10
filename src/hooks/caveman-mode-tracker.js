@@ -94,6 +94,7 @@ const clearSessionPrev = cfg.clearSessionPrev || (() => removeFlag(prevPath));
 // hook to exactly its pre-#975 behavior — the one-line reminder, nothing more.
 const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — mode: ' + m);
 const loadRuleset = cfg.loadRuleset || (() => null);
+const fallbackRuleset = cfg.fallbackRuleset || (() => null);
 const thesisLine = cfg.thesisLine
   || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die.');
 const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (m) =>
@@ -379,12 +380,11 @@ function handle(raw) {
     // `reinforce` is the gate as well as the reminder: it already encodes both
     // "caveman is active and not an independent mode" and the #634 repo
     // opt-out, so a project with defaultMode "off" gets neither line.
-    // A SKILL.md that cannot be read degrades to the reminder alone — the
-    // standalone hook install with no skills dir, the case activate.js covers
-    // with its hardcoded fallback.
+    // A SKILL.md that cannot be read — the standalone hook install has no
+    // skills dir — gets the same fallback ruleset activate.js injects there.
     let ruleset = null;
     if (switchedToMode && reinforce) {
-      const body = loadRuleset(switchedToMode, __dirname);
+      const body = loadRuleset(switchedToMode, __dirname) || fallbackRuleset(switchedToMode, __dirname);
       if (body) ruleset = rulesetBanner(switchedToMode) + '\n\n' + body.trimEnd();
     }
 

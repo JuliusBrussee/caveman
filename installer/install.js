@@ -2623,7 +2623,7 @@ function printList(noColor) {
     process.stdout.write(`  ${pad(p.id, 15)} ${pad(p.label, 22)} ${p.mech}${tag}\n`);
   }
   process.stdout.write('\n');
-  process.stdout.write(c.dim('  Defaults: --with-hooks ON, --with-init OFF, --with-mcp-shrink OFF.\n'));
+  process.stdout.write(c.dim('  Defaults: hooks auto (Claude Code: only without the plugin), --with-init OFF, --with-mcp-shrink OFF.\n'));
   process.stdout.write(c.dim('  --all = hooks + init (mcp-shrink needs an upstream — opt in explicitly).\n'));
   process.stdout.write(c.dim('  --minimal turns hooks + init + mcp-shrink off.\n'));
 }
@@ -2652,7 +2652,10 @@ FLAGS
                         UserPromptSubmit/SessionEnd hooks + statusline badge.
                         Codex: SessionStart hook in \$CODEX_HOME/hooks.json.
                         Cursor sessionStart hook, Copilot CLI session hook.
-                        (Default ON.)
+                        (Default: auto. Codex, Cursor and Copilot CLI get
+                        their hook. Claude Code gets these only when its
+                        plugin did not install, because the plugin already
+                        runs them; --with-hooks wires them anyway.)
   --no-hooks            Skip the hooks installer.
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"

@@ -161,7 +161,7 @@ function runTrackerAgainstConfig({ stripNewExports, pluginRoot = REPO_ROOT }) {
   if (stripNewExports) {
     const configPath = path.join(hooks, 'caveman-config.js');
     const body = fs.readFileSync(configPath, 'utf8');
-    const stripped = body.replace(/^\s*skillPathCandidates, loadRuleset, thesisLine, rulesetBanner,\n/m, '');
+    const stripped = body.replace(/^\s*skillPathCandidates, loadRuleset, thesisLine, rulesetBanner, fallbackRuleset,\n/m, '');
     assert.notStrictEqual(stripped, body, 'export line to strip not found — test is stale');
     fs.writeFileSync(configPath, stripped);
   }
@@ -196,6 +196,19 @@ test('no reachable SKILL.md: reinforcement uses the built-in thesis fallback', (
   assert.ok(ctx.includes('CAVEMAN MODE ACTIVE (ultracave). Respond terse like smart caveman. All technical'
     + ' substance stay. Only fluff die. Then cut again. Answer only what was asked:'),
     `fallback thesis missing:\n${ctx}`);
+});
+
+// A standalone install copies the hooks alone, so no SKILL.md resolves. A
+// switch there carried the reminder and nothing else; it has to carry the
+// fallback ruleset caveman-activate.js gives the same install at SessionStart.
+test('no reachable SKILL.md: a switch injects the fallback ruleset', () => {
+  const nowhere = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-no-skills-'));
+  const ctx = runTrackerAgainstConfig({ stripNewExports: false, pluginRoot: nowhere });
+  assert.ok(ctx.includes('CAVEMAN MODE ACTIVE — mode: ultracave\n\nRespond terse like smart caveman.'),
+    `fallback ruleset missing:\n${ctx}`);
+  assert.ok(ctx.includes('9. Never perform caveman.'), `rule headlines missing:\n${ctx}`);
+  assert.ok(ctx.includes('Only fluff die. Then cut again.\n\nCAVEMAN MODE ACTIVE (ultracave).'),
+    `ultracave thesis missing, or the reminder no longer comes last:\n${ctx}`);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
