@@ -145,6 +145,36 @@ test("status and doctor say when the runtime wired agents use is not running", a
   }
 });
 
+// The runtime's 2 s status probe can time out on a loaded machine, and a
+// runtime that just bound its port has not written its run state yet. Status
+// and doctor ask the listener before calling it another program: telling a
+// user to stop their own runtime is wrong.
+test("status and doctor do not call a runtime whose status probe is slow another program", async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  const holder = createHttpServer((req, res) => {
+    res.writeHead(200, req.url === "/health/live" ? { "X-Caveman-Instance": "t" } : {});
+    res.end("ok");
+  });
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const { port } = holder.address();
+  const env = { ...fx.env, CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`, CAVEMAN_LISTEN: `127.0.0.1:${port}` };
+  try {
+    assert.equal((await runCli(["enable", "claude"], env)).code, 0);
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${port}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "start", instance_token: "t", pid: process.pid, port,
+    }));
+    writeFileSync(env.CAVEMAN_PROXY_BIN, readFileSync(env.CAVEMAN_PROXY_BIN, "utf8").replace("status) ", "status) sleep 3; "));
+    const status = await runCli(["status"], env);
+    assert.doesNotMatch(status.stdout, /another program holds|something else is listening/);
+    assert.equal(JSON.parse((await runCli(["status", "--json"], env)).stdout).agent_traffic.runtime, "running");
+    const doctor = await runCli(["doctor"], env);
+    assert.doesNotMatch(doctor.stdout, /another program holds/);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
 test("doctor reports degraded agent wiring with its fix", async () => {
   const fx = modulesFixture({ agents: ["claude"] });
   try {

@@ -168,27 +168,45 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if ((await portListening(host, port)) ? !(await portHeldByOther(port)) : await portBindable(host, port)) return undefined;
+  if ((await portListening(host, port)) ? !(await portHeldByOther(host, port)) : await portBindable(host, port)) return undefined;
   const free = await nextFreePort(port);
   return free ? { held: `${host}:${port}`, free } : undefined;
 }
 
-// Whether the program answering on a port is not a Caveman runtime: ours when
-// caveman-proxy's run-state record for the port names a live process. A runtime
-// binds before it writes that record, so it is polled for briefly, as
-// awaitProxyRuntimeState does; reading the record directly keeps a status probe
-// that times out on a loaded machine from calling our own runtime foreign.
-// Without caveman-proxy nothing here can be ours; a runtime too old to keep
-// that record cannot be told apart, so it counts as ours.
-async function portHeldByOther(port: number): Promise<boolean> {
-  const version = probeProxyVersion();
+// Whether the program answering on a port is not a Caveman runtime: ours only
+// when the listener vouches for caveman-proxy's run-state record for the port,
+// its /health/live naming the record's instance token. A live pid in the record
+// proves nothing: a crash, kill -9 or power loss leaves the record behind, and
+// the OS reuses its pid. A runtime binds before it writes that record and a
+// loaded machine answers slowly, so this is polled for briefly; asking the
+// listener directly keeps a status probe that times out from calling our own
+// runtime foreign. Without caveman-proxy nothing here can be ours; a runtime
+// too old to keep that record cannot be told apart, so it counts as ours.
+async function portHeldByOther(host: string, port: number, version = probeProxyVersion()): Promise<boolean> {
   if (!version) return true;
   if (!version.capabilities.includes("run_state")) return false;
   for (const deadline = Date.now() + 3000; ; await sleep(100)) {
-    const { pid } = readRawProxyRunState(port);
-    if (pid && processAlive(pid)) return false;
+    const token = readRawProxyRunState(port).instance_token;
+    if (token && await liveInstanceToken(host, port) === token) return false;
     if (Date.now() >= deadline) return true;
   }
+}
+
+// The instance token a runtime's /health/live publishes (loopback listeners
+// only). A wildcard bind is reached through loopback, as caveman-proxy's own
+// check does.
+function liveInstanceToken(host: string, port: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const dial = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+    const req = httpRequest({ host: dial, port, path: "/health/live", timeout: 750 }, (res) => {
+      res.resume();
+      const token = res.headers["x-caveman-instance"];
+      resolve(res.statusCode === 200 && typeof token === "string" ? token : undefined);
+    });
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => resolve(undefined));
+    req.end();
+  });
 }
 
 // What answers where wired agents send their requests: "running" (a Caveman
@@ -204,7 +222,7 @@ async function agentRuntimeState(): Promise<"running" | "down" | "other" | undef
   const { host, port } = gatewayHostPort(gw);
   if (version.capabilities.includes("run_state") && readProxyRuntimeState(port, version).owner !== "unknown") return "running";
   if (!(await portListening(host, port))) return "down";
-  return version.capabilities.includes("run_state") ? "other" : "running";
+  return await portHeldByOther(host, port, version) ? "other" : "running";
 }
 
 // What status and doctor say about it, with the fix. `doctor <agent> --fix`
@@ -2639,7 +2657,7 @@ async function start(argv: string[] = []) {
 
   if (await portListening(host, port)) {
     // Routing an agent to someone else's listener hands them every request.
-    if (await portHeldByOther(port)) {
+    if (await portHeldByOther(host, port)) {
       const free = await nextFreePort(port);
       panel("Port in use", [
         `${mark("bad")} ${host}:${port} is held by another program.`,
@@ -20527,7 +20545,7 @@ async function status(argv: string[]) {
 
   const states: OffState[] = [];
   if (!versionInfo) states.push(fixedOffState("binary-missing", OFF_STATES.binaryMissing));
-  if (listening && runtime.owner === "unknown" && versionInfo?.capabilities.includes("run_state")) {
+  if (listening && runtime.owner === "unknown" && versionInfo?.capabilities.includes("run_state") && await portHeldByOther(host, port, versionInfo)) {
     states.push(OFF_STATES.foreignProcess(host, port));
   }
   if (runtime.owner !== "unknown" && runtime.mode && runtime.mode !== gate.mode) {
