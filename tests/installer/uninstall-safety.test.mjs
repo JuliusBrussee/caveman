@@ -238,7 +238,9 @@ test('uninstall never starts the bundled CLI on a Node older than it needs', () 
     const removed = spawnSync(process.execPath, [path.join(pkg, 'installer', 'install.js'), '--uninstall', '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
       env: { ...env, CLAUDE_CONFIG_DIR: configDir }, encoding: 'utf8',
     });
-    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    // The route it could not undo leaves the uninstall incomplete.
+    assert.equal(removed.status, 1, removed.stderr || removed.stdout);
+    assert.match(`${removed.stdout}${removed.stderr}`, /uninstall incomplete/);
     assert.equal(fs.existsSync(record), false, `a caveman CLI ran: ${fs.existsSync(record) && fs.readFileSync(record, 'utf8')}`);
     assert.match(removed.stderr, /claude: native Caveman routing is still installed/);
     assert.match(removed.stderr, /needs Node 999 or newer/);
