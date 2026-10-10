@@ -602,10 +602,12 @@ setModuleHost({
   agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
   coreActive: () => nativeCoreRuntimeState().active,
   signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
+  // A thrown error carries the HTTP status; 0 means no answer at all.
   cloudCheck: async () => {
     const cfg = await config();
-    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`${cfg.baseURL} answered ${response.status}`);
+    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) })
+      .catch(() => { throw Object.assign(new Error(`no answer from ${cfg.baseURL}`), { status: 0 }); });
+    if (!response.ok) throw Object.assign(new Error(`${cfg.baseURL} answered ${response.status}`), { status: response.status });
   },
   // Bounded so an offline status fails fast: 1.5 s for a token refresh, 1.5 s for /me.
   cloudMe: async () => {
@@ -867,12 +869,19 @@ function telemetryEnvForcesOff(): boolean {
 }
 
 function telemetryConfigFromDisk(): TelemetryConfig | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { telemetry?: unknown };
-    return parseTelemetryConfig(parsed.telemetry);
-  } catch {
-    return undefined;
-  }
+  const read = (path: string) => {
+    try {
+      return parseTelemetryConfig((JSON.parse(readFileSync(path, "utf8")) as { telemetry?: unknown }).telemetry);
+    } catch {
+      return undefined;
+    }
+  };
+  const cfg = read(configPath());
+  if (cfg?.enabled === false) return cfg;
+  // An older CLI still on PATH writes `telemetry off` to the old file only (this
+  // CLI mirrors its own decisions there), so an opt-out found there holds too.
+  const legacy = read(join(legacyCloudDir(), "config.json"));
+  return legacy?.enabled === false ? legacy : cfg;
 }
 
 function parseTelemetryConfig(value: unknown): TelemetryConfig | undefined {
@@ -3565,11 +3574,17 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
   process.stderr.write(`${mark("ok")} ${agent}: agent-native bundle removed; prior skills and cloud MCP restored\n`);
 }
 
+const SETUP_USAGE = `${ONBOARD_USAGE} | setup --install [--json] | setup --json | setup --agent-native <claude|codex> [--remove]`;
+
 async function setup(argv: string[] = []) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`usage: ${invokedAs()} ${SETUP_USAGE}`);
+    return;
+  }
   const onboarding = parseOnboardArgs(argv);
   if (onboarding && "error" in onboarding) {
     console.error(`caveman setup: ${onboarding.error}`);
-    commandUsage(ONBOARD_USAGE);
+    commandUsage(SETUP_USAGE);
   }
   if (onboarding) {
     const result = await runOnboarding(onboarding, undefined, true);
@@ -3592,7 +3607,7 @@ async function setup(argv: string[] = []) {
     && !arg.startsWith("--agent-native=")
     && argv[index - 1] !== "--agent-native");
   if (unknown.length > 0 || (hasAgentNativeFlag && !agentNative) || (agentNative && (json || install)) || (removeBundle && !agentNative)) {
-    commandUsage(`${ONBOARD_USAGE} | setup --install [--json] | setup --json | setup --agent-native <claude|codex> [--remove]`);
+    commandUsage(SETUP_USAGE);
   }
   if (agentNative) {
     if (agentNative !== "claude" && agentNative !== "codex") {
@@ -4851,11 +4866,22 @@ function readWrapEntitlementState(): WrapEntitlementState | null {
 // entitlement/deviceId writes never clobber baseURL/gatewayUrl/telemetry etc.
 function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
   let out: Record<string, unknown> = {};
+  let raw = "";
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
+    raw = readFileSync(configPath(), "utf8").replace(/^\uFEFF/, "");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // only a missing file is a fresh config
+  }
+  if (raw.trim()) {
+    // A hand edit that broke the JSON still holds sign-in, module state and the
+    // telemetry decision: refuse rather than write {} plus this change over it.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${configPath()} is not valid JSON, so Caveman left it untouched. Fix the file or delete it, then run this again.`);
+    }
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out = parsed as Record<string, unknown>;
-  } catch {
-    /* fresh config */
   }
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
@@ -5054,11 +5080,15 @@ function isoWeekKey(now = new Date()): string {
 function claimWeeklyRunRefresh(now = new Date()): boolean {
   const week = isoWeekKey(now);
   let claimed = false;
-  mutateRawConfig((out) => {
-    if (out.wrapEntitlementRunRefreshWeek === week) return;
-    out.wrapEntitlementRunRefreshWeek = week;
-    claimed = true;
-  });
+  try {
+    mutateRawConfig((out) => {
+      if (out.wrapEntitlementRunRefreshWeek === week) return;
+      out.wrapEntitlementRunRefreshWeek = week;
+      claimed = true;
+    });
+  } catch {
+    return false; // unreadable config: skip the refresh, never block the run
+  }
   return claimed;
 }
 
@@ -5437,13 +5467,8 @@ export function formatSessionSavings(
         `your agent never reached the compression layer this session — routing may not have applied; run \`caveman doctor ${doctorTarget}\``,
       ];
     }
-    if (cut <= 0) {
-      // Compression ran but the net cut was zero — a broken or ineffective setup,
-      // not a byte-safe win. Point at the doctor instead of claiming success.
-      return [
-        `compression ran on ${eligible} request${eligible === 1 ? "" : "s"} this session but saved nothing — run \`caveman doctor ${doctorTarget}\` to check the setup`,
-      ];
-    }
+    // Eligible counts candidates, not wins: requests that reached the layer with
+    // nothing to cut are a healthy, byte-safe session (emptyLine below).
   }
 
   if (spans <= 0 || tokensIn <= 0) return [emptyLine];
@@ -10655,7 +10680,7 @@ function genericIntegrationStatus(runtimeReachable: boolean) {
 async function nativeDoctor(argv: string[]) {
   const fix = argv.includes("--fix");
   const target = argv.find((arg) => arg !== "--fix");
-  if ((target !== "claude" && target !== "codex" && target !== "hermes" && target !== "gemini" && target !== "opencode" && target !== "pi" && target !== "aider" && target !== "generic") || argv.length !== (fix ? 2 : 1) || (fix && target === "generic")) commandUsage("doctor <claude|codex|hermes|gemini|opencode|pi|aider|generic> [--fix]");
+  if ((target !== "claude" && target !== "codex" && target !== "hermes" && target !== "gemini" && target !== "opencode" && target !== "pi" && target !== "aider" && target !== "generic") || argv.length !== (fix ? 2 : 1) || (fix && target === "generic")) commandUsage("doctor [<claude|codex|hermes|gemini|opencode|pi|aider|generic> [--fix]]");
   if (target === "generic") {
     const { host, port } = gatewayHostPort();
     const result = genericIntegrationStatus(await portListening(host, port));
@@ -16742,15 +16767,15 @@ async function memRecallHook() {
   telemetryCommandSent = true;
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
-  let evt: { prompt?: string };
+  let evt: { prompt?: string } | null; // `null` is valid JSON too
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
-  const prompt = typeof evt.prompt === "string" ? evt.prompt.trim() : "";
+  const prompt = typeof evt?.prompt === "string" ? evt.prompt.trim() : "";
   if (!prompt) process.exit(0);
   const out = cavememRun(["recall", prompt, "3"], { soft: true });
   if (!out) process.exit(0);
-  let parsed: { hits?: Array<{ text?: string; tokens_added?: number; recovery_handle?: string }> };
+  let parsed: { hits?: Array<{ text?: string; tokens_added?: number; recovery_handle?: string }> } | null;
   try { parsed = JSON.parse(out); } catch { process.exit(0); }
-  const hits = Array.isArray(parsed.hits) ? parsed.hits : [];
+  const hits = Array.isArray(parsed?.hits) ? parsed.hits : [];
   if (hits.length === 0) process.exit(0);
   const blocks = hits.map((h) => {
     const tokens = typeof h.tokens_added === "number" ? h.tokens_added : 0;

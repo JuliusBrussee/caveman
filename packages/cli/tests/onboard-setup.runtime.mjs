@@ -38,6 +38,19 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   }
 });
 
+// With no agent on PATH there is nothing to try: never suggest `caveman claude`.
+test("setup --yes with no agent installed says to install one instead of naming an agent", { skip }, async () => {
+  const fx = modulesFixture({ agents: [] });
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /Try:/);
+    assert.match(out.stdout, /✓ Ready\. No agent set up yet · install one \(for example Claude Code\), then caveman setup\n/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 // Signed in, setup turns routing on and it starts right away: setup says what
 // routing sends.
 test("setup --yes signed in says what routing sends", { skip }, async () => {
@@ -256,6 +269,22 @@ test("setup --json still reports binary status for scripts", async () => {
     assert.ok(Array.isArray(report.binaries) && report.binaries.some((b) => b.name === "caveman-proxy"));
     assert.equal(typeof report.ready, "boolean");
     assert.equal(existsSync(join(isolated.home, "cloud.json")), false, "--json is read-only");
+  } finally {
+    isolated.cleanup();
+  }
+});
+
+// The reference sends readers to command help for the accepted flags: it must
+// list every documented form, setup's older verbs and bare doctor included.
+test("setup --help prints every setup form and doctor's usage names bare doctor", async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const setupHelp = await runIsolated(["setup", "--help"], { env: isolated.env });
+    assert.equal(setupHelp.code, 0, setupHelp.stderr);
+    assert.match(setupHelp.stdout, /^usage: caveman setup \[--yes\].* \| setup --install \[--json\] \| setup --json \| setup --agent-native <claude\|codex> \[--remove\]\n$/);
+    assert.equal(existsSync(join(isolated.home, "cloud.json")), false, "--help writes nothing");
+    const doctorHelp = await runIsolated(["doctor", "--help"], { env: isolated.env });
+    assert.match(doctorHelp.stderr, /^usage: caveman doctor \[<claude\|codex\|hermes\|gemini\|opencode\|pi\|aider\|generic> \[--fix\]\]\n$/);
   } finally {
     isolated.cleanup();
   }

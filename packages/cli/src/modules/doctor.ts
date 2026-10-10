@@ -46,8 +46,14 @@ export async function modulesDoctor(): Promise<void> {
     try {
       await h.cloudCheck();
     } catch (error) {
-      cloudFailed = true;
-      console.log(`✗ cloud: ${error instanceof Error ? error.message : String(error)} · fix: caveman login`);
+      const message = error instanceof Error ? error.message : String(error);
+      const status = (error as { status?: unknown }).status;
+      // Down, slow or erroring (no answer, 5xx): signing in again fixes none of it.
+      if (status === 0 || (typeof status === "number" && status >= 500)) console.log(`· cloud: ${message} · try again later`);
+      else {
+        cloudFailed = true;
+        console.log(`✗ cloud: ${message} · fix: caveman login`);
+      }
     }
   }
   if (failures.length || cloudFailed) {

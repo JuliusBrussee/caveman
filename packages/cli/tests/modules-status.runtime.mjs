@@ -2,6 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
 import { modulesFixture, runCli } from "./_modules.mjs";
@@ -78,12 +79,24 @@ test("doctor fails a broken module offline and passes a healthy one", async () =
     assert.equal(out.code, 0, out.stdout + out.stderr);
     assert.match(out.stdout, /^✓ healthy · 6 modules on · 2 agents wired$/m);
 
-    // Signed in with Cloud unreachable: the local result still prints, then the
-    // Cloud failure, and the exit is non-zero.
+    // Signed in with Cloud unreachable: signing in again cannot fix an outage,
+    // so it is a note, not a failure, and never says caveman login.
     const signed = await runCli(["doctor"], { ...healthy.env, CAVE_TOKEN: "test-token" });
-    assert.equal(signed.code, 1);
+    assert.equal(signed.code, 0, signed.stdout + signed.stderr);
     assert.match(signed.stdout, /^· routing: waiting for Cloud routing$/m);
-    assert.match(signed.stdout, /^✗ cloud: .* · fix: caveman login$/m);
+    assert.match(signed.stdout, /^· cloud: no answer from http:\/\/127\.0\.0\.1:9 · try again later$/m);
+    assert.doesNotMatch(signed.stdout, /caveman login/);
+
+    // A Cloud that refuses the sign-in is the one case login fixes.
+    const refusing = createHttpServer((req, res) => { res.statusCode = 401; res.end("{}"); });
+    await new Promise((resolve) => refusing.listen(0, "127.0.0.1", resolve));
+    try {
+      const refused = await runCli(["doctor"], { ...healthy.env, CAVE_TOKEN: "test-token", CAVE_API_URL: `http://127.0.0.1:${refusing.address().port}` });
+      assert.equal(refused.code, 1);
+      assert.match(refused.stdout, /^✗ cloud: .* answered 401 · fix: caveman login$/m);
+    } finally {
+      await new Promise((resolve) => refusing.close(resolve));
+    }
   } finally {
     healthy.cleanup();
   }

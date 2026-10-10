@@ -87,7 +87,7 @@ test("routing ticked and sign-in closed: setup still succeeds and routing waits 
   assert.deepEqual([result.confirmed, result.ok], [true, true]);
   assert.match(tty.text(), / {2}Setup\n {4}Agents {4}none\n {4}Modules {3}output · input · waste fixes · routing · scripts · browse\n {4}Routing {3}asks to Auto go to Cloud to pick model \+ effort · free account\n/);
   assert.match(tty.text(), / {2}Sign in to switch on Auto {2}free account · everything else already works\n {2}○ Auto {6}Sign-in is not open on api\.caveman\.so yet · caveman login\n/);
-  assert.match(tty.text(), /\n {2}✓ Ready {5}caveman claude · caveman status\n\[disclosure\]\n$/, "telemetry disclosure is the last line");
+  assert.match(tty.text(), /\n {2}✓ Ready {5}No agent set up yet · install one \(for example Claude Code\), then caveman setup\n\[disclosure\]\n$/, "telemetry disclosure is the last line");
   assert.equal(JSON.parse(readFileSync(configPath, "utf8")).modules.routing, true);
 });
 

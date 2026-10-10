@@ -66,6 +66,7 @@ test("recall-hook injects above-threshold hits as priced additionalContext", asy
 // Fail-open matrix: every problem path must exit 0 with no output (never blocks).
 for (const [label, payload, emptyHits, bin] of [
   ["malformed stdin", "not json", false, undefined],
+  ["JSON null payload", "null", false, undefined],
   ["missing prompt", JSON.stringify({ foo: 1 }), false, undefined],
   ["empty hits", JSON.stringify({ prompt: "nothing relevant" }), true, undefined],
   ["missing cavemem", JSON.stringify({ prompt: "x" }), false, join(tmpdir(), "no-cavemem-xyz")],
