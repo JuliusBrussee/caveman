@@ -47,6 +47,7 @@ func Command(ctx context.Context, root string, args ...string) *exec.Cmd {
 	full = append(full, hardened...)
 	full = append(full, args...)
 	cmd := exec.CommandContext(ctx, "git", full...)
+	hideConsole(cmd)
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, entry := range os.Environ() {
 		if strings.HasPrefix(entry, "GIT_") {

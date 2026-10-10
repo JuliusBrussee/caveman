@@ -26,8 +26,9 @@ const maxPayloadBytes = 2 * 1024 * 1024
 type hostEvent map[string]any
 
 // Run processes one host callback. Adapter failures deliberately emit nothing
-// and return nil: host command continues unchanged.
-func Run(ctx context.Context, home, agent, adapterPath string, raw []byte, stdout, stderr io.Writer) error {
+// and return nil: host command continues unchanged. nodePath is the node the
+// hook was wired with; empty means $NODE, then PATH.
+func Run(ctx context.Context, home, agent, adapterPath, nodePath string, raw []byte, stdout, stderr io.Writer) error {
 	if len(raw) == 0 || len(raw) > maxPayloadBytes || !validAgent(agent) {
 		return nil
 	}
@@ -37,7 +38,7 @@ func Run(ctx context.Context, home, agent, adapterPath string, raw []byte, stdou
 	}
 	eventName := normalizeEvent(agent, firstString(event, "hook_event_name", "event_name", "event"))
 	if eventName != "PreToolUse" && eventName != "PermissionRequest" {
-		delegate(ctx, adapterPath, agent, raw, stdout, stderr)
+		delegate(ctx, adapterPath, nodePath, agent, raw, stdout, stderr)
 		return nil
 	}
 	sessionID := bounded(firstString(event, "session_id", "sessionId"), 160)
@@ -391,15 +392,11 @@ func recordFallback(home, agent, eventName, sessionID, toolName string, raw []by
 	_ = os.Chmod(path, 0o600)
 }
 
-func delegate(ctx context.Context, adapterPath, agent string, raw []byte, stdout, stderr io.Writer) {
+func delegate(ctx context.Context, adapterPath, nodePath, agent string, raw []byte, stdout, stderr io.Writer) {
 	if adapterPath == "" {
 		return
 	}
-	node := os.Getenv("NODE")
-	if node == "" {
-		node = "node"
-	}
-	cmd := exec.CommandContext(ctx, node, adapterPath, "native-hook", agent)
+	cmd := exec.CommandContext(ctx, nodeCommand(nodePath), adapterPath, "native-hook", agent)
 	cmd.Stdin = bytes.NewReader(raw)
 	var out, errOut bytes.Buffer
 	cmd.Stdout = &out
@@ -409,6 +406,23 @@ func delegate(ctx context.Context, adapterPath, agent string, raw []byte, stdout
 	}
 	_, _ = stdout.Write(out.Bytes())
 	_, _ = stderr.Write(errOut.Bytes())
+}
+
+// nodeCommand picks the node that runs the adapter. Hosts started from a GUI
+// or launchd often have no node on PATH (nvm, volta, Homebrew), and a bare
+// `node` then failed every lifecycle hook silently, so a stopped runtime was
+// never revived. The node recorded at setup wins while it still exists; after
+// an nvm switch removes it, $NODE and then PATH still get a chance.
+func nodeCommand(recorded string) string {
+	if recorded != "" {
+		if info, err := os.Stat(recorded); err == nil && !info.IsDir() {
+			return recorded
+		}
+	}
+	if node := os.Getenv("NODE"); node != "" {
+		return node
+	}
+	return "node"
 }
 
 func firstString(event hostEvent, keys ...string) string {

@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
+	"github.com/JuliusBrussee/caveman/proxy/internal/securehome"
 	"github.com/JuliusBrussee/caveman/proxy/internal/translate"
 )
 
@@ -237,6 +238,9 @@ func (s *Store) saveIf(id, kind, secret string, keep func(current string) bool) 
 	if err := os.MkdirAll(s.home, 0o700); err != nil {
 		return err
 	}
+	// Best effort: a volume without ACLs (FAT) cannot be made private, and
+	// refusing there would only break sign-in.
+	_ = securehome.Restrict(s.home)
 	unlock, err := lockIndex(s.home)
 	if err != nil {
 		return err

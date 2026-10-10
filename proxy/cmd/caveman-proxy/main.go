@@ -46,6 +46,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativehook"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
 	"github.com/JuliusBrussee/caveman/proxy/internal/runstate"
+	"github.com/JuliusBrussee/caveman/proxy/internal/securehome"
 	"github.com/JuliusBrussee/caveman/proxy/internal/sessionusage"
 	"github.com/JuliusBrussee/caveman/proxy/internal/standalone"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
@@ -105,6 +106,7 @@ func runNativeHookBridge(args []string) {
 	}
 	agent := args[0]
 	adapter := argFlag(args[1:], "--adapter", "")
+	node := argFlag(args[1:], "--node", "")
 	home := env.String("CAVEMAN_HOME", "")
 	if home == "" {
 		userHome, err := os.UserHomeDir()
@@ -117,7 +119,7 @@ func runNativeHookBridge(args []string) {
 	if err != nil || len(raw) > nativeHookMaxPayloadBytes {
 		return
 	}
-	_ = nativehook.Run(context.Background(), home, agent, adapter, raw, os.Stdout, os.Stderr)
+	_ = nativehook.Run(context.Background(), home, agent, adapter, node, raw, os.Stdout, os.Stderr)
 }
 
 func readNativeHookPayload(r io.Reader) ([]byte, error) {
@@ -1276,6 +1278,9 @@ func mustHome(logger *slog.Logger) string {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		logger.Error("cannot create ~/.caveman", "error", err)
 		os.Exit(1)
+	}
+	if err := securehome.Restrict(home); err != nil {
+		logger.Warn("cannot make ~/.caveman private to this user", "error", err)
 	}
 	return home
 }

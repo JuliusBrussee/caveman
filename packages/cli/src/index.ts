@@ -69,6 +69,7 @@ import {
 import { portableInvocation } from "./portable-command.js";
 import { ensureModuleBinaries, NoModuleIndexError, readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
+import { nativePipePath } from "./native-pipe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
@@ -7447,14 +7448,18 @@ export function nativeHookInvocation(
   agentId: string,
   executableIsProxy: boolean,
   platform: NodeJS.Platform = process.platform,
+  node: string = process.execPath,
 ): string {
   const executableInvocation = hookExecutableInvocation(
     executable,
     executableIsProxy ? undefined : fastHook,
     platform,
   );
+  // The bridge runs the adapter with node. Hosts started from a GUI or launchd
+  // often have none on PATH (nvm, volta, Homebrew), so name this one; the
+  // bridge falls back to PATH if it is later removed.
   const invocation = executableIsProxy
-    ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)}`
+    ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)} --node ${quoteHookPath(node, platform)}`
     : `${executableInvocation} native-hook ${agentId}`;
   return invocation;
 }
@@ -7576,7 +7581,7 @@ function managedHookIdentity(command: string): string | undefined {
   const agent = args[1];
   const nativeAgent = agent === "claude" || agent === "codex" || agent === "gemini";
   const supportedNative =
-    (executable === "caveman-proxy" && args.length === 4 && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
+    (executable === "caveman-proxy" && (args.length === 4 || (args.length === 6 && args[4] === "--node")) && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
     || ((executable === "caveman" || executable === "cave") && args.length === 2 && args[0] === "native-hook" && nativeAgent)
     || (nodeScript !== undefined && ["index.js", "native-hook-fast.js"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
   if (supportedNative) return `native-hook:${agent}`;
@@ -7709,6 +7714,9 @@ function invocationTargetsExist(tokens: string[]): boolean {
   const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
   const adapter = tokens.indexOf("--adapter");
   if (adapter !== -1) files.push(tokens[adapter + 1]);
+  // The bridge's recorded `--node` dangles the same way after an nvm or Homebrew upgrade.
+  const node = tokens.indexOf("--node");
+  if (node !== -1) files.push(tokens[node + 1]);
   return !files.some((file) => file !== undefined && !existsSync(file));
 }
 
@@ -12619,6 +12627,17 @@ export function ensureCavemanHome(): string {
   const home = cavemanHome();
   mkdirSync(home, { recursive: true, mode: 0o700 });
   try { chmodSync(home, 0o700); } catch { /* not ours / Windows */ }
+  // Windows ignores both modes. A home outside the profile (D:\caveman)
+  // inherits the drive's "Authenticated Users: Modify", so every local account
+  // could read the credentials written here. Make it this user, SYSTEM and
+  // Administrators only, as the proxy does (proxy/internal/securehome). The
+  // profile is private already and is left alone.
+  const outside = process.platform === "win32" && process.env.USERPROFILE ? relative(process.env.USERPROFILE, home) : "";
+  if (outside.startsWith("..") || isAbsolute(outside)) {
+    const user = spawnSync("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
+    const sid = /,"(S-1-[\d-]+)"\s*$/.exec(user.stdout ?? "")?.[1];
+    if (sid) spawnSync("icacls", [home, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], { stdio: "ignore", windowsHide: true });
+  }
   return home;
 }
 
@@ -16110,7 +16129,7 @@ function callNativeRuntime(request: Record<string, unknown>): Promise<NativeRunt
       settle(value);
     };
     const endpoint = process.platform === "win32"
-      ? `\\\\.\\pipe\\caveman-native-${createHash("sha256").update(resolve(cavemanHome()).replaceAll("/", "\\").toLowerCase()).digest("hex").slice(0, 16)}`
+      ? nativePipePath(cavemanHome())
       : join(cavemanHome(), "run", "native.sock");
     const socket = netConnect({ path: endpoint });
     socket.setTimeout(250);
