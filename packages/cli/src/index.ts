@@ -4468,9 +4468,14 @@ function proxyUpstreamIsFirstParty(provider: string, host: string): boolean {
   }
 }
 
+// Only ./.caveman/config.json, as documented; the hooks walk up for
+// defaultMode alone. Hand-edited like theirs: a BOM, PowerShell 5.1's
+// UTF-16LE, comments and trailing commas are fine.
 function projectCapabilityDocument(): Record<string, unknown> {
   try {
-    return objectValue(JSON.parse(readFileSync(join(process.cwd(), ".caveman", "config.json"), "utf8")));
+    const bytes = readFileSync(join(process.cwd(), ".caveman", "config.json"));
+    const text = bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.toString("utf16le", 2) : bytes.toString("utf8");
+    return objectValue(parseJsonc(text.replace(/^﻿/, "")));
   } catch {
     return {};
   }

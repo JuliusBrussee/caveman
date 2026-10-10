@@ -221,6 +221,28 @@ test("project allowlist contributes local capability sources only", async () => 
   }
 });
 
+// Hand-edited like the hooks' repo config: a BOM (or PowerShell 5.1's UTF-16LE),
+// comments and trailing commas still apply the overlay.
+for (const [label, encode] of [
+  ["a BOM, comments and trailing commas", (text) => Buffer.from(`﻿${text}`, "utf8")],
+  ["UTF-16LE", (text) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])],
+]) {
+  test(`project overlay with ${label} still applies`, async () => {
+    const isolated = isolatedCliEnv();
+    writeGlobal(isolated.home, { think: { toon: true } });
+    const cwd = mkdtempSync(join(tmpdir(), "cave-overlay-"));
+    mkdirSync(join(cwd, ".caveman"), { recursive: true });
+    writeFileSync(join(cwd, ".caveman", "config.json"), encode('{\n  // team default\n  "think": { "toon": false, /* "//" in a value survives: */ "x": "a//b", },\n}\n'));
+    try {
+      const get = await runCli(["config", "get", "think.toon"], { env: isolated.env, prefix: "tools", cwd });
+      assert.equal(get.code, 0, get.stderr);
+      assert.match(get.stdout, /^think\.toon = false  \(project\)$/m);
+    } finally {
+      isolated.cleanup();
+    }
+  });
+}
+
 test("invalid stored mode fails closed to record and is surfaced", async () => {
   const harness = startEnvHarness({ think: { mode: "observe" } });
   try {
