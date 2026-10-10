@@ -2044,9 +2044,15 @@ function uninstall(ctx) {
   if (fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
   if (hasCmd('caveman')) {
     const bundled = newerBundledCli();
-    disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all']] : ['caveman', ['disable', '--all']]);
+    // The bundled CLI may not start at all: then the PATH caveman takes its turn.
+    disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all'], 'caveman'] : ['caveman', ['disable', '--all']]);
   }
-  if (disables.map(([cmd, args]) => spawnOk(runSpawn(cmd, args, null, opts.dryRun))).some(Boolean) && !opts.dryRun) {
+  const failedDisables = disables.filter(([cmd, args, fallback]) => !spawnOk(runSpawn(cmd, args, null, opts.dryRun))
+    && !(fallback && spawnOk(runSpawn(fallback, ['disable', '--all'], null, opts.dryRun))));
+  if (failedDisables.length > 0) {
+    cleanupFailed = true;
+    warn('  `caveman disable --all` failed (see above); native Caveman routing may still be installed.');
+  } else if (disables.length > 0 && !opts.dryRun) {
     ok('  disabled native agent integrations');
   }
 
@@ -2060,6 +2066,7 @@ function uninstall(ctx) {
   // directory is not re-deriving the restore logic: it never writes.
   if (!opts.dryRun) {
     const stranded = remainingNativeIntegrations();
+    if (stranded.length > 0) cleanupFailed = true;
     for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
     if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
   }
