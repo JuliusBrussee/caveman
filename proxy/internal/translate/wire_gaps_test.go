@@ -969,6 +969,29 @@ func TestTerminalEventEndsTheStream(t *testing.T) {
 	}
 }
 
+// A usage chunk that comes well after finish_reason (but within
+// lateUsageGrace) is still read, by every caller of a chat upstream.
+func TestLateUsageChunkIsKept(t *testing.T) {
+	for from, body := range streamCallers {
+		_, reply, err := Request(from, Chat, []byte(body), streamTargets[Chat])
+		if err != nil {
+			t.Fatal(err)
+		}
+		upstream, feed := io.Pipe()
+		go func() {
+			_, _ = io.WriteString(feed, sse(streamChatFrames[:2]...))
+			time.Sleep(250 * time.Millisecond)
+			_, _ = io.WriteString(feed, chatStream(streamChatFrames[2]))
+		}() // then lingers
+		recorder := httptest.NewRecorder()
+		usage, err := reply.Serve(recorder, &http.Response{StatusCode: 200, Header: http.Header{}, Body: upstream})
+		_ = feed.Close()
+		if err != nil || usage.OutputTokens != 50 || !strings.Contains(recorder.Body.String(), streamFinal[from]) {
+			t.Errorf("%s>chat: err %v, usage %+v\n%s", from, err, usage, recorder.Body.String())
+		}
+	}
+}
+
 // relayServe relays stream to a grammar caller; with linger the upstream
 // keeps the connection open after it.
 func relayServe(t *testing.T, grammar, body, stream string, linger bool) (string, Usage, error) {

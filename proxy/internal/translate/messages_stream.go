@@ -138,17 +138,29 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(
 		return cut
 	}
 	stop := func() { once.Do(func() { close(done) }) }
+	var end time.Time
 	endBy := func(d time.Duration) {
-		if deadline == nil {
-			deadline = time.After(d)
+		if at := time.Now().Add(d); deadline == nil || at.Before(end) {
+			deadline, end = time.After(d), at // only ever sooner
 		}
 	}
 	return lines, ended, stop, endBy
 }
 
 // usageGrace is how long a stream whose answer is over (a chat finish_reason)
-// still waits for the usage chunk and [DONE] that follow it.
-var usageGrace = 100 * time.Millisecond
+// still waits for [DONE] once the usage chunk is in; lateUsageGrace is how
+// long it waits for a usage chunk that has not come yet (a host can send it
+// well after the finish, and without it the turn records no tokens).
+var usageGrace, lateUsageGrace = 100 * time.Millisecond, 2 * time.Second
+
+// finishGrace is the wait after a chat finish_reason: usageGrace once the
+// usage chunk arrived, lateUsageGrace before.
+func finishGrace(usage bool) time.Duration {
+	if usage {
+		return usageGrace
+	}
+	return lateUsageGrace
+}
 
 // sseDone reports chat's last line, `data: [DONE]`.
 func sseDone(line []byte) bool {
@@ -201,6 +213,7 @@ type messageStream struct {
 	errored       bool
 	finished      bool // a finish_reason or [DONE] arrived: the upstream ended the answer itself
 	usage         chatUsage
+	gotUsage      bool // the usage chunk arrived
 	id            string
 	// signature marks translated thinking as the runtime's (caveman:…).
 	signature string
@@ -229,7 +242,7 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 			break // the answer is over: an upstream that lingers holds neither it nor the fallback
 		}
 		if stream.finished {
-			endBy(usageGrace) // only the usage chunk and [DONE] may follow
+			endBy(finishGrace(stream.gotUsage)) // only the usage chunk and [DONE] may follow
 		}
 	}
 	if stream.errored {
@@ -295,7 +308,7 @@ func (m *messageStream) consume(line []byte) {
 		return
 	}
 	if chunk.Usage != nil {
-		m.usage = *chunk.Usage
+		m.usage, m.gotUsage = *chunk.Usage, true
 	}
 	for _, choice := range chunk.Choices {
 		if reasoning := choice.Delta.Reasoning + choice.Delta.ReasoningContent; reasoning != "" {

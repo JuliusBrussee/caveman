@@ -762,8 +762,10 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 			if choice.FinishReason != "" {
 				finished = true
 				out.incomplete = incompleteReason(choice.FinishReason)
-				endBy(usageGrace) // only the usage chunk and [DONE] may follow
 			}
+		}
+		if finished {
+			endBy(finishGrace(out.usage != nil)) // only the usage chunk and [DONE] may follow
 		}
 	}
 	if out.finished {

@@ -562,6 +562,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	var usage Usage
 	terminal := false       // the upstream ended the answer itself
 	upstreamFailed := false // with a failure of its own
+	gotUsage := false       // chat's usage chunk came
 	lines, cut, stop, endBy := sseLines(body)
 	defer stop()
 	boundary := true  // the upstream's last line ended an event
@@ -602,9 +603,6 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 			upstreamFailed = upstreamFailed || failed
 			terminal = terminal || failed || relayTerminal(r.from, data)
 			done = done || r.from == Chat && string(data) == "[DONE]"
-			if terminal {
-				endBy(usageGrace) // only usage and chat's [DONE] may follow
-			}
 			commit = !failed && relayContent(r.from, data)
 			if edited := r.tagReasoning(withModel(data, shown)); !bytes.Equal(edited, data) {
 				line = append(append([]byte("data: "), edited...), '\n')
@@ -617,13 +615,18 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 				if bytes.Contains(data, []byte(`"usage"`)) {
 					var chunk chatStreamChunk
 					if json.Unmarshal(data, &chunk) == nil && chunk.Usage != nil {
-						usage = chunk.Usage.usage()
+						usage, gotUsage = chunk.Usage.usage(), true
 					}
 				}
 			case Responses:
 				if completed := completedResponse(data); completed != nil {
 					usage = responsesUsageOf(completed).usage()
 				}
+			}
+			if terminal {
+				// Only usage and chat's [DONE] may follow (the other grammars'
+				// terminal events come after their usage).
+				endBy(finishGrace(r.from != Chat || gotUsage || upstreamFailed))
 			}
 		}
 		_, _ = w.Write(line)
