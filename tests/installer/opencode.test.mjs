@@ -509,6 +509,80 @@ test('opencode plugin handles /caveman ultra, /megacave, stop caveman, and sessi
   }
 });
 
+// ── opencode 2.x: the same payload loads through server.js ────────────────
+// opencode 2 skips the opencode.json file entry for plugin.js ("configured
+// plugin path must be a directory"), discovers plugins/caveman/ itself, loads
+// <dir>/server.js and requires `export default { id, setup(ctx) }`. Without
+// that file caveman's mode tracking silently never ran on 2.x. This drives
+// the V2 surface the way the host does: event stream, prompt and context hooks.
+test('opencode 2.x loads server.js: session init, prompt mode changes and context reinforcement', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const r = runInstaller(['--only', 'opencode'], { ...process.env, XDG_CONFIG_HOME: xdg, PATH: pathWith(shimDir), NO_COLOR: '1' });
+    assert.equal(r.status, 0, r.stderr);
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    // 1.x loads only top-level plugins/*.{js,ts} plus the config entry, so a
+    // server.js inside the plugin directory never reaches the 1.x loader.
+    const cfg = SETTINGS.readSettings(path.join(xdg, 'opencode', 'opencode.jsonc'));
+    assert.deepEqual(cfg.plugin, ['./plugins/caveman/plugin.js']);
+
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+    const mod = await import(pathToFileURL(path.join(pluginDir, 'server.js')).href);
+    assert.equal(mod.default.id, 'caveman');
+    assert.equal(typeof mod.default.setup, 'function');
+
+    const hooks = {};
+    let delivered;
+    const eventsDone = new Promise((resolve) => { delivered = resolve; });
+    const ctx = {
+      event: {
+        subscribe: async function* () {
+          yield { type: 'session.created', data: { sessionID: 'ses_1' } };
+          delivered();
+        },
+      },
+      session: { hook: async (name, callback) => { hooks[name] = callback; return { dispose: async () => {} }; } },
+    };
+    const cleanup = await mod.default.setup(ctx);
+    assert.equal(typeof cleanup, 'function');
+    await eventsDone;
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'caveman', 'session init did not write the flag');
+
+    const prompt = (text) => {
+      const event = { sessionID: 'ses_1', prompt: { text } };
+      return hooks.prompt(event).then(() => event.prompt.text);
+    };
+    await prompt('/ultracave');
+    assert.equal(fs.readFileSync(flagPath, 'utf8'), 'ultracave');
+    assert.equal(await prompt('/caveman status'), 'Report this status verbatim without changing mode: Caveman mode: ultracave');
+
+    const context = { sessionID: 'ses_1', system: [{ type: 'text', text: 'host prompt' }] };
+    await hooks.context(context);
+    assert.equal(context.system.length, 2);
+    assert.equal(context.system[1].type, 'text');
+    assert.match(context.system[1].text, /^CAVEMAN MODE ACTIVE \(ultracave\)/);
+
+    await prompt('stop caveman');
+    assert.equal(fs.existsSync(flagPath), false, 'stop caveman did not clear the flag');
+    const quiet = { sessionID: 'ses_1', system: [] };
+    await hooks.context(quiet);
+    assert.deepEqual(quiet.system, []);
+    cleanup();
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── system.transform must inject the ACTIVE MODE's skill ─────────────────
 // Checks injected content differs per mode and a mid-session switch replaces
 // the whole block rather than stacking behind the prior one (#792).

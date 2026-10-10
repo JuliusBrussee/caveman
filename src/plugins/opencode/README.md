@@ -7,7 +7,8 @@ opencode's `session.created` + `tui.prompt.append` lifecycle hooks.
 
 | File | Role |
 |---|---|
-| `plugin.js` | ESM Bun module. Default-exports an opencode `Plugin` factory. |
+| `plugin.js` | ESM Bun module. Default-exports an opencode `Plugin` factory (opencode 1.x, loaded from the `opencode.json` `plugin` entry). |
+| `server.js` | opencode 2.x entry: `{ id, setup(ctx) }` that wires `plugin.js`'s hooks to the 2.x event, prompt and context APIs. 2.x finds it by scanning `plugins/caveman/`; 1.x never loads it. |
 | `package.json` | Marks the directory as ESM so Bun loads `plugin.js` correctly. |
 | `commands/*.md` | Slash-command prompt templates (`/caveman`, `/ultracave`, `/megacave`, `/caveman-commit`, …). |
 
