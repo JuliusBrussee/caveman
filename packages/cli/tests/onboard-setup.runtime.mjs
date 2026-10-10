@@ -38,6 +38,19 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   }
 });
 
+// With no agent on PATH there is nothing to try: never suggest `caveman claude`.
+test("setup --yes with no agent installed says to install one instead of naming an agent", { skip }, async () => {
+  const fx = modulesFixture({ agents: [] });
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /Try:/);
+    assert.match(out.stdout, /✓ Ready\. No agent set up yet · install one \(for example Claude Code\), then caveman setup\n/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 // Signed in, setup turns routing on and it starts right away: setup says what
 // routing sends.
 test("setup --yes signed in says what routing sends", { skip }, async () => {

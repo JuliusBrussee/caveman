@@ -255,15 +255,20 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     : await routingStep(opts, { ...deps, cmd }, input, out, c);
   const tryAgent = ["claude", "codex"].find((id) => agents.includes(id)) ?? agents[0] ?? "claude";
   let launch: string | undefined;
+  // No agent set up means nothing to try: `caveman claude` would only fail.
+  const noAgent = `No agent set up yet · install one (for example Claude Code), then ${cmd} setup`;
   if (ask) {
     const hint = auto ? `\n${PAD}${" ".repeat(12)}${c.dim(`Auto is in the model picker${tryAgent === "claude" ? " · /model in Claude Code" : ""}`)}` : "";
     out.write(!result.ok ? `\n${PAD}${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`
       : deps.launching ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(`starting ${deps.launching}`)}\n`
+      : !agents.length ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(noAgent)}\n`
       : `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.cyan(`${cmd} ${tryAgent}`)} ${c.dim("·")} ${c.cyan(`${cmd} status`)}${hint}\n`);
   } else if (!result.ok) {
     out.write(`${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`);
   } else if (deps.launching) {
     out.write(`${c.green("✓")} Ready. Starting ${deps.launching}.\n`);
+  } else if (!agents.length) {
+    out.write(`${c.green("✓")} Ready. ${noAgent}\n`);
   } else {
     out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${cmd} status`)}\n`);
   }
