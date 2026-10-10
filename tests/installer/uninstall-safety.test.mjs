@@ -63,6 +63,7 @@ function isolatedEnv(root, extraBinDirs = []) {
     USERPROFILE: home,
     XDG_CONFIG_HOME: path.join(home, '.config'),
     HERMES_HOME: path.join(home, '.hermes'),
+    CAVEMAN_HOME: path.join(home, '.caveman'),
     OPENCLAW_WORKSPACE: path.join(home, '.openclaw', 'workspace'),
     PATH: `${bins}${sep}${pathWithout(['claude', 'gemini', 'caveman'])}`,
   };
@@ -147,6 +148,38 @@ test('uninstall hands native agent integrations to `caveman disable --all` when 
     const calls = fs.readFileSync(record, 'utf8').trim().split(/\n\s*\n/).filter(Boolean);
     assert.equal(calls.length, 1, `expected exactly one \`caveman\` invocation, got:\n${calls.join('\n---\n')}`);
     assert.deepEqual(calls[0].split('\n'), ['disable', '--all']);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Setup puts the CLI under $CAVEMAN_HOME/cli when the global npm prefix is not
+// writable, so an older global caveman can stay first on PATH. Only the newer
+// CLI undoes everything it wrote (Auto's model keys), so both run.
+test('uninstall also runs the private CLI setup installed under $CAVEMAN_HOME/cli', { skip: process.platform === 'win32' && 'POSIX fake CLI' }, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const record = path.join(dir, 'caveman-record.txt');
+  const privateRecord = path.join(dir, 'private-record.txt');
+  const env = isolatedEnv(dir, [fakeCavemanDir(dir, record)]);
+  try {
+    const installed = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    const privateCli = path.join(env.CAVEMAN_HOME, 'cli', 'bin', 'caveman');
+    fs.mkdirSync(path.dirname(privateCli), { recursive: true });
+    fs.writeFileSync(privateCli, `#!/bin/sh\n{ for a in "$@"; do echo "$a"; done; echo; } >> "${privateRecord}"\nexit 0\n`, { mode: 0o755 });
+    // Records disable keeps, not routes: no "still installed" warning for them.
+    for (const name of ['claude-profiles.json', 'claude.voice-skills.json']) {
+      fs.mkdirSync(path.join(env.CAVEMAN_HOME, 'integrations'), { recursive: true });
+      fs.writeFileSync(path.join(env.CAVEMAN_HOME, 'integrations', name), '[]\n');
+    }
+
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    for (const file of [privateRecord, record]) {
+      assert.deepEqual(fs.readFileSync(file, 'utf8').trim().split('\n'), ['disable', '--all'], file);
+    }
+    assert.doesNotMatch(`${removed.stdout}${removed.stderr}`, /still installed/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

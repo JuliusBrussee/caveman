@@ -1911,8 +1911,9 @@ function remainingNativeIntegrations() {
   const dir = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'integrations');
   try {
     return fs.readdirSync(dir)
-      // `.pending-<agent>.json` is an interrupted transaction, not an install.
-      .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+      // `.pending-<agent>.json` is an interrupted transaction, not an install;
+      // claude-profiles.json and <agent>.voice-skills.json are records disable keeps.
+      .filter((name) => /^[a-z]+\.json$/.test(name))
       .map((name) => name.slice(0, -'.json'.length))
       .sort();
   } catch (_) {
@@ -1929,10 +1930,15 @@ function uninstall(ctx) {
 
   // Native integrations (`caveman enable <agent>`) journal their prior state
   // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
-  // `disable --all` rather than re-deriving that logic here.
-  if (hasCmd('caveman')) {
-    const r = runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
-    if (spawnOk(r)) ok('  disabled native agent integrations');
+  // `disable --all` rather than re-deriving that logic here. Setup puts the CLI
+  // under $CAVEMAN_HOME/cli when the global npm prefix is not writable, so an
+  // older caveman can stay first on PATH; only the newer one undoes all it
+  // wrote, and a second run finds nothing left, so both run.
+  const privateCli = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'cli',
+    ...(process.platform === 'win32' ? ['caveman.cmd'] : ['bin', 'caveman']));
+  const clis = [...(fs.existsSync(privateCli) ? [privateCli] : []), ...(hasCmd('caveman') ? ['caveman'] : [])];
+  if (clis.map((cli) => spawnOk(runSpawn(cli, ['disable', '--all'], null, opts.dryRun))).some(Boolean)) {
+    ok('  disabled native agent integrations');
   }
 
   // ...and say so when one survived. `disable` removes the journal it restored
