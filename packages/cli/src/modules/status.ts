@@ -6,6 +6,7 @@ import { findModule, type ModuleId } from "./registry.js";
 // The command that clears an on-but-inactive module, when there is one.
 export function moduleFix(state: ModuleState): string | undefined {
   const reason = state.reason ?? "";
+  if (reason === "not set up") return "caveman setup";
   if (reason.startsWith("sign in") || reason === "login expired") return "caveman login";
   if (reason.startsWith(`${state.id} paused · `)) return "caveman billing";
   if (reason.startsWith(`${state.id} degraded · `)) return "caveman login";
@@ -16,16 +17,17 @@ export function moduleFix(state: ModuleState): string | undefined {
 }
 
 // An inactive module the user's own choices explain (not signed in, an
-// override, input off) rather than something broken.
+// override, input off, setup not run yet) rather than something broken.
 export function moduleChoice(state: ModuleState): boolean {
   const reason = state.reason ?? "";
-  return ["sign in", "waiting for Cloud", "overridden by", "paused while", "record mode", `${state.id} paused · `].some((start) => reason.startsWith(start))
+  return ["not set up", "sign in", "waiting for Cloud", "overridden by", "paused while", "record mode", `${state.id} paused · `].some((start) => reason.startsWith(start))
     || reason.endsWith(" in config");
 }
 
 export function nextStep(states: ModuleState[], opts: { degraded?: string | undefined; fallback: string | null }): string | null {
   const inactive = states.filter((state) => state.on && !state.active && moduleFix(state));
   if (inactive.some((state) => moduleFix(state) === "caveman setup --install")) return "caveman setup --install";
+  if (inactive.some((state) => moduleFix(state) === "caveman setup")) return "caveman setup";
   const broken = inactive.find((state) => !moduleChoice(state));
   if (broken) return moduleFix(broken)!;
   if (opts.degraded) return `caveman doctor ${opts.degraded} --fix`;

@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { portableInvocation } from "../portable-command.js";
 import { cloudAnswer, cloudProduct, ROUTING_ON_LINE, routeState, routingPause, type MeAnswer } from "./cloud.js";
+import { setupRan } from "./onboard.js";
 import { findModule, MODULES, type ModuleDef, type ModuleId } from "./registry.js";
 import { moduleFix } from "./status.js";
 
@@ -544,8 +545,13 @@ export async function moduleStates(): Promise<ModuleState[]> {
   return MODULES.map((m) => {
     const on = selection[m.id];
     const bin = on && m.external ? externalBin(m) : null;
+  const stored = storedModules();
+  const setUp = setupRan();
     const status = m.external && bin ? externalStatus(m, bin) : undefined;
-    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }, cloud) : undefined;
+    const why = on ? inactiveReason(m, selection, signedIn, { bin, status }, cloud) : undefined;
+    // Before the first setup, a module that acts only once setup records it
+    // on (Cloud routing, Blocks' hooks) is not set up yet rather than broken.
+    const reason = why && !setUp && (m.needsSignIn || m.external) && typeof stored[m.id] !== "boolean" ? "not set up" : why;
     const perAgent = Object.fromEntries(agents.map((agent) => [
       agent.id,
       m.wiresAgents ? agent.wired ? "wired" : "not wired" : externalAgentState(status, agent.id),

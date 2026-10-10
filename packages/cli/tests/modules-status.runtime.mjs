@@ -51,7 +51,7 @@ test("status on a fresh home points at the missing binaries first", async () => 
     const out = await runCli(["status"], fx.env);
     assert.equal(out.code, 0, out.stderr);
     assert.match(out.stdout, /  on  input        —          caveman-proxy, caveman-engine, caveman-mcp, cavemem, caveman-shrink not installed · caveman setup --install/);
-    assert.match(out.stdout, /  on  scripts      —          caveman-blocks not installed/);
+    assert.match(out.stdout, /  on  scripts      —          not set up · caveman setup/);
     assert.match(out.stdout, /\nnext: caveman setup --install\n$/);
   } finally {
     fx.cleanup();
@@ -64,8 +64,8 @@ test("doctor fails a broken module offline and passes a healthy one", async () =
     const out = await runCli(["doctor"], broken.env);
     assert.equal(out.code, 1, out.stderr);
     assert.match(out.stdout, /^✗ input: caveman-proxy, caveman-engine, caveman-mcp, cavemem, caveman-shrink not installed · fix: caveman setup --install$/m);
-    assert.match(out.stdout, /^✗ scripts: caveman-blocks not installed · fix: install it, or caveman off scripts$/m);
-    assert.match(out.stdout, /^· routing: sign in to turn on routing · caveman login$/m);
+    assert.match(out.stdout, /^· scripts: not set up · caveman setup$/m);
+    assert.match(out.stdout, /^· routing: not set up · caveman setup$/m);
     assert.doesNotMatch(out.stdout, /cloud/);
   } finally {
     broken.cleanup();
@@ -86,6 +86,25 @@ test("doctor fails a broken module offline and passes a healthy one", async () =
     assert.match(signed.stdout, /^✗ cloud: .* · fix: caveman login$/m);
   } finally {
     healthy.cleanup();
+  }
+});
+
+// An upgrader from before modules has no module state yet: routing and
+// scripts do nothing until setup records them, which is not a failure.
+test("before setup, modules that wait on it say not set up and point at setup", async () => {
+  const fx = modulesFixture();
+  try {
+    const status = await runCli(["status"], fx.env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.match(status.stdout, /^  on  routing .*not set up · caveman setup$/m);
+    assert.match(status.stdout, /^  on  scripts .*not set up · caveman setup$/m);
+    assert.match(status.stdout, /\nnext: caveman setup\n$/);
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.equal(doctor.code, 0, doctor.stdout);
+    assert.match(doctor.stdout, /^· routing: not set up · caveman setup$/m);
+    assert.match(doctor.stdout, /^· scripts: not set up · caveman setup$/m);
+  } finally {
+    fx.cleanup();
   }
 });
 
