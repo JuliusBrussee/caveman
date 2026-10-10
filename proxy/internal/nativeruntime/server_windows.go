@@ -17,6 +17,9 @@ import (
 )
 
 // SocketPath returns a per-install named-pipe path shared with Node adapters.
+// The fold is strings.ToLower, one code point to one; Node mirrors it in
+// packages/cli/src/native-pipe.ts. Changing it renames the pipe for every
+// home with a capital letter, so both sides move together or not at all.
 func SocketPath(home string) string {
 	absolute, err := filepath.Abs(home)
 	if err != nil {

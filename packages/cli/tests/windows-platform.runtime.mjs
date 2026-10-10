@@ -17,6 +17,7 @@ import {
   quoteHookPath,
   setupPlatform,
 } from "../dist/index.js";
+import { nativePipePath } from "../dist/native-pipe.js";
 
 test("CLI setup accepts Windows x64 and arm64", () => {
   assert.deepEqual(setupPlatform("win32", "x64"), { os: "win32", arch: "amd64" });
@@ -75,6 +76,14 @@ test("CLI normalizes every path in Windows lifecycle hook commands", () => {
     ),
     "& 'C:/Program Files/nodejs/node.exe' 'C:/Program Files/Caveman/native-hook-fast.js' native-hook claude",
   );
+});
+
+// Same vector as TestSocketPathWindowsMatchesNodeAdapters in
+// proxy/internal/nativeruntime/server_windows_test.go: Go and Node must name the
+// same pipe, or every Node hook silently loses the runtime.
+test("native runtime pipe name matches the Go proxy for non-ASCII homes", () => {
+  assert.equal(nativePipePath("C:\\Users\\İlker\\ΝΙΚΟΣ\\.caveman"), "\\\\.\\pipe\\caveman-native-4f3f9f7846224643");
+  assert.equal(nativePipePath("C:/Users/Jane Doe/.caveman"), "\\\\.\\pipe\\caveman-native-0b9a73ef77a5671a");
 });
 
 test("every Windows hook executable prefix uses PowerShell invocation", () => {

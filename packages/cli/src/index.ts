@@ -69,6 +69,7 @@ import {
 import { portableInvocation } from "./portable-command.js";
 import { ensureModuleBinaries, NoModuleIndexError, readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
+import { nativePipePath } from "./native-pipe.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
@@ -16005,7 +16006,7 @@ function callNativeRuntime(request: Record<string, unknown>): Promise<NativeRunt
       settle(value);
     };
     const endpoint = process.platform === "win32"
-      ? `\\\\.\\pipe\\caveman-native-${createHash("sha256").update(resolve(cavemanHome()).replaceAll("/", "\\").toLowerCase()).digest("hex").slice(0, 16)}`
+      ? nativePipePath(cavemanHome())
       : join(cavemanHome(), "run", "native.sock");
     const socket = netConnect({ path: endpoint });
     socket.setTimeout(250);

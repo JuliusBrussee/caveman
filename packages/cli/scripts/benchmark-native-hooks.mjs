@@ -1,10 +1,11 @@
 import { spawn, spawnSync } from "node:child_process";
-import { createHash } from "node:crypto";
 import { mkdtempSync, mkdirSync, rmSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+
+import { nativePipePath } from "../dist/native-pipe.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const hook = join(root, "dist", "native-hook-fast.js");
@@ -22,7 +23,7 @@ if (!nativeHookBin) {
 }
 const runDir = join(home, "run");
 const socketPath = process.platform === "win32"
-  ? `\\\\.\\pipe\\caveman-native-${createHash("sha256").update(resolve(home).replaceAll("/", "\\").toLowerCase()).digest("hex").slice(0, 16)}`
+  ? nativePipePath(home)
   : join(runDir, "native.sock");
 mkdirSync(runDir, { recursive: true, mode: 0o700 });
 
