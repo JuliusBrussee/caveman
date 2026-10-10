@@ -21,8 +21,9 @@ export const HOME_MARKERS = [
 ];
 
 // SQLite's -wal, -shm and -journal, a rotated log's .1, a temp (.tmp,
-// .<random>.tmp), a lock (.lock, .<purpose>.lock), a lock being broken.
-export const OWNED_HOME_SUFFIX = /^(?:-wal|-shm|-journal|\.\d+|(?:\.[^.]+)?\.tmp|(?:\.[^.]+)?\.lock(?:\.break\..+)?)$/;
+// .<pid>.<random>.tmp), a lock (.lock, .<purpose>.lock), a lock being broken,
+// a broken lock set aside (.<pid>.<ms>.stale).
+export const OWNED_HOME_SUFFIX = /^(?:-wal|-shm|-journal|\.\d+|(?:\.[^.]+)*\.tmp|(?:\.[^.]+)*\.stale|(?:\.[^.]+)?\.lock(?:\.break\..+)?)$/;
 
 // Whether a Windows home's permissions are not caveman's to rewrite: a drive
 // root, a network path (\\server\share, or a mapped drive, whose real path is

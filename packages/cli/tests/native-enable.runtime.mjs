@@ -713,6 +713,25 @@ test("doctor codex reads a trust hash recorded for another hook at the same posi
   assert.deepEqual(trusted.warnings, []);
 });
 
+// A `]` in CODEX_HOME sits inside the quoted hooks.state key; a hook the user
+// turned off in /hooks (enabled = false) does not run though it is trusted.
+test("doctor codex reads trust under a CODEX_HOME with a ], and not for a hook turned off", async () => {
+  const fx = fixture();
+  const codexHome = join(fx.home, "co]dex");
+  mkdirSync(codexHome, { recursive: true });
+  const env = { ...fx.env, CODEX_HOME: codexHome };
+  assert.equal((await run(["enable", "codex"], env)).code, 0);
+  const hooksPath = join(codexHome, "hooks.json");
+  const configPath = join(codexHome, "config.toml");
+  const groups = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  const group = groups.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  const key = `${realpathSync(hooksPath)}:session_start:${group}:0`;
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "${codexHookHash(groups[group])}"\n`);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], env)).stdout).components.lifecycle_hooks, true);
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}enabled = false\n`);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], env)).stdout).components.lifecycle_hooks, false);
+});
+
 // Codex declines command-output rewrite since #1037, so doctor never claims one.
 test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
   const fx = fixture();
@@ -1205,6 +1224,28 @@ test("the bridge hook names PATH's node when it is this node, never an fnm multi
   symlinkSync(process.execPath, join(multishell, "node"));
   assert.equal((await run(["enable", "claude"], { ...fnm.env, PATH: `${multishell}:${fnm.env.PATH}` })).code, 0);
   assert.equal(nodeArg(fnm), process.execPath);
+});
+
+// Without a caveman-proxy that bridges hooks, the hook runs its adapter with
+// node directly; that node, like the MCP servers' and generated plugins', is
+// the same stable name.
+test("a hook without the bridge and the MCP servers name PATH's node when it is this node", async () => {
+  const fx = fixture();
+  const node = join(fx.home, "bin", "node");
+  symlinkSync(process.execPath, node);
+  writeFileSync(fx.env.CAVEMAN_PROXY_BIN, readFileSync(fx.env.CAVEMAN_PROXY_BIN, "utf8").replace(',"native_hook_bridge_v1"', ""));
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const command = JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).hooks.SessionStart
+    .map((entry) => entry.hooks[0].command).find((command) => command.includes("native-hook claude"));
+  assert.ok(command.startsWith(`'${node}' '`), command);
+  for (const server of ["caveman-cloud", "caveman-delegate"]) {
+    const installed = await run(["mcp", "install", "codex", "--server", server], fx.env);
+    assert.equal(installed.code, 0, installed.stderr);
+  }
+  const config = readFileSync(join(fx.home, ".codex", "config.toml"), "utf8");
+  for (const server of ["caveman-cloud", "caveman-delegate"]) {
+    assert.ok(config.includes(`[mcp_servers.${server}]\ncommand = ${JSON.stringify(node)}\n`), config);
+  }
 });
 
 test("doctor --fix transactionally repairs missing owned hooks and preserves unrelated edits", async () => {

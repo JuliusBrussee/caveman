@@ -412,7 +412,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
       const currentSkill = readRegularIfExists(skillFile);
       if (priorSkill.content === null) {
         if (currentSkill.stat) unlinkRegular(skillFile, currentSkill.stat);
-        try { fs.rmdirSync(skillDir); } catch (_) {}
+        removeEmptyDirs([skillDir]);
       } else {
         atomicWriteRegular(skillFile, priorSkill.content, currentSkill.stat);
       }

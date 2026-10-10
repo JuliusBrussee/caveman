@@ -31,7 +31,10 @@ const promptText = "PROMPT-TEXT-ONLY-THE-ROUTE-ASK-CARRIES"
 func cloudHome(t *testing.T, cloud string, routing bool, credentials string) string {
 	t.Helper()
 	home := t.TempDir()
-	t.Setenv("HOME", home) // the old ~/.caveman-cloud file is read too: never the developer's
+	// The old ~/.caveman-cloud file is read too: never the developer's. Windows
+	// finds it under USERPROFILE (Node's os.homedir()), every other OS under HOME.
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	doc := map[string]any{"baseURL": cloud, "gatewayUrl": cloud, "tokenStore": "file", "deviceId": "device-1", "modules": map[string]any{"routing": routing}}
 	raw, _ := json.Marshal(doc)
 	if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {

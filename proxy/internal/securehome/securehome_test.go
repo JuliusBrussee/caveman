@@ -12,7 +12,8 @@ func TestLeaveAloneAnythingCavemanDoesNotOwn(t *testing.T) {
 	home := filepath.Join(t.TempDir(), ".caveman")
 	ours := []string{"bin", "run", "cloud.json", "cloud.json.123.tmp", "cloud.json.telemetry.lock", "credentials",
 		"caveman.db", "caveman.db-wal", "ccr.db-shm", "proxy.log.1", "provider-logins.json.lock.break.ab",
-		".caveman-sqlite-123", ".cache-warm-9", "integrations", "mem"}
+		".caveman-sqlite-123", ".cache-warm-9", "integrations", "mem", "modules.lock.json.123.a1b2c3.tmp",
+		"cloud.json.123.a1b2c3.tmp", ".install.lock.123.1700000000000.stale", "cloud.json.telemetry.lock.123.1700000000000.stale"}
 	for _, tt := range []struct {
 		name  string
 		home  string
@@ -28,6 +29,7 @@ func TestLeaveAloneAnythingCavemanDoesNotOwn(t *testing.T) {
 		{"names that only continue like ours", home, []string{"cloud.json", "cli-tools", "hooks-backup", "mcp-servers"}, true},
 		{"generic names alone", home, []string{"bin", "run", "tmp", "reports"}, true},
 		{"the install lock", home, []string{"cloud.json", ".install.lock"}, false},
+		{"a name that only ends like ours", home, []string{"cloud.json", "cloud.json.stale.txt"}, true},
 		{"volume root", string(filepath.Separator), nil, true},
 		{"network share", `\\server\share\caveman`, nil, true},
 	} {

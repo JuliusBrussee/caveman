@@ -656,7 +656,9 @@ async function installClaude(ctx) {
         // A plugin that was already there may be turned off: then these hooks
         // are the only caveman left. --force skips the "already installed"
         // check and `plugin install` leaves a turned-off plugin off, so ask.
-        if (removed > 0 && !claudeCavemanEnabled()) {
+        // A dry run installed nothing: a plugin not there yet is one the real
+        // run installs turned on.
+        if (removed > 0 && !claudeCavemanEnabled() && !(opts.dryRun && !alreadyInstalled && !claudeHasCaveman())) {
           note(`  kept ${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} in settings.json: Claude Code does not report the caveman plugin as turned on`);
         } else if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
         else if (removed > 0) {
@@ -827,12 +829,16 @@ function installGemini(ctx) {
   }
   if (spawnOk(r)) results.installed.push('gemini');
   else if (r) results.failed.push(['gemini', 'gemini extensions install failed']);
-  if (!spawnOk(r) && saved && !fs.existsSync(extDir)) {
+  // r is set once the uninstall succeeded: whatever the failed install left
+  // in extDir goes, and the old one comes back.
+  if (!spawnOk(r) && saved && (r || !fs.existsSync(extDir))) {
     try {
+      fs.rmSync(extDir, { recursive: true, force: true });
       fs.cpSync(path.join(saved, 'caveman'), extDir, { recursive: true, verbatimSymlinks: true });
       note('  put the old caveman extension back');
     } catch (_) {
-      warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+      warn(`  could not put the old caveman extension back. A copy is kept at ${path.join(saved, 'caveman')}: copy it to ${extDir}, or install it again with: gemini extensions install ${url}`);
+      saved = null;
     }
   }
   if (saved) { try { fs.rmSync(saved, { recursive: true, force: true }); } catch (_) {} }
@@ -2159,7 +2165,8 @@ function uninstall(ctx) {
   if (!cliNodeFloor && fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
   if (!cliNodeFloor && hasCmd('caveman')) {
     const bundled = newerBundledCli();
-    // The bundled CLI may not start at all: then the PATH caveman takes its turn.
+    // The PATH caveman takes its turn only when the bundled CLI could not be
+    // spawned or was killed by a signal, never when it ran and failed.
     disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all'], 'caveman'] : ['caveman', ['disable', '--all']]);
   }
   // Only a CLI that did not run (spawn error, killed) hands over: one that ran

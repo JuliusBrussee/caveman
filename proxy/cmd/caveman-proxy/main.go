@@ -478,9 +478,16 @@ func loopbackListen(addr string) bool {
 // a run-state file it can already read, so on a shared listener the header
 // hands every unauthenticated /health/live caller a value that correlates
 // restarts and distinguishes instances behind a load balancer, for nothing.
-func withInstanceIdentity(next http.Handler, token string, loopback bool) http.Handler {
+// A wildcard bind (0.0.0.0, ::) is the one shared listener the CLI and status
+// still reach through loopback, so there a loopback caller gets the header and
+// a caller from the network still does not.
+func withInstanceIdentity(next http.Handler, token, listen string) http.Handler {
+	loopback := loopbackListen(listen)
+	host, _, err := net.SplitHostPort(listen)
+	ip := net.ParseIP(host)
+	wildcard := err == nil && (host == "" || ip != nil && ip.IsUnspecified())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if loopback && r.Method == http.MethodGet && r.URL.Path == "/health/live" {
+		if (loopback || wildcard && loopbackListen(r.RemoteAddr)) && r.Method == http.MethodGet && r.URL.Path == "/health/live" {
 			w.Header().Set(runstate.InstanceHeader, token)
 			w.Header().Set("Cache-Control", "no-store")
 		}
@@ -492,7 +499,7 @@ func withInstanceIdentity(next http.Handler, token string, loopback bool) http.H
 // local caller may read, and the shutdown only the run-state file's reader may
 // send.
 func withRunState(next http.Handler, state runstate.State, loopback bool, stop func()) http.Handler {
-	return withShutdown(withInstanceIdentity(next, state.InstanceToken, loopback), state.ShutdownToken, loopback, stop)
+	return withShutdown(withInstanceIdentity(next, state.InstanceToken, state.Listen), state.ShutdownToken, loopback, stop)
 }
 
 // withShutdown is `caveman stop` on Windows, where no signal reaches a

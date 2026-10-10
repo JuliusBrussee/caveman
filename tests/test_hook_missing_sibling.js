@@ -134,6 +134,26 @@ test('--subagent exits 0 and injects nothing without the config module', () => {
   });
 });
 
+// Plugin-cache drift can leave a caveman-config.js from before fallbackRuleset
+// beside this hook. With no SKILL.md either, SessionStart must still inject the
+// rules, not the thesis line alone.
+test('a caveman-config.js predating fallbackRuleset still gets the rules without a SKILL.md', () => {
+  withInstall([], ({ root, hooks }) => {
+    fs.rmSync(path.join(root, 'skills'), { recursive: true, force: true });
+    const configPath = path.join(hooks, 'caveman-config.js');
+    const body = fs.readFileSync(configPath, 'utf8');
+    const stripped = body.replace(/(rulesetBanner, )fallbackRuleset,/, '$1');
+    assert.notStrictEqual(stripped, body, 'export to strip not found — test is stale');
+    fs.writeFileSync(configPath, stripped);
+    const r = runHook(hooks, 'caveman-activate.js', { stdin: SESSION_START, env: { CLAUDE_PLUGIN_ROOT: root } });
+    assert.strictEqual(r.status, 0, r.stderr);
+    assert.match(r.stdout, /CAVEMAN MODE ACTIVE/);
+    // The same rules caveman-config's fallbackRuleset gives: the copies stay in step.
+    const rules = require(path.join(HOOKS_DIR, 'caveman-config.js')).fallbackRuleset('caveman', hooks);
+    assert.ok(r.stdout.includes(rules), `rules missing:\n${r.stdout}`);
+  });
+});
+
 console.log('\ncaveman-mode-tracker.js — missing siblings');
 
 test('missing caveman-config.js: exits 0, emits nothing', () => {

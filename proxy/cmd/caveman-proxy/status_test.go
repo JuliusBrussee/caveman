@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -53,7 +54,7 @@ func TestInstanceIdentityIsPublishedOnlyOnHealth(t *testing.T) {
 		}
 		w.WriteHeader(http.StatusOK)
 	})
-	handler := withInstanceIdentity(next, token, true)
+	handler := withInstanceIdentity(next, token, "127.0.0.1:8787")
 	for _, tt := range []struct {
 		method, path string
 		wantIdentity bool
@@ -185,7 +186,7 @@ func TestRunStatusRequiresThisListenerGeneration(t *testing.T) {
 			const listenerToken = "live-listener-token"
 			server := httptest.NewServer(withInstanceIdentity(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
-			}), listenerToken, true))
+			}), listenerToken, "127.0.0.1:0"))
 			defer server.Close()
 			state, err := runstate.New(strings.TrimPrefix(server.URL, "http://"), "record", "start", "test")
 			if err != nil {
@@ -278,7 +279,7 @@ func TestInstanceIdentityIsLoopbackOnly(t *testing.T) {
 			}
 			handler := withInstanceIdentity(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				w.WriteHeader(http.StatusOK)
-			}), "listener-token", loopbackListen(tt.listen))
+			}), "listener-token", tt.listen)
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/health/live", nil))
 			want := ""
@@ -289,6 +290,64 @@ func TestInstanceIdentityIsLoopbackOnly(t *testing.T) {
 				t.Fatalf("identity header = %q, want %q", got, want)
 			}
 		})
+	}
+}
+
+// A wildcard bind (CAVEMAN_LISTEN=0.0.0.0:<port>) is still the user's own
+// runtime: the CLI and status reach it through loopback, so a loopback caller
+// gets the identity there. A caller from the network never does.
+func TestInstanceIdentityOnAWildcardBindIsForLoopbackCallersOnly(t *testing.T) {
+	for _, tt := range []struct {
+		listen, remote string
+		want           bool
+	}{
+		{"0.0.0.0:8787", "127.0.0.1:50000", true},
+		{"[::]:8787", "[::1]:50000", true},
+		{":8787", "127.0.0.1:50000", true},
+		{"0.0.0.0:8787", "192.168.1.20:50000", false},
+		{"[::]:8787", "[fe80::1]:50000", false},
+		{"10.0.0.5:8787", "127.0.0.1:50000", false},
+	} {
+		t.Run(tt.listen+" from "+tt.remote, func(t *testing.T) {
+			handler := withInstanceIdentity(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusOK)
+			}), "listener-token", tt.listen)
+			request := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+			request.RemoteAddr = tt.remote
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if got := response.Header().Get(runstate.InstanceHeader) == "listener-token"; got != tt.want {
+				t.Fatalf("identity published = %v, want %v", got, tt.want)
+			}
+		})
+	}
+
+	// End to end: status validates a wildcard-bound runtime through loopback.
+	home := t.TempDir()
+	t.Setenv("CAVEMAN_HOME", home)
+	server := httptest.NewUnstartedServer(nil)
+	_, port, _ := net.SplitHostPort(server.Listener.Addr().String())
+	state, err := runstate.New("0.0.0.0:"+port, "record", "start", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server.Config.Handler = withRunState(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}), state, loopbackListen(state.Listen), func() {})
+	server.Start()
+	defer server.Close()
+	if err := runstate.Write(home, state); err != nil {
+		t.Fatal(err)
+	}
+	out := captureStdout(t, func() {
+		runStatus(slog.New(slog.NewTextHandler(io.Discard, nil)), []string{"--port", port})
+	})
+	var got runstate.PublicState
+	if err := json.Unmarshal([]byte(out), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Owner != "start" || got.InstanceToken != state.InstanceToken {
+		t.Fatalf("a wildcard-bound runtime reads as foreign: %s", out)
 	}
 }
 

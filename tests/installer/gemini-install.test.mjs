@@ -504,8 +504,8 @@ test('gemini --force reinstalls an installed extension, unless the user turned i
 
 // ── 15. --force uninstalls before it installs. When the install then fails
 //       (network, rate limit) the user had no extension left at all; the old
-//       one comes back instead. ──
-test('gemini --force puts the old extension back when the reinstall fails', () => {
+//       one comes back instead, over whatever the failed install left. ──
+for (const partial of [false, true]) test(`gemini --force puts the old extension back when the reinstall fails${partial ? ' halfway' : ''}`, () => {
   const root = freshTmpDir();
   try {
     const home = path.join(root, 'home');
@@ -513,11 +513,13 @@ test('gemini --force puts the old extension back when the reinstall fails', () =
     fs.mkdirSync(path.join(ext, 'commands'), { recursive: true });
     fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
     fs.writeFileSync(path.join(ext, 'commands', 'caveman.toml'), 'prompt = "x"\n');
-    // A fake whose uninstall removes the extension and whose install fails.
+    // A fake whose uninstall removes the extension and whose install fails,
+    // after writing part of a new one when `partial`.
     const bin = path.join(root, 'fake-bin');
     fs.mkdirSync(bin);
     const body = "const fs = require('fs');\nconst a = process.argv.slice(2);\n"
       + `if (a[0] === 'extensions' && a[1] === 'uninstall') fs.rmSync(${JSON.stringify(ext)}, { recursive: true, force: true });\n`
+      + (partial ? `if (a[0] === 'extensions' && a[1] === 'install') { fs.mkdirSync(${JSON.stringify(ext)}); fs.writeFileSync(${JSON.stringify(path.join(ext, 'half.json'))}, '{'); }\n` : '')
       + "if (a[0] === 'extensions' && a[1] === 'install') process.exit(1);\n";
     if (IS_WIN) {
       fs.writeFileSync(path.join(bin, 'gemini.js'), body);
@@ -529,8 +531,38 @@ test('gemini --force puts the old extension back when the reinstall fails', () =
     assert.notEqual(result.status, 0, 'a failed install reported success');
     assert.equal(fs.readFileSync(path.join(ext, 'gemini-extension.json'), 'utf8'), '{"name": "caveman"}\n', 'the old extension is gone');
     assert.equal(fs.readFileSync(path.join(ext, 'commands', 'caveman.toml'), 'utf8'), 'prompt = "x"\n');
+    assert.equal(fs.existsSync(path.join(ext, 'half.json')), false, 'the failed install is still there');
     assert.match(result.stdout + result.stderr, /put the old caveman extension back/);
   } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// When the old extension cannot go back either, its saved copy is the user's
+// only one: it stays, and the installer names where.
+test('gemini --force keeps the saved extension when it cannot be put back', { skip: IS_WIN || process.getuid?.() === 0 }, () => {
+  const root = freshTmpDir();
+  const extensions = path.join(root, 'home', '.gemini', 'extensions');
+  let kept;
+  try {
+    const ext = path.join(extensions, 'caveman');
+    fs.mkdirSync(ext, { recursive: true });
+    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
+    // The failed install leaves a half-written extension in a folder it then locks.
+    const bin = path.join(root, 'fake-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'gemini'), `#!${process.execPath}\nconst fs = require('fs');\nconst a = process.argv.slice(2);\n`
+      + `if (a[0] === 'extensions' && a[1] === 'uninstall') fs.rmSync(${JSON.stringify(ext)}, { recursive: true, force: true });\n`
+      + `if (a[0] === 'extensions' && a[1] === 'install') { fs.mkdirSync(${JSON.stringify(ext)}); fs.chmodSync(${JSON.stringify(extensions)}, 0o555); process.exit(1); }\n`,
+    { mode: 0o755 });
+    const { result } = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], bin);
+    const said = result.stdout + result.stderr;
+    kept = said.match(/A copy is kept at (\S+): copy it to /)?.[1];
+    assert.ok(kept, said);
+    assert.equal(fs.readFileSync(path.join(kept, 'gemini-extension.json'), 'utf8'), '{"name": "caveman"}\n');
+  } finally {
+    try { fs.chmodSync(extensions, 0o755); } catch (_) {}
+    if (kept) fs.rmSync(path.dirname(kept), { recursive: true, force: true });
     fs.rmSync(root, { recursive: true, force: true });
   }
 });

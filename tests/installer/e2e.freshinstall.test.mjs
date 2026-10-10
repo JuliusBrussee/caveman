@@ -688,6 +688,43 @@ test('openclaw atomic SOUL failure preserves user bytes and rolls back partial i
   }
 });
 
+// Windows reports a junction as a link, and rmdir removes one like a folder.
+// The rollback's rmdir goes through the link check uninstall uses, so a skill
+// folder swapped for a link is left alone.
+test('openclaw install rollback never rmdirs a skill folder swapped for a link', () => {
+  if (process.platform === 'win32') return;
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  const soul = path.join(ws, 'SOUL.md');
+  fs.writeFileSync(soul, '# user soul\n');
+  const skillDir = path.join(ws, 'skills', 'caveman');
+  const elsewhere = path.join(dir, 'elsewhere');
+  fs.mkdirSync(elsewhere);
+  const rename = fs.renameSync;
+  const rmdir = fs.rmdirSync;
+  let swapped = false;
+  const removed = [];
+  fs.renameSync = (from, to) => {
+    if (to !== soul) return rename(from, to);
+    fs.rmSync(skillDir, { recursive: true });
+    fs.symlinkSync(elsewhere, skillDir);
+    swapped = true;
+    throw Object.assign(new Error('injected rename failure'), { code: 'EIO' });
+  };
+  fs.rmdirSync = (p, ...rest) => { if (swapped) removed.push(p); return rmdir(p, ...rest); };
+  try {
+    assert.throws(() => helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT }), /injected rename failure/);
+    assert.deepEqual(removed, [], 'rollback called rmdir on a link');
+    assert.ok(fs.lstatSync(skillDir).isSymbolicLink());
+  } finally {
+    fs.renameSync = rename;
+    fs.rmdirSync = rmdir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw install refuses a concurrent same-inode SOUL edit', () => {
   const dir = freshTmpDir();
   const ws = path.join(dir, 'workspace');
@@ -981,12 +1018,20 @@ test('plugin install after a failed one drops the standalone hook entries', () =
   const configDir = path.join(dir, 'claude-config');
   try {
     // `plugin list --json` reports the plugin it just installed as on.
-    const env = recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '',
+    const on = () => recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '',
       JSON.stringify([{ id: 'caveman@caveman', version: '3.2.0', scope: 'user', enabled: true }]));
+    const env = on();
     const first = runInstaller(['--only', 'claude'], configDir, { ...env, FAKE_CLAUDE_FAIL_INSTALL: '1' });
     assert.match(first.stdout, /falling back to standalone wiring/, first.stdout + first.stderr);
     const settingsPath = path.join(configDir, 'settings.json');
     assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'));
+
+    // A dry run installs no plugin, so none is on yet; the real run installs
+    // it turned on and removes these, which is what the dry run says.
+    const dry = runInstaller(['--only', 'claude', '--dry-run'], configDir, recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '', '[]'));
+    assert.match(dry.stdout, /would remove \d+ standalone caveman hook entries/, dry.stdout + dry.stderr);
+    assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'), 'the dry run removed the hooks');
+    on();
 
     // `claude` reads CLAUDE_CONFIG_DIR, not --config-dir: a plugin found there
     // says nothing about this profile, whose hooks stay.

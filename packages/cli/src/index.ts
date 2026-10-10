@@ -182,17 +182,24 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
 // listener directly keeps a status probe that times out from calling our own
 // runtime foreign. Without caveman-proxy nothing here can be ours; a runtime
 // too old to keep that record cannot be told apart, so it counts as ours.
+// Proving a listener foreign waits out the whole poll, and status and doctor
+// ask more than once, so the first verdict per port holds for the process.
+const portVerdicts = new Map<string, Promise<boolean>>();
 async function portHeldByOther(host: string, port: number, version = probeProxyVersion()): Promise<boolean> {
   if (!version) return true;
   if (!version.capabilities.includes("run_state")) return false;
-  for (const deadline = Date.now() + 3000; ; await sleep(100)) {
-    const token = readRawProxyRunState(port).instance_token;
-    if (token && await liveInstanceToken(host, port) === token) return false;
-    if (Date.now() >= deadline) return true;
-  }
+  const key = `${host}:${port}`;
+  if (!portVerdicts.has(key)) portVerdicts.set(key, (async () => {
+    for (const deadline = Date.now() + 3000; ; await sleep(100)) {
+      const token = readRawProxyRunState(port).instance_token;
+      if (token && await liveInstanceToken(host, port) === token) return false;
+      if (Date.now() >= deadline) return true;
+    }
+  })());
+  return portVerdicts.get(key)!;
 }
 
-// The instance token a runtime's /health/live publishes (loopback listeners
+// The instance token a runtime's /health/live publishes (to loopback callers
 // only). A wildcard bind is reached through loopback, as caveman-proxy's own
 // check does.
 function liveInstanceToken(host: string, port: number): Promise<string | undefined> {
@@ -7652,7 +7659,8 @@ function detectCodexWrapAuthMode(): CodexWrapAuthMode {
 
 function codexTomlSectionName(line: string): string | undefined {
   // `[[x]]` (an array of tables, e.g. Codex's [[skills.config]]) starts a section too.
-  const match = line.match(/^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?$/);
+  // A quoted key may hold `]` (a CODEX_HOME path in a hooks.state key).
+  const match = line.match(/^\s*\[\[?((?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')+)\]\]?\s*(?:#.*)?$/);
   return match?.[1]?.trim();
 }
 
@@ -7828,7 +7836,7 @@ function nativeHookCommand(agentId: string): string {
     return nativeHookInvocation(proxy, fastHook, agentId, true);
   }
   if (existsSync(fastHook)) {
-    return nativeHookInvocation(process.execPath, fastHook, agentId, false);
+    return nativeHookInvocation(stableNodePath(), fastHook, agentId, false);
   }
   return `${cavemanBinForHook()} native-hook ${agentId}`;
 }
@@ -9712,6 +9720,8 @@ function codexHooksTrusted(): boolean {
   const real = (path: string) => { try { return realpathSync(path.replace(/^\\\\\?\\/, "")); } catch { return undefined; } };
   const target = real(hooksPath);
   let trusting = false;
+  let trusted = false;
+  let off = false;
   for (const line of (fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "").split(/\r?\n/)) {
     const section = codexTomlSectionName(line);
     if (section !== undefined) {
@@ -9720,9 +9730,14 @@ function codexHooksTrusted(): boolean {
       try { key = quoted === undefined ? undefined : quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted); } catch { key = undefined; }
       const at = typeof key === "string" ? key.match(/^(.*):session_start:(\d+):0$/) : null;
       trusting = Boolean(at && Number(at[2]) === group && target && real(at[1]!) === target);
-    } else if (trusting && line.match(/^\s*trusted_hash\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/)?.slice(1).includes(hash)) return true;
+    } else if (trusting && line.match(/^\s*trusted_hash\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/)?.slice(1).includes(hash)) {
+      trusted = true;
+    } else if (trusting && /^\s*enabled\s*=\s*false\s*(?:#.*)?$/.test(line)) {
+      // Turned off in /hooks: trusted, but Codex does not run it.
+      off = true;
+    }
   }
-  return false;
+  return trusted && !off;
 }
 
 // The hash Codex trusts a hooks.json SessionStart hook by (codex-rs hooks
@@ -13621,13 +13636,17 @@ function resolveMcpCommand(): { command: string; args: string[] } {
 // every host can start an .exe, while starting a .cmd depends on how the host
 // spawns (Node refuses one without a shell since CVE-2024-27980, and Claude Code
 // documents no Windows form for it). A shim we cannot read is written as before.
+// The node is this one under the name that outlives an upgrade (stableNodePath).
 export function mcpServerLaunch(
   command: string,
   args: string[],
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): { command: string; args: string[] } {
-  try { return portableInvocation(command, args, platform, env); } catch { return { command, args }; }
+  try {
+    const launch = portableInvocation(command, args, platform, env);
+    return launch.command === process.execPath ? { ...launch, command: stableNodePath() } : launch;
+  } catch { return { command, args }; }
 }
 
 function resolveCloudMcpCommand(): { command: string; args: string[] } {
@@ -13636,7 +13655,7 @@ function resolveCloudMcpCommand(): { command: string; args: string[] } {
     console.error("caveman mcp: cannot resolve CLI entrypoint for caveman-cloud server");
     process.exit(1);
   }
-  return { command: process.execPath, args: [realpathSync(entry), "cloud", "mcp-serve"] };
+  return { command: stableNodePath(), args: [realpathSync(entry), "cloud", "mcp-serve"] };
 }
 
 // resolveDelegateMcpCommand locates the dependency-free caveman-delegate stdio
@@ -13648,7 +13667,7 @@ function resolveDelegateMcpCommand(): { command: string; args: string[] } | null
     join(dirname(fileURLToPath(import.meta.url)), "caveman-delegate-mcp.mjs"),
   ].filter(Boolean);
   const script = candidates.find((c) => existsSync(c));
-  return script ? { command: process.execPath, args: [script] } : null;
+  return script ? { command: stableNodePath(), args: [script] } : null;
 }
 
 function resolvePiExtension(): string {
@@ -17883,7 +17902,7 @@ export function generatedPluginInvocation(
     const invocation = portableInvocation(onPath, [], platform);
     return { cmd: invocation.command, pre: invocation.args };
   }
-  return { cmd: process.execPath, pre: [currentScript] };
+  return { cmd: stableNodePath(), pre: [currentScript] };
 }
 
 function cavemanInvocation(): { cmd: string; pre: string[] } {

@@ -160,7 +160,8 @@ test("a caveman home outside the Windows profile is private to this user", { ski
 // files is caveman's to rewrite.
 test("a Windows home's permissions are rewritten only when caveman owns the folder", () => {
   const plain = { names: [], resolved: "D:\\caveman", link: false };
-  const ours = ["bin", "run", "cloud.json", "cloud.json.123.tmp", "credentials", "caveman.db-wal", "proxy.log.1", ".caveman-sqlite-1", "provider-logins.json.lock"];
+  const ours = ["bin", "run", "cloud.json", "cloud.json.123.tmp", "credentials", "caveman.db-wal", "proxy.log.1", ".caveman-sqlite-1", "provider-logins.json.lock",
+    "modules.lock.json.123.a1b2c3.tmp", "cloud.json.123.a1b2c3.tmp", ".install.lock.123.1700000000000.stale", "cloud.json.telemetry.lock.123.1700000000000.stale"];
   assert.equal(leaveHomeAclAlone("D:\\caveman", plain), false);
   assert.equal(leaveHomeAclAlone("d:\\caveman\\", { ...plain, names: ours }), false);
   assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: [...ours, "notes.txt"] }), true, "a user's file");
@@ -169,6 +170,7 @@ test("a Windows home's permissions are rewritten only when caveman owns the fold
   assert.equal(leaveHomeAclAlone("D:\\tools", { ...plain, names: ["cloud.json", "cli-tools", "hooks-backup", "mcp-servers"] }), true, "names that only continue like ours");
   assert.equal(leaveHomeAclAlone("D:\\tools", { ...plain, names: ["bin", "run", "tmp", "reports"] }), true, "generic names alone");
   assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: ["cloud.json", ".install.lock"] }), false, "the install lock");
+  assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: ["cloud.json", "cloud.json.stale.txt"] }), true, "a name that only ends like ours");
   assert.equal(leaveHomeAclAlone("D:\\", { ...plain, resolved: "D:\\" }), true, "drive root");
   assert.equal(leaveHomeAclAlone("\\\\server\\share\\caveman", plain), true, "UNC path");
   assert.equal(leaveHomeAclAlone("Z:\\caveman", { ...plain, resolved: "\\\\server\\share\\caveman" }), true, "mapped network drive");

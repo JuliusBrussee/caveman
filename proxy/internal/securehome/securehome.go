@@ -30,9 +30,10 @@ var homeMarkers = []string{
 }
 
 // ownedSuffix is what Caveman puts after one of its names: SQLite's -wal,
-// -shm and -journal, a rotated log's .1, a temp (.tmp, .<random>.tmp), a lock
-// (.lock, .<purpose>.lock) and a lock being broken (.lock.break.<token>).
-var ownedSuffix = regexp.MustCompile(`^(?:-wal|-shm|-journal|\.\d+|(?:\.[^.]+)?\.tmp|(?:\.[^.]+)?\.lock(?:\.break\..+)?)$`)
+// -shm and -journal, a rotated log's .1, a temp (.tmp, .<pid>.<random>.tmp), a
+// lock (.lock, .<purpose>.lock), a lock being broken (.lock.break.<token>) and
+// a broken lock set aside (.<pid>.<ms>.stale).
+var ownedSuffix = regexp.MustCompile(`^(?:-wal|-shm|-journal|\.\d+|(?:\.[^.]+)*\.tmp|(?:\.[^.]+)*\.stale|(?:\.[^.]+)?\.lock(?:\.break\..+)?)$`)
 
 // ErrNotOurs is Restrict leaving a home anyone else may read as it is,
 // because its permissions are not Caveman's to rewrite; the error says why.
