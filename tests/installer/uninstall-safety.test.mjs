@@ -283,6 +283,32 @@ test('uninstall stays quiet when no native integration is journaled', () => {
   }
 });
 
+// A foreign `caveman` whose --version never answers must not stall uninstall:
+// the probe gives up after 10s and the PATH caveman keeps its turn.
+test('uninstall gives up on a caveman --version that hangs', { skip: process.platform === 'win32' && 'POSIX fake CLI' }, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  try {
+    // A bundled CLI to compare against, or the probe never runs (see above).
+    const nodePath = path.join(dir, 'node-path');
+    const standIn = path.join(nodePath, '@caveman-ai', 'cli');
+    fs.mkdirSync(path.join(standIn, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(standIn, 'package.json'), JSON.stringify({ name: '@caveman-ai/cli', version: '2.1.0', bin: { caveman: 'dist/index.js' } }));
+    fs.writeFileSync(path.join(standIn, 'dist', 'index.js'), '');
+    const bin = path.join(dir, 'hung-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'caveman'), '#!/bin/sh\n[ "$1" = --version ] && exec sleep 120\nexit 0\n', { mode: 0o755 });
+    const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
+      env: { ...isolatedEnv(dir, [bin]), CLAUDE_CONFIG_DIR: configDir, NODE_PATH: nodePath, NO_COLOR: '1' },
+      encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(r.status, 0, r.error?.message || r.stderr || r.stdout);
+    assert.match(r.stdout, /would run: caveman disable --all/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Writing settings.json back re-serializes plain JSON: comments and trailing
 // commas go. A file with nothing of caveman's in it stays byte-identical, and
 // one that does get rewritten keeps its commented original as settings.json.bak.

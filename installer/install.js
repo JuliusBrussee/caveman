@@ -472,8 +472,8 @@ function sameFilesystemTmpEnv(configDir) {
   });
 }
 
-function captureSpawn(cmd, args) {
-  try { return spawnXplat(cmd, args, { encoding: 'utf8' }); }
+function captureSpawn(cmd, args, opts) {
+  try { return spawnXplat(cmd, args, Object.assign({ encoding: 'utf8' }, opts)); }
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
 }
 
@@ -2013,7 +2013,8 @@ function newerBundledCli() {
     if (!pkg.bin || typeof pkg.bin.caveman !== 'string') return null;
     const bin = path.join(path.dirname(manifest), pkg.bin.caveman);
     const want = /^(\d+)\.(\d+)\.(\d+)/.exec(pkg.version || '');
-    const probe = captureSpawn('caveman', ['--version']);
+    // A foreign `caveman` that never answers must not stall uninstall.
+    const probe = captureSpawn('caveman', ['--version'], { timeout: 10000, killSignal: 'SIGKILL' });
     const have = /(\d+)\.(\d+)\.(\d+)/.exec(probe.stdout || '');
     if (!want || !have || !spawnOk(probe) || !fs.existsSync(bin)) return null;
     for (let i = 1; i <= 3; i++) {
