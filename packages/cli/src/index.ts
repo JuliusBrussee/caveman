@@ -3204,7 +3204,8 @@ async function restartOutdatedRuntime(): Promise<void> {
   }
   const opts = defaultWrapOptions();
   const mode = (["compress", "record", "pixel"] as const).find((value) => value === runtime.mode) ?? opts.mode;
-  await startWrapProxy(mode, runtime.recovery_via_mcp === true, opts.toon, opts.pixelModels, opts.pixelDensity, gw);
+  // Onboarding draws its own progress line, which this one would break.
+  await startWrapProxy(mode, runtime.recovery_via_mcp === true, opts.toon, opts.pixelModels, opts.pixelDensity, gw, "standard", false, Boolean(installDownloading));
 }
 
 // ── caveman update ───────────────────────────────────────────────────────────
@@ -6972,14 +6973,14 @@ function ensureLocalProxyForNative(agent: NativeAgent, gw: string): void {
   })();
 }
 
-async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false): Promise<boolean> {
+async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false, quiet = false): Promise<boolean> {
   const spawned = spawnLocalProxyProcess(mode, mcpRecovery, toon, pixelModels, pixelDensity, gw, purpose, observeEstimate);
   if (!spawned) return false;
   const { host, port } = spawned;
   for (let i = 0; i < 20; i++) {
     await sleep(100);
     if (await portListening(host, port)) {
-      process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${mode})\n`));
+      if (!quiet) process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${mode})\n`));
       return true;
     }
   }
