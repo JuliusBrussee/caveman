@@ -795,6 +795,34 @@ test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving
   }
 });
 
+test('openclaw uninstall restores a pre-existing skill and keeps foreign files in its folder', () => {
+  const dir = freshTmpDir();
+  const env = isolatedInstallEnv(dir);
+  const skillDir = path.join(env.OPENCLAW_WORKSPACE, 'skills', 'caveman');
+  const mine = '---\nname: caveman\n---\nMY HAND TUNED SKILL\n';
+  try {
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), mine);
+    fs.writeFileSync(path.join(skillDir, 'notes.md'), 'notes\n');
+    const installed = runInstaller(['--only', 'openclaw'], path.join(dir, 'claude'), env);
+    assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+    assert.match(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /always: true/);
+
+    const removed = runInstaller(['--uninstall'], path.join(dir, 'claude'), env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), mine, 'pre-caveman skill not restored');
+    assert.equal(fs.readFileSync(path.join(skillDir, 'notes.md'), 'utf8'), 'notes\n', 'foreign file deleted');
+    assert.equal(fs.existsSync(path.join(skillDir, 'SKILL.md.bak')), false);
+
+    // A skill caveman never wrote stays put on a later uninstall.
+    const again = runInstaller(['--uninstall'], path.join(dir, 'claude'), env);
+    assert.equal(again.status, 0, again.stderr || again.stdout);
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), mine);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw uninstall propagates skill deletion failure and restores SOUL + skill', () => {
   const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
@@ -803,17 +831,18 @@ test('openclaw uninstall propagates skill deletion failure and restores SOUL + s
   helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT });
   const soul = path.join(ws, 'SOUL.md');
   const before = fs.readFileSync(soul, 'utf8');
-  const remove = fs.rmSync;
-  fs.rmSync = (target, options) => {
-    if (String(target).includes('.caveman.remove.')) throw Object.assign(new Error('injected remove failure'), { code: 'EACCES' });
-    return remove(target, options);
+  const skill = path.join(ws, 'skills', 'caveman', 'SKILL.md');
+  const unlink = fs.unlinkSync;
+  fs.unlinkSync = (target) => {
+    if (target === skill) throw Object.assign(new Error('injected remove failure'), { code: 'EACCES' });
+    return unlink(target);
   };
   try {
     assert.throws(() => helper.uninstallOpenclaw({ workspace: ws }), /injected remove failure/);
     assert.equal(fs.readFileSync(soul, 'utf8'), before);
-    assert.ok(fs.existsSync(path.join(ws, 'skills', 'caveman', 'SKILL.md')));
+    assert.ok(fs.existsSync(skill));
   } finally {
-    fs.rmSync = remove;
+    fs.unlinkSync = unlink;
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
