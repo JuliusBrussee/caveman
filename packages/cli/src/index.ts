@@ -10991,7 +10991,9 @@ async function nativeDoctor(argv: string[]) {
   print({
     ...result,
     repair: result.installed ? `caveman doctor ${target} --fix` : `caveman enable ${target}`,
-    trust: target === "codex" && result.installed ? "review through Codex /hooks" : "native host policy",
+    trust: target === "codex" && result.installed ? "review through Codex /hooks"
+      : target === "gemini" && result.installed ? `with folder trust on, Gemini CLI skips ${join(geminiConfigDir(), ".env")} in a folder you have not trusted, so its requests there go direct; trust the folder with /permissions`
+      : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
   });
   if (result.state === "degraded" || result.state === "unavailable") process.exitCode = 1;

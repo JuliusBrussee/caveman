@@ -2435,6 +2435,8 @@ test("doctor gemini warns where a project .env or the shell overrides Caveman's 
   mkdirSync(project);
   const doctor = (env, cwd) => JSON.parse(spawnSync(process.execPath, [cli, "doctor", "gemini"], { env, cwd, encoding: "utf8" }).stdout);
   assert.deepEqual(doctor(fx.env, project).warnings, []);
+  // An untrusted folder skips the global .env too; doctor says how to trust it.
+  assert.match(doctor(fx.env, project).trust, /folder you have not trusted.*\/permissions/);
   writeFileSync(join(project, ".env"), "FOO=bar\n");
   assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here instead of \S+\.gemini\/\.env/);
   writeFileSync(join(project, ".env"), "FOO=bar\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787/w/gemini\n");
