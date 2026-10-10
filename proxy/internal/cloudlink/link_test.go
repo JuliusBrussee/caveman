@@ -1,6 +1,7 @@
 package cloudlink
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -871,6 +872,32 @@ func TestEventsFollowMeAndTheOptOut(t *testing.T) {
 	t.Setenv("DO_NOT_TRACK", "1")
 	if got := send(cloudHome(t, cloud.URL, true, signedIn)); len(got) != 0 {
 		t.Fatalf("DO_NOT_TRACK still sent %v", got)
+	}
+}
+
+// The old CLI wrote that opt-out under Node's os.homedir(). PowerShell and cmd
+// leave HOME unset, and the user home there (USERPROFILE) is not the parent of
+// a CAVEMAN_HOME set elsewhere.
+func TestLegacyOptOutPathFollowsTheUserHome(t *testing.T) {
+	cavemanHome := filepath.Join(t.TempDir(), "elsewhere", ".caveman")
+	profile := t.TempDir()
+	previous := userHomeDir
+	defer func() { userHomeDir = previous }()
+	userHomeDir = func() (string, error) { return profile, nil }
+	for _, tt := range []struct{ home, want string }{
+		{"", profile},
+		{t.TempDir(), ""},
+	} {
+		t.Setenv("HOME", tt.home)
+		want := filepath.Join(cmp.Or(tt.want, tt.home), ".caveman-cloud", "config.json")
+		if _, legacy, _ := New(cavemanHome, nil).cloudPaths(); legacy != want {
+			t.Fatalf("HOME=%q: legacy opt-out read from %s, want %s", tt.home, legacy, want)
+		}
+	}
+	t.Setenv("HOME", "")
+	userHomeDir = func() (string, error) { return "", fmt.Errorf("no home") }
+	if _, legacy, _ := New(cavemanHome, nil).cloudPaths(); legacy != filepath.Join(filepath.Dir(cavemanHome), ".caveman-cloud", "config.json") {
+		t.Fatalf("no user home: legacy opt-out read from %s", legacy)
 	}
 }
 

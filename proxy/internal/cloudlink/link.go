@@ -146,8 +146,15 @@ type settings struct {
 
 func (s settings) signedIn() bool { return s.cloud != "" && (s.key != "" || s.access != "") }
 
+var userHomeDir = os.UserHomeDir
+
+// The legacy file is where the old CLI wrote it: Node's os.homedir(), which is
+// USERPROFILE on Windows, where PowerShell and cmd leave HOME unset.
 func (l *Link) cloudPaths() (current, legacy, credentials string) {
 	userHome := os.Getenv("HOME")
+	if userHome == "" {
+		userHome, _ = userHomeDir()
+	}
 	if userHome == "" {
 		userHome = filepath.Dir(l.home)
 	}
