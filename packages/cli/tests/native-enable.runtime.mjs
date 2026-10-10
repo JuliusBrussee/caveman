@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
 import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -2242,14 +2243,52 @@ test("enable leaves an agent on its own endpoint as is and says how to opt in", 
     assert.equal(readFileSync(file, "utf8"), body, agent);
     assert.equal(existsSync(join(fx.home, ".caveman", "integrations", `${agent}.json`)), false, agent);
   }
+  // `--detected` says so for each and goes on to wire the rest.
+  const detected = await run(["enable", "--detected"], { ...fx.env, HERMES_HOME: hermesHome });
+  assert.equal(detected.code, 0, detected.stderr);
+  assert.equal(detected.stderr.match(/was left as is/g)?.length, cases.length, detected.stderr);
+  assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
   // Codex's built-in provider takes its endpoint from the shell, and Caveman's
-  // provider would replace it. A route a wrapped session exports is Caveman's.
+  // provider would replace it.
   writeFileSync(cases[0][1], "");
-  const shell = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: "https://llm-gw.corp.example/v1" });
+  const shell = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: "https://user:secret@llm-gw.corp.example/v1?key=k" });
   assert.notEqual(shell.code, 0);
-  assert.match(shell.stderr, /\(OPENAI_BASE_URL in your shell\).* remove OPENAI_BASE_URL from your shell and run `caveman enable codex`/);
-  const wrapped = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: "http://127.0.0.1:8787/w/codex" });
-  assert.equal(wrapped.code, 0, wrapped.stderr);
+  assert.match(shell.stderr, /its own endpoint https:\/\/llm-gw\.corp\.example\/v1 \(OPENAI_BASE_URL in your shell\).* remove OPENAI_BASE_URL from your shell and run `caveman enable codex`/);
+  assert.doesNotMatch(shell.stderr, /secret|key=k/, "credentials in the URL are not printed");
+  // Not the user's own: the provider's public API, where the proxy sends it
+  // anyway, and the gateway a wrapped shell exports, with or without a route.
+  for (const value of ["https://api.openai.com/v1", "http://127.0.0.1:8787", "http://127.0.0.1:8787/w/codex"]) {
+    const out = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: value });
+    assert.equal(out.code, 0, `${value}: ${out.stderr}`);
+    assert.equal((await run(["disable", "codex"], fx.env)).code, 0, value);
+  }
+});
+
+// An install from before this check routes the user's own endpoint; a repair
+// must not call that "left as is".
+test("repairing an earlier install over the user's own endpoint says how to put it back", async () => {
+  const fx = fixture();
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  mkdirSync(dirname(settingsPath), { recursive: true });
+  writeFileSync(settingsPath, "{}\n");
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  // Rewind the journal to what an earlier enable over a gateway recorded.
+  const journalPath = join(fx.home, ".caveman", "integrations", "claude.json");
+  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+  const op = journal.operations.find((item) => item.kind === "claude-settings");
+  const original = JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://llm-gw.corp.example/anthropic" } }) + "\n";
+  writeFileSync(op.backup, original);
+  op.before_sha256 = `sha256:${createHash("sha256").update(original).digest("hex")}`;
+  op.owned.previous_route = "https://llm-gw.corp.example/anthropic";
+  writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+  const wired = readFileSync(settingsPath, "utf8");
+  // A moved runtime port makes the next enable repair the route.
+  const out = await run(["enable", "claude"], { ...fx.env, CAVE_GATEWAY_URL: "http://127.0.0.1:8799" });
+  assert.notEqual(out.code, 0);
+  assert.match(out.stderr, /was routed through Caveman before, over its own endpoint https:\/\/llm-gw\.corp\.example\/anthropic.* Run `caveman disable claude` to put that endpoint back/);
+  assert.equal(readFileSync(settingsPath, "utf8"), wired);
+  assert.equal((await run(["disable", "claude"], fx.env)).code, 0);
+  assert.equal(readFileSync(settingsPath, "utf8"), original);
 });
 
 // Gemini CLI reads the first .env walking up from where it runs; the global
@@ -2266,4 +2305,8 @@ test("doctor gemini warns where a project .env or the shell overrides Caveman's 
   writeFileSync(join(project, ".env"), "FOO=bar\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787/w/gemini\n");
   assert.deepEqual(doctor(fx.env, project).warnings, []);
   assert.match(doctor({ ...fx.env, GOOGLE_GEMINI_BASE_URL: "https://llm-gw.corp.example" }, fx.home).warnings.join("\n"), /takes GOOGLE_GEMINI_BASE_URL from your shell/);
+  // A virtualenv named .env is still the first hit; it must not crash doctor.
+  rmSync(join(project, ".env"));
+  mkdirSync(join(project, ".env"));
+  assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here/);
 });

@@ -8147,14 +8147,26 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
 
 function detectedAgentVersion(agent: AgentProfile): string | null { return nativeHostProbe(agent).version; }
 
-// A base URL Caveman wrote: a /w/ route on the local runtime or a Caveman
-// gateway. A wrapped session exports one in every vendor variable.
+// A base URL Caveman wrote: the gateway itself (a raw `caveman wrap` exports
+// it), or a /w/ route on the local runtime or a Caveman gateway. A wrapped
+// session exports one in every vendor variable.
 function isCavemanRoute(value: string): boolean {
   try {
     const url = new URL(value);
-    return url.pathname.startsWith("/w/") && (["localhost", "127.0.0.1", "[::1]", "gateway.caveman.so", "gw.caveman.so", "api.caveman.so"].includes(url.hostname)
-      || url.origin === new URL(gatewayURL()).origin);
+    return url.origin === new URL(gatewayURL()).origin
+      || url.pathname.startsWith("/w/") && ["localhost", "127.0.0.1", "[::1]", "gateway.caveman.so", "gw.caveman.so", "api.caveman.so"].includes(url.hostname);
   } catch { return false; }
+}
+
+// The user's own endpoint a base URL names, shown without credentials, or
+// null: Caveman's routes are not, nor the providers' public APIs, where the
+// proxy sends the requests anyway.
+function ownEndpoint(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim() || isCavemanRoute(value)) return null;
+  try {
+    if (["api.anthropic.com", "api.openai.com", "generativelanguage.googleapis.com"].includes(new URL(value).hostname)) return null;
+  } catch { /* not a URL: a provider name */ }
+  return value.replace(/\/\/[^/@]*@/, "//").replace(/[?#].*$/, "");
 }
 
 // An agent that already sends its requests to an endpoint of its own (a
@@ -8165,9 +8177,10 @@ function isCavemanRoute(value: string): boolean {
 // cannot forward this one agent to the user's endpoint instead. Thrown before
 // any write; setup reports it as a skip.
 function refuseOwnEndpoint(agent: NativeAgent, key: string, value: unknown, file?: string): void {
-  if (typeof value !== "string" || !value.trim() || isCavemanRoute(value)) return;
+  const own = ownEndpoint(value);
+  if (!own) return;
   const name = findAgent(agent)?.display_name ?? agent;
-  throw Object.assign(new Error(`${name} sends its requests to its own endpoint ${value} (${key} in ${file ?? "your shell"}). Caveman would send them, with their key, to the provider's public API instead, so ${name} was left as is. To route it through Caveman anyway, remove ${key} ${file ? "there" : "from your shell"} and run \`caveman enable ${agent}\`.`), { ownEndpoint: true });
+  throw Object.assign(new Error(`${name} sends its requests to its own endpoint ${own} (${key} in ${file ?? "your shell"}). Caveman would send them, with their key, to the provider's public API instead, so ${name} was left as is. To route it through Caveman anyway, remove ${key} ${file ? "there" : "from your shell"} and run \`caveman enable ${agent}\`.`), { ownEndpoint: own });
 }
 
 // A YAML or dotenv scalar: comment and quotes off.
@@ -8325,7 +8338,10 @@ function geminiRouteShadow(): string | null {
     for (const file of [join(dir, ".gemini", ".env"), join(dir, ".env")]) {
       if (!existsSync(file)) continue;
       if (nativeRealPath(file) === nativeRealPath(global)) return null;
-      const routed = (fileBytes(file)?.toString("utf8") ?? "").split(/\r?\n/)
+      // A .env Gemini cannot read (a directory, no permission) loads nothing.
+      let text = "";
+      try { text = readFileSync(file, "utf8"); } catch { /* not routed */ }
+      const routed = text.split(/\r?\n/)
         .some((line) => /^\s*(?:export\s+)?GOOGLE_GEMINI_BASE_URL\s*=/.test(line) && isCavemanRoute(configValue(line.slice(line.indexOf("=") + 1)) ?? ""));
       return routed ? null : `Gemini CLI reads ${file} here instead of ${global}, so its requests from this folder go direct and are not compressed or counted; copy the Caveman lines from ${global} into it`;
     }
@@ -9345,7 +9361,7 @@ function hermesNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const native = hermesNativeConfig(configBefore?.toString("utf8") ?? "", gw, mcpBinary);
   // A custom provider is the user's own endpoint; a named one is the vendor's.
   const previous = Object.fromEntries((native.owned.previous_route_lines as string[]).map((line) => [line.match(/^  ([^:]+):/)![1]!, configValue(line.slice(line.indexOf(":") + 1))]));
-  if (!previous.provider || previous.provider === "custom") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
+  if (!previous.provider || previous.provider === "custom" || previous.provider === "auto") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
   const pluginDir = hermesNativePluginDir();
   const manifestPath = join(pluginDir, "plugin.yaml");
   const initPath = join(pluginDir, "__init__.py");
@@ -9730,7 +9746,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
   const gw = gatewayURL();
   for (const profile of profiles) {
     const agent = profile.id as NativeAgent;
-    const outcome = withIntegrationLock(agent, () => {
+    const wire = () => withIntegrationLock(agent, () => {
       recoverPendingNativeInstallUnlocked(agent);
       if (!which(binOf(profile))) throw new Error(`${profile.display_name} not found on PATH`);
       const mcpBinary = agent === "aider" ? undefined : nativeMcpBinaryRequired();
@@ -9779,6 +9795,13 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
       installNativeVoiceSkills(agent);
       return "enabled" as const;
     });
+    let outcome: ReturnType<typeof wire>;
+    try { outcome = wire(); } catch (error) {
+      // `--detected` goes on past an agent on its own endpoint; one named alone fails.
+      if (!detected || !(error as { ownEndpoint?: string }).ownEndpoint) throw error;
+      process.stderr.write(`${mark("warn")} ${(error as Error).message}\n`);
+      continue;
+    }
     // Outside the lock, and on BOTH outcomes. The native SessionStart hook
     // autostarts the proxy, but only once the host has approved the installed
     // hooks (Codex gates this behind /hooks), and `enable` run on its own —
@@ -10381,6 +10404,10 @@ function repairNativeAgent(target: NativeAgent, { quiet = false }: { quiet?: boo
         try { writeNativeRestoration(item.file, item.bytes); } catch { /* original error remains authority */ }
       }
       atomicWriteFile(nativeJournalPath(target), journalBytes);
+      // An install from before that check routes the user's own endpoint: it
+      // was not left as is.
+      const own = (error as { ownEndpoint?: string }).ownEndpoint;
+      if (own) throw new Error(`${profile.display_name} was routed through Caveman before, over its own endpoint ${own}, so its requests go to the provider's public API. Run \`caveman disable ${target}\` to put that endpoint back.`);
       throw error;
     }
     if (!quiet) installNativeVoiceSkills(target);
@@ -13115,7 +13142,7 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
     case "codex":
       return removeMcpCodexToml(serverName);
     case "opencode":
-      return removeMcpJson(opencodeConfigPath(), ["mcp", serverName]);
+      return removeMcpJson(join(opencodeConfigDir(), "opencode.json"), ["mcp", serverName]);
     case "kilo":
     case "qwen":
       throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
@@ -14540,6 +14567,19 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
+  // The wrap would replace an endpoint of the user's own with the proxy, which
+  // cannot forward to it, and send its key to the provider's public API.
+  // Claude Code's settings env outranks the shell's.
+  const key = agent.id === "claude" ? "ANTHROPIC_BASE_URL" : agent.id === "codex" ? "OPENAI_BASE_URL" : undefined;
+  let settingsUrl: unknown;
+  if (agent.id === "claude") {
+    try {
+      const path = throughLink(join(claudeConfigDir(), "settings.json"));
+      settingsUrl = objectValue(parseJsonFileObject(path, fileBytes(path)).env).ANTHROPIC_BASE_URL;
+    } catch { /* unreadable: the shell decides */ }
+  }
+  const own = key ? ownEndpoint(settingsUrl || process.env[key]) : null;
+  if (key && own) return { surface: key, reason: `points at your own endpoint ${own}, which the proxy cannot forward to` };
   return null;
 }
 
@@ -15175,7 +15215,7 @@ function installMcpForAgent(a: AgentProfile, mcp: { command: string; args: strin
     case "codex":
       return installMcpCodexToml(mcp, serverName);
     case "opencode":
-      return installMcpJson(opencodeConfigPath(), ["mcp", serverName], {
+      return installMcpJson(join(opencodeConfigDir(), "opencode.json"), ["mcp", serverName], {
         type: "local",
         command: [mcp.command, ...mcp.args],
         enabled: true,
