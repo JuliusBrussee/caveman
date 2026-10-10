@@ -1168,7 +1168,11 @@ function installAntigravityCli(ctx) {
 const OPENCODE_SKILL_DIRS  = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
 const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 const OPENCODE_COMMAND_FILES = ['caveman.md', 'ultracave.md', 'megacave.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
-const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
+// The directory: opencode 1.x imports it through its package.json main
+// (plugin.js), opencode 2.x loads its server.js. A plugin.js entry worked on
+// 1.x only and made 2.x warn "configured plugin path must be a directory".
+const OPENCODE_PLUGIN_REL = './plugins/caveman';
+const OPENCODE_PLUGIN_LEGACY_REL = './plugins/caveman/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 // Marker fence for the opencode AGENTS.md ruleset block. Same convention as
 // installer/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
@@ -1610,6 +1614,7 @@ function installOpencode(ctx) {
       warn(`        Your original (with comments) is preserved at ${opencodeBak}`);
     }
     if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
+    cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_LEGACY_REL);
     if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
@@ -2219,7 +2224,7 @@ function uninstall(ctx) {
       const cfg = SETTINGS.readSettings(ocJson);
       if (cfg) {
         if (Array.isArray(cfg.plugin)) {
-          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL);
+          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL && p !== OPENCODE_PLUGIN_LEGACY_REL);
           if (cfg.plugin.length === 0) delete cfg.plugin;
         }
         if (cfg.mcp && typeof cfg.mcp === 'object' && cfg.mcp['caveman-shrink']) {

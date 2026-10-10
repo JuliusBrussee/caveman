@@ -7,16 +7,17 @@ opencode's `session.created` + `tui.prompt.append` lifecycle hooks.
 
 | File | Role |
 |---|---|
-| `plugin.js` | ESM Bun module. Default-exports an opencode `Plugin` factory (opencode 1.x, loaded from the `opencode.json` `plugin` entry). |
-| `server.js` | opencode 2.x entry: `{ id, setup(ctx) }` that wires `plugin.js`'s hooks to the 2.x event, prompt and context APIs. 2.x finds it by scanning `plugins/caveman/`; 1.x never loads it. |
-| `package.json` | Marks the directory as ESM so Bun loads `plugin.js` correctly. |
+| `plugin.js` | ESM Bun module. Default-exports an opencode `Plugin` factory (opencode 1.x, imported through `package.json` `main` when the `opencode.json` `plugin` entry names this directory). |
+| `server.js` | opencode 2.x entry: `{ id, setup(ctx) }` that wires `plugin.js`'s hooks to the 2.x event, prompt and context APIs. 2.x loads it from the `plugins/caveman/` directory; 1.x never loads it. |
+| `package.json` | Marks the directory as ESM and names `plugin.js` as its `main`. |
 | `commands/*.md` | Slash-command prompt templates (`/caveman`, `/ultracave`, `/megacave`, `/caveman-commit`, …). |
 
 The installer (`installer/install.js --only opencode`) copies these alongside
 `src/hooks/caveman-config.js` (for the symlink-safe flag-write helpers, renamed
 to `caveman-config.cjs` because this directory is `"type": "module"`) into
 `~/.config/opencode/plugins/caveman/` and patches `opencode.json` with a
-`"plugin"` array entry.
+`"plugin"` array entry naming that directory (`./plugins/caveman`), the one
+form both opencode 1.x and 2.x load.
 
 ## What it does
 

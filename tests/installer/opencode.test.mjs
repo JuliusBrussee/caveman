@@ -97,7 +97,7 @@ test('opencode fresh install drops plugin, commands, agents, skills, AGENTS.md, 
     assert.ok(fs.existsSync(cfgPath), 'opencode.jsonc missing');
     const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
     assert.ok(Array.isArray(cfg.plugin), 'opencode.jsonc missing plugin array');
-    assert.ok(cfg.plugin.includes('./plugins/caveman/plugin.js'), 'plugin entry missing');
+    assert.deepEqual(cfg.plugin, ['./plugins/caveman'], 'plugin entry must name the directory');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
@@ -116,7 +116,7 @@ test('opencode idempotent install does not duplicate plugin entries', () => {
     assert.notEqual(r2.status, 2);
 
     const cfg = JSON.parse(fs.readFileSync(path.join(xdg, 'opencode', 'opencode.jsonc'), 'utf8'));
-    const matches = cfg.plugin.filter(p => p === './plugins/caveman/plugin.js');
+    const matches = cfg.plugin.filter(p => p === './plugins/caveman');
     assert.equal(matches.length, 1, `expected 1 plugin entry, got ${matches.length}`);
 
     // AGENTS.md should not have the ruleset duplicated either.
@@ -305,7 +305,7 @@ test('opencode install tolerates JSONC opencode.json (comments + trailing commas
     const cfg = JSON.parse(fs.readFileSync(path.join(ocDir, 'opencode.json'), 'utf8'));
     assert.equal(cfg.model, 'anthropic/claude-sonnet-4-5', 'user model setting wiped');
     assert.equal(cfg.theme, 'dark', 'user theme setting wiped');
-    assert.ok(cfg.plugin.includes('./plugins/caveman/plugin.js'), 'plugin entry missing');
+    assert.ok(cfg.plugin.includes('./plugins/caveman'), 'plugin entry missing');
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
@@ -335,7 +335,7 @@ test('opencode uninstall removes plugin dir, command/agent/skill files, prunes o
       const cfgPath = path.join(ocDir, name);
       if (!fs.existsSync(cfgPath)) continue;
       const cfg = JSON.parse(fs.readFileSync(cfgPath, 'utf8'));
-      const stillHasPlugin = Array.isArray(cfg.plugin) && cfg.plugin.includes('./plugins/caveman/plugin.js');
+      const stillHasPlugin = Array.isArray(cfg.plugin) && cfg.plugin.includes('./plugins/caveman');
       assert.equal(stillHasPlugin, false, `plugin entry survived in ${name}`);
     }
   } finally {
@@ -528,7 +528,7 @@ test('opencode 2.x loads server.js: session init, prompt mode changes and contex
     // 1.x loads only top-level plugins/*.{js,ts} plus the config entry, so a
     // server.js inside the plugin directory never reaches the 1.x loader.
     const cfg = SETTINGS.readSettings(path.join(xdg, 'opencode', 'opencode.jsonc'));
-    assert.deepEqual(cfg.plugin, ['./plugins/caveman/plugin.js']);
+    assert.deepEqual(cfg.plugin, ['./plugins/caveman']);
 
     process.env.XDG_CONFIG_HOME = xdg;
     process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
@@ -875,6 +875,30 @@ test('opencode uninstall removes both the mode flag and the one-shot prev file',
     assert.equal(removed.status, 0, removed.stderr);
     assert.equal(fs.existsSync(flag), false, 'mode flag must be removed');
     assert.equal(fs.existsSync(prev), false, 'one-shot prev file must be removed');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── 10c. The plugin entry names the directory, so opencode 2 loads it quietly ─
+// A plugin.js entry worked on 1.x only; 2.x warned "configured plugin path
+// must be a directory" on every start. An older install's entry is replaced.
+test('opencode install replaces an older plugin.js entry with the directory entry', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = {
+      ...process.env, HOME: xdg, USERPROFILE: xdg, XDG_CONFIG_HOME: xdg, NO_COLOR: '1',
+      PATH: [shimDir, path.dirname(process.execPath), ...(IS_WIN ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')] : ['/usr/bin', '/bin'])].join(path.delimiter),
+    };
+    const cfgPath = path.join(xdg, 'opencode', 'opencode.json');
+    fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+    fs.writeFileSync(cfgPath, JSON.stringify({ plugin: ['./plugins/caveman/plugin.js', 'my-plugin'] }) + '\n');
+
+    const installed = runInstaller(['--only', 'opencode'], env);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.deepEqual(SETTINGS.readSettings(cfgPath).plugin, ['my-plugin', './plugins/caveman']);
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
