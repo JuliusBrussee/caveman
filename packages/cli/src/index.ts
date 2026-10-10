@@ -8343,8 +8343,11 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
   if (!binary) return { binary: null, launchable: false, version: null, error: "binary_not_found" };
   try {
     const invocation = portableInvocation(binary, ["--version"]);
-    // CAVE_BINARY_PROBE_TIMEOUT_MS may only lengthen the 3s default, to 10s at most (a loaded test box).
-    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.min(10_000, Math.max(3000, versionedBinaryProbeTimeoutMs())) });
+    // Node and Bun CLIs take seconds to start on a loaded machine (Gemini CLI
+    // 0.53 took 6s), so 10s by default; CAVE_BINARY_PROBE_TIMEOUT_MS sets 3s-30s.
+    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.max(3000, process.env.CAVE_BINARY_PROBE_TIMEOUT_MS ? versionedBinaryProbeTimeoutMs() : 10_000) });
+    // It started and is only slow: the host is there, its version unknown.
+    if ((out.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return { binary, launchable: true, version: null, error: "version_probe_timeout" };
     if (out.error) return { binary, launchable: false, version: null, error: boundedHookString(out.error.message, 240) ?? "version_probe_failed" };
     const value = `${out.stdout ?? ""} ${out.stderr ?? ""}`.trim();
     if (out.status !== 0) return { binary, launchable: false, version: value ? value.slice(0, 160) : null, error: `version_probe_exit_${out.status ?? "unknown"}` };
@@ -8631,17 +8634,24 @@ function opencodeNativePluginSource(): string {
   // (PluginModule.LoadError, missing "default"). Emit the implementation
   // matching the detected host major. See #1083.
   //
-  // An unreadable version keeps V1, the status quo. nativeHostProbe returns
-  // version: null for an empty/non-zero/unspawnable `opencode --version`
-  // ("version_probe_failed"), and #1081 records exactly that state on a live
-  // OpenCode 1.18.31 host — so "unknown" is not evidence of "new". Defaulting
-  // it to V2 would break a 1.x user whose probe merely flaked, turning a
-  // working install into one whose plugin the host refuses to load; a 2.x user
-  // in the same state is no worse off than before this gate existed. Only a
-  // version that positively reads as major >= 2 opts into the V2 API.
+  // An unreadable version (#1081: a live 1.18.31 host; a slow `--version` on a
+  // loaded machine) is evidence of neither major, so it gets the one file both
+  // load: V1's hook map behind a default { server } for OpenCode 1.4+, and the
+  // V2 { id, setup } beside it. 1.x also calls setup, with a context that has
+  // no session or event API, so setup returns there. Checked against real
+  // OpenCode 1.18.35 and 2.0.22; 1.0-1.3 call every export and cannot load it.
   const major = opencodePluginMajor();
-  if (major === null || major < 2) return opencodeNativePluginSourceV1();
+  if (major === null) return opencodeNativePluginSourceBoth();
+  if (major < 2) return opencodeNativePluginSourceV1();
   return opencodeNativePluginSourceV2();
+}
+
+function opencodeNativePluginSourceBoth(): string {
+  const v2 = opencodeNativePluginSourceV2();
+  const definition = v2.slice(v2.indexOf("export default {"))
+    .replace('  id: "caveman-native",\n', '  id: "caveman-native",\n  server: CavemanNative,\n')
+    .replace("  async setup(ctx) {\n", "  async setup(ctx) {\n    if (!ctx?.session?.hook || !ctx?.event?.subscribe) return;\n");
+  return `${opencodeNativePluginSourceV1()}\n${definition}`;
 }
 
 function opencodeNativePluginSourceV1(): string {
@@ -10840,6 +10850,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
 	  ? ownedHealthy
 	  : coreSupported && nativeCoreRuntimeState().active;
   const warnings: string[] = [];
+  if (host.error === "version_probe_timeout") warnings.push(`could not read the ${profile.display_name} version: \`${binOf(profile)} --version\` did not answer in time`);
   if (agent === "gemini" && installed) {
     const shadow = geminiRouteShadow();
     if (shadow) warnings.push(shadow);
