@@ -235,7 +235,10 @@ test("enable/disable codex owns marked config blocks and preserves unrelated dri
   const installedHooks = JSON.parse(readFileSync(hooksPath, "utf8")).hooks;
   assert.match(JSON.stringify(installedHooks.PreToolUse), /native-hook codex/);
   assert.match(JSON.stringify(installedHooks.PermissionRequest), /native-hook codex/);
-  assert.match(JSON.stringify(installedHooks.PostToolUseFailure), /native-hook codex/);
+  // Codex has no PostToolUseFailure event (hooks/list drops it), and shrink-hook
+  // declines every Codex tool call (#1037): neither is written.
+  assert.equal(installedHooks.PostToolUseFailure, undefined);
+  assert.doesNotMatch(JSON.stringify(installedHooks), /shrink-hook/);
 
   writeFileSync(configPath, `${installed}\n# later user comment\n`);
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
@@ -551,10 +554,30 @@ test("disable refuses a removed pre-existing file and keeps journal", async () =
   assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
 });
 
-// `caveman enable codex` still writes a shrink-hook entry into ~/.codex/hooks.json,
-// but since #1037 that hook declines every Codex tool event. Reporting the component
-// off a substring of the hooks file therefore claimed a rewrite that no longer
-// happens. Codex is an installed, healthy integration WITHOUT command-output rewrite.
+// An install from before carries a shrink-hook entry (a second PreToolUse hook
+// on every Codex tool call that declines it) and a PostToolUseFailure entry
+// Codex never runs. Doctor sends it to --fix, which takes both out.
+test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of an older Codex install", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
+  const native = hooks.hooks.SessionStart.find((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  hooks.hooks.PreToolUse.push({ hooks: [{ type: "command", command: `${join(fx.home, "bin", "caveman")} shrink-hook` }] });
+  hooks.hooks.PostToolUseFailure = [native];
+  writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
+
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).state, "degraded");
+  const fixed = await run(["doctor", "codex", "--fix"], fx.env);
+  assert.equal(fixed.code, 0, fixed.stdout + fixed.stderr);
+  const after = JSON.parse(readFileSync(hooksPath, "utf8")).hooks;
+  assert.equal(after.PostToolUseFailure, undefined);
+  assert.doesNotMatch(JSON.stringify(after), /shrink-hook/);
+  assert.equal(after.PreToolUse.length, 1);
+});
+
+// Codex declines command-output rewrite since #1037, so doctor never claims one.
 test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });

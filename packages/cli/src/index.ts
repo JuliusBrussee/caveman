@@ -7778,7 +7778,8 @@ function nativeHooksDocument(agentId: "claude" | "codex" | "gemini", includeShri
   const lifecycle = agentId === "gemini"
     ? ["SessionStart", "BeforeAgent", "BeforeModel", "BeforeTool", "AfterTool", "AfterModel", "PreCompress", "AfterAgent", "SessionEnd"]
     : agentId === "codex"
-    ? ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PostToolUseFailure", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]
+    // Codex runs no PostToolUseFailure event; hooks/list drops the entry.
+    ? ["SessionStart", "UserPromptSubmit", "PreToolUse", "PermissionRequest", "PostToolUse", "PreCompact", "PostCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"]
     : ["SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolUseFailure", "PreCompact", "SubagentStart", "SubagentStop", "Stop", "SessionEnd"];
   const command = nativeHookCommand(agentId);
   const identity = `native-hook:${agentId}`;
@@ -7943,7 +7944,7 @@ function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claud
     : undefined;
   if (!hooks) return false;
   if (!managedHookTargetsExist(root)) return false;
-  const expected = nativeHooksDocument(agentId, nativeShrinkEnabled()).hooks as Record<string, unknown>;
+  const expected = nativeHooksDocument(agentId, agentId !== "codex" && nativeShrinkEnabled()).hooks as Record<string, unknown>;
   const required = Object.entries(expected).every(([event, expectedRaw]) => {
     const actual = Array.isArray(hooks[event]) ? hooks[event] as Array<Record<string, unknown>> : [];
     const actualEntries = new Set(actual.map(canonicalManagedHookEntry).filter(Boolean));
@@ -9321,7 +9322,9 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooksBefore = fileBytes(hooksPath);
   const hooksRoot = parseJsonFileObject(hooksPath, hooksBefore);
   assertNativeHooksShape(hooksPath, hooksRoot, "codex");
-  const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
+  // No shrink-hook: it declines every Codex tool call (#1037), so it would only
+  // run a second process per call. An older install's entry goes too.
+  const hooks = nativeHooksDocument("codex", false, hooksRoot);
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
   // A provider of the user's own (Ollama, Azure, a gateway) is replaced by
@@ -10855,12 +10858,9 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent,
     core: coreActive,
     mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
-    // Codex is false for the same reason hermes is: no command rewrite happens. The
-    // shrink-hook entry is still written into ~/.codex/hooks.json (removing it from
-    // nativeHooksDocument would make every existing install read as degraded, since
-    // nativeHookEntriesHealthy rejects a managed entry the expected document lacks),
-    // but since #1037 shrinkHook declines every Codex tool event, so the presence of
-    // that entry no longer evidences a rewrite. Report the behavior, not the file.
+    // Codex is false for the same reason hermes is: no command rewrite happens.
+    // Since #1037 shrinkHook declines every Codex tool event, so Codex gets no
+    // shrink-hook entry; an older install's entry reads degraded until --fix.
     tool_rewrite: agent !== "aider" && ownedHealthy && (agent === "hermes" || agent === "codex" ? false : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes("shrink-hook")),
     shared_runtime: proxyHealthy,
   };
