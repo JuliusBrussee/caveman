@@ -78,6 +78,9 @@ export type ModuleHost = {
   // Whether the local runtime answers, waiting up to waitMs for it.
   runtimeListening(waitMs: number): Promise<boolean>;
   agentState(agent: string): string;
+  // What clears a degraded agent: `caveman doctor <agent> --fix`, or the way
+  // out when that repair would refuse (a user edit to what Caveman wrote).
+  agentFix(agent: string): string;
   coreActive(): boolean;
   signedIn(): boolean;
   cloudCheck(): Promise<void>;
@@ -477,19 +480,37 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const runs = externalRuns(plan.selection, plan.only, plan.agents, wire.length > 0);
   const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
 
-  if (state.length) h.mutateConfig((out) => { out.modules = { ...objectOf(out.modules), ...Object.fromEntries(state) }; });
-  // Effects land before wiring: enable and repair read think.shrink for hooks.
-  for (const [key, value] of effects) h.setConfigValue(key, value);
   const step = (agent: string, done: string, act: () => void) => {
     try {
       act();
       say(`✓ ${h.agentName(agent)} ${done}`);
+      return true;
     } catch (error) {
-      if ((error as { ownEndpoint?: boolean }).ownEndpoint) say(`○ ${(error as Error).message}`);
-      else fail(agent, error);
+      // An agent on its own endpoint is left as is: a note, not a failure.
+      if ((error as { ownEndpoint?: boolean }).ownEndpoint) { say(`○ ${(error as Error).message}`); return true; }
+      fail(agent, error);
+      return false;
     }
   };
-  for (const agent of unwire) step(agent, "unwired", () => h.unwireAgent(agent));
+  // Unwiring reads no config, so it goes first. When the last agent-wired
+  // module goes off and an agent stays wired, the modules this run switched
+  // off keep their state and keys: status must not say off over a wired
+  // agent, and running off again retries the unwire. A config the writes
+  // would refuse (broken JSON) stops the run here, before any agent changes.
+  if (state.length || effects.length) h.mutateConfig(() => {});
+  const wasOn = currentSelection();
+  const stuck = unwire.filter((agent) => !step(agent, "unwired", () => h.unwireAgent(agent)));
+  const kept = stuck.length && !MODULES.some((m) => m.wiresAgents && plan.selection[m.id])
+    ? MODULES.filter((m) => m.wiresAgents && wasOn[m.id]) : [];
+  if (kept.length) {
+    const ids = kept.map((m) => m.id);
+    const list = (items: string[]) => new Intl.ListFormat("en").format(items);
+    problems.push(`${list(ids)} stay${ids.length > 1 ? "" : "s"} on while ${list(stuck.map((agent) => h.agentName(agent)))} ${stuck.length > 1 ? "are" : "is"} still wired; fix the problem above, then run this again`);
+  }
+  const recorded = state.filter(([id]) => !kept.some((m) => m.id === id));
+  if (recorded.length) h.mutateConfig((out) => { out.modules = { ...objectOf(out.modules), ...Object.fromEntries(recorded) }; });
+  // Effects land before wiring: enable and repair read think.shrink for hooks.
+  for (const [key, value] of effects) if (!kept.some((m) => m.capabilities.some((effect) => effect.key === key))) h.setConfigValue(key, value);
   for (const agent of wire) step(agent, "wired", () => h.wireAgent(agent));
   const target = h.agentTraffic().target === "local" ? "local runtime" : "managed gateway";
   for (const agent of refresh) step(agent, h.agentStaleRoute(agent) ? `routing: ${target}` : "hooks refreshed", () => h.refreshAgent(agent));

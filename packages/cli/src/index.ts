@@ -621,6 +621,7 @@ setModuleHost({
     return !(await portListening(host, port));
   },
   agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
+  agentFix: (agent) => nativeRepairFix(agent as NativeAgent),
   coreActive: () => nativeCoreRuntimeState().active,
   signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
   // A thrown error carries the HTTP status; 0 means no answer at all.
@@ -3268,7 +3269,8 @@ async function restartOutdatedRuntime(explicit = false): Promise<void> {
   }
   const opts = defaultWrapOptions();
   const mode = (["compress", "record", "pixel"] as const).find((value) => value === runtime.mode) ?? opts.mode;
-  await startWrapProxy(mode, runtime.recovery_via_mcp === true, opts.toon, opts.pixelModels, opts.pixelDensity, gw);
+  // Onboarding draws its own progress line, which this one would break.
+  await startWrapProxy(mode, runtime.recovery_via_mcp === true, opts.toon, opts.pixelModels, opts.pixelDensity, gw, "standard", false, Boolean(installDownloading));
 }
 
 // Whether another session may be using the runtime on `port`: a live
@@ -4221,8 +4223,7 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function globalCapabilityDocument(): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
-    return objectValue(parsed);
+    return parseRawConfig(readFileSync(configPath(), "utf8"));
   } catch {
     return {};
   }
@@ -4550,9 +4551,14 @@ function proxyUpstreamIsFirstParty(provider: string, host: string): boolean {
   }
 }
 
+// Only ./.caveman/config.json, as documented; the hooks walk up for
+// defaultMode alone. Hand-edited like theirs: a BOM, PowerShell 5.1's
+// UTF-16LE, comments and trailing commas are fine.
 function projectCapabilityDocument(): Record<string, unknown> {
   try {
-    return objectValue(JSON.parse(readFileSync(join(process.cwd(), ".caveman", "config.json"), "utf8")));
+    const bytes = readFileSync(join(process.cwd(), ".caveman", "config.json"));
+    const text = bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.toString("utf16le", 2) : bytes.toString("utf8");
+    return objectValue(parseJsonc(text.replace(/^\uFEFF/, "")));
   } catch {
     return {};
   }
@@ -5071,27 +5077,32 @@ function readWrapEntitlementState(): WrapEntitlementState | null {
   }
 }
 
+// cloud.json's keys: {} for a missing or empty file, and a BOM (PowerShell
+// UTF-8) is fine. A hand edit that broke the JSON still holds sign-in, module
+// state and the telemetry decision: refuse, naming the file, rather than let
+// a write put {} plus its change over it.
+function parseRawConfig(text: string): Record<string, unknown> {
+  const raw = text.replace(/^\uFEFF/, "");
+  if (!raw.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${configPath()} is not valid JSON, so Caveman left it untouched. Fix the file or delete it, then run this again.`);
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
 // mutateRawConfig read-modify-writes config.json preserving every other key, so
 // entitlement/deviceId writes never clobber baseURL/gatewayUrl/telemetry etc.
 function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
-  let out: Record<string, unknown> = {};
   let raw = "";
   try {
-    raw = readFileSync(configPath(), "utf8").replace(/^\uFEFF/, "");
+    raw = readFileSync(configPath(), "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // only a missing file is a fresh config
   }
-  if (raw.trim()) {
-    // A hand edit that broke the JSON still holds sign-in, module state and the
-    // telemetry decision: refuse rather than write {} plus this change over it.
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`${configPath()} is not valid JSON, so Caveman left it untouched. Fix the file or delete it, then run this again.`);
-    }
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out = parsed as Record<string, unknown>;
-  }
+  const out = parseRawConfig(raw);
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
   const target = configWriteTarget();
@@ -5849,8 +5860,9 @@ function firstRunUIEligible(): boolean {
 }
 
 async function firstRunPending(): Promise<boolean> {
-  const raw = await readRawConfig();
-  return typeof raw.firstRunAt !== "string" || !raw.firstRunAt;
+  // A broken cloud.json skips the welcome: it could not be marked done.
+  const raw = await readRawConfig().catch(() => null);
+  return raw !== null && (typeof raw.firstRunAt !== "string" || !raw.firstRunAt);
 }
 
 async function markFirstRunDone(): Promise<void> {
@@ -7049,14 +7061,14 @@ function ensureLocalProxyForNative(agent: NativeAgent, gw: string): void {
   })();
 }
 
-async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false): Promise<boolean> {
+async function startWrapProxy(mode: WrapRuntimeMode, mcpRecovery: boolean, toon: boolean, pixelModels: string | undefined, pixelDensity: string | undefined, gw = gatewayURL(), purpose: "standard" | "codex-subscription" = "standard", observeEstimate = false, quiet = false): Promise<boolean> {
   const spawned = spawnLocalProxyProcess(mode, mcpRecovery, toon, pixelModels, pixelDensity, gw, purpose, observeEstimate);
   if (!spawned) return false;
   const { host, port } = spawned;
   for (let i = 0; i < 20; i++) {
     await sleep(100);
     if (await portListening(host, port)) {
-      process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${mode})\n`));
+      if (!quiet) process.stderr.write(dim(`→ started Caveman proxy on ${host}:${port} (${mode})\n`));
       return true;
     }
   }
@@ -7820,7 +7832,8 @@ function hookCommandBasename(token: string): string {
 function isCavemanCliInvocation(tokens: string[]): boolean {
   const executable = hookCommandBasename(tokens[0] ?? "");
   if (executable === "caveman" || executable === "cave") return true;
-  return executable === "node" && hookCommandBasename(tokens[1] ?? "") === "index.js";
+  // `node <npm's caveman link>` is what cavemanBinForHook writes now.
+  return executable === "node" && ["index.js", "caveman", "cave"].includes(hookCommandBasename(tokens[1] ?? ""));
 }
 
 function managedHookIdentity(command: string): string | undefined {
@@ -7836,7 +7849,7 @@ function managedHookIdentity(command: string): string | undefined {
   const supportedNative =
     (executable === "caveman-proxy" && (args.length === 4 || (args.length === 6 && args[4] === "--node")) && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
     || ((executable === "caveman" || executable === "cave") && args.length === 2 && args[0] === "native-hook" && nativeAgent)
-    || (nodeScript !== undefined && ["index.js", "native-hook-fast.js"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
+    || (nodeScript !== undefined && ["index.js", "native-hook-fast.js", "caveman", "cave"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
   if (supportedNative) return `native-hook:${agent}`;
 
   if (isCavemanCliInvocation(tokens)) {
@@ -9502,6 +9515,24 @@ function codexNativeTables(lines: ReturnType<typeof codexTomlLines>, tablesBlock
 
 function codexNativeRouted(lines: ReturnType<typeof codexTomlLines>): boolean {
   return lines.some((line) => line.section === "" && line.key === "model_provider" && line.value === '"caveman"');
+}
+
+// The way out of Caveman Codex tables the user edited, which repair refuses
+// to overwrite (codexNativeRestoreText): doctor names it instead of a --fix
+// that would refuse the same way.
+function codexEditedTablesFix(journal: NativeJournal | undefined): string | undefined {
+  const operation = journal?.operations.find((item) => item.kind === "codex-config");
+  const block = operation?.owned?.tables_block;
+  const text = operation ? fileBytes(operation.file)?.toString("utf8") : undefined;
+  if (typeof block !== "string" || text === undefined) return undefined;
+  const edited = [...codexNativeTables(codexTomlLines(text.replace(/^\uFEFF/, "")), block)].filter(([, owned]) => !owned).map(([table]) => `[${table}]`);
+  if (!edited.length) return undefined;
+  return `undo your edit to Codex ${edited.join(", ")} in ${operation!.file} or delete ${edited.length > 1 ? "those tables" : "that table"}, then caveman doctor codex --fix`;
+}
+
+// What clears a degraded native agent: --fix, or the way out when repair would refuse.
+function nativeRepairFix(agent: NativeAgent): string {
+  return (agent === "codex" ? codexEditedTablesFix(readNativeJournal(agent)) : undefined) ?? `caveman doctor ${agent} --fix`;
 }
 
 // Disable once Codex has rewritten config.toml: take out exactly what enable
@@ -11194,7 +11225,7 @@ async function nativeDoctor(argv: string[]) {
   const result = nativeIntegrationStatus(target);
   print({
     ...result,
-    repair: result.installed ? `caveman doctor ${target} --fix` : `caveman enable ${target}`,
+    repair: result.installed ? nativeRepairFix(target) : `caveman enable ${target}`,
     trust: target === "codex" && result.installed ? "review through Codex /hooks" : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
   });
@@ -12160,6 +12191,8 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   if (!instance && !secureLoginURL(new URL(baseURL))) {
     throw new Error(`Sign-in needs https: ${baseURL} (plain http only for localhost).`);
   }
+  // A broken cloud.json would refuse the save below: say so before the browser step.
+  await readRawConfig();
 
   let grant: DeviceGrant;
   try {
@@ -16212,9 +16245,18 @@ function shouldShrink(command: string): boolean {
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
   // Never a package runner's cached copy when a lasting one exists.
   const command = durableCaveman() ?? which("caveman") ?? which("cave");
-  return command
-    ? hookExecutableInvocation(command, undefined, process.platform, powershell)
-    : hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
+  if (!command) return hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
+  // npm links `caveman` to a `#!/usr/bin/env node` script, and a host started
+  // from a GUI or launchd often has no node on PATH (nvm, volta, Homebrew):
+  // run it with this node, as the lifecycle hooks name theirs (`--node`).
+  // Doctor flags that node once an upgrade removes it; --fix re-renders.
+  let script = false;
+  try {
+    script = hookCommandBasename(process.execPath) === "node" && /\.[cm]?js$/.test(realpathSync(command));
+  } catch { /* unresolvable: run it as found */ }
+  return script
+    ? hookExecutableInvocation(process.execPath, command, process.platform, powershell)
+    : hookExecutableInvocation(command, undefined, process.platform, powershell);
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can
@@ -17073,6 +17115,14 @@ function installSettingsHookGeneric(
   const hooks = (root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks))
     ? (root.hooks as Record<string, unknown>) : {};
   const list = Array.isArray(hooks[event]) ? (hooks[event] as Array<Record<string, unknown>>) : [];
+  // The same hook an older caveman wrote under another invocation (a bare
+  // `caveman`, before hooks named their node) takes this command in place.
+  const identity = managedHookIdentity(command);
+  for (const entry of list) {
+    for (const hook of Array.isArray(entry.hooks) ? entry.hooks as Array<Record<string, unknown>> : []) {
+      if (identity && typeof hook.command === "string" && managedHookIdentity(hook.command) === identity) hook.command = command;
+    }
+  }
   if (!list.some((e) => matches(e))) {
     list.push(matcher !== undefined
       ? { matcher, hooks: [{ type: "command", command }] }
@@ -21354,9 +21404,16 @@ export function resolveConfigBaseUrl(savedBaseURL: string | undefined): string {
   return savedBaseURL ?? process.env.CAVE_API_URL ?? PROD_API_URL;
 }
 
+// A command that only reads carries on signed out over a broken cloud.json,
+// after saying so once; a write still stops at readRawConfig.
+let brokenConfigSaid = false;
+
 async function config(refreshTimeoutMs = 5000): Promise<Config> {
-  const raw = await readFile(configPath(), "utf8").catch(() => "{}");
-  const parsed = JSON.parse(raw) as Partial<Config>;
+  const parsed = await readRawConfig().catch((error: Error) => {
+    if (!brokenConfigSaid) process.stderr.write(`${mark("warn")} ${error.message}\n`);
+    brokenConfigSaid = true;
+    return {};
+  }) as Partial<Config>;
 	const credentials = resolveCredentials(parsed);
   const cfg: Config = {
     baseURL: resolveConfigBaseUrl(parsed.baseURL),
@@ -21379,9 +21436,7 @@ async function config(refreshTimeoutMs = 5000): Promise<Config> {
 }
 
 async function readRawConfig(): Promise<Record<string, unknown>> {
-  const raw = await readFile(configPath(), "utf8").catch(() => "{}");
-  const parsed = JSON.parse(raw) as unknown;
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  return parseRawConfig(await readFile(configPath(), "utf8").catch(() => ""));
 }
 
 async function writeRawConfig(out: Record<string, unknown>) {

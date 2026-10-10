@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { harness, modulesFixture, runCli, snapshot } from "./_modules.mjs";
 
@@ -205,6 +205,53 @@ test("off keeps agent wiring while another module needs it", async () => {
     assert.equal(last.code, 0, last.stderr);
     assert.equal(journal(), false, "last agent-wired module off must unwire");
     assert.equal(existsSync(join(fx.home, ".claude", "settings.json")), false);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// The module state is what status reports: it must not say off over an agent
+// whose unwire failed, and running off again has to retry that unwire.
+test("off whose unwire fails keeps the agent-wired modules on, and off again finishes", { skip: process.platform === "win32" || process.getuid?.() === 0 ? "chmod does not block root or Windows" : false }, async () => {
+  const fx = modulesFixture();
+  const codex = join(fx.home, ".codex");
+  const stored = () => JSON.parse(readFileSync(join(fx.home, ".caveman", "cloud.json"), "utf8"));
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    const keys = stored().think;
+    chmodSync(codex, 0o500);
+    const off = await runCli(["off", "--all", "--yes"], fx.env);
+    chmodSync(codex, 0o700);
+    assert.equal(off.code, 1, off.stdout);
+    assert.match(off.stdout, /^✓ Claude Code unwired$/m);
+    assert.match(off.stderr, /^✗ codex: /m);
+    assert.match(off.stderr, /^✗ output, input, waste-fixes, and routing stay on while Codex is still wired; fix the problem above, then run this again$/m);
+    assert.deepEqual(stored().modules, { output: true, input: true, "waste-fixes": true, routing: true, scripts: false, browse: false });
+    assert.deepEqual(stored().think, keys, "keys the kept modules own changed");
+    const status = JSON.parse((await runCli(["status", "--json"], fx.env)).stdout);
+    assert.equal(status.modules.find((state) => state.id === "input").perAgent.codex, "wired");
+
+    const again = await runCli(["off", "--all", "--yes"], fx.env);
+    assert.equal(again.code, 0, again.stderr);
+    assert.match(again.stdout, /^✓ Codex unwired$/m);
+    assert.deepEqual(stored().modules, { output: false, input: false, "waste-fixes": false, routing: false, scripts: false, browse: false });
+  } finally {
+    chmodSync(codex, 0o700);
+    fx.cleanup();
+  }
+});
+
+test("off over a cloud.json it cannot write changes nothing, agents included", async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  const path = join(fx.home, ".caveman", "cloud.json");
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n}$/, ",\n}"));
+    const before = snapshot(fx.home);
+    const off = await runCli(["off", "--all", "--yes"], fx.env);
+    assert.equal(off.code, 1, off.stdout);
+    assert.ok(off.stderr.includes(`${path} is not valid JSON`), off.stderr);
+    assert.deepEqual(snapshot(fx.home), before, "an agent was unwired under a config that refuses the write");
   } finally {
     fx.cleanup();
   }

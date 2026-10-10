@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { NATIVE_CORE } from "../dist/native-pack.generated.js";
 import { nativePipePath } from "../dist/native-pipe.js";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
@@ -14,7 +15,7 @@ let nativeHookBin = process.env.CAVEMAN_NATIVE_HOOK_BIN ?? process.env.CAVEMAN_P
 if (!nativeHookBin) {
   const candidate = join(home, process.platform === "win32" ? "caveman-proxy.exe" : "caveman-proxy");
   const build = spawnSync("go", ["build", "-o", candidate, "./proxy/cmd/caveman-proxy"], {
-    cwd: join(root, ".."),
+    cwd: join(root, "..", ".."),
     env: process.env,
     encoding: "utf8",
   });
@@ -122,10 +123,13 @@ try {
     }
     noOp.push(result.ms);
   }
+  // The Core the CLI ships, as the hook's JSON carries it: a copy edit to
+  // Core must not read as a broken hook here.
+  const core = JSON.stringify(NATIVE_CORE).slice(1, -1);
   const startup = [];
   for (let i = 0; i < samples; i += 1) {
     const result = await runHook({ ...startupPayload, session_id: `bench-startup-${i}` }, env);
-    if (result.code !== 0 || !result.stdout.includes("smallest coherent change") || result.stderr !== "") {
+    if (result.code !== 0 || !result.stdout.includes(core) || result.stderr !== "") {
       throw new Error(`startup hook failed: code=${result.code} stdout=${JSON.stringify(result.stdout)} stderr=${JSON.stringify(result.stderr)}`);
     }
     startup.push(result.ms);

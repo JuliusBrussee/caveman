@@ -181,7 +181,8 @@ test("binaries an older release installed are out of date, and on replaces them 
 
 // A running runtime keeps the binary it started from. Replacing caveman-proxy
 // restarts the one agents route through, at the same address and mode.
-test("an update restarts the runtime agents route through on the new proxy", { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+// Onboarding draws its own progress line: the restart says nothing there.
+for (const [label, argv] of [["an update", ["setup", "--install"]], ["onboarding", ["setup", "--yes", "--only", "input", "--agents", "none"]]]) test(`${label} restarts the runtime agents route through on the new proxy`, { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
   const serveJs = `const fs = require("node:fs"); const port = Number(process.env.CAVEMAN_LISTEN.split(":").pop());
 const file = process.env.CAVEMAN_HOME + "/run/" + port + ".json";
 const server = require("node:net").createServer().listen(port, "127.0.0.1", () => {
@@ -224,10 +225,11 @@ esac
   await new Promise((resolve) => old.stdout.once("data", resolve));
   const oldExit = new Promise((resolve) => old.once("exit", resolve));
   try {
-    const update = await runCli(["setup", "--install"], env, { cli });
+    const update = await runCli(argv, env, { cli });
     assert.equal(update.code, 0, update.stdout + update.stderr);
     assert.ok(await Promise.race([oldExit.then(() => true), new Promise((resolve) => setTimeout(resolve, 10_000, false))]), "the old runtime still runs");
-    assert.match(update.stderr, new RegExp(`started Caveman proxy on 127\\.0\\.0\\.1:${port} \\(compress\\)`));
+    if (argv.includes("--install")) assert.match(update.stderr, new RegExp(`started Caveman proxy on 127\\.0\\.0\\.1:${port} \\(compress\\)`));
+    else assert.doesNotMatch(update.stderr, /started Caveman proxy/);
     const running = JSON.parse(readFileSync(runFile, "utf8"));
     assert.deepEqual([running.version, running.owner, running.mode], ["bin-new", "wrap", "compress"]);
   } finally {

@@ -155,6 +155,31 @@ test("config set refuses to replace an unparseable cloud.json and keeps a BOM fi
   }
 });
 
+test("a broken cloud.json is named, never a raw SyntaxError: writes refuse, reads carry on", async () => {
+  const isolated = isolatedCliEnv();
+  const path = join(isolated.home, "cloud.json");
+  try {
+    writeFileSync(path, '{"tokenStore":"file","telemetry":{"enabled":false,"decidedAt":"2026-10-01T00:00:00.000Z","promptVersion":3},}\n');
+    const before = readFileSync(path);
+    const on = await runCli(["telemetry", "on"], { env: isolated.env });
+    assert.equal(on.code, 1, on.stderr);
+    assert.ok(on.stderr.includes(`${path} is not valid JSON, so Caveman left it untouched.`), on.stderr);
+    assert.deepEqual(readFileSync(path), before);
+    // whoami only reads: it says the same, then answers as signed out.
+    const whoami = await runCli(["whoami"], { env: isolated.env });
+    assert.ok(whoami.stderr.includes(`${path} is not valid JSON`), whoami.stderr);
+    assert.match(whoami.stderr, /not logged in/);
+    assert.doesNotMatch(whoami.stderr, /SyntaxError|Unexpected token|Expected/);
+    assert.deepEqual(readFileSync(path), before);
+    // Every reader takes the BOM the writers accept.
+    writeFileSync(path, `\uFEFF${JSON.stringify({ think: { mode: "record" } })}`);
+    const get = await runCli(["config", "get", "think.mode"], { env: isolated.env, prefix: "tools" });
+    assert.match(get.stdout, /^think\.mode = record  \(global\)$/m);
+  } finally {
+    isolated.cleanup();
+  }
+});
+
 test("config set writes grouped key, preserves deviceId, mode 0600, and reports source", async () => {
   const isolated = isolatedCliEnv();
   const path = writeGlobal(isolated.home, {
@@ -220,6 +245,28 @@ test("project allowlist contributes local capability sources only", async () => 
     isolated.cleanup();
   }
 });
+
+// Hand-edited like the hooks' repo config: a BOM (or PowerShell 5.1's UTF-16LE),
+// comments and trailing commas still apply the overlay.
+for (const [label, encode] of [
+  ["a BOM, comments and trailing commas", (text) => Buffer.from(`\uFEFF${text}`, "utf8")],
+  ["UTF-16LE", (text) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])],
+]) {
+  test(`project overlay with ${label} still applies`, async () => {
+    const isolated = isolatedCliEnv();
+    writeGlobal(isolated.home, { think: { toon: true } });
+    const cwd = mkdtempSync(join(tmpdir(), "cave-overlay-"));
+    mkdirSync(join(cwd, ".caveman"), { recursive: true });
+    writeFileSync(join(cwd, ".caveman", "config.json"), encode('{\n  // team default\n  "think": { "toon": false, /* "//" in a value survives: */ "x": "a//b", },\n}\n'));
+    try {
+      const get = await runCli(["config", "get", "think.toon"], { env: isolated.env, prefix: "tools", cwd });
+      assert.equal(get.code, 0, get.stderr);
+      assert.match(get.stdout, /^think\.toon = false  \(project\)$/m);
+    } finally {
+      isolated.cleanup();
+    }
+  });
+}
 
 test("invalid stored mode fails closed to record and is surfaced", async () => {
   const harness = startEnvHarness({ think: { mode: "observe" } });
