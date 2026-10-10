@@ -6812,7 +6812,7 @@ async function spawnWrapped(
     env = direct
       ? { ...process.env }
       : agent?.id === "codex"
-        ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, includeShrink, ephemeralDelegateMcp)
+        ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, ephemeralDelegateMcp)
         : buildWrapEnv(agent, gw, opts.mcpMode, cmdArgs, runtime.owner === "unknown" ? undefined : runtime);
     if (!direct && agent?.id === "claude") {
       const pluginDir = buildClaudeEphemeralPlugin(ephemeralMcpBinary, includeShrink, Boolean(opts.autoRecall), ephemeralDelegateMcp);
@@ -8154,7 +8154,6 @@ function buildCodexEphemeralHome(
   gw: string,
   subscription: boolean,
   mcpBinary: string | undefined,
-  includeShrink: boolean,
   delegateMcp: { command: string; args: string[] } | null,
 ): string {
   const sourceHome = codexHomeDir();
@@ -8193,7 +8192,9 @@ function buildCodexEphemeralHome(
     { mode: 0o600 },
   );
 
-  const hooks = nativeHooksDocument("codex", includeShrink, readJsonObject(join(sourceHome, "hooks.json")));
+  // The hooks the native door writes (codexNativeMutations): no shrink-hook,
+  // and not the installer's always-on voice hook beside ours.
+  const hooks = nativeHooksDocument("codex", false, withoutInstallerCodexHook(readJsonObject(join(sourceHome, "hooks.json"))));
   writeFileSync(join(outDir, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
 
   linkCodexReadOnly(sourceHome, outDir, "skills");
@@ -8205,7 +8206,6 @@ function buildCodexEphemeralWrapEnv(
   gw: string,
   subscription: boolean,
   mcpBinary: string | undefined,
-  includeShrink: boolean,
   delegateMcp: { command: string; args: string[] } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -8213,7 +8213,7 @@ function buildCodexEphemeralWrapEnv(
   // The ephemeral CODEX_HOME points Codex at the same loopback gateway, so it
   // needs the same proxy exemption the base-url wrap path gets.
   Object.assign(env, gatewayNoProxyEnv(gw));
-  env.CODEX_HOME = buildCodexEphemeralHome(gw, subscription, mcpBinary, includeShrink, delegateMcp);
+  env.CODEX_HOME = buildCodexEphemeralHome(gw, subscription, mcpBinary, delegateMcp);
   return env;
 }
 
