@@ -167,18 +167,27 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if ((await portListening(host, port)) ? !portHeldByOther(port) : await portBindable(host, port)) return undefined;
+  if ((await portListening(host, port)) ? !(await portHeldByOther(port)) : await portBindable(host, port)) return undefined;
   const free = await nextFreePort(port);
   return free ? { held: `${host}:${port}`, free } : undefined;
 }
 
 // Whether the program answering on a port is not a Caveman runtime: ours when
-// caveman-proxy's record names a live process there that the listener's own
-// /health/live confirms. Without caveman-proxy nothing here can be ours; a
-// runtime too old to keep that record cannot be told apart, so it counts as ours.
-function portHeldByOther(port: number): boolean {
+// caveman-proxy's run-state record for the port names a live process. A runtime
+// binds before it writes that record, so it is polled for briefly, as
+// awaitProxyRuntimeState does; reading the record directly keeps a status probe
+// that times out on a loaded machine from calling our own runtime foreign.
+// Without caveman-proxy nothing here can be ours; a runtime too old to keep
+// that record cannot be told apart, so it counts as ours.
+async function portHeldByOther(port: number): Promise<boolean> {
   const version = probeProxyVersion();
-  return !version || (version.capabilities.includes("run_state") && !readProxyRuntimeState(port, version).pid);
+  if (!version) return true;
+  if (!version.capabilities.includes("run_state")) return false;
+  for (const deadline = Date.now() + 3000; ; await sleep(100)) {
+    const { pid } = readRawProxyRunState(port);
+    if (pid && processAlive(pid)) return false;
+    if (Date.now() >= deadline) return true;
+  }
 }
 
 // Whether the runtime could bind the port. Nothing answers on a port inside a
@@ -2587,7 +2596,7 @@ async function start(argv: string[] = []) {
 
   if (await portListening(host, port)) {
     // Routing an agent to someone else's listener hands them every request.
-    if (portHeldByOther(port)) {
+    if (await portHeldByOther(port)) {
       const free = await nextFreePort(port);
       panel("Port in use", [
         `${mark("bad")} ${host}:${port} is held by another program.`,
