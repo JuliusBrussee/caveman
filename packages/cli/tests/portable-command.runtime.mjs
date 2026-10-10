@@ -294,14 +294,18 @@ test("MCP configs get node and npx's script on Windows, not npx.cmd", async () =
     mkdirSync(dirname(node));
     symlinkSync(process.execPath, node);
     process.env.PATH = dirname(node);
-    assert.deepEqual(generatedPluginInvocation(undefined, "cli.js"), { cmd: node, pre: ["cli.js"] });
+    // which() answers through PATHEXT, upper-case on Windows: node.EXE, the same file as node.exe.
+    const spelled = (cmd) => process.platform === "win32" && cmd.toLowerCase() === node.toLowerCase() ? node : cmd;
+    const plugin = generatedPluginInvocation(undefined, "cli.js");
+    assert.deepEqual({ ...plugin, cmd: spelled(plugin.cmd) }, { cmd: node, pre: ["cli.js"] });
     const script = join(root, "node_modules", "npm", "bin", "npx-cli.js");
     mkdirSync(dirname(script), { recursive: true });
     writeFileSync(script, "");
     const npx = join(root, "npx.CMD");
     writeFileSync(npx, NPM_SHIM("npx"));
     const env = { PATH: root, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
-    assert.deepEqual(mcpServerLaunch(npx, ["-y", "caveman-mcp"], "win32", env), {
+    const launch = mcpServerLaunch(npx, ["-y", "caveman-mcp"], "win32", env);
+    assert.deepEqual({ ...launch, command: spelled(launch.command) }, {
       command: node, args: [script, "-y", "caveman-mcp"],
     });
     // A caveman-mcp.exe stays as it is; a shim we cannot read is written as before.
