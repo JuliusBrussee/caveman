@@ -18,6 +18,7 @@ import {
   quoteHookPath,
   removeAsideBinaries,
   replaceBinary,
+  samePath,
   setupPlatform,
 } from "../dist/index.js";
 import { nativePipePath } from "../dist/native-pipe.js";
@@ -71,6 +72,15 @@ test("CLI recognizes Windows paths and PATHEXT without double extensions", () =>
     executableCandidateNames("caveman-proxy.exe", "win32", ".EXE;.CMD"),
     ["caveman-proxy.exe"],
   );
+});
+
+// which() answers through PATHEXT, so with ~/.caveman/bin on PATH it names
+// `caveman-proxy.EXE` where the install wrote `caveman-proxy.exe`: one file,
+// and binariesBehindPin never saw an upgrader's binaries as behind.
+test("Windows paths that differ only in case name the same file", () => {
+  assert.equal(samePath("C:\\Users\\Jane\\.caveman\\bin\\caveman-proxy.EXE", "C:\\Users\\Jane\\.caveman\\bin\\caveman-proxy.exe", "win32"), true);
+  assert.equal(samePath("C:\\Users\\Jane\\.caveman\\bin\\caveman-proxy.exe", "C:\\Users\\Jane\\bin\\caveman-proxy.exe", "win32"), false);
+  assert.equal(samePath("/home/jane/.caveman/bin/caveman-proxy.EXE", "/home/jane/.caveman/bin/caveman-proxy.exe", "linux"), false);
 });
 
 test("CLI quotes Windows hook paths for PowerShell", () => {

@@ -230,6 +230,53 @@ test("every door that wires a first agent moves the runtime off a port another p
   }
 });
 
+// Help, a typo, or an agent that never routes through the runtime moves
+// nothing: the port is claimed only once such an agent is being wired.
+test("enable --help, an unknown agent and aider leave the runtime's port alone", { skip }, async () => {
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const held = holder.address().port;
+  const fx = modulesFixture({ agents: ["claude", "aider"] });
+  try {
+    const env = runtimeOn(fx, held);
+    for (const argv of [["enable", "--help"], ["enable", "bogus"], ["enable", "aider"]]) {
+      const out = await runCli(argv, env);
+      assert.doesNotMatch(`${out.stdout}${out.stderr}`, /in use by another program/, argv.join(" "));
+      assert.equal(JSON.parse(readFileSync(join(env.CAVEMAN_HOME, "cloud.json"), "utf8")).localPort, held, argv.join(" "));
+    }
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
+// A runtime's status probe can outlast its 2 s timeout on a loaded machine
+// (or run before the runtime has written its run state). A run-state record
+// for the port whose process is alive is still ours: the port stays.
+test("a runtime whose status probe is slow is still ours, and enable keeps its port", { skip }, async () => {
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const held = holder.address().port;
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const env = runtimeOn(fx, held);
+    const proxy = env.CAVEMAN_PROXY_BIN;
+    writeFileSync(proxy, readFileSync(proxy, "utf8").replace("status) ", "status) sleep 3; "));
+    mkdirSync(join(env.CAVEMAN_HOME, "run"), { recursive: true });
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${held}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "wrap", pid: process.pid, port: held, listen: `127.0.0.1:${held}`, instance_token: "t", version: "1.0.0",
+    }));
+    const out = await runCli(["enable", "claude"], env);
+    const said = `${out.stdout}${out.stderr}`;
+    assert.equal(out.code, 0, said);
+    assert.doesNotMatch(said, /in use by another program/);
+    assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${held}/w/claude`);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
 // Nothing answers on a port inside a Windows excluded range (Hyper-V, WSL,
 // Docker reserve them), yet the runtime cannot bind it. A socket bound without
 // listening is the same case on any OS.

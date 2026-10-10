@@ -168,18 +168,27 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if ((await portListening(host, port)) ? !portHeldByOther(port) : await portBindable(host, port)) return undefined;
+  if ((await portListening(host, port)) ? !(await portHeldByOther(port)) : await portBindable(host, port)) return undefined;
   const free = await nextFreePort(port);
   return free ? { held: `${host}:${port}`, free } : undefined;
 }
 
 // Whether the program answering on a port is not a Caveman runtime: ours when
-// caveman-proxy's record names a live process there that the listener's own
-// /health/live confirms. Without caveman-proxy nothing here can be ours; a
-// runtime too old to keep that record cannot be told apart, so it counts as ours.
-function portHeldByOther(port: number): boolean {
+// caveman-proxy's run-state record for the port names a live process. A runtime
+// binds before it writes that record, so it is polled for briefly, as
+// awaitProxyRuntimeState does; reading the record directly keeps a status probe
+// that times out on a loaded machine from calling our own runtime foreign.
+// Without caveman-proxy nothing here can be ours; a runtime too old to keep
+// that record cannot be told apart, so it counts as ours.
+async function portHeldByOther(port: number): Promise<boolean> {
   const version = probeProxyVersion();
-  return !version || (version.capabilities.includes("run_state") && !readProxyRuntimeState(port, version).pid);
+  if (!version) return true;
+  if (!version.capabilities.includes("run_state")) return false;
+  for (const deadline = Date.now() + 3000; ; await sleep(100)) {
+    const { pid } = readRawProxyRunState(port);
+    if (pid && processAlive(pid)) return false;
+    if (Date.now() >= deadline) return true;
+  }
 }
 
 // Whether the runtime could bind the port. Nothing answers on a port inside a
@@ -466,7 +475,12 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   on: (argv) => moduleSwitchCommand(true, argv),
   off: (argv) => moduleSwitchCommand(false, argv),
   stop: () => stopRuntime(),
-  enable: async (argv) => { await claimRuntimePort(); enableNative(argv); },
+  // The port moves only for an agent that routes through the runtime and is
+  // on PATH: help, a typo or aider never touch it.
+  enable: async (argv) => {
+    if (enableProfiles(argv).profiles.some((profile) => profile.id !== "aider" && which(binOf(profile)))) await claimRuntimePort();
+    enableNative(argv);
+  },
   disable: (argv) => disableNative(argv),
   inspect: (argv) => nativeInspect(argv),
   why: (argv) => nativeWhy(argv),
@@ -1345,7 +1359,7 @@ const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
 // hazard over different state files, and a second copy of this spin is how the
 // two would drift apart. Callers supply their own stale window because their
 // hold times differ by orders of magnitude — see refreshClaimLock.
-function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number): string | null {
+function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, reclaimDeadOwner = false): string | null {
   try {
     mkdirSync(dirname(lockPath), { recursive: true });
   } catch {
@@ -1368,7 +1382,7 @@ function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number): 
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
       try {
-        if (Date.now() - statSync(lockPath).mtimeMs > staleMs) {
+        if (Date.now() - statSync(lockPath).mtimeMs > staleMs || (reclaimDeadOwner && claimLockOwnerDead(lockPath))) {
           // Reclaim by rename, not unlink. Two waiters can both see the same
           // stale lock; with unlink the slower one would delete the lock the
           // faster one had already created in its place, and both would hold
@@ -1385,6 +1399,13 @@ function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number): 
       Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
     }
   }
+}
+
+// Whether the process a lock's token (`<pid>:<uuid>`) names has exited. A
+// holder between its create and its write reads as alive.
+function claimLockOwnerDead(lockPath: string): boolean {
+  const pid = Number(readFileSync(lockPath, "utf8").split(":")[0]);
+  return Number.isSafeInteger(pid) && pid > 0 && !processAlive(pid);
 }
 
 // releaseClaimLock drops a lock taken above, but only while it is still ours:
@@ -2584,7 +2605,7 @@ async function start(argv: string[] = []) {
 
   if (await portListening(host, port)) {
     // Routing an agent to someone else's listener hands them every request.
-    if (portHeldByOther(port)) {
+    if (await portHeldByOther(port)) {
       const free = await nextFreePort(port);
       panel("Port in use", [
         `${mark("bad")} ${host}:${port} is held by another program.`,
@@ -2871,9 +2892,18 @@ function binariesBehindPin(): string[] {
   const manifest = readBinaryInstallManifest();
   if (!manifest || manifest.release === BINARY_RELEASE) return [];
   const binDir = join(cavemanHome(), "bin");
-  return GO_BINARIES.filter((binary) => !("external" in binary)
-    && resolveGoBin(binary.name, binary.env) === join(binDir, binaryInstallFilename(binary.name)))
-    .map((binary) => binary.name);
+  return GO_BINARIES.filter((binary) => {
+    const resolved = "external" in binary ? null : resolveGoBin(binary.name, binary.env);
+    return resolved !== null && samePath(resolved, join(binDir, binaryInstallFilename(binary.name)));
+  }).map((binary) => binary.name);
+}
+
+// Whether two paths name one file. On Windows which() answers through PATHEXT
+// (`caveman-proxy.EXE`) and paths ignore case, so `===` misses the same file.
+export function samePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  const real = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+  const [x, y] = [real(a), real(b)];
+  return platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 // A signed manifest names its release through a `RELEASE` entry: the sha256 of
@@ -3092,12 +3122,43 @@ function printInstallResult(
   if (!continuing) console.log(`next: caveman claude`);
 }
 
-async function setupInstall(json: boolean, options: { continuing?: boolean } = {}) {
+// Every agent launched right after a CLI upgrade finds the runtime behind the
+// pin and installs it. One downloads; the rest wait here, then find its install
+// verified and reuse it. A holder that died is reclaimed at once, a hung one
+// once its lock is BINARY_INSTALL_LOCK_STALE_MS old.
+const BINARY_INSTALL_WAIT_MS = 120_000;
+const BINARY_INSTALL_LOCK_STALE_MS = 10 * 60_000;
+
+// `explicit`: `setup --install` and `update`, which restart an outdated
+// runtime even while agents use it.
+async function setupInstall(json: boolean, options: { continuing?: boolean; explicit?: boolean } = {}) {
+  const lock = join(ensureCavemanHome(), ".install.lock");
+  const deadline = Date.now() + BINARY_INSTALL_WAIT_MS;
+  for (let told = false; ; await sleep(250)) {
+    const token = acquireClaimLock(lock, 100, BINARY_INSTALL_LOCK_STALE_MS, true);
+    if (token) {
+      try { return await setupInstallLocked(json, options); } finally { releaseClaimLock(lock, token); }
+    }
+    // Not creatable at all (a read-only home): the install itself says why.
+    // Downloads are per-process, so running beside another one is still safe.
+    if (!existsSync(lock)) return setupInstallLocked(json, options);
+    if (Date.now() >= deadline) throw new Error("another Caveman is still installing the runtime — try again once it finishes");
+    if (!told) process.stderr.write(dim("→ another Caveman is installing the runtime; waiting for it\n"));
+    told = true;
+  }
+}
+
+async function setupInstallLocked(json: boolean, options: { continuing?: boolean; explicit?: boolean }) {
   const platform = setupPlatform();
   const timeoutSeconds = setupTimeoutSeconds();
   const binDir = join(ensureCavemanHome(), "bin");
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
   removeAsideBinaries(binDir);
+  // Downloads an install that was killed left behind.
+  for (const name of readdirSync(binDir)) {
+    const pid = Number(/^[a-z-]+(?:\.exe)?\.(\d+)\.part$/.exec(name)?.[1]);
+    if (pid && !processAlive(pid)) try { unlinkSync(join(binDir, name)); } catch { /* the next install retries */ }
+  }
 
   const local = verifiedLocalInstall(binDir);
   if (local) {
@@ -3145,7 +3206,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
       continue;
     }
 
-    const partial = `${target}.part`;
+    const partial = `${target}.${process.pid}.part`;
     cleanupPartial(partial);
     installProgressStart(name, platform);
     let result: { sha256: string; bytes: number };
@@ -3176,7 +3237,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   await writeFile(binaryInstallManifestPath(), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   await chmod(binaryInstallManifestPath(), 0o600);
   if (installed.some((item) => item.name === "caveman-proxy" && item.status === "installed")) {
-    await restartOutdatedRuntime();
+    await restartOutdatedRuntime(options.explicit === true);
     removeAsideBinaries(binDir);
   }
   printInstallResult(installed, platform, binDir, json, options.continuing);
@@ -3185,8 +3246,10 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
 // A running runtime keeps the binary it started from. Once caveman-proxy is
 // replaced, the runtime agents route through restarts on the new one, at the
 // same address with the mode and recovery its run state names. One started
-// another way (`caveman start`, Codex's ChatGPT login) is left to the user.
-async function restartOutdatedRuntime(): Promise<void> {
+// another way (`caveman start`, Codex's ChatGPT login) is left to the user, and
+// so is one in use when the install was implicit (an agent launch, `on`):
+// restarting it would cut every stream another session has in flight.
+async function restartOutdatedRuntime(explicit = false): Promise<void> {
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local") return;
   const { host, port } = gatewayHostPort(gw);
@@ -3194,7 +3257,7 @@ async function restartOutdatedRuntime(): Promise<void> {
   const runtime = readProxyRuntimeState(port, installed);
   if (!runtime.pid || !runtime.version || !installed || runtime.version === installed.version) return;
   const stillOld = `caveman-proxy ${runtime.version} still runs on ${host}:${port} — run \`caveman stop\`, then start your agent again to use ${installed.version}`;
-  if (runtime.owner !== "wrap") {
+  if (runtime.owner !== "wrap" || (!explicit && runtimeInUse(port))) {
     process.stderr.write(`${mark("warn")} ${stillOld}\n`);
     return;
   }
@@ -3206,6 +3269,23 @@ async function restartOutdatedRuntime(): Promise<void> {
   const opts = defaultWrapOptions();
   const mode = (["compress", "record", "pixel"] as const).find((value) => value === runtime.mode) ?? opts.mode;
   await startWrapProxy(mode, runtime.recovery_via_mcp === true, opts.toon, opts.pixelModels, opts.pixelDensity, gw);
+}
+
+// Whether another session may be using the runtime on `port`: a live
+// `caveman <agent>` session marker, or a request in the last 30 minutes (the
+// runtime's own idle window for a session). Unreadable counts as in use.
+function runtimeInUse(port: number): boolean {
+  pruneDeadProxySessionMarkers(port);
+  try { if (readdirSync(proxySessionDir(port)).length > 0) return true; } catch { /* no wrap session */ }
+  const proxy = resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
+  if (!proxy) return true;
+  try {
+    const rows = JSON.parse(execFileSync(proxy, ["stats", "--recent", "1", "--json"], { encoding: "utf8", env: process.env, timeout: 2000, stdio: ["ignore", "pipe", "ignore"] })) as unknown;
+    if (!Array.isArray(rows)) return true;
+    return Date.now() - parseProxyTS(String((rows[0] as { ts?: unknown } | undefined)?.ts ?? "")) < 30 * 60_000;
+  } catch {
+    return true;
+  }
 }
 
 // ── caveman update ───────────────────────────────────────────────────────────
@@ -3241,7 +3321,7 @@ async function latestPublishedCliVersion(timeoutSeconds: number): Promise<string
 
 async function update(argv: string[] = []) {
   if (argv.length > 0) commandUsage("update");
-  await setupInstall(false, { continuing: true });
+  await setupInstall(false, { continuing: true, explicit: true });
   const current = cliVersion();
   const latest = await latestPublishedCliVersion(setupTimeoutSeconds());
   if (!latest) {
@@ -3776,7 +3856,7 @@ async function setup(argv: string[] = []) {
       console.error(dim("→ log in with `caveman login`; agent reads project context through existing CLI credentials"));
     });
   }
-  if (install) return setupInstall(json);
+  if (install) return setupInstall(json, { explicit: true });
 
   // Only `setup --json` reaches here: the binary status for scripts.
   const locked = Object.values(readLock().modules).flatMap((entry) => Object.keys(entry?.binaries ?? {}));
@@ -7612,7 +7692,7 @@ export function nativeHookInvocation(
   agentId: string,
   executableIsProxy: boolean,
   platform: NodeJS.Platform = process.platform,
-  node: string = process.execPath,
+  node: string = stableNodePath(),
 ): string {
   const executableInvocation = hookExecutableInvocation(
     executable,
@@ -7626,6 +7706,15 @@ export function nativeHookInvocation(
     ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)} --node ${quoteHookPath(node, platform)}`
     : `${executableInvocation} native-hook ${agentId}`;
   return invocation;
+}
+
+// The node a bridge hook names. Homebrew's process.execPath is the versioned
+// Cellar path `brew upgrade` deletes; PATH's node, when it is this same binary
+// (/opt/homebrew/bin/node), survives the upgrade. fnm's multishell links are
+// per-shell temp paths that vanish with the shell, so never those.
+function stableNodePath(): string {
+  const onPath = which("node");
+  return onPath && !/[\\/]fnm_multishells[\\/]/i.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
 }
 
 export function hookExecutableInvocation(
@@ -7878,9 +7967,11 @@ function invocationTargetsExist(tokens: string[]): boolean {
   const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
   const adapter = tokens.indexOf("--adapter");
   if (adapter !== -1) files.push(tokens[adapter + 1]);
-  // The bridge's recorded `--node` dangles the same way after an nvm or Homebrew upgrade.
+  // The bridge's recorded `--node` dangles the same way after an nvm or Homebrew
+  // upgrade, but the bridge then runs $NODE or PATH's node: broken only when
+  // that is gone too, so an upgrade alone never rewrites the hooks.
   const node = tokens.indexOf("--node");
-  if (node !== -1) files.push(tokens[node + 1]);
+  if (node !== -1 && !which(process.env.NODE || "node")) files.push(tokens[node + 1]);
   return !files.some((file) => file !== undefined && !existsSync(file));
 }
 
@@ -10111,9 +10202,8 @@ function installNativeVoiceSkills(agent: NativeAgent): void {
   }
 }
 
-// `quiet` is for module apply (onboarding, `caveman on|off`), which prints one
-// progress line per step itself; refusals still throw with their full message.
-function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {}) {
+// The agents `enable <argv>` names; a bad argv prints usage and exits.
+function enableProfiles(argv: string[]): { detected: boolean; profiles: AgentProfile[] } {
   const detected = argv.includes("--detected");
   const target = argv.find((arg) => !arg.startsWith("--"));
   if ((!detected && !target) || (detected && target) || argv.some((arg) => arg !== "--detected" && arg !== target)) {
@@ -10126,6 +10216,13 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     console.error(detected ? "no supported native agent detected on PATH" : `caveman enable: supported agents are claude, codex, hermes, gemini, opencode, pi, and aider (got ${target ?? ""})`);
     process.exit(1);
   }
+  return { detected, profiles };
+}
+
+// `quiet` is for module apply (onboarding, `caveman on|off`), which prints one
+// progress line per step itself; refusals still throw with their full message.
+function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {}) {
+  const { detected, profiles } = enableProfiles(argv);
   const gw = gatewayURL();
   for (const profile of profiles) {
     const agent = profile.id as NativeAgent;
@@ -11084,7 +11181,7 @@ async function nativeDoctor(argv: string[]) {
     } else if (!before.available) {
       throw new Error(`${findAgent(target)?.display_name ?? target} is unavailable; repair host installation first`);
     } else if (!before.installed) {
-      await claimRuntimePort();
+      if (target !== "aider") await claimRuntimePort();
       enableNative([target]);
       fixResult = "enabled";
     } else if (before.state === "installed" && !agentStaleRoute(target)) {
@@ -19987,7 +20084,7 @@ function createProxySessionMarker(port: number): string | null {
 }
 
 // pruneDeadProxySessionMarkers removes markers whose owner died. Their absence
-// never authorizes a restart, so nothing reads the surviving count.
+// alone never authorizes a restart; runtimeInUse also asks for recent requests.
 function pruneDeadProxySessionMarkers(port: number): void {
   let names: string[];
   try {
