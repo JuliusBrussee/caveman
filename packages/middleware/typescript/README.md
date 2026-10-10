@@ -6,7 +6,7 @@ This quickstart targets middleware `1.0.1` and SDK `1.2.0`. Read the [release no
 
 ## Run a complete example
 
-Follow the [AI SDK quickstart](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk) for a fresh environment and [runtime installation](https://docs.caveman.so/docs/sdk/middleware/deployment#run-it-as-a-process). Start the local runtime separately; the client package does not include it.
+Follow the [AI SDK quickstart](https://docs.caveman.so/integrations/frameworks) for a fresh environment and [runtime installation](https://docs.caveman.so/reference/faq). Start the local runtime separately; the client package does not include it.
 
 ```sh
 npm install --save-exact @caveman-ai/sdk@1.2.0 @caveman-ai/middleware@1.0.1 ai@7.0.94 @ai-sdk/provider@4.0.11 zod@4.4.3
@@ -20,12 +20,12 @@ The default example makes no provider request. It runs a deterministic native mo
 
 ## Choose an integration
 
-- [Framework guide](https://docs.caveman.so/docs/sdk/middleware/frameworks#typescript): public entrypoints, native APIs, recovery ownership, transports, and limitations.
-- [Compatibility matrix](https://docs.caveman.so/docs/sdk/middleware/frameworks): resolver ranges versus accepted ranges versus exact validation evidence. A range is not an exhaustive test result.
-- [Deployment](https://docs.caveman.so/docs/sdk/middleware/deployment): process/container lifecycle, remote TLS/authentication, persistence, session affinity, deadlines, and rollback.
+- [Framework guide](https://docs.caveman.so/integrations/frameworks): public entrypoints, native APIs, recovery ownership, transports, and limitations.
+- [Compatibility matrix](https://docs.caveman.so/integrations/frameworks): resolver ranges versus accepted ranges versus exact validation evidence. A range is not an exhaustive test result.
+- [Deployment](https://docs.caveman.so/reference/faq): process/container lifecycle, remote TLS/authentication, persistence, session affinity, deadlines, and rollback.
 - [Recovery and scope](https://github.com/JuliusBrussee/caveman/blob/main/docs/technical/middleware-protocol.md): namespace/session/branch/cache epoch, exact originals, excerpts, and expiry.
-- [Troubleshooting](https://docs.caveman.so/docs/sdk/troubleshooting#middleware): final reason codes and strict readiness versus normal inference fallback.
-- [Measurement](https://docs.caveman.so/docs/sdk/middleware/deployment#what-to-measure): quality, latency, retries, recovery calls, cache effects, and provider usage.
+- [Troubleshooting](https://docs.caveman.so/reference/troubleshooting): final reason codes and strict readiness versus normal inference fallback.
+- [Measurement](https://docs.caveman.so/reference/faq): quality, latency, retries, recovery calls, cache effects, and provider usage.
 
 ## Entry points: which ones compress
 
