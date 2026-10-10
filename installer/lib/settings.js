@@ -108,6 +108,9 @@ function readSettings(p, meta) {
     process.stderr.write(`caveman: cannot read ${p}: ${e.message}\n`);
     return null;
   }
+  // Windows PowerShell 5.1 writes UTF-8 with a BOM, which JSON.parse rejects.
+  // writeSettings puts it back.
+  if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (!raw.trim()) return {};
   try { return JSON.parse(raw); } catch (_) { /* fall through to JSONC */ }
   try {
@@ -123,12 +126,15 @@ function readSettings(p, meta) {
 
 // ── writeSettings ──────────────────────────────────────────────────────────
 // Atomic write: temp file + rename. mode 0600 (settings often contains tokens).
+// A UTF-8 BOM the file already had is kept, so the round trip is lossless.
 function writeSettings(p, obj) {
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);
+  let bom = '';
+  try { if (fs.readFileSync(p).subarray(0, 3).equals(Buffer.from([0xef, 0xbb, 0xbf]))) bom = '\ufeff'; } catch (_) {}
   try {
-    fs.writeFileSync(tmp, JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
+    fs.writeFileSync(tmp, bom + JSON.stringify(obj, null, 2) + '\n', { mode: 0o600 });
     fs.renameSync(tmp, p);
   } catch (error) {
     try { fs.unlinkSync(tmp); } catch (_) {}

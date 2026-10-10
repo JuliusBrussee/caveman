@@ -74,6 +74,17 @@ test('readSettings handles JSONC (comments + trailing commas)', () => {
   assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark', hooks: {} });
 });
 
+// Windows PowerShell 5.1 `Set-Content -Encoding UTF8` starts the file with a
+// UTF-8 BOM. JSON.parse rejects it, so the installer refused to merge.
+test('readSettings accepts a UTF-8 BOM and writeSettings keeps it', () => {
+  const p = tmpFile('s.json', '﻿{"theme":"dark"}\r\n');
+  assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark' });
+  SETTINGS.writeSettings(p, { theme: 'light' });
+  const bytes = fs.readFileSync(p);
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM dropped on write');
+  assert.deepEqual(SETTINGS.readSettings(p), { theme: 'light' });
+});
+
 test('readSettings returns {} for missing file', () => {
   assert.deepEqual(SETTINGS.readSettings('/nonexistent/path/xyz.json'), {});
 });
