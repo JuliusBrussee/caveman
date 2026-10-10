@@ -980,7 +980,9 @@ test('plugin install after a failed one drops the standalone hook entries', () =
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude-config');
   try {
-    const env = recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'));
+    // `plugin list --json` reports the plugin it just installed as on.
+    const env = recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '',
+      JSON.stringify([{ id: 'caveman@caveman', version: '3.2.0', scope: 'user', enabled: true }]));
     const first = runInstaller(['--only', 'claude'], configDir, { ...env, FAKE_CLAUDE_FAIL_INSTALL: '1' });
     assert.match(first.stdout, /falling back to standalone wiring/, first.stdout + first.stderr);
     const settingsPath = path.join(configDir, 'settings.json');
@@ -1021,6 +1023,12 @@ test('a turned-off caveman plugin keeps the standalone hooks', () => {
     assert.equal(again.status, 0, again.stdout + again.stderr);
     assert.ok(wired(), 'a re-run removed the only caveman hooks that run');
     assert.match(again.stdout, /kept \d+ standalone caveman hook entries/);
+
+    // --force skips the "already installed" check, and `plugin install` on an
+    // installed plugin leaves it turned off: the hooks still stay.
+    const forced = runInstaller(['--only', 'claude', '--force'], configDir, claude(false));
+    assert.equal(forced.status, 0, forced.stdout + forced.stderr);
+    assert.ok(wired(), '--force removed the only caveman hooks that run');
 
     // A claude without --json says nothing either way: the hooks stay.
     runInstaller(['--only', 'claude'], configDir, recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), listed, 'error: unknown option \'--json\''));

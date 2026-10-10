@@ -654,8 +654,9 @@ async function installClaude(ctx) {
       const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
       try {
         // A plugin that was already there may be turned off: then these hooks
-        // are the only caveman left. One just installed is on.
-        if (removed > 0 && alreadyInstalled && !claudeCavemanEnabled()) {
+        // are the only caveman left. --force skips the "already installed"
+        // check and `plugin install` leaves a turned-off plugin off, so ask.
+        if (removed > 0 && !claudeCavemanEnabled()) {
           note(`  kept ${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} in settings.json: Claude Code does not report the caveman plugin as turned on`);
         } else if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
         else if (removed > 0) {
@@ -735,8 +736,25 @@ function installGemini(ctx) {
   // Gemini CLI refuses `extensions install` for an installed extension
   // ("Please uninstall it first"), and `extensions update` leaves one already at
   // the latest release alone. So --force reinstalls: uninstall, then install.
+  // A copy of the old one is kept aside first: when the install then fails
+  // (network, rate limit), it goes back instead of leaving no extension.
+  const extDir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'caveman');
+  let saved = null;
   const uninstallFirst = (spawnOpts) => {
-    if (!installed || spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
+    if (!installed) return true;
+    if (!opts.dryRun) {
+      let dir;
+      try {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-gemini-'));
+        fs.cpSync(extDir, path.join(dir, 'caveman'), { recursive: true, verbatimSymlinks: true });
+        saved = dir;
+      } catch (e) {
+        if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+        results.failed.push(['gemini', `could not copy ${extDir} aside, so it was not reinstalled: ${e.message}`]);
+        return false;
+      }
+    }
+    if (spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
     results.failed.push(['gemini', 'gemini extensions uninstall failed']);
     return false;
   };
@@ -808,10 +826,16 @@ function installGemini(ctx) {
     }
   }
   if (spawnOk(r)) results.installed.push('gemini');
-  else if (r) {
-    results.failed.push(['gemini', 'gemini extensions install failed']);
-    if (installed) warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+  else if (r) results.failed.push(['gemini', 'gemini extensions install failed']);
+  if (!spawnOk(r) && saved && !fs.existsSync(extDir)) {
+    try {
+      fs.cpSync(path.join(saved, 'caveman'), extDir, { recursive: true, verbatimSymlinks: true });
+      note('  put the old caveman extension back');
+    } catch (_) {
+      warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+    }
   }
+  if (saved) { try { fs.rmSync(saved, { recursive: true, force: true }); } catch (_) {} }
   process.stdout.write('\n');
 }
 
@@ -2138,8 +2162,12 @@ function uninstall(ctx) {
     // The bundled CLI may not start at all: then the PATH caveman takes its turn.
     disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all'], 'caveman'] : ['caveman', ['disable', '--all']]);
   }
-  const failedDisables = disables.filter(([cmd, args, fallback]) => !spawnOk(runSpawn(cmd, args, null, opts.dryRun))
-    && !(fallback && spawnOk(runSpawn(fallback, ['disable', '--all'], null, opts.dryRun))));
+  // Only a CLI that did not run (spawn error, killed) hands over: one that ran
+  // and failed keeps its failure, which an older CLI's exit 0 would hide.
+  const failedDisables = disables.filter(([cmd, args, fallback]) => {
+    const r = runSpawn(cmd, args, null, opts.dryRun);
+    return !spawnOk(r) && !(fallback && (!r || r.error || r.signal) && spawnOk(runSpawn(fallback, ['disable', '--all'], null, opts.dryRun)));
+  });
   if (failedDisables.length > 0) {
     cleanupFailed = true;
     warn('  `caveman disable --all` failed (see above); native Caveman routing may still be installed.');
@@ -2348,9 +2376,11 @@ function uninstall(ctx) {
       } else if (original && current && JSON.stringify(original) === JSON.stringify(current)) {
         try {
           fs.copyFileSync(ocBak, ocJson);
-          fs.unlinkSync(ocBak);
+          // The copy is the restore; a backup left behind is only clutter.
+          try { fs.unlinkSync(ocBak); } catch (_) {}
           note(`  restored ${ocJson} as it was before install`);
         } catch (error) {
+          cleanupFailed = true;
           warn(`  could not restore ${ocJson} from ${ocBak}: ${error.message}`);
         }
       } else {

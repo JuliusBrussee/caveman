@@ -501,3 +501,36 @@ test('gemini --force reinstalls an installed extension, unless the user turned i
     fs.rmSync(root, { recursive: true, force: true });
   }
 });
+
+// ── 15. --force uninstalls before it installs. When the install then fails
+//       (network, rate limit) the user had no extension left at all; the old
+//       one comes back instead. ──
+test('gemini --force puts the old extension back when the reinstall fails', () => {
+  const root = freshTmpDir();
+  try {
+    const home = path.join(root, 'home');
+    const ext = path.join(home, '.gemini', 'extensions', 'caveman');
+    fs.mkdirSync(path.join(ext, 'commands'), { recursive: true });
+    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
+    fs.writeFileSync(path.join(ext, 'commands', 'caveman.toml'), 'prompt = "x"\n');
+    // A fake whose uninstall removes the extension and whose install fails.
+    const bin = path.join(root, 'fake-bin');
+    fs.mkdirSync(bin);
+    const body = "const fs = require('fs');\nconst a = process.argv.slice(2);\n"
+      + `if (a[0] === 'extensions' && a[1] === 'uninstall') fs.rmSync(${JSON.stringify(ext)}, { recursive: true, force: true });\n`
+      + "if (a[0] === 'extensions' && a[1] === 'install') process.exit(1);\n";
+    if (IS_WIN) {
+      fs.writeFileSync(path.join(bin, 'gemini.js'), body);
+      fs.writeFileSync(path.join(bin, 'gemini.cmd'), '@echo off\r\n"%~dp0\\node.exe" "%~dp0\\gemini.js" %*\r\n');
+    } else {
+      fs.writeFileSync(path.join(bin, 'gemini'), `#!${process.execPath}\n${body}`, { mode: 0o755 });
+    }
+    const { result } = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], bin);
+    assert.notEqual(result.status, 0, 'a failed install reported success');
+    assert.equal(fs.readFileSync(path.join(ext, 'gemini-extension.json'), 'utf8'), '{"name": "caveman"}\n', 'the old extension is gone');
+    assert.equal(fs.readFileSync(path.join(ext, 'commands', 'caveman.toml'), 'utf8'), 'prompt = "x"\n');
+    assert.match(result.stdout + result.stderr, /put the old caveman extension back/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

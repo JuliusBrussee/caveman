@@ -302,9 +302,11 @@ test('a failed `caveman disable --all` leaves uninstall incomplete', () => {
   }
 });
 
-// The bundled CLI may not start at all (a Node below its floor, a broken
-// install). The caveman on PATH, even an older one, then takes the turn.
-test('uninstall falls back to the PATH caveman when the bundled CLI fails', (t) => {
+// The bundled CLI may not start at all (killed on start, a broken Node). The
+// caveman on PATH, even an older one, then takes the turn. A bundled CLI that
+// ran and failed keeps its failure: an older CLI cannot undo what the newer one
+// wrote, and its exit 0 would hide that.
+test('uninstall falls back to the PATH caveman only when the bundled CLI did not run', (t) => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');
   const record = path.join(dir, 'caveman-record.txt');
@@ -313,16 +315,24 @@ test('uninstall falls back to the PATH caveman when the bundled CLI fails', (t) 
     const standIn = path.join(nodePath, '@caveman-ai', 'cli');
     fs.mkdirSync(path.join(standIn, 'dist'), { recursive: true });
     fs.writeFileSync(path.join(standIn, 'package.json'), JSON.stringify({ name: '@caveman-ai/cli', version: '2.1.0', bin: { caveman: 'dist/index.js' } }));
-    fs.writeFileSync(path.join(standIn, 'dist', 'index.js'), 'process.exit(1);\n');
     const seen = spawnSync(process.execPath, ['-e', "process.stdout.write(require.resolve('@caveman-ai/cli/package.json'))"], {
       cwd: path.dirname(INSTALLER), env: { ...process.env, NODE_PATH: nodePath }, encoding: 'utf8',
     }).stdout;
     if (seen !== fs.realpathSync(path.join(standIn, 'package.json'))) return t.skip('a real @caveman-ai/cli is installed beside the installer');
     const env = { ...isolatedEnv(dir, [fakeCavemanDir(dir, record, '0.0.1')]), NODE_PATH: nodePath };
-    const removed = runInstaller(['--uninstall'], configDir, env);
-    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
-    assert.match(removed.stdout, /dist[\\/]index\.js'? disable --all/, 'the bundled CLI did not go first');
-    assert.match(fs.readFileSync(record, 'utf8'), /^disable\n--all$/m, 'the PATH caveman did not get the turn');
+    // Windows has no signals: a process that kills itself just exits 1.
+    const cases = [['process.exit(1);\n', false]];
+    if (process.platform !== 'win32') cases.push(["process.kill(process.pid, 'SIGKILL');\n", true]);
+    for (const [script, fallsBack] of cases) {
+      fs.writeFileSync(path.join(standIn, 'dist', 'index.js'), script);
+      fs.rmSync(record, { force: true });
+      const removed = runInstaller(['--uninstall'], configDir, env);
+      assert.match(removed.stdout, /dist[\\/]index\.js'? disable --all/, 'the bundled CLI did not go first');
+      const pathRan = fs.existsSync(record) && /^disable\n--all$/m.test(fs.readFileSync(record, 'utf8'));
+      assert.equal(pathRan, fallsBack, `${script.trim()}: the PATH caveman ${fallsBack ? 'did not get' : 'got'} the turn`);
+      assert.equal(removed.status, fallsBack ? 0 : 1, removed.stderr || removed.stdout);
+      if (!fallsBack) assert.match(removed.stderr, /uninstall incomplete/);
+    }
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

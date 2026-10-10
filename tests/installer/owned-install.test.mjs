@@ -155,3 +155,26 @@ test('uninstall refuses a symlinked backup root before unregistering', { skip: p
     assert.equal(fs.readFileSync(journalPath, 'utf8'), journal);
   } finally { fs.rmSync(root, { recursive: true, force: true }); fs.rmSync(elsewhere, { recursive: true, force: true }); }
 });
+
+// On Windows rmdir deletes a junction or directory symlink itself, so a
+// recorded dir the user later replaced with a link would lose the link. The
+// sweep never hands a link to rmdir (lstat reports a junction as a symlink).
+test('the empty-directory sweep never removes a symlink or junction', (t) => {
+  const root = freshRoot();
+  try {
+    const target = path.join(root, 'user-data');
+    const link = path.join(root, 'created');
+    const empty = path.join(root, 'empty');
+    fs.mkdirSync(target);
+    fs.mkdirSync(empty);
+    fs.symlinkSync(target, link, process.platform === 'win32' ? 'junction' : 'dir');
+    const rmdir = t.mock.method(fs, 'rmdirSync');
+    OWNED.removeEmptyDirs([link, empty]);
+    assert.deepEqual(rmdir.mock.calls.map((call) => call.arguments[0]), [empty], 'rmdir was handed a link');
+    assert.ok(fs.lstatSync(link).isSymbolicLink(), 'the link is gone');
+    assert.ok(fs.existsSync(target));
+    assert.equal(fs.existsSync(empty), false, 'an empty recorded dir stayed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});

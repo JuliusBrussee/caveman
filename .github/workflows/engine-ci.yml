@@ -197,11 +197,12 @@ jobs:
       # On a PR, HEAD is GitHub's merge commit and HEAD^1 the base branch tip.
       # Every path counts as relevant unless it is one Windows cannot break
       # (docs, benchmarks, deploy config, prose); so does an unreadable diff.
+      # --no-renames lists a rename's source too, not only where it went.
       - name: Does this PR touch Windows-relevant code?
         id: windows-scope
         if: github.event_name == 'pull_request'
         run: |
-          if ! changed="$(git diff --name-only HEAD^1 HEAD)" \
+          if ! changed="$(git diff --no-renames --name-only HEAD^1 HEAD)" \
             || grep -qvE '^(docs|benchmarks|evals|deploy|supabase)/|^[^/]+\.md$|(^|/)(README|CHANGELOG)\.md$' <<<"$changed"; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           fi

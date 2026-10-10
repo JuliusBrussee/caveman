@@ -67,10 +67,11 @@ first_run() {
   # The caveman on PATH when it is this release or newer: an older CLI has an
   # older setup, so npx runs this one and its setup installs it for good, but
   # over a newer CLI that would be a downgrade. A prerelease ranks below its
-  # own release; a version that cannot be read counts as older. The probe
-  # gives up after 10s (macOS has no `timeout`). install.ps1 carries it too.
+  # own release, and two prereleases of one release rank as semver orders
+  # them; a version that cannot be read counts as older. The probe gives up
+  # after 10s (macOS has no `timeout`). install.ps1 carries it too.
   if command -v caveman >/dev/null 2>&1 &&
-    node -e 'const r=require(`child_process`).spawnSync(`caveman --version`,{shell:true,encoding:`utf8`,timeout:1e4,killSignal:`SIGKILL`,stdio:[`ignore`,`pipe`,`ignore`],windowsHide:true});const v=s=>(s=/^(\d+)\.(\d+)\.(\d+)(-?)/.exec(s))&&[+s[1],+s[2],+s[3],+!s[4]];let h;try{h=v(JSON.parse(r.stdout).version)}catch{}const w=v(process.argv[1]),d=h&&w&&h.map((x,i)=>x-w[i]).find(x=>x);process.exitCode=h&&w&&!(d<0)?0:1' "$CLI_VERSION" </dev/null 2>/dev/null; then
+    node -e 'const r=require(`child_process`).spawnSync(`caveman --version`,{shell:true,encoding:`utf8`,timeout:1e4,killSignal:`SIGKILL`,stdio:[`ignore`,`pipe`,`ignore`],windowsHide:true});const v=s=>(s=/^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?/.exec(s))&&[s[1],s[2],s[3],+!s[4],...s[4]?s[4].split(`.`):[]].map(x=>/^\d+$/.test(x)?+x:x);let h;try{h=v(JSON.parse(r.stdout).version)}catch{}const c=(a,b)=>a===b?0:a===undefined?-1:b===undefined?1:typeof a!=typeof b?(typeof a==`number`?-1:1):a<b?-1:1;const w=v(process.argv[1]),d=h&&w&&[...h,...w].map((_,i)=>c(h[i],w[i])).find(x=>x);process.exitCode=h&&w&&!(d<0)?0:1' "$CLI_VERSION" </dev/null 2>/dev/null; then
     set -- caveman setup
   else
     set -- npx -y "@caveman-ai/cli@$CLI_VERSION" setup

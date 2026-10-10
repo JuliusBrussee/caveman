@@ -147,10 +147,14 @@ function recordCreatedDirs(journal, root, first, deepest) {
   journal.createdDirs = [...created];
 }
 
-// rmdir, never rm: only an empty directory goes, and a symlink is refused.
+// rmdir, never rm: only an empty directory goes. A link is skipped: on Windows
+// rmdir deletes a junction or directory symlink itself, and lstat reports a
+// junction as a symlink.
 function removeEmptyDirs(dirs) {
   for (const dir of dirs) {
-    try { fs.rmdirSync(dir); } catch (_) { /* holds something, or already gone */ }
+    try {
+      if (!fs.lstatSync(dir).isSymbolicLink()) fs.rmdirSync(dir);
+    } catch (_) { /* holds something, or already gone */ }
   }
 }
 

@@ -65,7 +65,9 @@ test("engine-ci runs Windows on a PR unless every change is Windows-irrelevant",
   }
   const dir = mkdtempSync(join(tmpdir(), "caveman-windows-scope-"));
   try {
-    writeFileSync(join(dir, "git"), '#!/bin/sh\n[ -n "$FAKE_DIFF_FAIL" ] && exit 128\nprintf \'%s\\n\' "$FAKE_DIFF"\n', { mode: 0o755 });
+    // Like git, the fake lists only a rename's destination unless --no-renames.
+    writeFileSync(join(dir, "git"), '#!/bin/sh\n[ -n "$FAKE_DIFF_FAIL" ] && exit 128\n'
+      + 'case " $* " in *" --no-renames "*) printf \'%s\\n\' "$FAKE_DIFF" ;; *) printf \'%s\\n\' "${FAKE_RENAMED_DIFF-$FAKE_DIFF}" ;; esac\n', { mode: 0o755 });
     const windows = (diff, extra = {}) => {
       const output = join(dir, "output");
       writeFileSync(output, "");
@@ -85,6 +87,8 @@ test("engine-ci runs Windows on a PR unless every change is Windows-irrelevant",
       assert.equal(windows(changed), false, `${changed} ran the Windows suite`);
     }
     assert.equal(windows("", { FAKE_DIFF_FAIL: "1" }), true, "an unreadable diff must run Windows");
+    // A rename out of Windows code into docs/ still changes Windows code.
+    assert.equal(windows("installer/install.js\ndocs/install.js", { FAKE_RENAMED_DIFF: "docs/install.js" }), true, "a rename into docs/ skipped the Windows suite");
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

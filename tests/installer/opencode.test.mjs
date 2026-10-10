@@ -912,10 +912,7 @@ test('opencode uninstall restores a commented opencode.jsonc and removes its bac
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
   try {
-    const env = {
-      ...process.env, HOME: xdg, USERPROFILE: xdg, XDG_CONFIG_HOME: xdg, NO_COLOR: '1',
-      PATH: [shimDir, path.dirname(process.execPath), ...(IS_WIN ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')] : ['/usr/bin', '/bin'])].join(path.delimiter),
-    };
+    const env = installEnv(xdg, shimDir);
     const ocDir = path.join(xdg, 'opencode');
     const cfgPath = path.join(ocDir, 'opencode.jsonc');
     const original = '{\n  // my opencode config\n  "theme": "tokyonight",\n  "plugin": ["my-plugin"], // trailing comma ok\n}\n';
@@ -946,6 +943,47 @@ test('opencode uninstall restores a commented opencode.jsonc and removes its bac
   }
 });
 
+// ── 10b-2. A restore that fails leaves uninstall incomplete ─────────────────
+// A failed copy back used to be a warning only, with uninstall reported done.
+// A backup that cannot be deleted after a good copy is still a restore.
+test('opencode uninstall reports a failed config restore, but not a backup it could not delete', () => {
+  const shimDir = shimOpencode();
+  try {
+    for (const [broken, status] of [['copyFileSync', 1], ['unlinkSync', 0]]) {
+      const xdg = freshTmpDir();
+      try {
+        const env = installEnv(xdg, shimDir);
+        const cfgPath = path.join(xdg, 'opencode', 'opencode.jsonc');
+        const original = '{\n  // mine\n  "theme": "tokyonight"\n}\n';
+        fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
+        fs.writeFileSync(cfgPath, original);
+        assert.equal(runInstaller(['--only', 'opencode'], env).status, 0);
+
+        // Preloaded into the uninstall: the one fs call on the config backup fails.
+        const preload = path.join(xdg, 'break-fs.cjs');
+        fs.writeFileSync(preload, "const fs = require('fs');\n"
+          + `const name = ${JSON.stringify(broken)};\nconst orig = fs[name];\n`
+          + "fs[name] = function (p, ...rest) {\n"
+          + "  if (String(p).endsWith('opencode.jsonc.bak')) throw Object.assign(new Error(`EACCES: ${name}`), { code: 'EACCES' });\n"
+          + '  return orig.call(this, p, ...rest);\n};\n');
+        const removed = runInstaller(['--uninstall'], { ...env, NODE_OPTIONS: `--require "${preload}"` });
+        assert.equal(removed.status, status, `${broken}: ${removed.stdout}${removed.stderr}`);
+        if (broken === 'copyFileSync') {
+          assert.match(removed.stderr, /could not restore/);
+          assert.match(removed.stderr, /uninstall incomplete/);
+        } else {
+          assert.equal(fs.readFileSync(cfgPath, 'utf8'), original, 'the original config must come back');
+          assert.doesNotMatch(removed.stderr, /could not restore/);
+        }
+      } finally {
+        fs.rmSync(xdg, { recursive: true, force: true });
+      }
+    }
+  } finally {
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── 10c. The plugin entry names the directory, so opencode 2 loads it quietly ─
 // A plugin.js entry worked on 1.x only; 2.x warned "configured plugin path
 // must be a directory" on every start. An older install's entry is replaced.
@@ -953,10 +991,7 @@ test('opencode install replaces an older plugin.js entry with the directory entr
   const xdg = freshTmpDir();
   const shimDir = shimOpencode();
   try {
-    const env = {
-      ...process.env, HOME: xdg, USERPROFILE: xdg, XDG_CONFIG_HOME: xdg, NO_COLOR: '1',
-      PATH: [shimDir, path.dirname(process.execPath), ...(IS_WIN ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')] : ['/usr/bin', '/bin'])].join(path.delimiter),
-    };
+    const env = installEnv(xdg, shimDir);
     const cfgPath = path.join(xdg, 'opencode', 'opencode.json');
     fs.mkdirSync(path.dirname(cfgPath), { recursive: true });
     fs.writeFileSync(cfgPath, JSON.stringify({ plugin: ['./plugins/caveman/plugin.js', 'my-plugin'] }) + '\n');
