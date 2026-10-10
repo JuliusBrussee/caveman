@@ -198,5 +198,28 @@ test('an end marker above the begin marker is refused, not spliced', (tmp) => {
   assert.equal(fs.readFileSync(agents, 'utf8'), original);
 });
 
+test('a symlinked rule file stays a link and its target is left alone', (tmp) => {
+  if (process.platform === 'win32') return; // symlinks need developer mode
+  // AGENTS.md -> CLAUDE.md is a common single-source setup. The atomic rename
+  // used to swap the link for a regular copy, so the two files drifted.
+  fs.writeFileSync(path.join(tmp, 'CLAUDE.md'), '# rules\n');
+  fs.symlinkSync('CLAUDE.md', path.join(tmp, 'AGENTS.md'));
+  fs.mkdirSync(path.join(tmp, '.github'));
+  fs.symlinkSync('../AGENTS.md', path.join(tmp, '.github/copilot-instructions.md'));
+  const out = runInit(tmp);
+  assert.match(out, /AGENTS\.md \(skipped-symlink\)/);
+  assert.match(out, /copilot-instructions\.md \(skipped-symlink\)/);
+  assert.ok(fs.lstatSync(path.join(tmp, 'AGENTS.md')).isSymbolicLink());
+  assert.ok(fs.lstatSync(path.join(tmp, '.github/copilot-instructions.md')).isSymbolicLink());
+  assert.strictEqual(fs.readFileSync(path.join(tmp, 'CLAUDE.md'), 'utf8'), '# rules\n');
+});
+
+test('--force does not create an OpenClaw workspace that is not there', (tmp) => {
+  // --force means "overwrite rule files"; it used to also mkdir
+  // ~/.openclaw/workspace, after which every run "detected" OpenClaw.
+  assert.match(runInit(tmp, '--force'), /skipped-workspace missing/);
+  assert.strictEqual(fs.existsSync(path.join(tmp, 'no-openclaw')), false);
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
