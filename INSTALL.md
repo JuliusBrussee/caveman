@@ -518,17 +518,18 @@ The installer uses a JSONC-tolerant parser (`installer/lib/settings.js`) so comm
 
 **"I'm in a managed env where I can't install hooks."**
 
-Use the rule-file-only path. Hooks are Claude Code-specific; everything else works via static rule files:
+Use the rule-file-only path. Static rule files need no hook:
 
 ```bash
-# Just install for one agent, no Claude hooks
-node installer/install.js --only cursor
+# Skills for one agent, no hooks (still writes that agent's skills, and for Cursor the Cavecrew agents, in your home folder)
+node installer/install.js --only cursor --no-hooks
 
-# Or write rule files into the current repo only (no global state)
-node installer/install.js --with-init --only cursor --only windsurf
+# Or write rule files into the current repo only (no global state), one agent per run
+node src/tools/caveman-init.js --only cursor
+node src/tools/caveman-init.js --only windsurf
 ```
 
-This drops `.cursor/rules/caveman.mdc` (and friends) into your repo. No hooks, no global config, nothing outside the repo.
+The second form drops `.cursor/rules/caveman.mdc` and `.windsurf/rules/caveman.md` into your repo. No hooks, no global config, nothing outside the repo. (`--with-init` on the installer is not repo-only: it also runs the normal install for every agent.)
 
 **"`npx skills add` errored on a profile slug."**
 

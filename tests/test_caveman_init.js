@@ -221,5 +221,26 @@ test('--force does not create an OpenClaw workspace that is not there', (tmp) =>
   assert.strictEqual(fs.existsSync(path.join(tmp, 'no-openclaw')), false);
 });
 
+test('INSTALL.md repo-only commands write nothing outside the repo', (tmp) => {
+  // The managed-env section used to promise "nothing outside the repo" for
+  // `install.js --with-init`, which runs every global install first.
+  const doc = fs.readFileSync(path.join(ROOT, 'INSTALL.md'), 'utf8');
+  const commands = [...doc.matchAll(/^node src\/tools\/caveman-init\.js (.+)$/gm)].map(m => m[1].split(' '));
+  assert.ok(commands.length, 'INSTALL.md documents no repo-only caveman-init command');
+  const repo = path.join(tmp, 'repo');
+  const home = path.join(tmp, 'home');
+  const ws = path.join(home, '.openclaw', 'workspace');
+  fs.mkdirSync(repo);
+  fs.mkdirSync(ws, { recursive: true });
+  for (const args of commands) {
+    execFileSync(process.execPath, [INIT, ...args], {
+      cwd: repo, env: { ...process.env, HOME: home, USERPROFILE: home, OPENCLAW_WORKSPACE: ws },
+    });
+  }
+  assert.deepStrictEqual(fs.readdirSync(ws), [], 'repo-only init wrote into the OpenClaw workspace');
+  assert.deepStrictEqual(fs.readdirSync(home), ['.openclaw']);
+  assert.ok(fs.readdirSync(repo).length > 0, 'nothing written into the repo');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);
