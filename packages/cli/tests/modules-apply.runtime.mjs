@@ -241,6 +241,22 @@ test("off whose unwire fails keeps the agent-wired modules on, and off again fin
   }
 });
 
+test("off over a cloud.json it cannot write changes nothing, agents included", async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  const path = join(fx.home, ".caveman", "cloud.json");
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    writeFileSync(path, readFileSync(path, "utf8").replace(/\n}$/, ",\n}"));
+    const before = snapshot(fx.home);
+    const off = await runCli(["off", "--all", "--yes"], fx.env);
+    assert.equal(off.code, 1, off.stdout);
+    assert.ok(off.stderr.includes(`${path} is not valid JSON`), off.stderr);
+    assert.deepEqual(snapshot(fx.home), before, "an agent was unwired under a config that refuses the write");
+  } finally {
+    fx.cleanup();
+  }
+});
+
 test("on/off reject unknown modules and bad flags", async () => {
   const fx = modulesFixture();
   try {

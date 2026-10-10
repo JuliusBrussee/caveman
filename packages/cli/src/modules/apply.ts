@@ -485,10 +485,13 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   // Unwiring reads no config, so it goes first. When the last agent-wired
   // module goes off and an agent stays wired, the modules this run switched
   // off keep their state and keys: status must not say off over a wired
-  // agent, and running off again retries the unwire.
+  // agent, and running off again retries the unwire. A config the writes
+  // would refuse (broken JSON) stops the run here, before any agent changes.
+  if (state.length || effects.length) h.mutateConfig(() => {});
+  const wasOn = currentSelection();
   const stuck = unwire.filter((agent) => !step(agent, "unwired", () => h.unwireAgent(agent)));
   const kept = stuck.length && !MODULES.some((m) => m.wiresAgents && plan.selection[m.id])
-    ? MODULES.filter((m) => m.wiresAgents && state.some(([id]) => id === m.id)) : [];
+    ? MODULES.filter((m) => m.wiresAgents && wasOn[m.id]) : [];
   if (kept.length) {
     const ids = kept.map((m) => m.id);
     const list = (items: string[]) => new Intl.ListFormat("en").format(items);
