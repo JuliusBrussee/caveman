@@ -26,7 +26,9 @@ function fakeClaudeDir(root) {
   const dir = path.join(root, 'fake-bin');
   fs.mkdirSync(dir, { recursive: true });
   if (process.platform === 'win32') {
-    fs.writeFileSync(path.join(dir, 'claude.cmd'), '@echo off\r\nexit /b 0\r\n');
+    // A Node-backed shim: the installer refuses to launch any other .cmd.
+    fs.writeFileSync(path.join(dir, 'claude.js'), 'process.exit(0);\n');
+    fs.writeFileSync(path.join(dir, 'claude.cmd'), '@echo off\r\n"%~dp0\\node.exe" "%~dp0\\claude.js" %*\r\n');
   } else {
     const file = path.join(dir, 'claude');
     fs.writeFileSync(file, '#!/bin/sh\nexit 0\n');
@@ -301,7 +303,7 @@ test('uninstall leaves a settings.json without caveman entries untouched', () =>
     assert.equal(fs.existsSync(`${settingsPath}.bak`), false);
 
     const hook = path.join(configDir, 'hooks', 'caveman-activate.js');
-    const withHook = `{\n  // my note\n  "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "node ${hook}"}]}]},\n}\n`;
+    const withHook = `{\n  // my note\n  "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": ${JSON.stringify(`node ${hook}`)}}]}]},\n}\n`;
     fs.writeFileSync(settingsPath, withHook);
     const r2 = runInstaller(['--uninstall'], configDir, env);
     assert.equal(r2.status, 0, r2.stderr || r2.stdout);
