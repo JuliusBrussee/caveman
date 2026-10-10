@@ -881,6 +881,40 @@ test('opencode uninstall removes both the mode flag and the one-shot prev file',
   }
 });
 
+// ── 10b. Uninstall puts a commented opencode.jsonc back and leaves nothing ──
+// Install rewrites the config as plain JSON (comments gone) and keeps the
+// original in opencode.jsonc.bak; the plugin also writes a mode log. Uninstall
+// used to leave the comment-less file, the .bak and the log behind.
+test('opencode uninstall restores a commented opencode.jsonc and removes its backup and the mode log', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = {
+      ...process.env, HOME: xdg, USERPROFILE: xdg, XDG_CONFIG_HOME: xdg, NO_COLOR: '1',
+      PATH: [shimDir, path.dirname(process.execPath), ...(IS_WIN ? [path.join(process.env.SystemRoot || 'C:\\Windows', 'System32')] : ['/usr/bin', '/bin'])].join(path.delimiter),
+    };
+    const ocDir = path.join(xdg, 'opencode');
+    const cfgPath = path.join(ocDir, 'opencode.jsonc');
+    const original = '{\n  // my opencode config\n  "theme": "tokyonight",\n  "plugin": ["my-plugin"], // trailing comma ok\n}\n';
+    fs.mkdirSync(ocDir, { recursive: true });
+    fs.writeFileSync(cfgPath, original);
+
+    const installed = runInstaller(['--only', 'opencode'], env);
+    assert.equal(installed.status, 0, installed.stderr);
+    assert.deepEqual(SETTINGS.readSettings(cfgPath).plugin, ['my-plugin', './plugins/caveman']);
+    fs.writeFileSync(path.join(ocDir, MODE_LOG_BASENAME), '{"mode":"caveman"}\n');
+
+    const removed = runInstaller(['--uninstall'], env);
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(fs.readFileSync(cfgPath, 'utf8'), original, 'the original config, comments included, must come back');
+    assert.equal(fs.existsSync(cfgPath + '.bak'), false, 'the install backup must go');
+    assert.equal(fs.existsSync(path.join(ocDir, MODE_LOG_BASENAME)), false, 'the mode log must go');
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── 10c. The plugin entry names the directory, so opencode 2 loads it quietly ─
 // A plugin.js entry worked on 1.x only; 2.x warned "configured plugin path
 // must be a directory" on every start. An older install's entry is replaced.

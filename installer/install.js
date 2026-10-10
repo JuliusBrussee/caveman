@@ -2235,6 +2235,21 @@ function uninstall(ctx) {
         ok(`  pruned caveman entries from ${ocJson}`);
       }
     }
+    // Install rewrote the config as plain JSON and kept the original in .bak.
+    // When nothing but caveman's entries changed since, the original goes
+    // back, comments and all; otherwise the backup stays for the user.
+    const ocBak = ocJson + '.bak';
+    if (!opts.dryRun && fs.existsSync(ocJson) && fs.existsSync(ocBak)) {
+      const original = SETTINGS.readSettings(ocBak);
+      const current = SETTINGS.readSettings(ocJson);
+      if (original && current && JSON.stringify(original) === JSON.stringify(current)) {
+        fs.copyFileSync(ocBak, ocJson);
+        fs.unlinkSync(ocBak);
+        note(`  restored ${ocJson} as it was before install`);
+      } else {
+        note(`  kept ${ocBak}: ${ocJson} changed since install, so its pre-install copy (with any comments) stays there`);
+      }
+    }
     // AGENTS.md — strip the fenced caveman block (preserves user content
     // above and below). If the file is empty after the strip, remove it.
     // Falls back to legacy unfenced-sentinel handling for installs that
@@ -2267,11 +2282,11 @@ function uninstall(ctx) {
         }
       }
     }
-    // opencode mode state. Both files, matching the Claude-side stateFiles
-    // sweep below: the plugin writes `.prev` for the one-shot restore, and a
-    // stale one is not inert — a reinstall's first /caveman-commit would read
-    // it as that session's return target.
-    for (const name of ['.caveman-active', '.caveman-active.prev']) {
+    // opencode mode state, matching the Claude-side stateFiles sweep below:
+    // the plugin writes `.prev` for the one-shot restore, and a stale one is
+    // not inert — a reinstall's first /caveman-commit would read it as that
+    // session's return target. The mode log is the plugin's too.
+    for (const name of ['.caveman-active', '.caveman-active.prev', '.caveman-mode-log.jsonl']) {
       const ocFlag = path.join(ocDir, name);
       if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
     }
