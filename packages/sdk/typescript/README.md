@@ -87,7 +87,7 @@ console.log({
 });
 ```
 
-Small payloads may remain unchanged. Network or malformed-response failures also return the original string with zero reported reduction. Use the [compression report](https://docs.caveman.so/docs/sdk/compression) to distinguish a useful transformation from pass-through; successful JavaScript execution alone proves neither compression nor savings.
+Small payloads may remain unchanged. Network or malformed-response failures also return the original string with zero reported reduction. Use the [compression report](https://docs.caveman.so/concepts/optimizations) to distinguish a useful transformation from pass-through; successful JavaScript execution alone proves neither compression nor savings.
 
 ## Use TypeScript
 
@@ -109,20 +109,20 @@ The non-null assertions above are type annotations, not environment validation. 
 
 ## Next steps
 
-- [Configure credentials, labels, timeouts, and cancellation](https://docs.caveman.so/docs/sdk/reference#constructor-options).
-- [Use Anthropic, Gemini, Vertex, raw responses, or streaming](https://docs.caveman.so/docs/sdk/providers).
-- [Select tools](https://docs.caveman.so/docs/sdk/tools), [manage context](https://docs.caveman.so/docs/sdk/context), or [trace a workflow](https://docs.caveman.so/docs/sdk/tracing).
-- [Add local framework middleware](https://docs.caveman.so/docs/sdk/middleware) when you want to keep an existing framework integration.
+- [Configure credentials, labels, timeouts, and cancellation](https://docs.caveman.so/sdks/typescript).
+- [Use Anthropic, Gemini, Vertex, raw responses, or streaming](https://docs.caveman.so/sdks/typescript).
+- [Select tools](https://docs.caveman.so/sdks/typescript), [manage context](https://docs.caveman.so/sdks/typescript), or [trace a workflow](https://docs.caveman.so/sdks/typescript).
+- [Add local framework middleware](https://docs.caveman.so/integrations/frameworks) when you want to keep an existing framework integration.
 
 The SDK does not install the engine, run an agent loop, or guarantee that your configured service supports every exported method.
 
 ## Full documentation
 
-[SDK overview](https://docs.caveman.so/docs/sdk) · [API reference](https://docs.caveman.so/docs/sdk/reference) · [Troubleshooting](https://docs.caveman.so/docs/sdk/troubleshooting)
+[SDK overview](https://docs.caveman.so/sdks/typescript) · [API reference](https://docs.caveman.so/sdks/typescript) · [Troubleshooting](https://docs.caveman.so/reference/troubleshooting)
 
 ## Native framework middleware
 
-For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [AI SDK quickstart](https://docs.caveman.so/docs/sdk/middleware/vercel-ai-sdk). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.
+For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/integrations/frameworks). Start with the complete [AI SDK quickstart](https://docs.caveman.so/integrations/frameworks). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.
 
 The `@caveman-ai/sdk/middleware` subpath is the protocol client those adapters build on. It is stable and follows semver with the rest of the SDK, because `@caveman-ai/middleware` 1.x depends on it.
 

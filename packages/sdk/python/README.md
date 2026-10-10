@@ -26,7 +26,7 @@ export CAVE_MODEL="your-enabled-model-id"
 export OPENAI_API_KEY="your-provider-key"
 ```
 
-Replace the placeholder address with your configured service. The SDK does not supply a default address, obtain credentials, or start a local runtime. See [configure](https://docs.caveman.so/docs/sdk/python#configure).
+Replace the placeholder address with your configured service. The SDK does not supply a default address, obtain credentials, or start a local runtime. See [configure](https://docs.caveman.so/sdks/python#configure-the-client).
 
 ## Make your first request
 
@@ -80,7 +80,7 @@ print(compressed.tokens_before, compressed.tokens_after)
 print(compressed.basis, compressed.recovery_handle)
 ```
 
-The return value is a `CompressResult` dataclass. Access its fields with dots. The SDK preserves the original string on transport or parse failure; small inputs may also remain unchanged. Read [compression](https://docs.caveman.so/docs/sdk/compression) before treating an unchanged result as a working service check.
+The return value is a `CompressResult` dataclass. Access its fields with dots. The SDK preserves the original string on transport or parse failure; small inputs may also remain unchanged. Read [compression](https://docs.caveman.so/concepts/optimizations) before treating an unchanged result as a working service check.
 
 ## Call from an async application
 
@@ -101,14 +101,14 @@ For native async framework compression, the separate middleware entrypoint expos
 
 Python uses `base_url`, `default_workflow`, `tool_search`, and `retry_loop_breaker`; TypeScript uses camelCase. Python chat completions use `cave.openai().chat["completions"].create(body)`. Trace providers use `trace.model["openai"]`.
 
-The SDK does not execute tool calls, process provider SSE streams, or install a compression runtime. Follow [provider calls](https://docs.caveman.so/docs/sdk/providers), [deferred tools](https://docs.caveman.so/docs/sdk/tools), [tracing](https://docs.caveman.so/docs/sdk/tracing), and the [API reference](https://docs.caveman.so/docs/sdk/reference) for complete workflows.
+The SDK does not execute tool calls, process provider SSE streams, or install a compression runtime. Follow [provider calls](https://docs.caveman.so/sdks/python), [deferred tools](https://docs.caveman.so/sdks/python), [tracing](https://docs.caveman.so/sdks/python), and the [API reference](https://docs.caveman.so/sdks/python) for complete workflows.
 
 ## Full documentation
 
-[SDK overview](https://docs.caveman.so/docs/sdk) · [API reference](https://docs.caveman.so/docs/sdk/reference) · [Troubleshooting](https://docs.caveman.so/docs/sdk/troubleshooting)
+[SDK overview](https://docs.caveman.so/sdks/python) · [API reference](https://docs.caveman.so/sdks/python) · [Troubleshooting](https://docs.caveman.so/reference/troubleshooting)
 
 ## Native framework middleware
 
 `caveman_cloud.middleware` is stable and follows semver with the rest of `caveman-sdk`, because `caveman-middleware` 1.x depends on it.
 
-For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/docs/sdk/middleware). Start with the complete [LangChain quickstart](https://docs.caveman.so/docs/sdk/middleware/python). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.
+For automatic projection of eligible tool results in an existing framework, use the separate [middleware package](https://docs.caveman.so/integrations/frameworks). Start with the complete [LangChain quickstart](https://docs.caveman.so/integrations/frameworks). The local runtime is accountless; inference stays in your provider client. The thin connected APIs above remain explicit calls.

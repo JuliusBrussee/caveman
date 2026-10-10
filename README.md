@@ -165,7 +165,7 @@ npm install @caveman-ai/middleware @caveman-ai/sdk        # TypeScript
 pip install 'caveman-middleware[langchain]' caveman-sdk   # Python 3.11+
 ```
 
-[TypeScript guide](./packages/middleware/typescript/README.md) · [Python guide](./packages/middleware/python/README.md) · [Every framework](https://docs.caveman.so/docs/sdk/middleware/frameworks) · [One container for the whole team](docs/technical/deploy.md)
+[TypeScript guide](./packages/middleware/typescript/README.md) · [Python guide](./packages/middleware/python/README.md) · [Every framework](https://docs.caveman.so/integrations/frameworks) · [One container for the whole team](docs/technical/deploy.md)
 
 ## Small rock: the skill
 

@@ -6,7 +6,7 @@ API references; this page explains how pieces fit together.
 
 ## TypeScript and Python SDKs
 
-Start with the [SDK overview](https://docs.caveman.so/docs/sdk), [TypeScript quickstart](https://docs.caveman.so/docs/sdk/typescript), or [Python quickstart](https://docs.caveman.so/docs/sdk/python). The guides cover configuration, provider routes and streaming, compression reports, deferred tools, context recovery, tracing, runtime policy, API signatures, and troubleshooting.
+Start with the [SDK overview](https://docs.caveman.so/sdks/typescript), [TypeScript quickstart](https://docs.caveman.so/sdks/typescript), or [Python quickstart](https://docs.caveman.so/sdks/python). The guides cover configuration, provider routes and streaming, compression reports, deferred tools, context recovery, tracing, runtime policy, API signatures, and troubleshooting.
 
 `packages/sdk/typescript` and `packages/sdk/python` implement matching high-level
 operations:

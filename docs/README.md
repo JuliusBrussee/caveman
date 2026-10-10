@@ -33,7 +33,7 @@ this repository. Hosted-service implementation details are outside its scope.
 - [Cache planner](./technical/cache-planner.md): provider prompt caching
 - Framework middleware: [TypeScript](../packages/middleware/typescript/README.md)
   and [Python](../packages/middleware/python/README.md) adapters that wrap one call
-  in your own app; hosted guide at https://docs.caveman.so/docs/sdk/middleware
+  in your own app; hosted guide at https://docs.caveman.so/integrations/frameworks
 
 ## Agent-facing tools
 
