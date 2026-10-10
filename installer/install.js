@@ -2267,7 +2267,13 @@ function uninstall(ctx) {
           delete cfg.mcp['caveman-shrink'];
           if (Object.keys(cfg.mcp).length === 0) delete cfg.mcp;
         }
-        if (!opts.dryRun) SETTINGS.writeSettings(ocJson, cfg);
+        // Install backs up a config that was already there, so an emptied one
+        // without a backup is the one install created: it goes too.
+        const created = Object.keys(cfg).length === 0 && !fs.existsSync(ocJson + '.bak');
+        if (!opts.dryRun) {
+          if (created) fs.unlinkSync(ocJson);
+          else SETTINGS.writeSettings(ocJson, cfg);
+        }
         ok(`  pruned caveman entries from ${ocJson}`);
       }
     }
@@ -2311,6 +2317,7 @@ function uninstall(ctx) {
       const ocFlag = path.join(ocDir, name);
       if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
     }
+    OWNED.removeEmptyDirs(ocOwnership.createdDirs || []);
   }
 
   // OpenClaw native install — strip skill folder + SOUL.md marker block.
@@ -2372,9 +2379,11 @@ function uninstall(ctx) {
     warn(`  Hermes ownership journal invalid; left integration untouched: ${error.message}`);
   }
 
+  let grokSkillDirs = [];
   for (const prov of PROVIDERS.filter(prov => PROVIDER_SKILLS.usesNativeSkills(prov.id))) {
     try {
       const removed = PROVIDER_SKILLS.uninstall({ provider: prov.id, dryRun: opts.dryRun, note, warn });
+      if (prov.id === 'grok') grokSkillDirs = removed.createdDirs || [];
       if (removed.hadJournal && removed.changed.length === 0) ok(`  pruned owned caveman skills from ${prov.label}`);
       if (removed.changed.length) cleanupFailed = true;
     } catch (error) {
@@ -2429,8 +2438,9 @@ function uninstall(ctx) {
   const grokAgentsMd = grokAgentsMdPath();
   if (fs.existsSync(grokAgentsMd)) {
     try {
-      if (opts.dryRun) note(`  would strip caveman block from ${grokAgentsMd}`);
-      else {
+      if (opts.dryRun) {
+        if (fs.readFileSync(grokAgentsMd, 'utf8').includes(OPENCLAW.MARK_BEGIN)) note(`  would strip caveman block from ${grokAgentsMd}`);
+      } else {
         const r = OPENCLAW.stripBootstrapFromSoul(grokAgentsMd);
         if (r.changed) note(r.removed ? `  removed ${grokAgentsMd}` : `  stripped caveman block from ${grokAgentsMd}`);
       }
@@ -2439,6 +2449,8 @@ function uninstall(ctx) {
       warn(`  could not strip caveman block from ${grokAgentsMd}: ${error.message}`);
     }
   }
+  // GROK_HOME itself goes once the AGENTS.md beside the skills is gone too.
+  OWNED.removeEmptyDirs(grokSkillDirs);
 
   // Per-session state. Keep lifetime savings history unless user removes it.
   const stateFiles = [

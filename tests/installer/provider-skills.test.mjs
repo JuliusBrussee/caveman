@@ -138,7 +138,7 @@ test('detached install stages all skills in a disposable project and copies to t
   assert.equal(fs.existsSync(staged), false);
   assert.equal(fs.lstatSync(path.join(f.root, 'caveman')).isDirectory(), true);
   providerSkills.uninstall({ provider: 'verified-extra-provider', root: f.root });
-  assert.deepEqual(fs.readdirSync(f.root), []);
+  assert.equal(fs.existsSync(f.root), false, 'the skills directory install made stayed behind');
 });
 
 for (const failure of ['nonzero', 'signal', 'empty']) {

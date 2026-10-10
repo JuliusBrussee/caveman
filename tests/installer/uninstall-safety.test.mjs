@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isolatedEnv as isolatedHome } from './_isolated-env.mjs';
+import { nodeStub, stubEnv } from '../../packages/cli/tests/harness/stub-bin.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -368,6 +369,33 @@ test('an unsupported hook event shape fails claude-hooks and the run goes on', (
     assert.match(r.stderr, /claude-hooks — .*unsupported hook event shape for SessionStart/);
     assert.match(r.stdout, /• grok/, 'agents after Claude Code did not install');
     assert.equal(fs.readFileSync(settingsPath, 'utf8'), odd);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// Uninstall takes back the directories install made once they are empty, and
+// only those: a directory that was there before install stays, even empty.
+test('install then uninstall leaves no empty directories behind', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const home = path.join(dir, 'home');
+  const bin = path.join(dir, 'stub-bin');
+  try {
+    nodeStub(bin, 'opencode', 'process.exit(0);');
+    nodeStub(bin, 'npx', 'process.exit(0);');
+    const env = { ...stubEnv(isolatedHome(home), bin), CLAUDE_CONFIG_DIR: configDir };
+    fs.mkdirSync(path.join(env.OPENCLAW_WORKSPACE, 'memory'), { recursive: true });
+    fs.mkdirSync(path.join(env.XDG_CONFIG_HOME, 'opencode', 'themes'), { recursive: true });
+    const tree = () => fs.readdirSync(home, { recursive: true }).map(String).sort();
+    const before = tree();
+    const run = (args) => spawnSync(process.execPath, [INSTALLER, ...args, '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], { env, encoding: 'utf8' });
+    const installed = run(['--only', 'opencode', '--only', 'cursor', '--only', 'grok', '--only', 'openclaw']);
+    assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    assert.ok(fs.existsSync(path.join(env.GROK_HOME, 'skills', 'caveman')), 'setup: grok skills missing');
+    const removed = run(['--uninstall']);
+    assert.equal(removed.status, 0, removed.stdout + removed.stderr);
+    assert.deepEqual(tree(), before);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

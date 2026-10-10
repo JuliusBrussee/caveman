@@ -32,6 +32,9 @@ const SKILL_VERSION = '1.0.0';
 const MARK_BEGIN = '<!-- caveman-begin -->';
 const MARK_END = '<!-- caveman-end -->';
 const SOUL_FILE = 'SOUL.md';
+// Kept in the skill folder caveman owns: which workspace directories install
+// made, so uninstall can take them back once they are empty.
+const CREATED_FILE = '.caveman-created-dirs.json';
 
 function resolveWorkspace(env = process.env) {
   if (env.OPENCLAW_WORKSPACE) return path.resolve(env.OPENCLAW_WORKSPACE);
@@ -116,16 +119,34 @@ function unlinkRegular(p, expectedStat) {
   fs.unlinkSync(p);
 }
 
+// True when it made the directory.
 function ensureRealDirectory(p, create = false) {
   let stat;
+  let made = false;
   try { stat = fs.lstatSync(p); } catch (error) {
     if (!error || error.code !== 'ENOENT' || !create) throw error;
     fs.mkdirSync(p);
+    made = true;
     stat = fs.lstatSync(p);
   }
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new Error(`openclaw: refusing non-directory or symlink ${p}`);
   }
+  return made;
+}
+
+// Reads and removes the record install left; only the two directories install
+// can make are honored. Deepest first.
+function takeCreatedDirs(ws, skillDir) {
+  const file = path.join(skillDir, CREATED_FILE);
+  let list;
+  try {
+    const { content, stat } = readRegularIfExists(file);
+    if (content === null) return [];
+    list = JSON.parse(content);
+    unlinkRegular(file, stat);
+  } catch (_) { return []; }
+  return ['skills', '.'].filter((d) => Array.isArray(list) && list.includes(d)).map((d) => path.join(ws, d));
 }
 
 function restoreRegularSnapshot(p, snapshot) {
@@ -334,13 +355,14 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   }
   const snippet = loadBootstrapSnippet(repoRoot);
 
+  const created = [];
   if (!fs.existsSync(ws)) {
     if (!force) {
       log.warn(`  openclaw workspace not found at ${ws}.`);
       log.note('  Either install OpenClaw (https://openclaw.ai) and re-run, or pass --force to mkdir.');
       return { ok: false, reason: 'workspace missing' };
     }
-    if (!dryRun) fs.mkdirSync(ws, { recursive: true });
+    if (!dryRun) { fs.mkdirSync(ws, { recursive: true }); created.push('.'); }
   }
 
   const skillDir = path.join(ws, 'skills', SKILL_NAME);
@@ -354,7 +376,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   }
 
   ensureRealDirectory(ws);
-  ensureRealDirectory(path.join(ws, 'skills'), true);
+  if (ensureRealDirectory(path.join(ws, 'skills'), true)) created.push('skills');
   ensureRealDirectory(skillDir, true);
   const priorSkill = readRegularIfExists(skillFile);
   const merged = mergeOpenclawFrontmatter(skillBody, { version });
@@ -393,6 +415,10 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
     throw error;
   }
   log.write(`  installed: ${skillFile}\n`);
+  const createdFile = path.join(skillDir, CREATED_FILE);
+  if (created.length && !fs.existsSync(createdFile)) {
+    try { fs.writeFileSync(createdFile, JSON.stringify(created) + '\n', { mode: 0o600, flag: 'wx' }); } catch (_) { /* best effort */ }
+  }
 
   return { ok: true };
 }
@@ -450,7 +476,9 @@ function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) 
         if (bak.content !== null) unlinkRegular(skillBak, bak.stat);
         log.note(`  removed ${skillFile}`);
       }
-      try { fs.rmdirSync(skillDir); } catch (_) { /* holds the user's own files */ }
+      for (const dir of [skillDir, ...takeCreatedDirs(ws, skillDir)]) {
+        try { fs.rmdirSync(dir); } catch (_) { /* holds the user's own files */ }
+      }
       touched = true;
     }
   } catch (error) {
