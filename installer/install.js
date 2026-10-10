@@ -679,19 +679,43 @@ function geminiHasCaveman() {
   return ['gemini-extension.json', '.gemini-extension-install.json'].some((f) => fs.existsSync(path.join(dir, f)));
 }
 
+// `gemini extensions disable` records a `!<path>` override here. Uninstalling
+// drops the record, so a reinstall would turn caveman back on.
+function geminiCavemanTurnedOff() {
+  const file = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'extension-enablement.json');
+  try {
+    const entry = JSON.parse(fs.readFileSync(file, 'utf8')).caveman;
+    return !!entry && Array.isArray(entry.overrides) && entry.overrides.some((o) => String(o).startsWith('!'));
+  } catch (_) { return false; }
+}
+
 function installGemini(ctx) {
-  const { say, note, opts, results } = ctx;
+  const { say, note, warn, opts, results } = ctx;
   results.detected++;
   say('→ Gemini CLI detected');
 
-  if (!opts.force) {
-    if (geminiHasCaveman()) {
-      note('  caveman extension already installed (use --force to reinstall)');
-      results.skipped.push(['gemini', 'extension already installed']);
-      process.stdout.write('\n');
-      return;
-    }
+  const installed = geminiHasCaveman();
+  if (installed && !opts.force) {
+    note('  caveman extension already installed (use --force to reinstall)');
+    results.skipped.push(['gemini', 'extension already installed']);
+    process.stdout.write('\n');
+    return;
   }
+  if (installed && geminiCavemanTurnedOff()) {
+    note('  caveman extension is turned off in Gemini CLI. Reinstalling would turn it back on, so it is left as is.');
+    note('  To reinstall anyway: gemini extensions uninstall caveman, then run this installer again.');
+    results.skipped.push(['gemini', 'extension turned off in Gemini CLI']);
+    process.stdout.write('\n');
+    return;
+  }
+  // Gemini CLI refuses `extensions install` for an installed extension
+  // ("Please uninstall it first"), and `extensions update` leaves one already at
+  // the latest release alone. So --force reinstalls: uninstall, then install.
+  const uninstallFirst = (spawnOpts) => {
+    if (!installed || spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
+    results.failed.push(['gemini', 'gemini extensions uninstall failed']);
+    return false;
+  };
   // Under `curl | bash`, stdin is the script, not a terminal. Gemini CLI reads
   // its workspace-trust and extension-consent answers from stdin, so the
   // install never ends. See issues #400 and #676. Two parts remove the two
@@ -726,7 +750,7 @@ function installGemini(ctx) {
         : (help.status === null ? 'spawn error' : help.status);
       note(`  could not read \`gemini --help\` (exit ${code}). ${tail}`);
     }
-    r = runSpawn('gemini', ['extensions', 'install', url], null, opts.dryRun);
+    if (uninstallFirst(null)) r = runSpawn('gemini', ['extensions', 'install', url], null, opts.dryRun);
   } else {
     // A trusted cwd lets Gemini CLI load .gemini/ config and .env files. Gemini
     // CLI also searches every parent directory up to the root for those files.
@@ -754,13 +778,16 @@ function installGemini(ctx) {
       }
     }
     try {
-      r = runSpawn('gemini', ['extensions', 'install', url, '--consent'], { env, cwd }, opts.dryRun);
+      if (uninstallFirst({ env, cwd })) r = runSpawn('gemini', ['extensions', 'install', url, '--consent'], { env, cwd }, opts.dryRun);
     } finally {
       if (cwd) { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) {} }
     }
   }
   if (spawnOk(r)) results.installed.push('gemini');
-  else results.failed.push(['gemini', 'gemini extensions install failed']);
+  else if (r) {
+    results.failed.push(['gemini', 'gemini extensions install failed']);
+    if (installed) warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+  }
   process.stdout.write('\n');
 }
 
