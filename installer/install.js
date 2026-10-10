@@ -523,7 +523,7 @@ function writeSettingsKeepingComments(settingsPath, settings, meta, warn) {
     const bak = settingsPath + '.bak';
     if (!fs.existsSync(bak)) fs.copyFileSync(settingsPath, bak);
     warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
-    warn(`        Your original (with comments) is preserved at ${bak}`);
+    warn(`        Your comments are kept in ${bak} (that copy may still list caveman's hooks).`);
   }
   SETTINGS.validateHookFields(settings);
   SETTINGS.writeSettings(settingsPath, settings);
@@ -534,7 +534,8 @@ function writeSettingsKeepingComments(settingsPath, settings, meta, warn) {
 // matched caveman-browse@caveman-browse, so the install was skipped.
 function claudeHasCaveman() {
   const r = captureSpawn('claude', ['plugin', 'list']);
-  return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(r.stdout || '');
+  const out = (r.stdout || '').replace(/\x1b\[[0-9;]*m/g, '');
+  return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(out);
 }
 
 async function installClaude(ctx) {
@@ -618,10 +619,13 @@ async function installClaude(ctx) {
       results.skipped.push(['claude-hooks', 'plugin manifest handles hooks']);
       // An earlier run whose plugin install failed wired standalone hooks. The
       // plugin runs the same scripts, so keeping them fires each hook twice.
-      // The statusline stays: the plugin has none.
+      // The statusline stays: the plugin has none. `claude` reads the profile
+      // in CLAUDE_CONFIG_DIR, not --config-dir: another profile keeps its hooks.
       const settingsPath = path.join(configDir, 'settings.json');
       const settingsMeta = {};
-      const settings = SETTINGS.readSettings(settingsPath, settingsMeta);
+      const pluginProfile = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+      const settings = path.resolve(configDir) === path.resolve(pluginProfile)
+        ? SETTINGS.readSettings(settingsPath, settingsMeta) : null;
       const removed = settings ? SETTINGS.removeCavemanHooks(settings) : 0;
       const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
       try {
@@ -2063,16 +2067,18 @@ function uninstall(ctx) {
     if (settings) {
       // Rewriting drops comments, so write only when something of ours
       // came out.
-      const before = JSON.stringify(settings);
       const removed = SETTINGS.removeCavemanHooks(settings);
+      let statusRemoved = false;
       // Drop our statusline if it points at our script
       if (settings.statusLine) {
         const cmd = typeof settings.statusLine === 'string' ? settings.statusLine : (settings.statusLine.command || '');
-        if (cmd.includes('caveman-statusline')) delete settings.statusLine;
+        if (cmd.includes('caveman-statusline')) { delete settings.statusLine; statusRemoved = true; }
       }
       SETTINGS.validateHookFields(settings);
-      const changed = JSON.stringify(settings) !== before;
-      const entries = `${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`;
+      const changed = removed > 0 || statusRemoved;
+      const entries = removed > 0
+        ? `${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`
+        : 'the caveman statusline from settings.json';
       try {
         if (changed && opts.dryRun) note(`  would remove ${entries}`);
         else if (changed) {
@@ -2124,7 +2130,11 @@ function uninstall(ctx) {
     if (mcpHelp.status === 0) {
       const args = ['mcp', 'remove', 'caveman-shrink'];
       const r = opts.dryRun ? runSpawn('claude', args, null, true) : captureSpawn('claude', args);
-      if (spawnOk(r) && !opts.dryRun) ok('  removed the caveman-shrink MCP server');
+      const said = `${r.stdout || ''}${r.stderr || ''}`.trim();
+      if (!opts.dryRun && !/^No MCP server named/i.test(said)) {
+        if (spawnOk(r)) ok('  removed the caveman-shrink MCP server');
+        else warn(`  claude mcp remove caveman-shrink failed: ${said.split('\n')[0] || 'no output'}`);
+      }
     }
   }
 

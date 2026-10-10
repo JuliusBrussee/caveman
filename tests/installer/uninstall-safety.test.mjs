@@ -12,7 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createRequire } from 'node:module';
+import { isolatedEnv as isolatedHome } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -20,26 +20,6 @@ const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
 
 function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-uninstall-safety-'));
-}
-
-// Drop every PATH entry holding a `claude`/`gemini`/`caveman` binary so the
-// installer never reaches the user's real plugin, extension or native-agent
-// state.
-function pathWithout(binNames) {
-  const sep = process.platform === 'win32' ? ';' : ':';
-  const exts = process.platform === 'win32' ? ['.exe', '.cmd', '.bat', ''] : [''];
-  return (process.env.PATH || '')
-    .split(sep)
-    .filter(dir => {
-      if (!dir) return false;
-      for (const b of binNames) {
-        for (const ext of exts) {
-          try { if (fs.existsSync(path.join(dir, b + ext))) return false; } catch (_) {}
-        }
-      }
-      return true;
-    })
-    .join(sep);
 }
 
 function fakeClaudeDir(root) {
@@ -55,18 +35,11 @@ function fakeClaudeDir(root) {
   return dir;
 }
 
+// A throwaway home, and a PATH with only the stubs and system dirs, so the
+// installer never reaches the user's real plugin, extension or native-agent
+// state.
 function isolatedEnv(root, extraBinDirs = []) {
-  const home = path.join(root, 'home');
-  const sep = process.platform === 'win32' ? ';' : ':';
-  const bins = [fakeClaudeDir(root), ...extraBinDirs].join(sep);
-  return {
-    HOME: home,
-    USERPROFILE: home,
-    XDG_CONFIG_HOME: path.join(home, '.config'),
-    HERMES_HOME: path.join(home, '.hermes'),
-    OPENCLAW_WORKSPACE: path.join(home, '.openclaw', 'workspace'),
-    PATH: `${bins}${sep}${pathWithout(['claude', 'gemini', 'caveman'])}`,
-  };
+  return isolatedHome(path.join(root, 'home'), [fakeClaudeDir(root), ...extraBinDirs]);
 }
 
 // A fake `caveman` CLI that records each invocation (one argument per line,
@@ -174,22 +147,29 @@ test('uninstall does not invoke `caveman` when it is not on PATH', () => {
 // An older global `caveman` cannot undo what a newer CLI wrote (1.x left Claude
 // Code on the caveman-auto model with no route), so when the CLI this package
 // depends on is newer, uninstall runs that one instead.
-const BUNDLED_CLI = (() => {
-  try { return createRequire(INSTALLER).resolve('@caveman-ai/cli/package.json'); } catch (_) { return null; }
-})();
-
-test('uninstall runs the bundled CLI when the caveman on PATH is older', { skip: !BUNDLED_CLI && 'no node_modules/@caveman-ai/cli; run pnpm install' }, () => {
+test('uninstall runs the bundled CLI when the caveman on PATH is older', () => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');
   const record = path.join(dir, 'caveman-record.txt');
   try {
-    for (const [version, runsBundled] of [['1.3.4', true], ['999.0.0', false]]) {
-      const env = isolatedEnv(dir, [fakeCavemanDir(dir, record, version)]);
+    // CI installs no root dependencies, so NODE_PATH offers a stand-in. Node
+    // still prefers a real node_modules copy; ask it which one the installer sees.
+    const nodePath = path.join(dir, 'node-path');
+    const standIn = path.join(nodePath, '@caveman-ai', 'cli');
+    fs.mkdirSync(path.join(standIn, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(standIn, 'package.json'), JSON.stringify({ name: '@caveman-ai/cli', version: '2.1.0', bin: { caveman: 'dist/index.js' } }));
+    fs.writeFileSync(path.join(standIn, 'dist', 'index.js'), '');
+    const seen = spawnSync(process.execPath, ['-e', "process.stdout.write(require.resolve('@caveman-ai/cli/package.json'))"], {
+      cwd: path.dirname(INSTALLER), env: { ...process.env, NODE_PATH: nodePath }, encoding: 'utf8',
+    }).stdout;
+    assert.ok(seen, 'no @caveman-ai/cli resolvable from the installer');
+    for (const [version, runsBundled] of [['0.0.1', true], ['999.0.0', false]]) {
+      const env = { ...isolatedEnv(dir, [fakeCavemanDir(dir, record, version)]), NODE_PATH: nodePath };
       const r = runInstaller(['--uninstall', '--dry-run'], configDir, env);
       assert.equal(r.status, 0, r.stderr || r.stdout);
       const line = r.stdout.split('\n').find((l) => l.includes('disable --all')) || '';
       if (runsBundled) {
-        assert.ok(line.includes(path.dirname(BUNDLED_CLI)), `PATH caveman ${version} ran instead of the bundled CLI: ${line}`);
+        assert.ok(line.includes(path.dirname(seen)), `PATH caveman ${version} ran instead of the bundled CLI: ${line}`);
       } else {
         assert.match(line, /would run: caveman disable --all/, `bundled CLI ran over a newer PATH caveman: ${line}`);
       }
@@ -280,7 +260,7 @@ test('uninstall leaves a settings.json without caveman entries untouched', () =>
   const settingsPath = path.join(configDir, 'settings.json');
   try {
     fs.mkdirSync(configDir, { recursive: true });
-    const mine = '{\n  // my note\n  "model": "opus",\n  "statusLine": {"type": "command", "command": "~/bin/s.sh",},\n}\n';
+    const mine = '{\n  // my note\n  "model": "opus",\n  "hooks": {},\n  "statusLine": {"type": "command", "command": "~/bin/s.sh",},\n}\n';
     fs.writeFileSync(settingsPath, mine);
     const r = runInstaller(['--uninstall'], configDir, env);
     assert.equal(r.status, 0, r.stderr || r.stdout);

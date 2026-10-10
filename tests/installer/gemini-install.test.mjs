@@ -136,6 +136,7 @@ function runInstaller(root, args, fakeBin, extraEnv = {}) {
   const sep = IS_WIN ? ';' : ':';
   const baseEnv = { ...process.env };
   delete baseEnv.GEMINI_CLI_TRUST_WORKSPACE;
+  delete baseEnv.GEMINI_CLI_HOME; // the installer looks for the extension under it
   const r = spawnSync(process.execPath, [
     INSTALLER, ...args,
     '--config-dir', path.join(root, 'claude'),

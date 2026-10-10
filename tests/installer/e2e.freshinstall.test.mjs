@@ -32,6 +32,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -928,9 +929,7 @@ function recordingClaudeEnv(root, record, list = '') {
   } else {
     fs.writeFileSync(path.join(dir, 'claude'), `#!${process.execPath}\n${body}`, { mode: 0o755 });
   }
-  const env = isolatedInstallEnv(root);
-  env.PATH = `${dir}${process.platform === 'win32' ? ';' : ':'}${env.PATH}`;
-  return env;
+  return isolatedEnv(path.join(root, 'home'), [dir]);
 }
 
 // Only `caveman@caveman` is the caveman plugin. A bare /caveman/ match on the
@@ -968,6 +967,11 @@ test('plugin install after a failed one drops the standalone hook entries', () =
     assert.match(first.stdout, /falling back to standalone wiring/, first.stdout + first.stderr);
     const settingsPath = path.join(configDir, 'settings.json');
     assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'));
+
+    // `claude` reads CLAUDE_CONFIG_DIR, not --config-dir: a plugin found there
+    // says nothing about this profile, whose hooks stay.
+    runInstaller(['--only', 'claude'], configDir, { ...env, CLAUDE_CONFIG_DIR: path.join(dir, 'other-profile') });
+    assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'), 'another profile\'s plugin removed these hooks');
 
     const second = runInstaller(['--only', 'claude'], configDir, env);
     assert.equal(second.status, 0, second.stdout + second.stderr);
