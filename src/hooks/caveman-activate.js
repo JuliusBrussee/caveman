@@ -510,8 +510,10 @@ function statuslineScripts(command) {
   // but reads as missing here, and a false "repair needed" nudge invites the
   // model to rewrite the user's settings. Treat such a candidate as unknown.
   // On Windows a backslash is a path separator, so only `~` and `$` are opaque.
+  // Only a LEADING `~` expands: one inside a path is literal, as in the Windows
+  // 8.3 short names (C:\Users\RUNNER~1\...) that %TEMP% and some homes use.
   const opaque = (candidate) =>
-    /[~$]/.test(candidate) || (process.platform !== 'win32' && candidate.includes('\\'));
+    /^~|\$/.test(candidate) || (process.platform !== 'win32' && candidate.includes('\\'));
   return found.some(opaque) ? null : found;
 }
 
