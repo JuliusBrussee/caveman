@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -33,7 +33,7 @@ fi
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
   printf '%s\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}'
 elif [ -n "$CAVEMAN_PROXY_SPAWN_LOG" ]; then
-  printf 'listen=%s recovery=%s owner=%s\n' "$CAVEMAN_LISTEN" "$CAVEMAN_RECOVERY" "$CAVEMAN_PROXY_OWNER" >> "$CAVEMAN_PROXY_SPAWN_LOG"
+  printf 'listen=%s recovery=%s owner=%s cwd=%s\n' "$CAVEMAN_LISTEN" "$CAVEMAN_RECOVERY" "$CAVEMAN_PROXY_OWNER" "$(pwd -P)" >> "$CAVEMAN_PROXY_SPAWN_LOG"
 fi
 `, { mode: 0o755 });
   writeFileSync(join(bin, "caveman"), `#!/usr/bin/env node
@@ -65,6 +65,9 @@ if (process.argv[2] === "shrink-hook") {
     CAVEMAN_HOME: join(home, ".caveman"),
     CAVEMAN_MCP_BIN: mcp,
     CAVEMAN_PROXY_BIN: proxy,
+    // These tests are about wiring, not the port check: a pinned address keeps a
+    // machine that already runs something on 8787 from moving the runtime.
+    CAVEMAN_LISTEN: "127.0.0.1:8787",
     // Full CLI suite runs several process-heavy files concurrently. Keep this
     // fixture's valid shell probes distinct from dedicated 2s hung-probe tests.
     CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",
@@ -79,9 +82,9 @@ if (process.argv[2] === "shrink-hook") {
   return { home, env };
 }
 
-function run(argv, env, input = undefined) {
+function run(argv, env, input = undefined, cwd = undefined) {
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [cli, ...argv], { env });
+    const child = spawn(process.execPath, [cli, ...argv], { env, cwd });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (chunk) => (stdout += chunk));
@@ -443,6 +446,28 @@ test("a second enable still starts the proxy when nothing is listening", async (
   }
   assert.ok(existsSync(spawnLog), "a repeated enable must still revive a dead proxy");
   assert.ok(readFileSync(spawnLog, "utf8").includes(`listen=${new URL(fx.env.CAVE_GATEWAY_URL).host} `));
+});
+
+// The runtime outlives the command that starts it. Started in a project, it
+// would hold that directory: the volume cannot be ejected, and on Windows the
+// folder cannot be deleted or renamed, until `caveman stop`.
+test("the background runtime never keeps the project it was started from as its working directory", async () => {
+  const fx = fixture();
+  const project = mkdtempSync(join(tmpdir(), "cave-project-"));
+  const spawnLog = join(fx.home, "proxy-spawn-cwd.log");
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  try {
+    const out = await run(["enable", "codex"], { ...fx.env, CAVE_GATEWAY_URL: await unusedGateway(), CAVEMAN_PROXY_SPAWN_LOG: spawnLog }, undefined, project);
+    assert.equal(out.code, 0, out.stderr);
+    for (let i = 0; i < 20 && !existsSync(spawnLog); i++) {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    assert.ok(existsSync(spawnLog), "enable never spawned the local proxy");
+    const logged = readFileSync(spawnLog, "utf8");
+    assert.ok(logged.includes(` cwd=${realpathSync(fx.home)}\n`), logged);
+  } finally {
+    rmSync(project, { recursive: true, force: true });
+  }
 });
 
 // Every other spawn site (agentShortcut, the native hook) gates on !opts.noProxy.

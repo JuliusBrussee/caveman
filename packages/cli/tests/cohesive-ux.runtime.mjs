@@ -2,8 +2,10 @@ import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
 import { mkdirSync } from "node:fs";
+import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { modulesFixture } from "./_modules.mjs";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -38,6 +40,25 @@ test("start renders a help panel when the proxy binary is missing", async () => 
   assert.match(out.stderr, /caveman setup --install/, "must offer the signed installer");
   assert.match(out.stderr, /CAVEMAN_PROXY_BIN/, "must show the explicit binary override");
   assert.doesNotMatch(out.stderr, /go build|make dev|git clone/, "npm users must not receive contributor setup");
+});
+
+// Something answering on the port is not a running Caveman: telling the user to
+// route an agent through it would send their requests and key to that program.
+test("start refuses a port another program holds instead of calling it a running proxy", { skip: process.platform === "win32" ? "shell proxy stub" : false }, async () => {
+  const fx = modulesFixture();
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const port = holder.address().port;
+  try {
+    const out = await run(["start", "--port", String(port)], fx.env);
+    assert.notEqual(out.code, 0, out.stderr);
+    assert.match(out.stderr, new RegExp(`127\\.0\\.0\\.1:${port} is held by another program`));
+    assert.match(out.stderr, /caveman start --port \d+/);
+    assert.doesNotMatch(out.stderr, /already running|Route an agent through it/);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
 });
 
 // `caveman wrap <unknown>` (a command not on PATH and not a known agent) must

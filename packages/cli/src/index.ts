@@ -73,7 +73,7 @@ import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-tren
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
-import { currentSelection, moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
+import { claimRuntimePort, currentSelection, moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
 import { billingCommand, cloudMe, printSignInLines, signInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule, MODULES } from "./modules/registry.js";
@@ -159,21 +159,41 @@ function validLocalPort(port: unknown): port is number {
 // before any agent is wired: that port and the next free one. Wiring an agent
 // to a port someone else answers on would send every request to them. Once an
 // agent is wired the address stays (doctor names a conflict), and an explicit
-// CAVE_GATEWAY_URL is the user's own choice.
+// CAVE_GATEWAY_URL is the user's own choice. An agent still wired to an earlier
+// login's managed gateway is getting a new address, so it pins nothing.
 async function runtimePortTaken(): Promise<{ held: string; free: number } | undefined> {
   if (process.env.CAVE_GATEWAY_URL || process.env.CAVEMAN_LISTEN) return undefined;
   const gw = gatewayURL();
-  if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired)) return undefined;
+  if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if (!(await portListening(host, port))) return undefined;
-  // Ours when the runtime's own record names a live process on that port. A
-  // runtime too old to keep that record cannot be told apart, so it stays.
-  if (resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN")) {
-    const version = probeProxyVersion();
-    if (!version?.capabilities.includes("run_state") || readProxyRuntimeState(port, version).pid) return undefined;
-  }
+  if ((await portListening(host, port)) ? !portHeldByOther(port) : await portBindable(host, port)) return undefined;
+  const free = await nextFreePort(port);
+  return free ? { held: `${host}:${port}`, free } : undefined;
+}
+
+// Whether the program answering on a port is not a Caveman runtime: ours when
+// caveman-proxy's record names a live process there that the listener's own
+// /health/live confirms. Without caveman-proxy nothing here can be ours; a
+// runtime too old to keep that record cannot be told apart, so it counts as ours.
+function portHeldByOther(port: number): boolean {
+  const version = probeProxyVersion();
+  return !version || (version.capabilities.includes("run_state") && !readProxyRuntimeState(port, version).pid);
+}
+
+// Whether the runtime could bind the port. Nothing answers on a port inside a
+// Windows excluded range (Hyper-V, WSL, Docker), yet binding it fails.
+function portBindable(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = netCreateServer();
+    server.once("error", () => resolve(false));
+    server.listen({ host, port, exclusive: true }, () => server.close(() => resolve(true)));
+  });
+}
+
+// The first port after `port` that nothing answers on and the runtime can bind.
+async function nextFreePort(port: number): Promise<number | undefined> {
   for (let candidate = port + 1; candidate <= Math.min(port + 50, 65535); candidate++) {
-    if (!(await portListening("127.0.0.1", candidate))) return { held: `${host}:${port}`, free: candidate };
+    if (!(await portListening("127.0.0.1", candidate)) && await portBindable("127.0.0.1", candidate)) return candidate;
   }
   return undefined;
 }
@@ -444,7 +464,7 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   on: (argv) => moduleSwitchCommand(true, argv),
   off: (argv) => moduleSwitchCommand(false, argv),
   stop: () => stopRuntime(),
-  enable: (argv) => enableNative(argv),
+  enable: async (argv) => { await claimRuntimePort(); enableNative(argv); },
   disable: (argv) => disableNative(argv),
   inspect: (argv) => nativeInspect(argv),
   why: (argv) => nativeWhy(argv),
@@ -2543,6 +2563,16 @@ async function start(argv: string[] = []) {
   const { host, port, listen } = options;
 
   if (await portListening(host, port)) {
+    // Routing an agent to someone else's listener hands them every request.
+    if (portHeldByOther(port)) {
+      const free = await nextFreePort(port);
+      panel("Port in use", [
+        `${mark("bad")} ${host}:${port} is held by another program.`,
+        ...(free ? ["", `Start Caveman on a free port:  ${cyan(`caveman start --port ${free}`)}`] : []),
+      ]);
+      process.exitCode = 1;
+      return;
+    }
     panel("Caveman proxy already running", [
       `${mark("ok")} Something is already listening on ${host}:${port}.`,
       "",
@@ -3568,6 +3598,7 @@ async function setup(argv: string[] = []) {
       console.error(`caveman setup: --agent-native must be claude or codex (got ${agentNative})`);
       process.exit(2);
     }
+    if (!removeBundle) await claimRuntimePort();
     return withIntegrationLock(`agent-native-bundle-${agentNative}`, () => {
       if (removeBundle) {
         removeAgentNativeBundle(agentNative);
@@ -6043,6 +6074,7 @@ async function agentShortcut(rest: string[]) {
   if (native === "claude" && !readNativeJournal(native) && setupRan() && !setupDeclined() && listed(doorConfig.setupAgents)
     && !listed(doorConfig.nativeOptOut) && MODULES.some((m) => m.wiresAgents && currentSelection()[m.id])) {
     try {
+      await claimRuntimePort();
       enableNative([native], { quiet: true });
     } catch (error) {
       process.stderr.write(`${mark("warn")} Claude Code native setup failed (${(error as Error).message}); this session only\n`);
@@ -6720,7 +6752,11 @@ function spawnLocalProxyProcess(mode: WrapRuntimeMode, mcpRecovery: boolean, too
   };
   // Same reason as `start`: the dead account variable never rides along inherited.
   delete env.CAVEMAN_WRAP_ENTITLED;
-  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true, windowsHide: true });
+  // The runtime outlives this command. Started in a project it would hold that
+  // directory until `caveman stop` (no eject; on Windows no delete or rename),
+  // so it runs from home, with the paths it is handed still meaning the same.
+  for (const key of ["CAVEMAN_HOME", "CAVEMAN_CONFIG", "CAVEMAN_DB"]) if (env[key]) env[key] = resolve(env[key]);
+  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true, windowsHide: true, cwd: homedir() });
   // The caller wraps this in try/catch for fail-open startup, but a try/catch
   // cannot catch an EventEmitter 'error' — it arrives asynchronously and becomes
   // an uncaughtException that kills the CLI before the agent ever launches. A
@@ -10627,6 +10663,7 @@ async function nativeDoctor(argv: string[]) {
     } else if (!before.available) {
       throw new Error(`${findAgent(target)?.display_name ?? target} is unavailable; repair host installation first`);
     } else if (!before.installed) {
+      await claimRuntimePort();
       enableNative([target]);
       fixResult = "enabled";
     } else if (before.state === "installed" && !agentStaleRoute(target)) {
