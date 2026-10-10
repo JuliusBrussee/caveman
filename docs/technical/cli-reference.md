@@ -18,7 +18,7 @@ for accepted flags.
 | `caveman learn` | Rank locally observed improvements | No |
 | `caveman status` | Show which modules are on, which agents they reach, and one next step | No |
 | `caveman on <module>` / `caveman off <module>` | Turn a module on or off, after showing what will change | No |
-| `caveman doctor` | Check this machine without the network: one problem per line, with its fix | No |
+| `caveman doctor` | Check this machine: one problem per line, with its fix. Signed in, it also checks Cloud | No |
 | `caveman stop` | Stop the local runtime that `caveman start` or `caveman <agent>` started | No |
 | `caveman login` | Connect the installation to Caveman Cloud | Yes |
 | `caveman tools` | Open the local tool namespace | No |

@@ -581,10 +581,12 @@ setModuleHost({
   agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
   coreActive: () => nativeCoreRuntimeState().active,
   signedIn: () => Boolean(resolveCredentials(globalCapabilityDocument() as Partial<Config>).access_token),
+  // A thrown error carries the HTTP status; 0 means no answer at all.
   cloudCheck: async () => {
     const cfg = await config();
-    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) });
-    if (!response.ok) throw new Error(`${cfg.baseURL} answered ${response.status}`);
+    const response = await fetch(`${cfg.baseURL}/api/v1/auth/me`, { headers: { authorization: `Bearer ${cfg.token}` }, signal: AbortSignal.timeout(5000) })
+      .catch(() => { throw Object.assign(new Error(`no answer from ${cfg.baseURL}`), { status: 0 }); });
+    if (!response.ok) throw Object.assign(new Error(`${cfg.baseURL} answered ${response.status}`), { status: response.status });
   },
   // Bounded so an offline status fails fast: 1.5 s for a token refresh, 1.5 s for /me.
   cloudMe: async () => {
