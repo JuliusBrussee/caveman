@@ -16458,17 +16458,18 @@ function shouldShrink(command: string): boolean {
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
   // Never a package runner's cached copy when a lasting one exists.
   const command = durableCaveman() ?? which("caveman") ?? which("cave");
-  if (!command) return hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
+  if (!command) return hookExecutableInvocation(stableNodePath(), process.argv[1]!, process.platform, powershell);
   // npm links `caveman` to a `#!/usr/bin/env node` script, and a host started
   // from a GUI or launchd often has no node on PATH (nvm, volta, Homebrew):
-  // run it with this node, as the lifecycle hooks name theirs (`--node`).
-  // Doctor flags that node once an upgrade removes it; --fix re-renders.
+  // run it with this node, named as the lifecycle hooks name theirs (`--node`)
+  // so `brew upgrade` does not delete it. Unlike the bridge, this command has
+  // no fallback node: doctor flags it once an upgrade removes it; --fix re-renders.
   let script = false;
   try {
     script = hookCommandBasename(process.execPath) === "node" && /\.[cm]?js$/.test(realpathSync(command));
   } catch { /* unresolvable: run it as found */ }
   return script
-    ? hookExecutableInvocation(process.execPath, command, process.platform, powershell)
+    ? hookExecutableInvocation(stableNodePath(), command, process.platform, powershell)
     : hookExecutableInvocation(command, undefined, process.platform, powershell);
 }
 

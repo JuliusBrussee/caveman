@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -1172,8 +1172,15 @@ test("the bridge hook names PATH's node when it is this node, never an fnm multi
     .map((entry) => entry.hooks[0].command).find((command) => command.includes("native-hook claude")).match(/--node '([^']+)'$/)?.[1];
   const stable = fixture();
   symlinkSync(process.execPath, join(stable.home, "bin", "node"));
+  // npm links `caveman` to its .js entry point, which hooks run with a node.
+  renameSync(join(stable.home, "bin", "caveman"), join(stable.home, "caveman.js"));
+  symlinkSync(join(stable.home, "caveman.js"), join(stable.home, "bin", "caveman"));
   assert.equal((await run(["enable", "claude"], stable.env)).code, 0);
   assert.equal(nodeArg(stable), join(stable.home, "bin", "node"));
+  // shrink-hook runs the caveman script with that node too, and has no fallback.
+  const shrink = JSON.parse(readFileSync(join(stable.home, ".claude", "settings.json"), "utf8")).hooks.PreToolUse
+    .map((entry) => entry.hooks[0].command).find((command) => command.endsWith(" shrink-hook"));
+  assert.equal(shrink, `'${join(stable.home, "bin", "node")}' '${join(stable.home, "bin", "caveman")}' shrink-hook`);
 
   const fnm = fixture();
   const multishell = join(fnm.home, "fnm_multishells", "4242_1760000000000", "bin");
