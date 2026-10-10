@@ -99,7 +99,10 @@ function fallbackCanonicalDefault(raw) {
 function fallbackReadMode(file) {
   try {
     if (!fs.lstatSync(file).isFile()) return null;
-    return fallbackCanonicalDefault(JSON.parse(fs.readFileSync(file, 'utf8')).defaultMode);
+    // A BOM or UTF-16LE (PowerShell 5.1) must not drop an opt-out here either.
+    const buf = fs.readFileSync(file);
+    const text = buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2) : buf.toString('utf8').replace(/^\uFEFF/, '');
+    return fallbackCanonicalDefault(JSON.parse(text).defaultMode);
   } catch (e) { /* absent, unreadable, or malformed → next source */ }
   return null;
 }
@@ -131,8 +134,11 @@ function fallbackGetDefaultMode(startDir) {
       dir = parent;
     }
   } catch (e) { /* fall through to user config */ }
-  // 3. User config, then 4. the built-in default.
-  return fallbackReadMode(fallbackUserConfigPath()) || 'caveman';
+  // 3. User config (Windows: %APPDATA%, then ~/.config), then 4. the built-in default.
+  return fallbackReadMode(fallbackUserConfigPath())
+    || (process.platform === 'win32' && !process.env.XDG_CONFIG_HOME
+      && fallbackReadMode(path.join(os.homedir(), '.config', 'caveman', 'config.json')))
+    || 'caveman';
 }
 
 // Degraded stubs keep the rest of this hook working when the config module is

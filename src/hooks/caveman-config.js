@@ -16,14 +16,19 @@
 //   2. Repo-local config (checked-in, per-project default):
 //      - <cwd>/.caveman/config.json
 //      - <cwd>/.caveman.json
-//      Walks up from process.cwd() to the nearest ancestor containing one of
-//      these (stops at filesystem root). Lets a team pin a project's default
-//      mode without polluting every contributor's user-level config or env.
+//      Walks up from process.cwd() to the nearest file that names a
+//      defaultMode (stops at filesystem root). A file without one — e.g. a
+//      .caveman/config.json holding only CLI settings — is skipped. Lets a
+//      team pin a project's default mode without polluting every
+//      contributor's user-level config or env.
 //   3. User config file defaultMode field:
-//      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set)
+//      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set; only file)
 //      - ~/.config/caveman/config.json (macOS / Linux fallback)
-//      - %APPDATA%\caveman\config.json (Windows fallback)
+//      - %APPDATA%\caveman\config.json, then ~/.config/caveman/config.json
+//        (Windows fallback; the docs give the ~/.config path everywhere)
 //   4. 'caveman'
+// Config files may carry a BOM, be UTF-16LE, or hold comments and trailing
+// commas (see parseConfigFile).
 
 const fs = require('fs');
 const path = require('path');
@@ -98,9 +103,10 @@ function getConfigPath() {
 // Walk up from `start` looking for a repo-local caveman config. Returns the
 // absolute path of the first match, or null. Stops at the filesystem root.
 // Candidates per dir (first wins): .caveman/config.json, .caveman.json.
+// `accept(path)`, when given, must also return true for a file to match.
 //
 // Bounded to 64 levels to defend against symlink cycles on pathological mounts.
-function findRepoConfigPath(start) {
+function findRepoConfigPath(start, accept) {
   try {
     let dir = path.resolve(start || process.cwd());
     const candidates = ['.caveman/config.json', '.caveman.json'];
@@ -111,6 +117,7 @@ function findRepoConfigPath(start) {
           const st = fs.lstatSync(p);
           // Refuse symlinks — symmetric with safeWriteFlag/readFlag policy.
           if (st.isSymbolicLink() || !st.isFile()) continue;
+          if (accept && !accept(p)) continue;
           return p;
         } catch (e) {
           // not present, try next candidate
@@ -126,10 +133,29 @@ function findRepoConfigPath(start) {
   return null;
 }
 
+// Config files are hand-edited, often on Windows: PowerShell 5.1's `>` writes
+// UTF-16LE with a BOM, `Set-Content -Encoding UTF8` a UTF-8 BOM, and people
+// leave comments and trailing commas. Accept all of them — the JSONC
+// tolerance installer/lib/settings.js gives settings.json — inlined because
+// this file may load only node built-ins (see the top of this file).
+function parseConfigFile(configPath) {
+  const buf = fs.readFileSync(configPath);
+  const text = (buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2) : buf.toString('utf8'))
+    .replace(/^\uFEFF/, '');
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Strings match first and are kept whole, so "//" or ",}" inside a value
+    // survives; outside strings, comments go and trailing commas go.
+    return JSON.parse(text
+      .replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, s) => s || '')
+      .replace(/("(?:[^"\\]|\\.)*")|,(\s*[}\]])/g, (m, s, close) => s || close));
+  }
+}
+
 function readModeFromConfigFile(configPath) {
   try {
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const config = JSON.parse(raw);
+    const config = parseConfigFile(configPath);
     if (config && config.defaultMode) {
       return canonicalDefaultMode(String(config.defaultMode));
     }
@@ -150,15 +176,18 @@ function getDefaultMode(startDir) {
   const envMode = canonicalDefaultMode(process.env.CAVEMAN_DEFAULT_MODE);
   if (envMode) return envMode;
 
-  // 2. Repo-local config (checked-in, per-project default)
-  const repoConfigPath = findRepoConfigPath(startDir);
-  if (repoConfigPath) {
-    const repoMode = readModeFromConfigFile(repoConfigPath);
-    if (repoMode) return repoMode;
-  }
+  // 2. Repo-local config (checked-in, per-project default). The first file
+  //    that names a mode wins: .caveman/config.json is also the CLI's project
+  //    overlay, and one without defaultMode must not hide a .caveman.json.
+  const repoConfigPath = findRepoConfigPath(startDir, (p) => readModeFromConfigFile(p) !== null);
+  if (repoConfigPath) return readModeFromConfigFile(repoConfigPath);
 
-  // 3. User config file
-  const userMode = readModeFromConfigFile(getConfigPath());
+  // 3. User config file. Windows also reads ~/.config/caveman/config.json,
+  //    the path the docs give for every platform, after %APPDATA%.
+  const userMode = readModeFromConfigFile(getConfigPath())
+    || (process.platform === 'win32' && !process.env.XDG_CONFIG_HOME
+      ? readModeFromConfigFile(path.join(os.homedir(), '.config', 'caveman', 'config.json'))
+      : null);
   if (userMode) return userMode;
 
   // 4. Default
