@@ -2162,8 +2162,12 @@ function uninstall(ctx) {
     // The bundled CLI may not start at all: then the PATH caveman takes its turn.
     disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all'], 'caveman'] : ['caveman', ['disable', '--all']]);
   }
-  const failedDisables = disables.filter(([cmd, args, fallback]) => !spawnOk(runSpawn(cmd, args, null, opts.dryRun))
-    && !(fallback && spawnOk(runSpawn(fallback, ['disable', '--all'], null, opts.dryRun))));
+  // Only a CLI that did not run (spawn error, killed) hands over: one that ran
+  // and failed keeps its failure, which an older CLI's exit 0 would hide.
+  const failedDisables = disables.filter(([cmd, args, fallback]) => {
+    const r = runSpawn(cmd, args, null, opts.dryRun);
+    return !spawnOk(r) && !(fallback && (!r || r.error || r.signal) && spawnOk(runSpawn(fallback, ['disable', '--all'], null, opts.dryRun)));
+  });
   if (failedDisables.length > 0) {
     cleanupFailed = true;
     warn('  `caveman disable --all` failed (see above); native Caveman routing may still be installed.');
