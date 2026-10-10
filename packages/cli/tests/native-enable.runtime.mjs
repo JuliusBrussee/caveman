@@ -2464,3 +2464,32 @@ test("doctor and enable name a shell endpoint the native route overrides", async
   }
 });
 
+// Windows PowerShell 5.1 saves UTF-8 with a BOM. Enable reads past it, keeps
+// it, and does not mistake it for comments; disable puts the bytes back.
+test("enable reads and keeps a UTF-8 BOM in each agent's JSON config", async () => {
+  const fx = fixture();
+  const body = '﻿{"theme":"dark"}\n';
+  const files = {
+    claude: [join(fx.home, ".claude", "settings.json"), join(fx.home, ".claude.json")],
+    gemini: [join(fx.home, ".gemini", "settings.json")],
+    codex: [join(fx.home, ".codex", "hooks.json")],
+    opencode: [join(fx.home, ".config", "opencode", "opencode.json")],
+  };
+  for (const [agent, paths] of Object.entries(files)) {
+    for (const path of paths) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+    }
+    const out = await run(["enable", agent], fx.env);
+    assert.equal(out.code, 0, `${agent}: ${out.stderr}`);
+    assert.doesNotMatch(out.stderr, /comments in/, agent);
+    for (const path of paths) {
+      const text = readFileSync(path, "utf8");
+      assert.ok(text.startsWith("﻿{"), path);
+      assert.equal(JSON.parse(text.slice(1)).theme, "dark", path);
+    }
+    assert.equal((await run(["disable", agent], fx.env)).code, 0, agent);
+    for (const path of paths) assert.equal(readFileSync(path, "utf8"), body, path);
+  }
+});
+

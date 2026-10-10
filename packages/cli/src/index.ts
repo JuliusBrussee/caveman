@@ -4239,7 +4239,7 @@ export function syncAutoEntries(): void {
             // Compared as values: a file in another layout (or with comments)
             // that needs no change is not rewritten.
             if (isDeepStrictEqual(root, parseJsonFileObject(operation.file, before))) continue;
-            atomicWriteFile(operation.file, jsonBytes(root));
+            atomicWriteFile(operation.file, jsonBytes(root, before));
             operation.owned = owned;
             changed = true;
           } catch (error) { failure ??= error; }
@@ -4266,14 +4266,14 @@ function clearAutoModelChoice(agent: NativeAgent): void {
         try {
           const bytes = fileBytes(path);
           const root = parseJsonFileObject(path, bytes);
-          if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+          if (bytes && isClaudeAutoModel(root.model)) { delete root.model; atomicWriteFile(path, jsonBytes(root, bytes)); }
         } catch { /* this profile only; the others still lose the choice */ }
       }
     } else if (agent === "opencode") {
       const path = opencodeConfigPath();
       const bytes = fileBytes(path);
       const root = parseJsonFileObject(path, bytes);
-      if (bytes && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
+      if (bytes && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) { delete root.model; atomicWriteFile(path, jsonBytes(root, bytes)); }
     } else if (agent === "codex") {
       // Codex's /model writes a top-level `model = "…"` to config.toml.
       const path = join(codexHomeDir(), "config.toml");
@@ -7140,6 +7140,8 @@ function stripTrailingCommas(s: string): string {
 }
 
 function parseJsonc(raw: string): unknown {
+  // Windows PowerShell 5.1 saves UTF-8 with a BOM, which JSON.parse rejects.
+  raw = raw.replace(/^\uFEFF/, "");
   try {
     return JSON.parse(raw);
   } catch {
@@ -7579,7 +7581,7 @@ function linkCodexReadOnly(sourceHome: string, outDir: string, name: string) {
 
 function readJsonObject(path: string): Record<string, unknown> {
   try {
-    const value = JSON.parse(readFileSync(path, "utf8"));
+    const value = JSON.parse(readFileSync(path, "utf8").replace(/^\uFEFF/, ""));
     return value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
   } catch {
     return {};
@@ -8609,14 +8611,14 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
     {
       file: settingsPath,
       before: settingsBefore,
-      after: Buffer.from(JSON.stringify(withHooks, null, 2) + "\n"),
+      after: jsonBytes(withHooks, settingsBefore),
       kind: "claude-settings",
       owned: { route, previous_route: previousRoute ?? null, assume_first_party: assumeFirstParty ? "1" : null, auto_env: autoEnv },
     },
     {
       file: mcpPath,
       before: mcpBefore,
-      after: Buffer.from(JSON.stringify(mcpRoot, null, 2) + "\n"),
+      after: jsonBytes(mcpRoot, mcpBefore),
       kind: "claude-mcp",
       owned: { installed_mcp: installedMcp, previous_mcp: previousMcp ?? null },
     },
@@ -8697,7 +8699,7 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
     {
       file: settingsPath,
       before: settingsBefore,
-      after: Buffer.from(JSON.stringify(withHooks, null, 2) + "\n"),
+      after: jsonBytes(withHooks, settingsBefore),
       kind: "gemini-settings",
       owned: { installed_mcp: installedMcp, previous_mcp: previousMcp ?? null },
     },
@@ -9212,7 +9214,7 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
     {
       file: configPath,
       before,
-      after: Buffer.from(JSON.stringify(root, null, 2) + "\n"),
+      after: jsonBytes(root, before),
       kind: "opencode-config",
       owned: { routes, previous_routes: previousRoutes, installed_mcp: installedMcp, previous_mcp: previousMcp ?? null, auto_models: autoModels },
     },
@@ -9436,7 +9438,7 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const native = codexNativeConfig(configBefore?.toString("utf8") ?? "", gw, subscription, mcpBinary);
   const route = codexGatewayBase(gw, subscription);
   return [
-    { file: hooksPath, before: hooksBefore, after: Buffer.from(JSON.stringify(hooks, null, 2) + "\n"), kind: "codex-hooks" },
+    { file: hooksPath, before: hooksBefore, after: jsonBytes(hooks, hooksBefore), kind: "codex-hooks" },
     {
       file: configPath,
       before: configBefore,
@@ -9899,7 +9901,7 @@ function applyNativeMutations(agent: NativeAgent, profile: AgentProfile, mutatio
     // the original is kept.
     mutations.forEach((mutation, index) => {
       if (!mutation.before?.length || !/\.jsonc?$/.test(mutation.file)) return;
-      try { JSON.parse(mutation.before.toString("utf8")); } catch {
+      try { JSON.parse(mutation.before.toString("utf8").replace(/^\uFEFF/, "")); } catch {
         process.stderr.write(`${mark("warn")} comments in ${mutation.file} were not kept; the original is saved at ${journal.operations[index]!.backup}\n`);
       }
     });
@@ -10260,8 +10262,9 @@ function removeNativeHookEntries(root: Record<string, unknown>, agent: "claude" 
   return root;
 }
 
-function jsonBytes(root: Record<string, unknown>): Buffer {
-  return Buffer.from(JSON.stringify(root, null, 2) + "\n");
+// A UTF-8 BOM the file had (Windows PowerShell 5.1) is kept.
+function jsonBytes(root: Record<string, unknown>, like?: Buffer | null): Buffer {
+  return Buffer.from(`${like?.toString("utf8").startsWith("\uFEFF") ? "\uFEFF" : ""}${JSON.stringify(root, null, 2)}\n`);
 }
 
 function restoreNativeOperation(operation: NativeJournal["operations"][number]): Buffer | null {
@@ -10310,7 +10313,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     }
     if (Object.keys(currentEnv).length > 0) currentRoot.env = currentEnv;
     else delete currentRoot.env;
-    return jsonBytes(removeNativeHookEntries(currentRoot, "claude"));
+    return jsonBytes(removeNativeHookEntries(currentRoot, "claude"), current);
   }
   if (operation.kind === "claude-mcp") {
     const currentRoot = parseJsonFileObject(operation.file, current);
@@ -10331,10 +10334,10 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     }
     if (Object.keys(servers).length > 0) currentRoot.mcpServers = servers;
     else delete currentRoot.mcpServers;
-    return jsonBytes(currentRoot);
+    return jsonBytes(currentRoot, current);
   }
   if (operation.kind === "codex-hooks") {
-    return jsonBytes(removeNativeHookEntries(parseJsonFileObject(operation.file, current), "codex"));
+    return jsonBytes(removeNativeHookEntries(parseJsonFileObject(operation.file, current), "codex"), current);
   }
   if (operation.kind === "gemini-settings") {
     const currentRoot = removeNativeHookEntries(parseJsonFileObject(operation.file, current), "gemini");
@@ -10355,7 +10358,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     }
     if (Object.keys(servers).length > 0) currentRoot.mcpServers = servers;
     else delete currentRoot.mcpServers;
-    return jsonBytes(currentRoot);
+    return jsonBytes(currentRoot, current);
   }
   if (operation.kind === "gemini-env") {
     const block = operation.owned?.route_block;
@@ -10405,7 +10408,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     }
     if (Object.keys(mcp).length > 0) root.mcp = mcp;
     else delete root.mcp;
-    return jsonBytes(root);
+    return jsonBytes(root, current);
   }
   if (operation.kind === "aider-config") {
     let text = current.toString("utf8");
@@ -10673,7 +10676,7 @@ function restoreNativeJournalFiles(journal: NativeJournal | undefined, allClaude
         process.stderr.write(`${mark("warn")} left ${file} as is: it is not a JSON object\n`);
         continue;
       }
-      if (cleanClaudeProfile(root)) restored.set(file, jsonBytes(root));
+      if (cleanClaudeProfile(root)) restored.set(file, jsonBytes(root, bytes));
     }
   }
   const current = [...restored].map(([file]) => ({ file, bytes: fileBytes(file) }));
@@ -13587,8 +13590,12 @@ function removeMcpCodexToml(serverName = "caveman"): boolean {
 // rest byte-identical in structure. Missing file/key counts as removed.
 function removeMcpJson(path: string, keyPath: string[]): boolean {
   let root: Record<string, unknown>;
+  let bom = "";
   try {
-    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    const text = readFileSync(path, "utf8");
+    // A UTF-8 BOM (Windows PowerShell 5.1) is kept.
+    if (text.startsWith("\uFEFF")) bom = "\uFEFF";
+    const parsed = JSON.parse(text.slice(bom.length));
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
     root = parsed as Record<string, unknown>;
   } catch (e) {
@@ -13605,7 +13612,7 @@ function removeMcpJson(path: string, keyPath: string[]): boolean {
   if (!(keyPath[keyPath.length - 1]! in cur)) return true;
   delete cur[keyPath[keyPath.length - 1]!];
   try {
-    writeFileSync(path, JSON.stringify(root, null, 2) + "\n");
+    writeFileSync(path, bom + JSON.stringify(root, null, 2) + "\n");
     return true;
   } catch (e) {
     console.error(`${mark("warn")} cannot write ${path}: ${(e as Error).message}`);
@@ -15769,8 +15776,12 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
 // (rather than corrupt it), and is idempotent.
 function installMcpJson(path: string, keyPath: string[], value: unknown): boolean {
   let root: Record<string, unknown> = {};
+  let bom = "";
   try {
-    const raw = readFileSync(path, "utf8").trim();
+    const text = readFileSync(path, "utf8");
+    // A UTF-8 BOM (Windows PowerShell 5.1) is kept.
+    if (text.startsWith("\uFEFF")) bom = "\uFEFF";
+    const raw = text.trim();
     if (raw) {
       const parsed = JSON.parse(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
@@ -15795,7 +15806,7 @@ function installMcpJson(path: string, keyPath: string[], value: unknown): boolea
   cur[keyPath[keyPath.length - 1]!] = value;
   try {
     mkdirSync(dirname(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(root, null, 2) + "\n");
+    writeFileSync(path, bom + JSON.stringify(root, null, 2) + "\n");
     return true;
   } catch (e) {
     console.error(`${mark("warn")} cannot write ${path}: ${(e as Error).message}`);
