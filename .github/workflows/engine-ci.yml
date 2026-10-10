@@ -186,10 +186,24 @@ jobs:
   root-surfaces:
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    # Read by the windows job below; job-level `if` cannot see changed paths.
+    outputs:
+      windows: ${{ steps.windows-scope.outputs.windows }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
+          fetch-depth: 2
+      # On a PR, HEAD is GitHub's merge commit and HEAD^1 the base branch tip.
+      # A diff that cannot be read counts as relevant.
+      - name: Does this PR touch Windows-relevant code?
+        id: windows-scope
+        if: github.event_name == 'pull_request'
+        run: |
+          if ! changed="$(git diff --name-only HEAD^1 HEAD)" \
+            || grep -qE '^(packages/cli/|installer/|src/hooks/|proxy/|install\.ps1$|scripts/test-windows-compat\.mjs$|\.github/workflows/engine-ci\.yml$)' <<<"$changed"; then
+            echo "windows=true" >> "$GITHUB_OUTPUT"
+          fi
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
@@ -225,11 +239,13 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run package
 
-  # ~15 min per run, the whole suite again on Windows. It runs after merge (and
-  # on manual dispatch), not on every PR push: ci.yml's windows-powershell job
-  # keeps the Windows-only hook contract on PRs in under a minute.
+  # ~15 min per run, the whole suite again on Windows. It runs after merge, on
+  # manual dispatch, and on PRs that touch Windows-relevant code (root-surfaces
+  # decides which), not on every PR push: ci.yml's windows-powershell job keeps
+  # the Windows-only hook contract on every PR in under a minute.
   windows:
-    if: github.event_name != 'pull_request'
+    needs: root-surfaces
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.root-surfaces.outputs.windows == 'true') }}
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -251,20 +267,6 @@ jobs:
       - run: python -m pip install pytest==9.0.3
       - run: go test ./...
       - run: npm test
-      - name: Prebuild caveman-proxy for conformance tests
-        run: go build -o "$env:RUNNER_TEMP\caveman-proxy.exe" ./proxy/cmd/caveman-proxy
-      - run: pnpm -r build
-      # @caveman-ai/cli's POSIX-harnessed suite has never executed on Windows
-      # and is excluded until its harness is ported, not because coverage is
-      # unwanted (149 failures — shebang-script stub agent binaries; Windows
-      # contracts run in the curated `npm run test:windows` gate below via
-      # windows-platform/portable-command/delegate-windows). Every other
-      # workspace suite passes on Windows and stays in.
-      - run: pnpm -r --filter "!@caveman-ai/cli" test
-        env:
-          CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}\caveman-proxy.exe
-          CAVEMAN_REQUIRE_FRAMEWORKS: "1"
-      - run: pnpm --dir packages/middleware/typescript test:consumer
       - run: node --test --test-force-exit tests/*.js
       - run: python -m unittest discover -s tests -p 'test_*.py'
         env:
@@ -283,3 +285,19 @@ jobs:
       - run: npm --prefix extension ci
       - run: npm --prefix extension test
       - run: npm run test:windows
+      # The workspace suites run last: a hang in one of them (the job timeout
+      # cut a run off there) must not skip the suites above.
+      - name: Prebuild caveman-proxy for conformance tests
+        run: go build -o "$env:RUNNER_TEMP\caveman-proxy.exe" ./proxy/cmd/caveman-proxy
+      - run: pnpm -r build
+      # @caveman-ai/cli's POSIX-harnessed suite has never executed on Windows
+      # and is excluded until its harness is ported, not because coverage is
+      # unwanted (149 failures — shebang-script stub agent binaries; Windows
+      # contracts run in the curated `npm run test:windows` gate above via
+      # windows-platform/portable-command/delegate-windows). Every other
+      # workspace suite passes on Windows and stays in.
+      - run: pnpm -r --filter "!@caveman-ai/cli" test
+        env:
+          CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}\caveman-proxy.exe
+          CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+      - run: pnpm --dir packages/middleware/typescript test:consumer
