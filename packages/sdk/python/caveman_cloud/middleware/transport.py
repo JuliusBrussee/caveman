@@ -12,6 +12,7 @@ connection instead of failing.
 """
 import base64
 import http.client
+import io
 import ipaddress
 import re
 import socket
@@ -107,6 +108,35 @@ class _Watchdog:
             self._socks.clear()
 
 
+class _Budget(io.RawIOBase):
+    """The socket http.client reads a response through (the CONNECT reply included): every recv gets what is left of
+    the deadline as its timeout. On Windows the watchdog's shutdown never wakes a blocked read, so this alone bounds
+    the line-by-line reads of a trickled status line, headers or chunked body there."""
+
+    def __init__(self, sock, deadline: float):
+        # makefile() keeps the descriptor open while this reader lives, as http.client's own reader does: a close() on
+        # another thread then only shuts the socket down, which wakes the read, instead of closing it under the read.
+        self._sock, self._raw, self._deadline = sock, sock.makefile("rb", buffering=0), deadline
+
+    def makefile(self, _mode):
+        return io.BufferedReader(self)
+
+    def readable(self) -> bool:
+        return True
+
+    def readinto(self, buffer):
+        self._sock.settimeout(_left(self._deadline))
+        return self._raw.readinto(buffer)
+
+    def close(self) -> None:
+        self._raw.close()
+        super().close()
+
+
+def _budgeted(deadline: float):
+    return lambda sock, *args, **kwargs: http.client.HTTPResponse(_Budget(sock, deadline), *args, **kwargs)
+
+
 def _reusable(sock) -> bool:
     """An idle pooled connection has nothing to read: EOF (the peer idle-closed it) or stray bytes mean it cannot carry
     the next request. Peeks the raw bytes, below any TLS layer, without blocking."""
@@ -128,6 +158,7 @@ def _dial(address: tuple, deadline: float, watchdog: _Watchdog) -> socket.socket
         try:
             sock.settimeout(_left(deadline))
             sock.connect(target)
+            sock.settimeout(_left(deadline))  # what the TLS handshake gets, as one budget
             return sock
         except OSError as failure:
             sock.close()
@@ -244,6 +275,7 @@ class HTTPTransport:
             connection = http.client.HTTPConnection(via_host, via_port)
         connection.timeout = _left(deadline)
         connection._create_connection = lambda address, *_: _dial(address, deadline, watchdog)
+        connection.response_class = _budgeted(deadline)  # the CONNECT reply is read through it too
         connection.connect()  # dial + CONNECT tunnel + TLS handshake, bounded together by the watchdog
         return connection
 
@@ -286,13 +318,12 @@ class HTTPTransport:
             connection.close()
 
     def _exchange(self, connection, key, method, target, headers, body, deadline, watchdog: _Watchdog):
+        connection.response_class = _budgeted(deadline)
         connection.sock.settimeout(_left(deadline))
         connection.request(method, target, body=body, headers=headers)
-        connection.sock.settimeout(_left(deadline))
         response = connection.getresponse()
         data = bytearray()
         while len(data) <= MAX_RESPONSE_BYTES:
-            connection.sock.settimeout(_left(deadline))
             part = response.read1(min(65536, MAX_RESPONSE_BYTES + 1 - len(data)))
             if not part:
                 if response.length:  # the peer closed before Content-Length was met
