@@ -27,7 +27,7 @@ import (
 // bedrockVendors spans the model-id allowlist (routing.go defaultModelPrefixes):
 // Anthropic plus several non-Anthropic vendors. Compression must be skipped for all.
 var bedrockVendors = []string{
-	"anthropic.claude-3-5-sonnet-20241022-v2:0",
+	"anthropic.claude-haiku-4-5-20251001-v1:0",
 	"amazon.titan-text-express-v1",
 	"amazon.nova-pro-v1:0",
 	"meta.llama3-70b-instruct-v1:0",

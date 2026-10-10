@@ -794,33 +794,6 @@
   verified_at: 2026-08-07T00:00:00Z
   capabilities_verified_at: 2026-08-09T00:00:00Z
 - provider: anthropic
-  model: claude-opus-4-1
-  region: global
-  currency: USD
-  pricing:
-    input_per_million: 15.00
-    output_per_million: 75.00
-    cache_read_input_per_million: 1.50
-    cache_write_input_per_million: 18.75
-    cache_write_1h_input_per_million: 30.00
-    reasoning_output_per_million: null
-    batch_discount_fraction: 0.50
-  capabilities:
-    messages_api: true
-    prompt_cache: true
-    streaming: true
-    message_batches: true
-    context_window_tokens: 200000
-    tools: true
-    vision: true
-    json_mode: true
-  sources:
-    - https://platform.claude.com/docs/en/about-claude/pricing
-    - https://platform.claude.com/docs/en/about-claude/models/overview
-    - https://platform.claude.com/docs/en/build-with-claude/context-windows
-  verified_at: 2026-07-10T00:00:00Z
-  capabilities_verified_at: 2026-07-30T00:00:00Z
-- provider: anthropic
   model: claude-haiku-4-5
   region: global
   currency: USD
@@ -931,58 +904,6 @@
     - https://ai.google.dev/gemini-api/docs/pricing
     - https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash
   verified_at: 2026-07-10T00:00:00Z
-  capabilities_verified_at: 2026-07-30T00:00:00Z
-- provider: bedrock
-  model: anthropic.claude-3-5-sonnet-20241022-v2:0
-  region: us-east-1
-  currency: USD
-  pricing:
-    input_per_million: 6.00
-    output_per_million: 30.00
-    cache_read_input_per_million: 0.60
-    cache_write_input_per_million: 7.50
-    reasoning_output_per_million: null
-    batch_discount_fraction: 0.50
-  capabilities:
-    invoke_model: true
-    converse: true
-    converse_stream: true
-    prompt_cache: true
-    streaming: true
-    context_window_tokens: 200000
-    tools: true
-    vision: true
-    json_mode: true
-  sources:
-    - https://aws.amazon.com/bedrock/pricing/
-    - https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
-  verified_at: 2026-07-10T00:00:00Z
-  capabilities_verified_at: 2026-07-30T00:00:00Z
-- provider: bedrock
-  model: anthropic.claude-3-5-haiku-20241022-v1:0
-  region: us-east-1
-  currency: USD
-  pricing:
-    input_per_million: 0.80
-    output_per_million: 4.00
-    cache_read_input_per_million: 0.08
-    cache_write_input_per_million: 1.00
-    reasoning_output_per_million: null
-    batch_discount_fraction: 0.50
-  capabilities:
-    invoke_model: true
-    converse: true
-    converse_stream: true
-    prompt_cache: true
-    streaming: true
-    context_window_tokens: 200000
-    tools: true
-    vision: true
-    json_mode: true
-  sources:
-    - https://aws.amazon.com/bedrock/pricing/
-    - https://platform.claude.com/docs/en/build-with-claude/claude-on-amazon-bedrock-legacy
-  verified_at: 2026-06-14T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 # Bedrock prices are keyed by the exact invocation model/profile ID and source
 # Region. Global and geographic inference profiles are not regionless: AWS

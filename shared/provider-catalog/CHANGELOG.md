@@ -12,6 +12,19 @@
   model pages (checked 2026-10-08, same snapshot).
 - **Breaking (license):** relicensed from MIT to Apache-2.0, along with the rest of
   the repository in Caveman 3.0.0. Releases before this one keep the MIT license.
+- Removed three rows for retired models (checked 2026-10-10). These are removals,
+  so no price was re-checked and no snapshot was added; older snapshots keep
+  the rows. The rows:
+  - Bedrock `anthropic.claude-3-5-haiku-20241022-v1:0` (us-east-1): AWS end of
+    life 2026-06-19, from Amazon Bedrock's model lifecycle page as archived on
+    2026-02-20 and 2026-04-09.
+  - Bedrock `anthropic.claude-3-5-sonnet-20241022-v2:0` (us-east-1): past AWS
+    end of life. The archived lifecycle page gives 2026-03-01 for us-east-1;
+    the current regional availability page gives 2026-07-30.
+  - Anthropic `claude-opus-4-1`: retired on the Claude API 2026-08-05 (Anthropic
+    model deprecations page).
+
+  Lookups for these IDs now return an honest unpriced zero.
 
 ## 1.0.0 — 2026-07-26
 

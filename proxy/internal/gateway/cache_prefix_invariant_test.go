@@ -619,7 +619,7 @@ func TestCachePrefixInvariant(t *testing.T) {
 			main := newCCConversation("You are Claude Code.", session)
 			h.send(main.user(filler("sonnet 1")), sendOpts{})
 			h.send(main.user(filler("sonnet 2")), sendOpts{})
-			main.model = "claude-opus-4-1"
+			main.model = "claude-opus-4-8"
 			h.send(main.user(filler("opus 3")), sendOpts{})
 			main.model = "claude-sonnet-4-6"
 			h.send(main.user(filler("sonnet 4")), sendOpts{})
@@ -1165,7 +1165,7 @@ func (w *fuzzWorld) step(h *invariantHarness, op, arg byte) {
 		w.send(h, c.user(filler("summary "+strconv.Itoa(int(arg)))))
 	case 7:
 		if c.model == "claude-sonnet-4-6" {
-			c.model = "claude-opus-4-1"
+			c.model = "claude-opus-4-8"
 		} else {
 			c.model = "claude-sonnet-4-6"
 		}
