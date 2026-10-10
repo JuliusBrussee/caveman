@@ -2189,3 +2189,29 @@ test("a linked or 0644 agent config keeps its link and mode through enable and d
   assert.equal(readFileSync(target, "utf8"), 'model = "gpt-5.5"\n');
   assert.equal(statSync(hooks).mode & 0o777, 0o644);
 });
+
+// OpenCode reads $XDG_CONFIG_HOME/opencode and prefers opencode.jsonc there.
+test("enable opencode writes where OpenCode reads: XDG_CONFIG_HOME and opencode.jsonc", async () => {
+  const fx = fixture();
+  const xdg = join(fx.home, "xdg");
+  const env = { ...fx.env, XDG_CONFIG_HOME: xdg };
+  const configPath = join(xdg, "opencode", "opencode.jsonc");
+  mkdirSync(dirname(configPath), { recursive: true });
+  const original = '{\n  // mine\n  "model": "openai/gpt-5.5",\n}\n';
+  writeFileSync(configPath, original);
+  const enabled = await run(["enable", "opencode"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  assert.equal(installed.model, "openai/gpt-5.5");
+  assert.equal(installed.provider.openai.options.baseURL, "http://127.0.0.1:8787/w/opencode/openai/v1");
+  assert.ok(existsSync(join(xdg, "opencode", "plugins", "caveman-native.js")));
+  assert.equal(existsSync(join(fx.home, ".config", "opencode")), false);
+  assert.equal(existsSync(join(xdg, "opencode", "opencode.json")), false);
+  // Rewritten as plain JSON: the comment goes, and enable says where it is kept.
+  const kept = enabled.stderr.match(/comments in \S+opencode\.jsonc were not kept; the original is saved at (\S+)/);
+  assert.ok(kept, enabled.stderr);
+  assert.equal(readFileSync(kept[1], "utf8"), original);
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], env)).stdout).state, "installed");
+  assert.equal((await run(["disable", "opencode"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});

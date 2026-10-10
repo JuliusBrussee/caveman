@@ -4110,7 +4110,7 @@ function clearAutoModelChoice(agent: NativeAgent): void {
         } catch { /* this profile only; the others still lose the choice */ }
       }
     } else if (agent === "opencode") {
-      const path = join(homedir(), ".config", "opencode", "opencode.json");
+      const path = opencodeConfigPath();
       const bytes = fileBytes(path);
       const root = parseJsonFileObject(path, bytes);
       if (bytes && typeof root.model === "string" && root.model.endsWith(`/${AUTO_MODEL}`)) { delete root.model; atomicWriteFile(path, jsonBytes(root)); }
@@ -8324,8 +8324,19 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   ];
 }
 
+// OpenCode reads $XDG_CONFIG_HOME/opencode, else ~/.config/opencode on every
+// platform, and opencode.jsonc over opencode.json when both are there.
+function opencodeConfigDir(): string {
+  return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
+}
+
+function opencodeConfigPath(): string {
+  const jsonc = join(opencodeConfigDir(), "opencode.jsonc");
+  return existsSync(jsonc) ? jsonc : join(opencodeConfigDir(), "opencode.json");
+}
+
 function opencodeNativePluginPath(): string {
-  return join(homedir(), ".config", "opencode", "plugins", "caveman-native.js");
+  return join(opencodeConfigDir(), "plugins", "caveman-native.js");
 }
 
 function opencodePluginMajor(): number | null {
@@ -8749,7 +8760,7 @@ function opencodeNativeRoutes(gw: string): Record<string, string> {
 function opencodeUnroutedActiveProvider(routed: string[]): string | null {
   for (const name of ["opencode.jsonc", "opencode.json"]) {
     try {
-      const model = (parseJsonc(readFileSync(join(homedir(), ".config", "opencode", name), "utf8")) as Record<string, unknown> | null)?.model;
+      const model = (parseJsonc(readFileSync(join(opencodeConfigDir(), name), "utf8")) as Record<string, unknown> | null)?.model;
       if (typeof model === "string" && model.includes("/")) {
         const provider = model.slice(0, model.indexOf("/"));
         return routed.includes(provider) ? null : provider;
@@ -8768,7 +8779,7 @@ function opencodeUnroutedActiveProvider(routed: string[]): string | null {
 }
 
 function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): NativeMutation[] {
-  const configPath = join(homedir(), ".config", "opencode", "opencode.json");
+  const configPath = opencodeConfigPath();
   const before = fileBytes(configPath);
   const root = parseJsonFileObject(configPath, before);
   if (root.provider !== undefined && (typeof root.provider !== "object" || root.provider === null || Array.isArray(root.provider))) {
@@ -9428,6 +9439,14 @@ function applyNativeMutations(agent: NativeAgent, profile: AgentProfile, mutatio
     if (agent === "claude") rememberClaudeProfile();
     atomicWriteFile(nativeJournalPath(agent), Buffer.from(JSON.stringify(journal, null, 2) + "\n"));
     unlinkSync(nativePendingJournalPath(agent));
+    // A JSON config is rewritten as plain JSON, so its comments go: say where
+    // the original is kept.
+    mutations.forEach((mutation, index) => {
+      if (!mutation.before?.length || !/\.jsonc?$/.test(mutation.file)) return;
+      try { JSON.parse(mutation.before.toString("utf8")); } catch {
+        process.stderr.write(`${mark("warn")} comments in ${mutation.file} were not kept; the original is saved at ${journal.operations[index]!.backup}\n`);
+      }
+    });
     return journal;
   } catch (error) {
     for (const mutation of written.reverse()) {
@@ -13016,7 +13035,7 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
     case "codex":
       return removeMcpCodexToml(serverName);
     case "opencode":
-      return removeMcpJson(join(homedir(), ".config", "opencode", "opencode.json"), ["mcp", serverName]);
+      return removeMcpJson(opencodeConfigPath(), ["mcp", serverName]);
     case "kilo":
     case "qwen":
       throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
@@ -15076,7 +15095,7 @@ function installMcpForAgent(a: AgentProfile, mcp: { command: string; args: strin
     case "codex":
       return installMcpCodexToml(mcp, serverName);
     case "opencode":
-      return installMcpJson(join(homedir(), ".config", "opencode", "opencode.json"), ["mcp", serverName], {
+      return installMcpJson(opencodeConfigPath(), ["mcp", serverName], {
         type: "local",
         command: [mcp.command, ...mcp.args],
         enabled: true,
@@ -16922,7 +16941,7 @@ function opencodePluginPath(): string {
   // opencode auto-loads global plugins from ~/.config/opencode/plugins/ (PLURAL — the
   // documented path; a file under the wrong dir is silently ignored, which would make
   // this a fake hook). See https://opencode.ai/docs/plugins.
-  return join(homedir(), ".config", "opencode", "plugins", "caveman-shrink.js");
+  return join(opencodeConfigDir(), "plugins", "caveman-shrink.js");
 }
 // cavemanInvocation returns how to call back into THIS CLI from a generated plugin,
 // baked at install time so it is independent of the agent's PATH: a resolved
