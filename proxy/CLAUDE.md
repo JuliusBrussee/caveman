@@ -140,7 +140,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `ETag`) while the link reports `AutoOffered` (signed in, routing on). Every POST there has its
   first 64 KiB read (decoded when gzip, deflate (zlib or raw) or zstd, by a decoder that is always closed; a br body is never looked into) for a
   top-level `"model":"caveman-auto"`; any other streams on unchanged. `/responses` naming Auto asks
-  with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx (a rate-limit 429, a 401 and a 403 are returned instead; a served replay pins the conversation raw, and the decision is rejected only then or when the replay is itself a 429); any other
+  with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx (a rate-limit 429, a 401 and a 403 are returned instead; a served replay pins the conversation raw, and the decision is rejected only then or when the replay is itself a 429; a 5xx on a moved model is returned and rejects the decision, a rate-limit 429 keeps it: the plan's limit holds for every model); any other
   path (Codex compaction) runs `gpt-6.1-sol` unasked; a body over `CAVE_MAX_REQUEST_BYTES` streams
   with only its model changed (`auto_body_too_large`; one that fits but does not decode records `auto_body_decode_failed`). The agent reads the Auto id it sent. The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
