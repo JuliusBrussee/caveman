@@ -4139,8 +4139,7 @@ function objectValue(value: unknown): Record<string, unknown> {
 
 function globalCapabilityDocument(): Record<string, unknown> {
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
-    return objectValue(parsed);
+    return parseRawConfig(readFileSync(configPath(), "utf8"));
   } catch {
     return {};
   }
@@ -4994,27 +4993,32 @@ function readWrapEntitlementState(): WrapEntitlementState | null {
   }
 }
 
+// cloud.json's keys: {} for a missing or empty file, and a BOM (PowerShell
+// UTF-8) is fine. A hand edit that broke the JSON still holds sign-in, module
+// state and the telemetry decision: refuse, naming the file, rather than let
+// a write put {} plus its change over it.
+function parseRawConfig(text: string): Record<string, unknown> {
+  const raw = text.replace(/^﻿/, "");
+  if (!raw.trim()) return {};
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`${configPath()} is not valid JSON, so Caveman left it untouched. Fix the file or delete it, then run this again.`);
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
 // mutateRawConfig read-modify-writes config.json preserving every other key, so
 // entitlement/deviceId writes never clobber baseURL/gatewayUrl/telemetry etc.
 function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
-  let out: Record<string, unknown> = {};
   let raw = "";
   try {
-    raw = readFileSync(configPath(), "utf8").replace(/^\uFEFF/, "");
+    raw = readFileSync(configPath(), "utf8");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // only a missing file is a fresh config
   }
-  if (raw.trim()) {
-    // A hand edit that broke the JSON still holds sign-in, module state and the
-    // telemetry decision: refuse rather than write {} plus this change over it.
-    let parsed: unknown;
-    try {
-      parsed = JSON.parse(raw);
-    } catch {
-      throw new Error(`${configPath()} is not valid JSON, so Caveman left it untouched. Fix the file or delete it, then run this again.`);
-    }
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out = parsed as Record<string, unknown>;
-  }
+  const out = parseRawConfig(raw);
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
   const target = configWriteTarget();
@@ -5772,8 +5776,9 @@ function firstRunUIEligible(): boolean {
 }
 
 async function firstRunPending(): Promise<boolean> {
-  const raw = await readRawConfig();
-  return typeof raw.firstRunAt !== "string" || !raw.firstRunAt;
+  // A broken cloud.json skips the welcome: it could not be marked done.
+  const raw = await readRawConfig().catch(() => null);
+  return raw !== null && (typeof raw.firstRunAt !== "string" || !raw.firstRunAt);
 }
 
 async function markFirstRunDone(): Promise<void> {
@@ -11809,6 +11814,8 @@ async function login(argv: string[] = [], ui?: SignInUi): Promise<{ email?: stri
   if (!instance && !secureLoginURL(new URL(baseURL))) {
     throw new Error(`Sign-in needs https: ${baseURL} (plain http only for localhost).`);
   }
+  // A broken cloud.json would refuse the save below: say so before the browser step.
+  await readRawConfig();
 
   let grant: DeviceGrant;
   try {
@@ -20960,9 +20967,16 @@ export function resolveConfigBaseUrl(savedBaseURL: string | undefined): string {
   return savedBaseURL ?? process.env.CAVE_API_URL ?? PROD_API_URL;
 }
 
+// A command that only reads carries on signed out over a broken cloud.json,
+// after saying so once; a write still stops at readRawConfig.
+let brokenConfigSaid = false;
+
 async function config(refreshTimeoutMs = 5000): Promise<Config> {
-  const raw = await readFile(configPath(), "utf8").catch(() => "{}");
-  const parsed = JSON.parse(raw) as Partial<Config>;
+  const parsed = await readRawConfig().catch((error: Error) => {
+    if (!brokenConfigSaid) process.stderr.write(`${mark("warn")} ${error.message}\n`);
+    brokenConfigSaid = true;
+    return {};
+  }) as Partial<Config>;
 	const credentials = resolveCredentials(parsed);
   const cfg: Config = {
     baseURL: resolveConfigBaseUrl(parsed.baseURL),
@@ -20985,9 +20999,7 @@ async function config(refreshTimeoutMs = 5000): Promise<Config> {
 }
 
 async function readRawConfig(): Promise<Record<string, unknown>> {
-  const raw = await readFile(configPath(), "utf8").catch(() => "{}");
-  const parsed = JSON.parse(raw) as unknown;
-  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+  return parseRawConfig(await readFile(configPath(), "utf8").catch(() => ""));
 }
 
 async function writeRawConfig(out: Record<string, unknown>) {
