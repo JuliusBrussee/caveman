@@ -160,7 +160,8 @@ test("doctor flags a pi extension whose baked invocation no longer exists and --
     nodeStub(versioned, "caveman", "");
     const env = { ...fx.env, PATH: `${versioned}${delimiter}${fx.env.PATH}` };
 
-    assert.equal((await run(["enable", "pi"], env)).code, 0, "enable pi");
+    const enabled = await run(["enable", "pi"], env);
+    assert.equal(enabled.code, 0, `enable pi: ${enabled.stderr}${enabled.stdout}`);
     // Pin the shape the health check parses: if the generator stops baking the
     // invocation into CAVEMAN_PI_HOOK_CMD, the check verifies nothing.
     assert.match(readFileSync(fx.extension, "utf8"), /^process\.env\.CAVEMAN_PI_HOOK_CMD \?\?= ".*v26\.9\.0.*";$/m);
