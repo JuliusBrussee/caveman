@@ -6,7 +6,8 @@ import (
 )
 
 // Restrict rewrites a home's permissions for good. Only a plain folder holding
-// nothing but Caveman's own files is Caveman's to rewrite.
+// nothing but Caveman's own files, one of them a file no other program
+// writes, is Caveman's to rewrite: bin, run, tmp or reports.xlsx is anyone's.
 func TestLeaveAloneAnythingCavemanDoesNotOwn(t *testing.T) {
 	home := filepath.Join(t.TempDir(), ".caveman")
 	ours := []string{"bin", "run", "cloud.json", "cloud.json.123.tmp", "cloud.json.telemetry.lock", "credentials",
@@ -23,12 +24,16 @@ func TestLeaveAloneAnythingCavemanDoesNotOwn(t *testing.T) {
 		{"a user's file", home, append(ours, "notes.txt"), true},
 		{"a user's folder", home, []string{"src"}, true},
 		{"a name that only starts like ours", home, []string{"binaries"}, true},
+		{"a tools folder", home, []string{"bin", "reports.xlsx", "run.bat", "credentials.txt", "usage-notes.md", "tmp"}, true},
+		{"names that only continue like ours", home, []string{"cloud.json", "cli-tools", "hooks-backup", "mcp-servers"}, true},
+		{"generic names alone", home, []string{"bin", "run", "tmp", "reports"}, true},
+		{"the install lock", home, []string{"cloud.json", ".install.lock"}, false},
 		{"volume root", string(filepath.Separator), nil, true},
 		{"network share", `\\server\share\caveman`, nil, true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := leaveAlone(tt.home, tt.names); got != tt.want {
-				t.Fatalf("leaveAlone(%q, %q) = %v, want %v", tt.home, tt.names, got, tt.want)
+			if got := leaveAlone(tt.home, tt.names); (got != "") != tt.want {
+				t.Fatalf("leaveAlone(%q, %q) = %q, want left alone %v", tt.home, tt.names, got, tt.want)
 			}
 		})
 	}

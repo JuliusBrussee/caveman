@@ -1,5 +1,6 @@
 import { test } from "node:test";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
@@ -305,12 +306,22 @@ test("enable --help, an unknown agent and aider leave the runtime's port alone",
   }
 });
 
+// A listener on 127.0.0.1 whose /health/live names `token` (as a Caveman
+// runtime names its run state's instance token), or nothing.
+async function healthListener(token) {
+  const holder = createHttpServer((req, res) => {
+    res.writeHead(200, token && req.url === "/health/live" ? { "X-Caveman-Instance": token } : {});
+    res.end("ok");
+  });
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  return holder;
+}
+
 // A runtime's status probe can outlast its 2 s timeout on a loaded machine
 // (or run before the runtime has written its run state). A run-state record
-// for the port whose process is alive is still ours: the port stays.
+// for the port that the listener vouches for is still ours: the port stays.
 test("a runtime whose status probe is slow is still ours, and enable keeps its port", { skip }, async () => {
-  const holder = createServer();
-  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const holder = await healthListener("t");
   const held = holder.address().port;
   const fx = modulesFixture({ agents: ["claude"] });
   try {
@@ -326,6 +337,35 @@ test("a runtime whose status probe is slow is still ours, and enable keeps its p
     assert.equal(out.code, 0, said);
     assert.doesNotMatch(said, /in use by another program/);
     assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${held}/w/claude`);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
+// A crash, kill -9 or power loss leaves the run-state record behind, naming a
+// pid the OS reuses (pid 1 is always alive). A program on the port that does
+// not vouch for the record is not ours: enable moves off it, start refuses it.
+test("a run-state record left by a crash does not make a foreign listener ours", { skip }, async () => {
+  const holder = await healthListener();
+  const held = holder.address().port;
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const env = runtimeOn(fx, held);
+    mkdirSync(join(env.CAVEMAN_HOME, "run"), { recursive: true });
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${held}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "wrap", instance_token: "tok", pid: 1, port: held,
+    }));
+    const out = await runCli(["enable", "claude"], env);
+    const said = `${out.stdout}${out.stderr}`;
+    assert.equal(out.code, 0, said);
+    const port = said.match(new RegExp(`○ 127\\.0\\.0\\.1:${held} is in use by another program · local runtime on port (\\d+)\\n`))?.[1];
+    assert.ok(port, said);
+    assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${port}/w/claude`);
+    const started = await runCli(["start", "--port", String(held)], env);
+    assert.equal(started.code, 1, started.stderr);
+    assert.match(started.stderr, new RegExp(`127\\.0\\.0\\.1:${held} is held by another program`));
+    assert.doesNotMatch(started.stderr, /already running/);
   } finally {
     holder.close();
     fx.cleanup();

@@ -207,6 +207,24 @@ test("wrap codex omits the shrink hook even with compression left on", async () 
   assert.doesNotMatch(dump.hooks, /shrink-hook/, "Codex rewrites nothing — do not register a dead hook");
 });
 
+// The installer's always-on hook (`--only codex`) injects the caveman voice
+// every session; the native hook does too. Like `caveman enable codex`, the
+// wrap's temporary home leaves the installer's entry out, and keeps the user's.
+test("wrap codex injects the voice once: the installer's always-on hook is left out", async () => {
+  const fx = fixture({ agents: undefined, skills: false });
+  writeWrapConfig(fx.home, { proxy: false, mcp: false, browse: false });
+  const foreign = { hooks: [{ type: "command", command: "echo foreign" }] };
+  const installer = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `node "${join(fx.codexDir, "caveman", "hooks", "codex-sessionstart.js")}"`, timeout: 5 }] };
+  writeFileSync(join(fx.codexDir, "hooks.json"), JSON.stringify({ hooks: { SessionStart: [foreign, installer] } }));
+
+  const out = await runCli(fx, ["wrap", "codex"], GW);
+  assert.equal(out.code, 0, out.stderr);
+  const sessionStart = JSON.parse(readDump(fx).hooks).hooks.SessionStart;
+  assert.doesNotMatch(JSON.stringify(sessionStart), /codex-sessionstart/);
+  assert.deepEqual(sessionStart[0], foreign);
+  assert.match(JSON.stringify(sessionStart), /native-hook codex/);
+});
+
 test("wrap codex with missing auth.json still uses ephemeral native home", async () => {
   const fx = fixture({ agents: undefined, skills: false });
   writeWrapConfig(fx.home, { proxy: false, shrink: false, mcp: false, browse: false });

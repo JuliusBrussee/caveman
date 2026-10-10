@@ -29,7 +29,9 @@ export type ModuleState = { id: ModuleId; on: boolean; active: boolean; reason?:
 export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean; optedOut?: boolean };
 // token: the run state's instance token. stale: the runtime still runs an
 // older caveman-proxy than the one now installed.
-export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number; token?: string; stale?: { running: string; installed: string } };
+// runFile: the runtime's run-state record, which a runtime ended the hard way
+// (Windows) never removes itself.
+export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number; token?: string; runFile?: string; stale?: { running: string; installed: string } };
 // A capability as every layer resolves it (defaults → global → project → env),
 // plus the global-file value alone, which is what module state is recorded in.
 export type Capability = { value: unknown; source: string; global: unknown; invalid?: string };
@@ -45,8 +47,8 @@ export type ModuleHost = {
   binaryRelease: string;
   resolveBinary(name: string): string | null;
   // `downloading` is told each binary as its download starts; with it the
-  // install prints nothing itself.
-  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<void>;
+  // install prints nothing itself and returns what it would have warned.
+  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<string[]>;
   // Binaries the hub installed for a module, from modules.lock.json.
   lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
@@ -472,7 +474,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const needs = binaryNeeds(plan.selection, plan.only);
   if (needs.missing.length) {
     try {
-      await h.installBinaries(needs.modules, opts.downloading);
+      for (const note of await h.installBinaries(needs.modules, opts.downloading)) say(`○ ${note}`);
       // A release from before modules.json brings no external binary.
       const still = binaryNeeds(plan.selection, plan.only).missing;
       const got = needs.missing.filter((name) => !still.includes(name));

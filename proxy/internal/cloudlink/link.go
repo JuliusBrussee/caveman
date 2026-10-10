@@ -149,10 +149,11 @@ func (s settings) signedIn() bool { return s.cloud != "" && (s.key != "" || s.ac
 var userHomeDir = os.UserHomeDir
 
 // The legacy file is where the old CLI wrote it: Node's os.homedir(), which is
-// USERPROFILE on Windows, where PowerShell and cmd leave HOME unset.
+// USERPROFILE on Windows even when HOME is set (MSYS2, Cygwin and Git Bash set
+// one that differs), and HOME elsewhere.
 func (l *Link) cloudPaths() (current, legacy, credentials string) {
 	userHome := os.Getenv("HOME")
-	if userHome == "" {
+	if runtime.GOOS == "windows" || userHome == "" {
 		userHome, _ = userHomeDir()
 	}
 	if userHome == "" {

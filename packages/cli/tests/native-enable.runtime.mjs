@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer as createHttpServer } from "node:http";
-import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -602,6 +602,23 @@ test("enable codex takes over from the installer's always-on hook, and disable l
   assert.deepEqual(JSON.parse(readFileSync(hooksPath, "utf8")), { hooks: { SessionStart: [foreign] } });
 });
 
+// Windows PowerShell 5.1 saves hooks.json with a BOM; disable keeps it when it
+// leaves the installer's hook out.
+test("disable codex keeps a hooks.json BOM when it leaves the installer's hook out", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  const foreign = { hooks: [{ type: "command", command: "echo foreign" }] };
+  const installer = { hooks: [{ type: "command", command: `node "${join(fx.home, ".codex", "caveman", "hooks", "codex-sessionstart.js")}"` }] };
+  writeFileSync(hooksPath, `\uFEFF${JSON.stringify({ hooks: { SessionStart: [foreign, installer] } }, null, 2)}\n`);
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const after = readFileSync(hooksPath, "utf8");
+  assert.ok(after.startsWith("\uFEFF"), JSON.stringify(after.slice(0, 8)));
+  assert.deepEqual(JSON.parse(after.slice(1)), { hooks: { SessionStart: [foreign] } });
+});
+
 // An install from before carries a shrink-hook entry (a second PreToolUse hook
 // on every Codex tool call that declines it) and a PostToolUseFailure entry
 // Codex never runs. Doctor sends it to --fix, which takes both out.
@@ -625,14 +642,25 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   assert.equal(after.PreToolUse.length, 1);
 });
 
+// The hash Codex records when /hooks trusts a hooks.json SessionStart group:
+// sha256 of the sorted-key compact JSON of the event, the matcher and the
+// handler, its timeout defaulted to 600 s.
+function codexHookHash(group) {
+  const hook = group.hooks[0];
+  const handler = { async: hook.async === true, command: hook.command, ...(hook.statusMessage ? { statusMessage: hook.statusMessage } : {}), timeout: hook.timeout ?? 600, type: "command" };
+  const identity = { event_name: "session_start", hooks: [handler], ...(group.matcher ? { matcher: group.matcher } : {}) };
+  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
+}
+
 // What Codex's /hooks records once the user trusts Caveman's SessionStart hook.
 // The key names CODEX_HOME canonicalized when it is set, ~/.codex as is otherwise.
 function trustCodexHooks(home, { canonical = true } = {}) {
   const hooksPath = join(home, ".codex", "hooks.json");
   const configPath = join(home, ".codex", "config.toml");
-  const group = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  const groups = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  const group = groups.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
   const key = `${canonical ? realpathSync(hooksPath) : hooksPath}:session_start:${group}:0`;
-  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "sha256:test"\n`);
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "${codexHookHash(groups[group])}"\n`);
 }
 
 // Codex runs a hook from hooks.json only once the user trusts it in /hooks.
@@ -654,6 +682,34 @@ test("doctor codex reports Caveman's hooks untrusted until /hooks trusts them", 
   assert.equal(trusted.components.lifecycle_hooks, true);
   assert.equal(trusted.core_active, true);
   assert.equal(trusted.capabilities.session_start.active, true);
+  assert.deepEqual(trusted.warnings, []);
+});
+
+// Codex keys trust by position and skips a hook whose hash differs from the
+// one recorded there. The installer's hook at SessionStart[0], trusted, makes
+// way for Caveman's at the same index: that hash is the installer's, so Codex
+// runs neither, and doctor must not read it as trusted.
+test("doctor codex reads a trust hash recorded for another hook at the same position as untrusted", async () => {
+  // What codex 0.161.0 recorded in /hooks for this command.
+  const recorded = { hooks: [{ type: "command", command: "'/tmp/cvx-codex-test.b7mQlW/gobin/caveman-proxy' native-hook codex --adapter '/Users/julb/Desktop/GitHub/caveman-v4-stability/packages/cli/dist/native-hook-fast.js' --node '/Users/julb/.local/share/fnm/node-versions/v22.22.2/installation/bin/node'" }] };
+  assert.equal(codexHookHash(recorded), "sha256:02d7c695f1ad13472c0bb36bf859bded8187e5976c06efe7cf4b6febdddc5de9");
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  const configPath = join(fx.home, ".codex", "config.toml");
+  const installer = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `node "${join(fx.home, ".codex", "caveman", "hooks", "codex-sessionstart.js")}"`, timeout: 5 }] };
+  writeFileSync(hooksPath, JSON.stringify({ hooks: { SessionStart: [installer] } }, null, 2) + "\n");
+  writeFileSync(configPath, `[hooks.state.${JSON.stringify(`${hooksPath}:session_start:0:0`)}]\ntrusted_hash = "${codexHookHash(installer)}"\n`);
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const groups = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  assert.equal(groups.length, 1);
+  const stale = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(stale.components.lifecycle_hooks, false);
+  assert.deepEqual(stale.warnings, ["Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself"]);
+  // /hooks records this hook's hash at the same key.
+  writeFileSync(configPath, readFileSync(configPath, "utf8").replace(codexHookHash(installer), codexHookHash(groups[0])));
+  const trusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(trusted.components.lifecycle_hooks, true);
   assert.deepEqual(trusted.warnings, []);
 });
 
@@ -1133,8 +1189,15 @@ test("the bridge hook names PATH's node when it is this node, never an fnm multi
     .map((entry) => entry.hooks[0].command).find((command) => command.includes("native-hook claude")).match(/--node '([^']+)'$/)?.[1];
   const stable = fixture();
   symlinkSync(process.execPath, join(stable.home, "bin", "node"));
+  // npm links `caveman` to its .js entry point, which hooks run with a node.
+  renameSync(join(stable.home, "bin", "caveman"), join(stable.home, "caveman.js"));
+  symlinkSync(join(stable.home, "caveman.js"), join(stable.home, "bin", "caveman"));
   assert.equal((await run(["enable", "claude"], stable.env)).code, 0);
   assert.equal(nodeArg(stable), join(stable.home, "bin", "node"));
+  // shrink-hook runs the caveman script with that node too, and has no fallback.
+  const shrink = JSON.parse(readFileSync(join(stable.home, ".claude", "settings.json"), "utf8")).hooks.PreToolUse
+    .map((entry) => entry.hooks[0].command).find((command) => command.endsWith(" shrink-hook"));
+  assert.equal(shrink, `'${join(stable.home, "bin", "node")}' '${join(stable.home, "bin", "caveman")}' shrink-hook`);
 
   const fnm = fixture();
   const multishell = join(fnm.home, "fnm_multishells", "4242_1760000000000", "bin");
@@ -2598,6 +2661,35 @@ test("enable opencode finds the user's own endpoint in every global config file"
   assert.equal((await run(["mcp", "uninstall", "opencode"], fx.env)).code, 0);
   assert.equal(JSON.parse(readFileSync(join(dir, "opencode.jsonc"), "utf8")).mcp?.caveman, undefined);
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")), { theme: "system", mcp: {} });
+});
+
+// OpenCode reads JSONC, so a commented opencode.jsonc is parsed, not skipped:
+// install writes the registration (BOM kept), and uninstall takes out its entry
+// and an earlier install's one in opencode.json. Comments cannot be kept; the
+// original is saved and the warning says where.
+test("mcp install and uninstall opencode work on a commented opencode.jsonc", async () => {
+  const fx = fixture();
+  const dir = join(fx.home, ".config", "opencode");
+  mkdirSync(dir, { recursive: true });
+  const jsonc = join(dir, "opencode.jsonc");
+  const commented = '﻿{\n  // mine\n  "theme": "system",\n}\n';
+  writeFileSync(jsonc, commented);
+  const installed = await run(["mcp", "install", "opencode"], fx.env);
+  assert.equal(installed.code, 0, installed.stderr);
+  const after = readFileSync(jsonc, "utf8");
+  assert.ok(after.startsWith("﻿"));
+  assert.equal(JSON.parse(after.slice(1)).theme, "system");
+  assert.ok(JSON.parse(after.slice(1)).mcp.caveman);
+  const saved = installed.stderr.match(/comments in \S+opencode\.jsonc were not kept; the original is saved at (\S+)/)?.[1];
+  assert.ok(saved, installed.stderr);
+  assert.equal(readFileSync(saved, "utf8"), commented);
+
+  writeFileSync(jsonc, '{\n  // mine\n  "mcp": { "caveman": { "type": "local", "command": ["caveman-mcp"] } }\n}\n');
+  writeFileSync(join(dir, "opencode.json"), JSON.stringify({ mcp: { caveman: { type: "local", command: ["caveman-mcp"] } } }));
+  const removed = await run(["mcp", "uninstall", "opencode"], fx.env);
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(jsonc, "utf8")), { mcp: {} });
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")), { mcp: {} });
 });
 
 // An endpoint of the user's own (a gateway, LiteLLM, a local model) is never

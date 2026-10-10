@@ -5,7 +5,7 @@ import assert from "node:assert";
 import { spawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { createServer } from "node:http";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, statSync, utimesSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -262,15 +262,38 @@ test("concurrent installs download each binary once and all succeed", { skip: he
   }
 });
 
+// A lock whose token write failed (a full disk) is left empty. Read as a
+// holder still writing its token, it held every install for ten minutes; one
+// seconds old holds nothing.
+test("an empty install lock a failed write left does not hold installs", { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+  const server = await serve(fixtureRelease());
+  const fx = modulesFixture();
+  try {
+    const env = { ...fx.env, CAVE_BINARY_RELEASE_BASE: server.base, CAVE_SETUP_TIMEOUT: "20" };
+    const lock = join(env.CAVEMAN_HOME, ".install.lock");
+    writeFileSync(lock, "");
+    const before = new Date(Date.now() - 30_000);
+    utimesSync(lock, before, before);
+    const run = await runCli(["setup", "--install"], env, { cli, timeoutMs: 60_000 });
+    assert.equal(run.code, 0, run.stdout + run.stderr);
+    assert.doesNotMatch(run.stderr, /another Caveman is installing/);
+  } finally {
+    fx.cleanup();
+    await server.close();
+  }
+});
+
 // An agent launch or `caveman on` updates implicitly. A restart would cut every
 // stream another session has in flight, so a runtime in use keeps running on
-// the old binary with a hint; an idle one restarts.
-for (const [name, { marker, rows, restarts }] of Object.entries({
+// the old binary with a hint; an idle one restarts. Setup draws its own
+// progress line, so there the hint is one of its steps, not a stray stderr line.
+for (const [name, { marker, rows, restarts, argv = ["on", "browse", "--yes"] }] of Object.entries({
   "a live caveman session": { marker: true, rows: "[]", restarts: false },
+  "a live caveman session during setup": { marker: true, rows: "[]", restarts: false, argv: ["setup", "--yes"] },
   "a request in the last 30 minutes": { marker: false, rows: JSON.stringify([{ ts: new Date().toISOString() }]), restarts: false },
   "nothing recent": { marker: false, rows: "[]", restarts: true },
 })) {
-  test(`on after an upgrade ${restarts ? "restarts" : "leaves running"} a runtime with ${name}`, { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
+  test(`${argv[0]} after an upgrade ${restarts ? "restarts" : "leaves running"} a runtime with ${name}`, { skip: here.os === "win32" ? "shell stand-in" : false }, async () => {
     const serveJs = `const fs = require("node:fs"); const port = Number(process.env.CAVEMAN_LISTEN.split(":").pop());
 const file = process.env.CAVEMAN_HOME + "/run/" + port + ".json";
 require("node:net").createServer().listen(port, "127.0.0.1", () => {
@@ -316,11 +339,16 @@ esac
     await new Promise((resolve) => old.stdout.once("data", resolve));
     const oldExit = new Promise((resolve) => old.once("exit", resolve));
     try {
-      const on = await runCli(["on", "browse", "--yes"], env, { cli });
-      assert.equal(on.code, 0, on.stdout + on.stderr);
+      const on = await runCli(argv, env, { cli });
+      // Setup goes on to wire agents, which the stand-in binaries cannot serve.
+      if (argv[0] !== "setup") assert.equal(on.code, 0, on.stdout + on.stderr);
       const stopped = await Promise.race([oldExit.then(() => true), new Promise((resolve) => setTimeout(resolve, restarts ? 10_000 : 1_000, false))]);
       assert.equal(stopped, restarts, on.stdout + on.stderr);
-      if (!restarts) assert.match(on.stderr, new RegExp(`caveman-proxy bin-old still runs on 127\\.0\\.0\\.1:${port} — run \`caveman stop\`, then start your agent again to use bin-new`));
+      const stillOld = `caveman-proxy bin-old still runs on 127\\.0\\.0\\.1:${port} — run \`caveman stop\`, then start your agent again to use bin-new`;
+      if (!restarts && argv[0] === "setup") {
+        assert.match(on.stdout, new RegExp(`^○ ${stillOld}$`, "m"));
+        assert.doesNotMatch(on.stderr, /still runs on/);
+      } else if (!restarts) assert.match(on.stderr, new RegExp(stillOld));
     } finally {
       old.kill("SIGKILL");
       try { process.kill(JSON.parse(readFileSync(runFile, "utf8")).pid, "SIGTERM"); } catch { /* not started */ }

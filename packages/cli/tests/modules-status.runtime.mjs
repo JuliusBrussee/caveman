@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modulesFixture, runCli } from "./_modules.mjs";
 
@@ -145,6 +146,36 @@ test("status and doctor say when the runtime wired agents use is not running", a
   }
 });
 
+// The runtime's 2 s status probe can time out on a loaded machine, and a
+// runtime that just bound its port has not written its run state yet. Status
+// and doctor ask the listener before calling it another program: telling a
+// user to stop their own runtime is wrong.
+test("status and doctor do not call a runtime whose status probe is slow another program", async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  const holder = createHttpServer((req, res) => {
+    res.writeHead(200, req.url === "/health/live" ? { "X-Caveman-Instance": "t" } : {});
+    res.end("ok");
+  });
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const { port } = holder.address();
+  const env = { ...fx.env, CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`, CAVEMAN_LISTEN: `127.0.0.1:${port}` };
+  try {
+    assert.equal((await runCli(["enable", "claude"], env)).code, 0);
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${port}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "start", instance_token: "t", pid: process.pid, port,
+    }));
+    writeFileSync(env.CAVEMAN_PROXY_BIN, readFileSync(env.CAVEMAN_PROXY_BIN, "utf8").replace("status) ", "status) sleep 3; "));
+    const status = await runCli(["status"], env);
+    assert.doesNotMatch(status.stdout, /another program holds|something else is listening/);
+    assert.equal(JSON.parse((await runCli(["status", "--json"], env)).stdout).agent_traffic.runtime, "running");
+    const doctor = await runCli(["doctor"], env);
+    assert.doesNotMatch(doctor.stdout, /another program holds/);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
 test("doctor reports degraded agent wiring with its fix", async () => {
   const fx = modulesFixture({ agents: ["claude"] });
   try {
@@ -254,10 +285,17 @@ test("stop on Windows asks the runtime to drain before ending it", async () => {
   const current = await fake();
   assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: current.port, listening: true, foreign: false, pid: current.child.pid, token: "t" }], "win32"), []);
   assert.equal(await current.out(), "drained\n");
-  // An older proxy has no such endpoint (404): ended the hard way.
+  // An older proxy has no such endpoint (404), and one from before this
+  // release has no shutdown token at all: ended the hard way, so it never
+  // removes its run state. Stop drops a record that still names it.
   const older = await fake();
-  assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: older.port, listening: true, foreign: false, pid: older.child.pid, token: "old" }], "win32"), []);
+  const records = mkdtempSync(join(tmpdir(), "caveman-run-"));
+  const runFile = join(records, `${older.port}.json`);
+  writeFileSync(runFile, JSON.stringify({ schema: "caveman.proxy.run.v1", owner: "start", pid: older.child.pid, port: older.port, instance_token: "public" }));
+  assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: older.port, listening: true, foreign: false, pid: older.child.pid, runFile }], "win32"), []);
   assert.equal(await older.out(), "killed\n");
+  assert.equal(existsSync(runFile), false, "the hard-killed runtime's run state is gone");
+  rmSync(records, { recursive: true, force: true });
 
   // The token stop sends is the run-state file's shutdown token. The instance
   // token is no secret: /health/live hands it to any local caller.

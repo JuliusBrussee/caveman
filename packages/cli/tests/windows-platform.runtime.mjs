@@ -22,7 +22,7 @@ import {
   setupPlatform,
 } from "../dist/index.js";
 import { nativePipePath } from "../dist/native-pipe.js";
-import { leaveHomeAclAlone, OWNED_HOME_ENTRIES, systemTool } from "../dist/home-acl.js";
+import { HOME_MARKERS, leaveHomeAclAlone, OWNED_HOME_ENTRIES, OWNED_HOME_SUFFIX, systemTool } from "../dist/home-acl.js";
 
 test("CLI setup accepts Windows x64 and arm64", () => {
   assert.deepEqual(setupPlatform("win32", "x64"), { os: "win32", arch: "amd64" });
@@ -165,6 +165,10 @@ test("a Windows home's permissions are rewritten only when caveman owns the fold
   assert.equal(leaveHomeAclAlone("d:\\caveman\\", { ...plain, names: ours }), false);
   assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: [...ours, "notes.txt"] }), true, "a user's file");
   assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: ["binaries"] }), true, "a name that only starts like ours");
+  assert.equal(leaveHomeAclAlone("D:\\tools", { ...plain, names: ["bin", "reports.xlsx", "run.bat", "credentials.txt", "usage-notes.md", "tmp"] }), true, "a tools folder");
+  assert.equal(leaveHomeAclAlone("D:\\tools", { ...plain, names: ["cloud.json", "cli-tools", "hooks-backup", "mcp-servers"] }), true, "names that only continue like ours");
+  assert.equal(leaveHomeAclAlone("D:\\tools", { ...plain, names: ["bin", "run", "tmp", "reports"] }), true, "generic names alone");
+  assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: ["cloud.json", ".install.lock"] }), false, "the install lock");
   assert.equal(leaveHomeAclAlone("D:\\", { ...plain, resolved: "D:\\" }), true, "drive root");
   assert.equal(leaveHomeAclAlone("\\\\server\\share\\caveman", plain), true, "UNC path");
   assert.equal(leaveHomeAclAlone("Z:\\caveman", { ...plain, resolved: "\\\\server\\share\\caveman" }), true, "mapped network drive");
@@ -175,8 +179,10 @@ test("a Windows home's permissions are rewritten only when caveman owns the fold
 // side writes and the other does not know would leave that home broad.
 test("the CLI and the proxy agree on what caveman writes into its home", () => {
   const go = readFileSync(new URL("../../../proxy/internal/securehome/securehome.go", import.meta.url), "utf8");
-  const block = /var ownedEntries = \[\]string\{([\s\S]*?)\n\}/.exec(go)?.[1] ?? "";
-  assert.deepEqual([...block.matchAll(/"([^"]+)"/g)].map((match) => match[1]), OWNED_HOME_ENTRIES);
+  const list = (name) => [...(new RegExp(`var ${name} = \\[\\]string\\{([\\s\\S]*?)\\n\\}`).exec(go)?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((match) => match[1]);
+  assert.deepEqual(list("ownedEntries"), OWNED_HOME_ENTRIES);
+  assert.deepEqual(list("homeMarkers"), HOME_MARKERS);
+  assert.equal(/var ownedSuffix = regexp\.MustCompile\(`([^`]+)`\)/.exec(go)?.[1], OWNED_HOME_SUFFIX.source);
 });
 
 // A bare whoami or icacls is looked up in the current directory first on

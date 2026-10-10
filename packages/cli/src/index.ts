@@ -168,27 +168,45 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if ((await portListening(host, port)) ? !(await portHeldByOther(port)) : await portBindable(host, port)) return undefined;
+  if ((await portListening(host, port)) ? !(await portHeldByOther(host, port)) : await portBindable(host, port)) return undefined;
   const free = await nextFreePort(port);
   return free ? { held: `${host}:${port}`, free } : undefined;
 }
 
-// Whether the program answering on a port is not a Caveman runtime: ours when
-// caveman-proxy's run-state record for the port names a live process. A runtime
-// binds before it writes that record, so it is polled for briefly, as
-// awaitProxyRuntimeState does; reading the record directly keeps a status probe
-// that times out on a loaded machine from calling our own runtime foreign.
-// Without caveman-proxy nothing here can be ours; a runtime too old to keep
-// that record cannot be told apart, so it counts as ours.
-async function portHeldByOther(port: number): Promise<boolean> {
-  const version = probeProxyVersion();
+// Whether the program answering on a port is not a Caveman runtime: ours only
+// when the listener vouches for caveman-proxy's run-state record for the port,
+// its /health/live naming the record's instance token. A live pid in the record
+// proves nothing: a crash, kill -9 or power loss leaves the record behind, and
+// the OS reuses its pid. A runtime binds before it writes that record and a
+// loaded machine answers slowly, so this is polled for briefly; asking the
+// listener directly keeps a status probe that times out from calling our own
+// runtime foreign. Without caveman-proxy nothing here can be ours; a runtime
+// too old to keep that record cannot be told apart, so it counts as ours.
+async function portHeldByOther(host: string, port: number, version = probeProxyVersion()): Promise<boolean> {
   if (!version) return true;
   if (!version.capabilities.includes("run_state")) return false;
   for (const deadline = Date.now() + 3000; ; await sleep(100)) {
-    const { pid } = readRawProxyRunState(port);
-    if (pid && processAlive(pid)) return false;
+    const token = readRawProxyRunState(port).instance_token;
+    if (token && await liveInstanceToken(host, port) === token) return false;
     if (Date.now() >= deadline) return true;
   }
+}
+
+// The instance token a runtime's /health/live publishes (loopback listeners
+// only). A wildcard bind is reached through loopback, as caveman-proxy's own
+// check does.
+function liveInstanceToken(host: string, port: number): Promise<string | undefined> {
+  return new Promise((resolve) => {
+    const dial = host === "0.0.0.0" ? "127.0.0.1" : host === "::" ? "::1" : host;
+    const req = httpRequest({ host: dial, port, path: "/health/live", timeout: 750 }, (res) => {
+      res.resume();
+      const token = res.headers["x-caveman-instance"];
+      resolve(res.statusCode === 200 && typeof token === "string" ? token : undefined);
+    });
+    req.on("timeout", () => req.destroy());
+    req.on("error", () => resolve(undefined));
+    req.end();
+  });
 }
 
 // What answers where wired agents send their requests: "running" (a Caveman
@@ -204,7 +222,7 @@ async function agentRuntimeState(): Promise<"running" | "down" | "other" | undef
   const { host, port } = gatewayHostPort(gw);
   if (version.capabilities.includes("run_state") && readProxyRuntimeState(port, version).owner !== "unknown") return "running";
   if (!(await portListening(host, port))) return "down";
-  return version.capabilities.includes("run_state") ? "other" : "running";
+  return await portHeldByOther(host, port, version) ? "other" : "running";
 }
 
 // What status and doctor say about it, with the fix. `doctor <agent> --fix`
@@ -582,6 +600,7 @@ setModuleHost({
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
   installBinaries: async (modules, downloading) => {
     installDownloading = downloading;
+    installNotes = [];
     // Hub binaries an older release installed are replaced together, with
     // their manifest, by the full signed install; the index adds the rest.
     const behind = binariesBehindPin().length > 0;
@@ -595,12 +614,13 @@ setModuleHost({
       // release does not carry it.
       if (error instanceof NoModuleIndexError) {
         if (!behind && modules.some((id) => findModule(id)?.binaries.length)) await setupInstall(false, { continuing: true });
-        return;
+        return installNotes;
       }
       throw error;
     } finally {
       installDownloading = undefined;
     }
+    return installNotes;
   },
   lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
   staleBinaries: () => [...new Set([
@@ -686,7 +706,7 @@ setModuleHost({
       const foreign = listening && !pid && Boolean(version?.capabilities.includes("run_state"));
       const stale = pid && state.version && version && state.version !== version.version ? { running: state.version, installed: version.version } : undefined;
       const token = proxyShutdownToken(port, state.instance_token);
-      return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(token ? { token } : {}), ...(stale ? { stale } : {}) };
+      return { host, port, listening, foreign, ...(pid ? { pid, runFile: proxyRunStatePath(port) } : {}), ...(token ? { token } : {}), ...(stale ? { stale } : {}) };
     }));
   },
   agentAsk: (agent) => agent === "codex" && readNativeJournal("codex") && !codexHooksTrusted() ? CODEX_TRUST_ASK : undefined,
@@ -1393,11 +1413,14 @@ const TELEMETRY_CLAIM_LOCK_STALE_MS = 5000;
 // hazard over different state files, and a second copy of this spin is how the
 // two would drift apart. Callers supply their own stale window because their
 // hold times differ by orders of magnitude — see refreshClaimLock.
-function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, reclaimDeadOwner = false): string | null {
+//
+// null: another holder kept it past the budget. undefined: it cannot be
+// created at all (a read-only home, a full disk).
+function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, reclaimDeadOwner = false): string | null | undefined {
   try {
     mkdirSync(dirname(lockPath), { recursive: true });
   } catch {
-    return null;
+    return undefined;
   }
   // The token names THIS holder. releaseClaimLock unlinks only a lock that
   // still carries it, so a holder that was reclaimed as stale mid-section
@@ -1407,14 +1430,18 @@ function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, r
   for (;;) {
     try {
       const fd = openSync(lockPath, "wx");
+      let written = false;
       try {
         writeSync(fd, token);
+        written = true;
       } finally {
         closeSync(fd);
+        // An empty lock reads as a holder still writing its token.
+        if (!written) try { unlinkSync(lockPath); } catch { /* already gone */ }
       }
       return token;
     } catch (err) {
-      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return null;
+      if ((err as NodeJS.ErrnoException).code !== "EEXIST") return undefined;
       try {
         if (Date.now() - statSync(lockPath).mtimeMs > staleMs || (reclaimDeadOwner && claimLockOwnerDead(lockPath))) {
           // Reclaim by rename, not unlink. Two waiters can both see the same
@@ -1436,9 +1463,12 @@ function acquireClaimLock(lockPath: string, budgetMs: number, staleMs: number, r
 }
 
 // Whether the process a lock's token (`<pid>:<uuid>`) names has exited. A
-// holder between its create and its write reads as alive.
+// holder between its create and its write reads as alive; a lock still empty
+// seconds later is a write that failed, and holds nothing.
 function claimLockOwnerDead(lockPath: string): boolean {
-  const pid = Number(readFileSync(lockPath, "utf8").split(":")[0]);
+  const token = readFileSync(lockPath, "utf8");
+  if (!token) return Date.now() - statSync(lockPath).mtimeMs > 5000;
+  const pid = Number(token.split(":")[0]);
   return Number.isSafeInteger(pid) && pid > 0 && !processAlive(pid);
 }
 
@@ -2639,7 +2669,7 @@ async function start(argv: string[] = []) {
 
   if (await portListening(host, port)) {
     // Routing an agent to someone else's listener hands them every request.
-    if (await portHeldByOther(port)) {
+    if (await portHeldByOther(host, port)) {
       const free = await nextFreePort(port);
       panel("Port in use", [
         `${mark("bad")} ${host}:${port} is held by another program.`,
@@ -3101,8 +3131,11 @@ export function removeAsideBinaries(binDir: string): void {
 }
 
 // Set while onboarding installs: it draws its own one-line progress, so the
-// per-binary lines below stay quiet and each download is reported to it.
+// per-binary lines below stay quiet and each download is reported to it. What
+// the install would have warned meanwhile goes to installNotes, which
+// onboarding shows with its steps.
 let installDownloading: ((name: string) => void) | undefined;
+let installNotes: string[] = [];
 
 function installProgressStart(name: string, platform: { os: string; arch: string }) {
   if (installDownloading) return installDownloading(name);
@@ -3175,9 +3208,10 @@ async function setupInstall(json: boolean, options: { continuing?: boolean; expl
     }
     // Not creatable at all (a read-only home): the install itself says why.
     // Downloads are per-process, so running beside another one is still safe.
-    if (!existsSync(lock)) return setupInstallLocked(json, options);
+    // A holder that just released it is tried again.
+    if (token === undefined) return setupInstallLocked(json, options);
     if (Date.now() >= deadline) throw new Error("another Caveman is still installing the runtime — try again once it finishes");
-    if (!told) process.stderr.write(dim("→ another Caveman is installing the runtime; waiting for it\n"));
+    if (!told && !installDownloading) process.stderr.write(dim("→ another Caveman is installing the runtime; waiting for it\n"));
     told = true;
   }
 }
@@ -3291,13 +3325,14 @@ async function restartOutdatedRuntime(explicit = false): Promise<void> {
   const runtime = readProxyRuntimeState(port, installed);
   if (!runtime.pid || !runtime.version || !installed || runtime.version === installed.version) return;
   const stillOld = `caveman-proxy ${runtime.version} still runs on ${host}:${port} — run \`caveman stop\`, then start your agent again to use ${installed.version}`;
+  const warn = () => installDownloading ? installNotes.push(stillOld) : process.stderr.write(`${mark("warn")} ${stillOld}\n`);
   if (runtime.owner !== "wrap" || (!explicit && runtimeInUse(port))) {
-    process.stderr.write(`${mark("warn")} ${stillOld}\n`);
+    warn();
     return;
   }
   const token = proxyShutdownToken(port, runtime.instance_token);
-  if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, ...(token ? { token } : {}) }])).length) {
-    process.stderr.write(`${mark("warn")} ${stillOld}\n`);
+  if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, runFile: proxyRunStatePath(port), ...(token ? { token } : {}) }])).length) {
+    warn();
     return;
   }
   const opts = defaultWrapOptions();
@@ -6783,7 +6818,7 @@ async function spawnWrapped(
     env = direct
       ? { ...process.env }
       : agent?.id === "codex"
-        ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, includeShrink, ephemeralDelegateMcp)
+        ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, ephemeralDelegateMcp)
         : buildWrapEnv(agent, gw, opts.mcpMode, cmdArgs, runtime.owner === "unknown" ? undefined : runtime);
     if (!direct && agent?.id === "claude") {
       const pluginDir = buildClaudeEphemeralPlugin(ephemeralMcpBinary, includeShrink, Boolean(opts.autoRecall), ephemeralDelegateMcp);
@@ -8125,7 +8160,6 @@ function buildCodexEphemeralHome(
   gw: string,
   subscription: boolean,
   mcpBinary: string | undefined,
-  includeShrink: boolean,
   delegateMcp: { command: string; args: string[] } | null,
 ): string {
   const sourceHome = codexHomeDir();
@@ -8164,7 +8198,9 @@ function buildCodexEphemeralHome(
     { mode: 0o600 },
   );
 
-  const hooks = nativeHooksDocument("codex", includeShrink, readJsonObject(join(sourceHome, "hooks.json")));
+  // The hooks the native door writes (codexNativeMutations): no shrink-hook,
+  // and not the installer's always-on voice hook beside ours.
+  const hooks = nativeHooksDocument("codex", false, withoutInstallerCodexHook(readJsonObject(join(sourceHome, "hooks.json"))));
   writeFileSync(join(outDir, "hooks.json"), JSON.stringify(hooks, null, 2) + "\n", { mode: 0o600 });
 
   linkCodexReadOnly(sourceHome, outDir, "skills");
@@ -8176,7 +8212,6 @@ function buildCodexEphemeralWrapEnv(
   gw: string,
   subscription: boolean,
   mcpBinary: string | undefined,
-  includeShrink: boolean,
   delegateMcp: { command: string; args: string[] } | null,
 ): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { ...process.env };
@@ -8184,7 +8219,7 @@ function buildCodexEphemeralWrapEnv(
   // The ephemeral CODEX_HOME points Codex at the same loopback gateway, so it
   // needs the same proxy exemption the base-url wrap path gets.
   Object.assign(env, gatewayNoProxyEnv(gw));
-  env.CODEX_HOME = buildCodexEphemeralHome(gw, subscription, mcpBinary, includeShrink, delegateMcp);
+  env.CODEX_HOME = buildCodexEphemeralHome(gw, subscription, mcpBinary, delegateMcp);
   return env;
 }
 
@@ -9660,15 +9695,18 @@ function withoutInstallerCodexHook(root: Record<string, unknown>): Record<string
 // trusted_hash in config.toml. Caveman never writes that itself. Read for the
 // SessionStart hook, the one that restarts the runtime. The path in the key is
 // CODEX_HOME canonicalized when set, ~/.codex as is otherwise, so it is
-// compared as a file. A hash recorded for an older command still reads as
-// trusted here; Codex then asks again in /hooks.
+// compared as a file. The key is a position, so the hash must be this hook's:
+// one recorded for whatever sat there before (the installer's hook enable
+// took out, an older command) is a hook Codex calls modified and skips.
 function codexHooksTrusted(): boolean {
   const hooksPath = codexHooksPath();
   let group = -1;
+  let hash = "";
   try {
     const hooks = parseJsonFileObject(hooksPath, fileBytes(hooksPath)).hooks as Record<string, unknown> | undefined;
     const list = hooks && Array.isArray(hooks.SessionStart) ? hooks.SessionStart as Array<Record<string, unknown>> : [];
     group = list.findIndex((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") === "native-hook:codex");
+    if (group !== -1) hash = codexSessionStartHash(list[group]!);
   } catch { return false; }
   if (group === -1) return false;
   const real = (path: string) => { try { return realpathSync(path.replace(/^\\\\\?\\/, "")); } catch { return undefined; } };
@@ -9682,9 +9720,29 @@ function codexHooksTrusted(): boolean {
       try { key = quoted === undefined ? undefined : quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted); } catch { key = undefined; }
       const at = typeof key === "string" ? key.match(/^(.*):session_start:(\d+):0$/) : null;
       trusting = Boolean(at && Number(at[2]) === group && target && real(at[1]!) === target);
-    } else if (trusting && /^\s*trusted_hash\s*=/.test(line)) return true;
+    } else if (trusting && line.match(/^\s*trusted_hash\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/)?.slice(1).includes(hash)) return true;
   }
   return false;
+}
+
+// The hash Codex trusts a hooks.json SessionStart hook by (codex-rs hooks
+// discovery, hook_hash): sha256 of the compact JSON, keys sorted, of the
+// event, the group's matcher and the one handler with its timeout defaulted
+// to 600 s. Checked against codex 0.161.0. Keys are written in sorted order.
+function codexSessionStartHash(group: Record<string, unknown>): string {
+  const handler = (group.hooks as Array<Record<string, unknown>>)[0]!;
+  const identity = {
+    event_name: "session_start",
+    hooks: [{
+      async: handler.async === true,
+      command: handler.command,
+      ...(typeof handler.statusMessage === "string" ? { statusMessage: handler.statusMessage } : {}),
+      timeout: Math.max(typeof handler.timeout === "number" ? handler.timeout : 600, 1),
+      type: "command",
+    }],
+    ...(typeof group.matcher === "string" ? { matcher: group.matcher } : {}),
+  };
+  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
 }
 
 // What Codex still asks before Caveman's hooks run.
@@ -10553,7 +10611,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     if (operation.kind !== "codex-hooks" || !before) return before;
     const root = parseJsonFileObject(operation.file, before);
     const stripped = withoutInstallerCodexHook(root);
-    return JSON.stringify(stripped) === JSON.stringify(root) ? before : Object.keys(stripped).length ? jsonBytes(stripped) : null;
+    return JSON.stringify(stripped) === JSON.stringify(root) ? before : Object.keys(stripped).length ? jsonBytes(stripped, before) : null;
   }
 
   if (operation.kind === "claude-settings") {
@@ -13862,7 +13920,7 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
       return removeMcpCodexToml(serverName);
     case "opencode":
       // An earlier install wrote opencode.json even beside an opencode.jsonc.
-      return [opencodeConfigPath(), join(opencodeConfigDir(), "opencode.json")].every((path) => removeMcpJson(path, ["mcp", serverName]));
+      return [opencodeConfigPath(), join(opencodeConfigDir(), "opencode.json")].map((path) => removeMcpJson(path, ["mcp", serverName])).every(Boolean);
     case "kilo":
     case "qwen":
       throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
@@ -13912,11 +13970,12 @@ function removeMcpCodexToml(serverName = "caveman"): boolean {
 function removeMcpJson(path: string, keyPath: string[]): boolean {
   let root: Record<string, unknown>;
   let bom = "";
+  let text = "";
   try {
-    const text = readFileSync(path, "utf8");
+    text = readFileSync(path, "utf8");
     // A UTF-8 BOM (Windows PowerShell 5.1) is kept.
     if (text.startsWith("\uFEFF")) bom = "\uFEFF";
-    const parsed = JSON.parse(text.slice(bom.length));
+    const parsed = parseJsonc(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
     root = parsed as Record<string, unknown>;
   } catch (e) {
@@ -13933,6 +13992,7 @@ function removeMcpJson(path: string, keyPath: string[]): boolean {
   if (!(keyPath[keyPath.length - 1]! in cur)) return true;
   delete cur[keyPath[keyPath.length - 1]!];
   try {
+    keepJsoncOriginal(path, text);
     writeFileSync(path, bom + JSON.stringify(root, null, 2) + "\n");
     return true;
   } catch (e) {
@@ -16098,13 +16158,14 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
 function installMcpJson(path: string, keyPath: string[], value: unknown): boolean {
   let root: Record<string, unknown> = {};
   let bom = "";
+  let text = "";
   try {
-    const text = readFileSync(path, "utf8");
+    text = readFileSync(path, "utf8");
     // A UTF-8 BOM (Windows PowerShell 5.1) is kept.
     if (text.startsWith("\uFEFF")) bom = "\uFEFF";
     const raw = text.trim();
     if (raw) {
-      const parsed = JSON.parse(raw);
+      const parsed = parseJsonc(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         root = parsed as Record<string, unknown>;
       } else {
@@ -16127,12 +16188,22 @@ function installMcpJson(path: string, keyPath: string[], value: unknown): boolea
   cur[keyPath[keyPath.length - 1]!] = value;
   try {
     mkdirSync(dirname(path), { recursive: true });
+    keepJsoncOriginal(path, text);
     writeFileSync(path, bom + JSON.stringify(root, null, 2) + "\n");
     return true;
   } catch (e) {
     console.error(`${mark("warn")} cannot write ${path}: ${(e as Error).message}`);
     return false;
   }
+}
+
+// A JSONC config is rewritten as plain JSON, so its comments go: keep the
+// original and say where, as enable does.
+function keepJsoncOriginal(path: string, text: string): void {
+  try { JSON.parse(text.replace(/^\uFEFF/, "").trim() || "{}"); return; } catch { /* comments */ }
+  const backup = join(cavemanHome(), "integrations", "backups", `mcp-${randomUUID()}`, basename(path));
+  atomicWriteFile(backup, Buffer.from(text));
+  console.error(`${mark("warn")} comments in ${path} were not kept; the original is saved at ${backup}`);
 }
 
 function writeMcpMarker(agentId: string, mcp: { command: string; args: string[] }): void {
@@ -16417,17 +16488,18 @@ function shouldShrink(command: string): boolean {
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
   // Never a package runner's cached copy when a lasting one exists.
   const command = durableCaveman() ?? which("caveman") ?? which("cave");
-  if (!command) return hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
+  if (!command) return hookExecutableInvocation(stableNodePath(), process.argv[1]!, process.platform, powershell);
   // npm links `caveman` to a `#!/usr/bin/env node` script, and a host started
   // from a GUI or launchd often has no node on PATH (nvm, volta, Homebrew):
-  // run it with this node, as the lifecycle hooks name theirs (`--node`).
-  // Doctor flags that node once an upgrade removes it; --fix re-renders.
+  // run it with this node, named as the lifecycle hooks name theirs (`--node`)
+  // so `brew upgrade` does not delete it. Unlike the bridge, this command has
+  // no fallback node: doctor flags it once an upgrade removes it; --fix re-renders.
   let script = false;
   try {
     script = hookCommandBasename(process.execPath) === "node" && /\.[cm]?js$/.test(realpathSync(command));
   } catch { /* unresolvable: run it as found */ }
   return script
-    ? hookExecutableInvocation(process.execPath, command, process.platform, powershell)
+    ? hookExecutableInvocation(stableNodePath(), command, process.platform, powershell)
     : hookExecutableInvocation(command, undefined, process.platform, powershell);
 }
 
@@ -20527,7 +20599,7 @@ async function status(argv: string[]) {
 
   const states: OffState[] = [];
   if (!versionInfo) states.push(fixedOffState("binary-missing", OFF_STATES.binaryMissing));
-  if (listening && runtime.owner === "unknown" && versionInfo?.capabilities.includes("run_state")) {
+  if (listening && runtime.owner === "unknown" && versionInfo?.capabilities.includes("run_state") && await portHeldByOther(host, port, versionInfo)) {
     states.push(OFF_STATES.foreignProcess(host, port));
   }
   if (runtime.owner !== "unknown" && runtime.mode && runtime.mode !== gate.mode) {
