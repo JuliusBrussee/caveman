@@ -109,14 +109,15 @@ class _Watchdog:
 
 
 class _Budget(io.RawIOBase):
-    """The socket http.client reads a response through (the CONNECT reply included): every recv gets what is left of
-    the deadline as its timeout. On Windows the watchdog's shutdown never wakes a blocked read, so this alone bounds
-    the line-by-line reads of a trickled status line, headers or chunked body there."""
+    """The socket http.client reads a response through (the CONNECT reply included). On Windows a shutdown never wakes
+    a blocked read, neither the watchdog's nor close()'s, so every recv waits at most what is left of the deadline, in
+    short slices that notice close() in between. That alone bounds a trickled status line, headers or chunked body
+    there."""
 
-    def __init__(self, sock, deadline: float):
+    def __init__(self, sock, deadline: float, closed):
         # makefile() keeps the descriptor open while this reader lives, as http.client's own reader does: a close() on
         # another thread then only shuts the socket down, which wakes the read, instead of closing it under the read.
-        self._sock, self._raw, self._deadline = sock, sock.makefile("rb", buffering=0), deadline
+        self._sock, self._raw, self._deadline, self._closed = sock, sock.makefile("rb", buffering=0), deadline, closed
 
     def makefile(self, _mode):
         return io.BufferedReader(self)
@@ -125,16 +126,22 @@ class _Budget(io.RawIOBase):
         return True
 
     def readinto(self, buffer):
-        self._sock.settimeout(_left(self._deadline))
-        return self._raw.readinto(buffer)
+        while True:
+            # ponytail: polls close() every 100 ms; select on a wake-up socketpair if that latency ever matters.
+            self._sock.settimeout(min(_left(self._deadline), 0.1))
+            try:
+                return self._sock.recv_into(buffer)
+            except TimeoutError:
+                if self._closed():
+                    raise OSError("transport closed") from None
 
     def close(self) -> None:
         self._raw.close()
         super().close()
 
 
-def _budgeted(deadline: float):
-    return lambda sock, *args, **kwargs: http.client.HTTPResponse(_Budget(sock, deadline), *args, **kwargs)
+def _budgeted(deadline: float, closed):
+    return lambda sock, *args, **kwargs: http.client.HTTPResponse(_Budget(sock, deadline, closed), *args, **kwargs)
 
 
 def _reusable(sock) -> bool:
@@ -241,11 +248,8 @@ class HTTPTransport:
             active = list(self._active)
             self._idle.clear()
             self._active.clear()
-        for connection in active:
-            try:  # shutdown wakes a thread blocked in recv; close alone does not on every platform
-                connection.sock and connection.sock.shutdown(socket.SHUT_RDWR)
-            except OSError:
-                pass
+        for connection in active:  # shutdown wakes a thread blocked in recv; close alone does not on every platform
+            connection.sock and _shutdown(connection.sock)
         for connection in idle + active:
             connection.close()
 
@@ -275,7 +279,7 @@ class HTTPTransport:
             connection = http.client.HTTPConnection(via_host, via_port)
         connection.timeout = _left(deadline)
         connection._create_connection = lambda address, *_: _dial(address, deadline, watchdog)
-        connection.response_class = _budgeted(deadline)  # the CONNECT reply is read through it too
+        connection.response_class = _budgeted(deadline, lambda: self._closed)  # the CONNECT reply is read through it too
         connection.connect()  # dial + CONNECT tunnel + TLS handshake, bounded together by the watchdog
         return connection
 
@@ -318,7 +322,7 @@ class HTTPTransport:
             connection.close()
 
     def _exchange(self, connection, key, method, target, headers, body, deadline, watchdog: _Watchdog):
-        connection.response_class = _budgeted(deadline)
+        connection.response_class = _budgeted(deadline, lambda: self._closed)
         connection.sock.settimeout(_left(deadline))
         connection.request(method, target, body=body, headers=headers)
         response = connection.getresponse()

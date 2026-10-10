@@ -321,12 +321,23 @@ class TestDefaultTransport(unittest.TestCase):
         with self.assertRaises(http.client.IncompleteRead):
             transport.HTTPTransport(env={})("GET", f"http://127.0.0.1:{server.getsockname()[1]}/", {}, None, 2.0)
 
+    def test_close_releases_a_call_when_shutdown_cannot_wake_its_read(self):
+        # On Windows close()'s shutdown never wakes the blocked read, so the call waited out its whole deadline.
+        server = raw_server(lambda conn: (conn.recv(65536), time.sleep(3), conn.close()))
+        self.addCleanup(server.close)
+        pool = transport.HTTPTransport(env={})
+        threading.Timer(0.2, pool.close).start()
+        started = time.monotonic()
+        with patch.object(transport, "_shutdown", lambda sock: None), self.assertRaises(OSError):
+            pool("GET", f"http://127.0.0.1:{server.getsockname()[1]}/", {}, None, 2.0)
+        self.assertLess(time.monotonic() - started, 1)
+
     def test_a_response_reader_keeps_its_socket_open_across_close(self):
         # A reader holding no reference let close() on another thread free the descriptor under a blocked read: EBADF,
         # or a read that slept out its timeout on whatever socket reused the number.
         sock, peer = socket.socketpair()
         self.addCleanup(peer.close)
-        response = transport._budgeted(time.monotonic() + 5)(sock)
+        response = transport._budgeted(time.monotonic() + 5, lambda: False)(sock)
         sock.close()
         self.assertNotEqual(sock.fileno(), -1)
         response.close()
