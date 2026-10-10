@@ -981,12 +981,20 @@ test('plugin install after a failed one drops the standalone hook entries', () =
   const configDir = path.join(dir, 'claude-config');
   try {
     // `plugin list --json` reports the plugin it just installed as on.
-    const env = recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '',
+    const on = () => recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '',
       JSON.stringify([{ id: 'caveman@caveman', version: '3.2.0', scope: 'user', enabled: true }]));
+    const env = on();
     const first = runInstaller(['--only', 'claude'], configDir, { ...env, FAKE_CLAUDE_FAIL_INSTALL: '1' });
     assert.match(first.stdout, /falling back to standalone wiring/, first.stdout + first.stderr);
     const settingsPath = path.join(configDir, 'settings.json');
     assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'));
+
+    // A dry run installs no plugin, so none is on yet; the real run installs
+    // it turned on and removes these, which is what the dry run says.
+    const dry = runInstaller(['--only', 'claude', '--dry-run'], configDir, recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '', '[]'));
+    assert.match(dry.stdout, /would remove \d+ standalone caveman hook entries/, dry.stdout + dry.stderr);
+    assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'), 'the dry run removed the hooks');
+    on();
 
     // `claude` reads CLAUDE_CONFIG_DIR, not --config-dir: a plugin found there
     // says nothing about this profile, whose hooks stay.
