@@ -21,6 +21,7 @@ import {
   setupPlatform,
 } from "../dist/index.js";
 import { nativePipePath } from "../dist/native-pipe.js";
+import { leaveHomeAclAlone, OWNED_HOME_ENTRIES, systemTool } from "../dist/home-acl.js";
 
 test("CLI setup accepts Windows x64 and arm64", () => {
   assert.deepEqual(setupPlatform("win32", "x64"), { os: "win32", arch: "amd64" });
@@ -133,6 +134,46 @@ test("a caveman home outside the Windows profile is private to this user", { ski
   const acl = spawnSync("icacls", [join(parent, "home")], { encoding: "utf8" }).stdout;
   assert.doesNotMatch(acl, /Authenticated Users/);
   assert.match(acl, /NT AUTHORITY\\SYSTEM:\(OI\)\(CI\)\(F\)/);
+  // A folder the user keeps other things in keeps its permissions.
+  mkdirSync(join(parent, "work"));
+  writeFileSync(join(parent, "work", "notes.txt"), "mine");
+  process.env.CAVEMAN_HOME = join(parent, "work");
+  process.env.USERPROFILE = join(parent, "profile");
+  try { ensureCavemanHome(); } finally {
+    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : process.env[key] = value;
+  }
+  assert.match(spawnSync("icacls", [join(parent, "work")], { encoding: "utf8" }).stdout, /Authenticated Users/);
+});
+
+// icacls /inheritance:r rewrites a folder's permissions and everything below
+// it for good. Only a plain local folder holding nothing but caveman's own
+// files is caveman's to rewrite.
+test("a Windows home's permissions are rewritten only when caveman owns the folder", () => {
+  const plain = { names: [], resolved: "D:\\caveman", link: false };
+  const ours = ["bin", "run", "cloud.json", "cloud.json.123.tmp", "credentials", "caveman.db-wal", "proxy.log.1", ".caveman-sqlite-1", "provider-logins.json.lock"];
+  assert.equal(leaveHomeAclAlone("D:\\caveman", plain), false);
+  assert.equal(leaveHomeAclAlone("d:\\caveman\\", { ...plain, names: ours }), false);
+  assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: [...ours, "notes.txt"] }), true, "a user's file");
+  assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, names: ["binaries"] }), true, "a name that only starts like ours");
+  assert.equal(leaveHomeAclAlone("D:\\", { ...plain, resolved: "D:\\" }), true, "drive root");
+  assert.equal(leaveHomeAclAlone("\\\\server\\share\\caveman", plain), true, "UNC path");
+  assert.equal(leaveHomeAclAlone("Z:\\caveman", { ...plain, resolved: "\\\\server\\share\\caveman" }), true, "mapped network drive");
+  assert.equal(leaveHomeAclAlone("D:\\caveman", { ...plain, link: true }), true, "junction");
+});
+
+// The proxy makes the same decision (proxy/internal/securehome); a name one
+// side writes and the other does not know would leave that home broad.
+test("the CLI and the proxy agree on what caveman writes into its home", () => {
+  const go = readFileSync(new URL("../../../proxy/internal/securehome/securehome.go", import.meta.url), "utf8");
+  const block = /var ownedEntries = \[\]string\{([\s\S]*?)\n\}/.exec(go)?.[1] ?? "";
+  assert.deepEqual([...block.matchAll(/"([^"]+)"/g)].map((match) => match[1]), OWNED_HOME_ENTRIES);
+});
+
+// A bare whoami or icacls is looked up in the current directory first on
+// Windows, so a copy planted in a project would run during setup.
+test("Windows system tools run from System32", () => {
+  assert.equal(systemTool("whoami", { SystemRoot: "C:\\WINDOWS" }), "C:\\WINDOWS\\System32\\whoami.exe");
+  assert.equal(systemTool("icacls", {}), "C:\\Windows\\System32\\icacls.exe");
 });
 
 test("every Windows hook executable prefix uses PowerShell invocation", () => {

@@ -70,6 +70,7 @@ import { portableInvocation } from "./portable-command.js";
 import { ensureModuleBinaries, NoModuleIndexError, readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { nativePipePath } from "./native-pipe.js";
+import { leaveHomeAclAlone, systemTool } from "./home-acl.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
@@ -12925,12 +12926,17 @@ export function ensureCavemanHome(): string {
   // inherits the drive's "Authenticated Users: Modify", so every local account
   // could read the credentials written here. Make it this user, SYSTEM and
   // Administrators only, as the proxy does (proxy/internal/securehome). The
-  // profile is private already and is left alone.
+  // profile is private already and is left alone, and so is a home that is
+  // not caveman's to rewrite (leaveHomeAclAlone).
   const outside = process.platform === "win32" && process.env.USERPROFILE ? relative(process.env.USERPROFILE, home) : "";
   if (outside.startsWith("..") || isAbsolute(outside)) {
-    const user = spawnSync("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
-    const sid = /,"(S-1-[\d-]+)"\s*$/.exec(user.stdout ?? "")?.[1];
-    if (sid) spawnSync("icacls", [home, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], { stdio: "ignore", windowsHide: true });
+    let seen: { names: string[]; resolved: string; link: boolean } | undefined;
+    try { seen = { names: readdirSync(home), resolved: realpathSync.native(home), link: lstatSync(home).isSymbolicLink() }; } catch { /* unreadable: leave it alone */ }
+    if (seen && !leaveHomeAclAlone(home, seen)) {
+      const user = spawnSync(systemTool("whoami"), ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
+      const sid = /,"(S-1-[\d-]+)"\s*$/.exec(user.stdout ?? "")?.[1];
+      if (sid) spawnSync(systemTool("icacls"), [home, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], { stdio: "ignore", windowsHide: true });
+    }
   }
   return home;
 }

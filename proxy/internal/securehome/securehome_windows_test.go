@@ -4,6 +4,7 @@ package securehome
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
@@ -47,6 +48,93 @@ func TestRestrictMakesABroadHomeOwnerOnlyAndLeavesItAloneAfter(t *testing.T) {
 	}
 }
 
+// CAVEMAN_HOME pointed at a folder the user keeps other things in, or a
+// junction to one: the owner-only DACL would replace theirs for good, with no
+// copy of the old one kept.
+func TestRestrictLeavesAPopulatedFolderAndAJunctionAlone(t *testing.T) {
+	broad := "D:P(A;OICI;0x1301bf;;;AU)(A;OICI;FA;;;" + tokenUser(t) + ")"
+	populated := t.TempDir()
+	setDACL(t, populated, broad)
+	if err := os.WriteFile(filepath.Join(populated, "notes.txt"), []byte("mine"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	target := t.TempDir()
+	setDACL(t, target, broad)
+	link := filepath.Join(t.TempDir(), "caveman")
+	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
+		t.Fatalf("mklink /J: %v %s", err, out)
+	}
+	for _, tt := range []struct{ home, check string }{{populated, populated}, {link, target}} {
+		before := sddl(t, tt.check)
+		if err := Restrict(tt.home); err != nil {
+			t.Fatal(err)
+		}
+		if after := sddl(t, tt.check); after != before {
+			t.Fatalf("Restrict(%s) rewrote %s:\nbefore %s\nafter  %s", tt.home, tt.check, before, after)
+		}
+	}
+}
+
+func TestLeaveAloneWindowsRootsAndShares(t *testing.T) {
+	for home, want := range map[string]bool{
+		`D:\`:                    true,
+		`C:\`:                    true,
+		`D:`:                     true,
+		`\\server\share`:         true,
+		`\\server\share\caveman`: true,
+		`\\?\D:\caveman`:         true,
+		`D:\caveman`:             false,
+	} {
+		if got := leaveAlone(home, nil); got != want {
+			t.Errorf("leaveAlone(%q) = %v, want %v", home, got, want)
+		}
+	}
+}
+
+// Anyone but this user, SYSTEM, Administrators, CREATOR OWNER and OWNER RIGHTS
+// is broad. A denylist of Everyone, Authenticated Users, Users and Guests
+// missed INTERACTIVE, NETWORK, Domain Users, other accounts and conditional
+// (callback) entries.
+func TestGrantsBroadAccessIsAnAllowlist(t *testing.T) {
+	user := tokenUser(t)
+	for sddl, want := range map[string]bool{
+		"D:P(A;OICI;FA;;;" + user + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)": false,
+		"D:P(A;OICIIO;FA;;;CO)(A;;FA;;;OW)(A;OICI;FA;;;" + user + ")":   false,
+		"D:P(D;OICI;FA;;;WD)(A;OICI;FA;;;" + user + ")":                 false,
+		"D:P(A;OICI;0x1301bf;;;AU)":                                     true,
+		"D:P(A;OICI;FR;;;IU)":                                           true,
+		"D:P(A;OICI;FR;;;NU)":                                           true,
+		"D:P(A;OICI;FR;;;S-1-5-21-1-2-3-513)":                           true,
+		"D:P(A;OICI;FR;;;S-1-5-21-1-2-3-1001)":                          true,
+		"D:P(XA;OICI;FR;;;IU;(Member_of {SID(BA)}))":                    true,
+	} {
+		descriptor, err := windows.SecurityDescriptorFromString(sddl)
+		if err != nil {
+			t.Fatalf("%s: %v", sddl, err)
+		}
+		dacl, _, err := descriptor.DACL()
+		if err != nil {
+			t.Fatal(err)
+		}
+		sid, err := windows.StringToSid(user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got, err := grantsBroadAccess(dacl, sid); err != nil || got != want {
+			t.Errorf("grantsBroadAccess(%s) = %v %v, want %v", sddl, got, err, want)
+		}
+	}
+}
+
+func tokenUser(t *testing.T) string {
+	t.Helper()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user.User.Sid.String()
+}
+
 func setDACL(t *testing.T, path, sddl string) {
 	t.Helper()
 	descriptor, err := windows.SecurityDescriptorFromString(sddl)
@@ -73,7 +161,11 @@ func broadPath(t *testing.T, path string) bool {
 	if err != nil {
 		t.Fatal(err)
 	}
-	broad, err := grantsBroadAccess(dacl)
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	broad, err := grantsBroadAccess(dacl, user.User.Sid)
 	if err != nil {
 		t.Fatal(err)
 	}
