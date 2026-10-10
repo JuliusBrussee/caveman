@@ -553,9 +553,12 @@ async function installClaude(ctx) {
   } else {
     // Use a temp dir on the same filesystem as configDir to avoid EXDEV errors
     // when Claude Code's plugin installer tries to rename across filesystems (#585).
-    const pluginEnv = sameFilesystemTmpEnv(configDir);
+    // A dry run makes none; a dir this run made goes again once it is empty.
+    const tmpExisted = fs.existsSync(path.join(configDir, 'tmp'));
+    const pluginEnv = opts.dryRun ? null : sameFilesystemTmpEnv(configDir);
     const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], { env: pluginEnv }, opts.dryRun);
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], { env: pluginEnv }, opts.dryRun);
+    if (pluginEnv && !tmpExisted) { try { fs.rmdirSync(pluginEnv.TMPDIR); } catch (_) {} }
     if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
       pluginInstallSucceeded = true;
@@ -1755,9 +1758,12 @@ async function installHooks(ctx) {
   }
   // Backup once, preserved across reinstalls. Without the !fs.existsSync(bak)
   // guard, the second install would overwrite the only known-good copy with
-  // the already-merged file, destroying recovery.
+  // the already-merged file, destroying recovery. A file already holding our
+  // hooks is our own earlier merge, not the user's original: restoring it
+  // would bring back hooks uninstall deleted. Comments still get kept.
   const bak = settingsPath + '.bak';
-  if (fs.existsSync(settingsPath) && !fs.existsSync(bak)) {
+  const ours = SETTINGS.removeCavemanHooks(structuredClone(settings)) > 0;
+  if (fs.existsSync(settingsPath) && !fs.existsSync(bak) && (settingsMeta.jsonc || !ours)) {
     try { fs.copyFileSync(settingsPath, bak); } catch (_) {}
   }
   // We re-serialize plain JSON, so // and /* */ comments do not survive. Say
@@ -2113,9 +2119,13 @@ function uninstall(ctx) {
 
     // caveman-shrink MCP — only run if `claude mcp` subcommand exists. Tolerate
     // non-zero exit (server may have never been registered).
+    // Captured: most machines never registered it, and the CLI says so on
+    // stderr every time.
     const mcpHelp = captureSpawn('claude', ['mcp', '--help']);
     if (mcpHelp.status === 0) {
-      runSpawn('claude', ['mcp', 'remove', 'caveman-shrink'], null, opts.dryRun);
+      const args = ['mcp', 'remove', 'caveman-shrink'];
+      const r = opts.dryRun ? runSpawn('claude', args, null, true) : captureSpawn('claude', args);
+      if (spawnOk(r) && !opts.dryRun) ok('  removed the caveman-shrink MCP server');
     }
   }
 

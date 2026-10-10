@@ -909,9 +909,10 @@ test('claude plugin install success reports SessionEnd manifest coverage', {
 });
 
 // A Node `claude` that appends each call's argv to `record`, answers
-// `plugin list` with `list`, and fails `plugin install` while
-// FAKE_CLAUDE_FAIL_INSTALL=1. Windows gets the .cmd shape portableInvocation
-// launches. Returns env with it first on PATH.
+// `plugin list` with `list`, fails `plugin install` while
+// FAKE_CLAUDE_FAIL_INSTALL=1, and has no caveman-shrink MCP server. Windows
+// gets the .cmd shape portableInvocation launches. Returns env with it first
+// on PATH.
 function recordingClaudeEnv(root, record, list = '') {
   const dir = path.join(root, 'recording-bin');
   fs.mkdirSync(dir, { recursive: true });
@@ -919,7 +920,8 @@ function recordingClaudeEnv(root, record, list = '') {
     + 'const args = process.argv.slice(2);\n'
     + `fs.appendFileSync(${JSON.stringify(record)}, args.join(' ') + '\\n');\n`
     + `if (args[0] === 'plugin' && args[1] === 'list') process.stdout.write(${JSON.stringify(list)});\n`
-    + "if (args[1] === 'install' && process.env.FAKE_CLAUDE_FAIL_INSTALL === '1') process.exit(1);\n";
+    + "if (args[1] === 'install' && process.env.FAKE_CLAUDE_FAIL_INSTALL === '1') process.exit(1);\n"
+    + "if (args[0] === 'mcp' && args[1] === 'remove') { process.stderr.write('No MCP server named caveman-shrink\\n'); process.exit(1); }\n";
   if (process.platform === 'win32') {
     fs.writeFileSync(path.join(dir, 'claude.js'), body);
     fs.writeFileSync(path.join(dir, 'claude.cmd'), '@echo off\r\n"%~dp0\\node.exe" "%~dp0\\claude.js" %*\r\n');
@@ -972,6 +974,30 @@ test('plugin install after a failed one drops the standalone hook entries', () =
     const settings = SETTINGS.readSettings(settingsPath);
     assert.equal(SETTINGS.removeCavemanHooks(structuredClone(settings)), 0, `standalone hooks left beside the plugin: ${JSON.stringify(settings.hooks)}`);
     assert.match(getStatuslineCommand(settings), /caveman-statusline/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A dry run writes nothing; a reinstall on a fresh home does not keep
+// caveman's own merged settings.json as "the original" backup; the plugin
+// install's scratch TMPDIR goes again; uninstall stays quiet about a
+// caveman-shrink MCP server that was never registered.
+test('Claude install and uninstall leave no stray backup, scratch dir or noise', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude-config');
+  try {
+    const env = recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'));
+    runInstaller(['--only', 'claude', '--dry-run'], configDir, env);
+    assert.equal(fs.existsSync(configDir), false, 'dry run created the config dir');
+
+    for (let i = 0; i < 2; i++) runInstaller(['--only', 'claude'], configDir, { ...env, FAKE_CLAUDE_FAIL_INSTALL: '1' });
+    assert.equal(fs.existsSync(path.join(configDir, 'settings.json.bak')), false, 'backup of caveman\'s own merge');
+    assert.equal(fs.existsSync(path.join(configDir, 'tmp')), false, 'plugin install scratch dir left behind');
+
+    const u = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(u.status, 0, u.stdout + u.stderr);
+    assert.doesNotMatch(u.stdout + u.stderr, /No MCP server named/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
