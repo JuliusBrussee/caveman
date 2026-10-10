@@ -2325,6 +2325,37 @@ test("enable opencode writes where OpenCode reads: XDG_CONFIG_HOME and opencode.
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// OpenCode merges config.json, then opencode.json, then opencode.jsonc (one it
+// seeds itself): Caveman's route in the .jsonc would win over the user's own
+// endpoint in either of the others, and send their key to the public API.
+test("enable opencode finds the user's own endpoint in every global config file", async () => {
+  const fx = fixture();
+  const dir = join(fx.home, ".config", "opencode");
+  mkdirSync(dir, { recursive: true });
+  const seeded = '{\n  "$schema": "https://opencode.ai/config.json"\n}';
+  writeFileSync(join(dir, "opencode.jsonc"), seeded);
+  for (const name of ["opencode.json", "config.json"]) {
+    const body = JSON.stringify({ provider: { openai: { options: { baseURL: "https://litellm.corp.example/v1", apiKey: "sk-corp" } } } }) + "\n";
+    writeFileSync(join(dir, name), body);
+    const out = await run(["enable", "opencode"], fx.env);
+    assert.notEqual(out.code, 0, name);
+    assert.match(out.stderr, new RegExp(`own endpoint https://litellm\\.corp\\.example/v1 \\(provider\\.openai\\.options\\.baseURL in \\S+/${name.replace(".", "\\.")}\\)`), name);
+    assert.equal(readFileSync(join(dir, "opencode.jsonc"), "utf8"), seeded, name);
+    assert.equal(readFileSync(join(dir, name), "utf8"), body, name);
+    rmSync(join(dir, name));
+  }
+  // The MCP registration goes into the file OpenCode reads last, not a second one.
+  const mcp = await run(["mcp", "install", "opencode"], fx.env);
+  assert.equal(mcp.code, 0, mcp.stderr);
+  assert.ok(JSON.parse(readFileSync(join(dir, "opencode.jsonc"), "utf8")).mcp.caveman);
+  assert.equal(existsSync(join(dir, "opencode.json")), false);
+  // An earlier install's entry in opencode.json goes too.
+  writeFileSync(join(dir, "opencode.json"), JSON.stringify({ theme: "system", mcp: { caveman: { type: "local", command: ["caveman-mcp"] } } }));
+  assert.equal((await run(["mcp", "uninstall", "opencode"], fx.env)).code, 0);
+  assert.equal(JSON.parse(readFileSync(join(dir, "opencode.jsonc"), "utf8")).mcp?.caveman, undefined);
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")), { theme: "system", mcp: {} });
+});
+
 // An endpoint of the user's own (a gateway, LiteLLM, a local model) is never
 // swapped for the proxy, whose upstream is the provider's public API: the
 // agent's requests and key would go there. Enable names it and writes nothing.
@@ -2414,4 +2445,80 @@ test("doctor gemini warns where a project .env or the shell overrides Caveman's 
   rmSync(join(project, ".env"));
   mkdirSync(join(project, ".env"));
   assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here/);
+});
+
+// An endpoint exported after Codex or OpenCode was wired: Caveman's route in
+// their config outranks it, so their key goes to the public API. Doctor and
+// enable say so and how to choose; nothing is unwired behind the user's back.
+test("doctor and enable name a shell endpoint the native route overrides", async () => {
+  const fx = fixture();
+  for (const agent of ["codex", "opencode"]) {
+    assert.equal((await run(["enable", agent], fx.env)).code, 0, agent);
+    const corp = { ...fx.env, OPENAI_BASE_URL: "https://litellm.corp.example/v1", OPENAI_API_KEY: "sk-corp" };
+    const doctor = JSON.parse((await run(["doctor", agent], corp)).stdout);
+    assert.match(doctor.warnings.join("\n"), new RegExp(`your own endpoint https://litellm\\.corp\\.example/v1 \\(OPENAI_BASE_URL in your shell\\).* Unset OPENAI_BASE_URL to keep Caveman, or run \`caveman disable ${agent}\` to use your endpoint`), agent);
+    const again = await run(["enable", agent], corp);
+    assert.match(again.stderr, /Unset OPENAI_BASE_URL to keep Caveman/, agent);
+    assert.ok(existsSync(join(fx.home, ".caveman", "integrations", `${agent}.json`)), agent);
+    assert.deepEqual(JSON.parse((await run(["doctor", agent], fx.env)).stdout).warnings, [], agent);
+  }
+});
+
+// Windows PowerShell 5.1 saves UTF-8 with a BOM. Enable reads past it, keeps
+// it, and does not mistake it for comments; disable puts the bytes back.
+test("enable reads and keeps a UTF-8 BOM in each agent's JSON config", async () => {
+  const fx = fixture();
+  const body = '﻿{"theme":"dark"}\n';
+  const files = {
+    claude: [join(fx.home, ".claude", "settings.json"), join(fx.home, ".claude.json")],
+    gemini: [join(fx.home, ".gemini", "settings.json")],
+    codex: [join(fx.home, ".codex", "hooks.json")],
+    opencode: [join(fx.home, ".config", "opencode", "opencode.json")],
+  };
+  for (const [agent, paths] of Object.entries(files)) {
+    for (const path of paths) {
+      mkdirSync(dirname(path), { recursive: true });
+      writeFileSync(path, body);
+    }
+    const out = await run(["enable", agent], fx.env);
+    assert.equal(out.code, 0, `${agent}: ${out.stderr}`);
+    assert.doesNotMatch(out.stderr, /comments in/, agent);
+    for (const path of paths) {
+      const text = readFileSync(path, "utf8");
+      assert.ok(text.startsWith("﻿{"), path);
+      assert.equal(JSON.parse(text.slice(1)).theme, "dark", path);
+    }
+    assert.equal((await run(["disable", agent], fx.env)).code, 0, agent);
+    for (const path of paths) assert.equal(readFileSync(path, "utf8"), body, path);
+  }
+});
+
+// A config linked into a read-only place (home-manager into /nix/store) cannot
+// be written through: say which link and where, not a raw EACCES on a temp file.
+test("enable names a linked config whose target is read-only", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const fx = fixture();
+  const store = join(fx.home, "store");
+  mkdirSync(store);
+  writeFileSync(join(store, "settings.json"), "{}\n");
+  mkdirSync(join(fx.home, ".claude"));
+  symlinkSync(join(store, "settings.json"), join(fx.home, ".claude", "settings.json"));
+  chmodSync(store, 0o555);
+  try {
+    const out = await run(["enable", "claude"], fx.env);
+    assert.notEqual(out.code, 0);
+    assert.match(out.stderr, /\S+\/\.claude\/settings\.json links to \S+\/store\/settings\.json, which is read-only/);
+    assert.doesNotMatch(out.stderr, /EACCES|\.tmp/);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")), false);
+    assert.equal(readFileSync(join(store, "settings.json"), "utf8"), "{}\n");
+    // Every other agent's config is written through the link the same way.
+    mkdirSync(join(fx.home, ".codex"));
+    symlinkSync(join(store, "settings.json"), join(fx.home, ".codex", "hooks.json"));
+    const codex = await run(["enable", "codex"], fx.env);
+    assert.notEqual(codex.code, 0);
+    assert.match(codex.stderr, /\S+\/\.codex\/hooks\.json links to \S+\/store\/settings\.json, which is read-only/);
+    assert.doesNotMatch(codex.stderr, /EACCES|\.tmp/);
+    assert.equal(existsSync(join(fx.home, ".codex", "config.toml")), false, "the other write is rolled back");
+  } finally {
+    chmodSync(store, 0o755);
+  }
 });
