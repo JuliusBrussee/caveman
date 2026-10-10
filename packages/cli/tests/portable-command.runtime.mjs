@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -220,4 +221,62 @@ test("native executables and POSIX commands pass through", () => {
     command: "agent",
     args: ["x"],
   });
+});
+
+// The installer (CommonJS, runs before any build), the delegate MCP server
+// (copied verbatim into dist/) and the pi extension each launch Windows shims
+// too. The first two cannot import this TypeScript, so they keep ported copies;
+// every copy must launch the same shims the same way, or one of them is the
+// next Windows-only break.
+test("every copy of the Windows shim launcher agrees", async () => {
+  const require = createRequire(import.meta.url);
+  const installer = require("../../../installer/lib/portable-process.js");
+  const delegate = await import("../../../agents/delegate/portable-process.mjs");
+  const pi = await import("../../pi-extension/src/portable-command.ts");
+  const copies = {
+    cli: (command, args, env) => portableInvocation(command, args, "win32", env),
+    installer: (command, args, env) => installer.portableInvocation(command, args, { platform: "win32", env, execPath: process.execPath }),
+    delegate: (command, args, env) => delegate.portableInvocation(command, args, "win32", env),
+    pi: (command, args, env) => pi.portableInvocation(command, args, "win32", env),
+  };
+  const node = (script) => ({ node: script });
+  const cases = [
+    ["npm cmd-shim", { "a.CMD": 'endLocal & "%_prog%" "%dp0%\\pkg\\cli.js" %*\r\n', "pkg/cli.js": "" }, "a", node("pkg/cli.js")],
+    ["managed Pi launcher", { "a.CMD": '@ECHO off\r\nnode "%~dp0pi-launcher.js" %*\r\n', "pi-launcher.js": "" }, "a", node("pi-launcher.js")],
+    ["pnpm IF EXIST", { "a.CMD": '@SETLOCAL\r\n@IF EXIST "%~dp0\\node.exe" (\r\n  "%~dp0\\node.exe"   "%~dp0\\pkg\\cli.js" %*\r\n) ELSE (\r\n  node   "%~dp0\\pkg\\cli.js" %*\r\n)\r\n', "pkg/cli.js": "" }, "a", node("pkg/cli.js")],
+    ["nested cmd to cmd", { "a.CMD": '@ECHO off\r\n"%~dp0b\\a.cmd" %*\r\n', "b/a.cmd": 'node "%~dp0\\cli.mjs" %*\r\n', "b/cli.mjs": "" }, "a", node("b/cli.mjs")],
+    ["stock npm.cmd", { "npm.CMD": NPM_SHIM("npm"), "node_modules/npm/bin/npm-cli.js": "" }, "npm", node("node_modules/npm/bin/npm-cli.js")],
+    ["stock npx.cmd", { "npx.CMD": NPM_SHIM("npx"), "node_modules/npm/bin/npx-cli.js": "" }, "npx", node("node_modules/npm/bin/npx-cli.js")],
+    ["npm .exe shim", { "a.CMD": '@ECHO off\r\nSETLOCAL\r\n"%dp0%\\bin\\a.exe"   %*\r\n', "bin/a.exe": "MZ" }, "a", { exe: "bin/a.exe" }],
+    ["pnpm .exe shim", { "a.CMD": '@SETLOCAL\r\n@"%~dp0\\bin\\a.exe"   %*\r\n', "bin/a.exe": "MZ" }, "a", { exe: "bin/a.exe" }],
+    ["Unix shim beside .CMD", { a: "#!/bin/sh\n", "a.CMD": 'node "%~dp0\\cli.js" %*\r\n', "cli.js": "" }, "a", node("cli.js")],
+    ["absolute extensionless path", { a: "#!/bin/sh\n", "a.CMD": 'node "%~dp0\\cli.js" %*\r\n', "cli.js": "" }, "/a", node("cli.js")],
+    ["non-Node shim", { "a.CMD": "@echo off\r\necho %*\r\n" }, "a", /cannot safely launch/],
+    ["command after an .exe forward", { "a.CMD": '"%~dp0bin\\a.exe" %* & echo unsafe\r\n', "bin/a.exe": "MZ" }, "a", /cannot safely launch/],
+    ["command after a nested forward", { "a.CMD": '"%~dp0b.bat" %*\r\necho unsafe\r\n', "b.bat": 'node "%~dp0cli.js" %*\r\n', "cli.js": "" }, "a", /cannot safely launch/],
+    ["npm.cmd running another variable", { "npm.CMD": NPM_SHIM("npm").replace('"%NPM_CLI_JS%" %*', '"%NPX_CLI_JS%" %*') }, "npm", /cannot safely launch/],
+    ["missing .exe", { "a.CMD": '"%~dp0a.exe" %*\r\n' }, "a", /target is missing/],
+    ["cycle", { "a.CMD": '"%~dp0b.cmd" %*\r\n', "b.cmd": '"%~dp0a.CMD" %*\r\n' }, "a", /cycle/],
+  ];
+  for (const [name, files, command, expected] of cases) {
+    const root = mkdtempSync(join(tmpdir(), "cave parity "));
+    try {
+      for (const [file, content] of Object.entries(files)) {
+        mkdirSync(dirname(join(root, file)), { recursive: true });
+        writeFileSync(join(root, file), content);
+      }
+      const env = { PATH: root, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+      const target = command.startsWith("/") ? join(root, command.slice(1)) : command;
+      const args = ["x&y", "%PATH%", 'quote"kept'];
+      for (const [copy, invoke] of Object.entries(copies)) {
+        const label = `${copy}: ${name}`;
+        if (expected instanceof RegExp) { assert.throws(() => invoke(target, args, env), expected, label); continue; }
+        assert.deepEqual(invoke(target, args, env), expected.exe
+          ? { command: join(root, expected.exe), args }
+          : { command: process.execPath, args: [join(root, expected.node), ...args] }, label);
+      }
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
 });
