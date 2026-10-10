@@ -340,3 +340,25 @@ test("standalone hooks refuse a foreign hooks/package.json that says type:module
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// addCommandHook refuses to overwrite a hook event it does not understand. That
+// refusal must come back as a failed claude-hooks, not a stack trace that ends
+// the run before the next agent installs.
+test('an unsupported hook event shape fails claude-hooks and the run goes on', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedEnv(dir);
+  const settingsPath = path.join(configDir, 'settings.json');
+  const odd = '{"hooks": {"SessionStart": {"foo": 1}}}\n';
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    fs.writeFileSync(settingsPath, odd);
+    const r = runInstaller(['--only', 'claude', '--only', 'grok', '--with-hooks'], configDir, env);
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stderr, /claude-hooks — .*unsupported hook event shape for SessionStart/);
+    assert.match(r.stdout, /• grok/, 'agents after Claude Code did not install');
+    assert.equal(fs.readFileSync(settingsPath, 'utf8'), odd);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});

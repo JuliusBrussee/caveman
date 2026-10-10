@@ -637,7 +637,12 @@ async function installClaude(ctx) {
 
   if (shouldWireHooks) {
     say('  → installing hooks');
-    const r = await installHooks(ctx);
+    // A throw (an event shape addCommandHook will not overwrite, a failed
+    // write) is a failed agent, not the end of the run. settings.json is
+    // written last and atomically, so it is unchanged.
+    let r;
+    try { r = await installHooks(ctx); }
+    catch (e) { r = `${e.message}; settings.json left untouched`; }
     if (r === 'ok') results.installed.push('claude-hooks');
     else if (r === 'skip') results.skipped.push(['claude-hooks', 'already wired']);
     else results.failed.push(['claude-hooks', r]);
