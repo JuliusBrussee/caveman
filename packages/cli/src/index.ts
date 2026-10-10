@@ -2869,9 +2869,18 @@ function binariesBehindPin(): string[] {
   const manifest = readBinaryInstallManifest();
   if (!manifest || manifest.release === BINARY_RELEASE) return [];
   const binDir = join(cavemanHome(), "bin");
-  return GO_BINARIES.filter((binary) => !("external" in binary)
-    && resolveGoBin(binary.name, binary.env) === join(binDir, binaryInstallFilename(binary.name)))
-    .map((binary) => binary.name);
+  return GO_BINARIES.filter((binary) => {
+    const resolved = "external" in binary ? null : resolveGoBin(binary.name, binary.env);
+    return resolved !== null && samePath(resolved, join(binDir, binaryInstallFilename(binary.name)));
+  }).map((binary) => binary.name);
+}
+
+// Whether two paths name one file. On Windows which() answers through PATHEXT
+// (`caveman-proxy.EXE`) and paths ignore case, so `===` misses the same file.
+export function samePath(a: string, b: string, platform: NodeJS.Platform = process.platform): boolean {
+  const real = (path: string) => { try { return realpathSync(path); } catch { return path; } };
+  const [x, y] = [real(a), real(b)];
+  return platform === "win32" ? x.toLowerCase() === y.toLowerCase() : x === y;
 }
 
 // A signed manifest names its release through a `RELEASE` entry: the sha256 of
