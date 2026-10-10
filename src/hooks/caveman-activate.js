@@ -194,6 +194,9 @@ const resolveActiveMode = cfg.resolveActiveMode || (() => {
   const m = readFlag(flagPath);
   return (!m || m === 'off') ? null : m;
 });
+// settings.json is JSONC: comments and trailing commas are legal there. An
+// older config module without the tolerant reader degrades to strict JSON.
+const parseSettingsFile = cfg.parseConfigFile || ((p) => JSON.parse(fs.readFileSync(p, 'utf8')));
 
 const SUBAGENT = process.argv.includes('--subagent');
 
@@ -538,18 +541,16 @@ try {
   let staleCommand = null;
   let staleKind = null; // 'gone' | 'outdated'
   if (fs.existsSync(settingsPath)) {
-    const rawSettings = fs.readFileSync(settingsPath, 'utf8');
     let configured;
     try {
-      configured = JSON.parse(rawSettings).statusLine;
+      configured = parseSettingsFile(settingsPath).statusLine;
       hasStatusline = !!configured;
     } catch (e) {
-      // JSONC (comments / trailing commas) is legal in settings.json and the
-      // hooks dir has no JSONC parser. Fall back to a substring probe and err
+      // Unparseable even as JSONC. Fall back to a substring probe and err
       // toward NOT nudging: a spurious "set up your statusline" for a user who
       // already has one is worse than a missing nudge. The command cannot be
       // extracted on this path, so a stale one is not detected either.
-      hasStatusline = rawSettings.includes('"statusLine"');
+      hasStatusline = fs.readFileSync(settingsPath, 'utf8').includes('"statusLine"');
     }
     const scripts = hasStatusline && configured ? statuslineScripts(configured.command) : null;
     if (scripts) {

@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -63,7 +64,7 @@ test('a PATH node below the engines floor is not persisted', { skip: process.pla
       INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
       '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
     ], {
-      env: { ...process.env, PATH: `${fakeBin}:${process.env.PATH || ''}`, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1' },
+      env: { ...isolatedEnv(path.join(dir, 'home'), [fakeBin]), CLAUDE_CONFIG_DIR: configDir },
       encoding: 'utf8',
     });
     assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);

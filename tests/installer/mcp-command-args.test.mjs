@@ -6,6 +6,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const require = createRequire(import.meta.url);
 const { parseCommandArgs } = require('../../installer/lib/command-args.js');
@@ -22,11 +23,15 @@ test('MCP command parsing preserves Windows paths and shell metacharacters', () 
   assert.deepEqual(parseCommandArgs(JSON.stringify(args)), args);
 });
 
-test('MCP command parsing rejects malformed argv before any installation', () => {
+test('MCP command parsing rejects malformed argv before any installation', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman mcp argv home '));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   assert.throws(() => parseCommandArgs('node \0'), /NUL/);
   for (const value of ['', '"" arg', '[]', '[1]', '["node",null]', '["node"', 'node "unfinished', JSON.stringify(['node', '\0'])]) {
     assert.throws(() => parseCommandArgs(value), /upstream command/);
-    const result = spawnSync(process.execPath, [path.join(root, 'installer/install.js'), '--with-mcp-shrink', value, '--dry-run'], { encoding: 'utf8' });
+    const result = spawnSync(process.execPath, [path.join(root, 'installer/install.js'), '--with-mcp-shrink', value, '--dry-run'], {
+      encoding: 'utf8', env: isolatedEnv(home),
+    });
     assert.equal(result.status, 2, value);
     assert.equal(result.stdout, '', 'invalid command must fail before provider work');
   }
@@ -40,7 +45,7 @@ for (const form of ['quoted', 'json']) {
     const value = form === 'json' ? JSON.stringify(args) : args.map(arg => `"${arg}"`).join(' ');
     const result = spawnSync(process.execPath, [path.join(root, 'installer/install.js'), '--only', 'opencode', `--with-mcp-shrink=${value}`, '--non-interactive'], {
       encoding: 'utf8', cwd: dir,
-      env: { ...process.env, HOME: dir, USERPROFILE: dir, XDG_CONFIG_HOME: dir },
+      env: { ...isolatedEnv(dir), XDG_CONFIG_HOME: dir },
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     const config = JSON.parse(fs.readFileSync(path.join(dir, 'opencode', 'opencode.jsonc'), 'utf8'));

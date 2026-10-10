@@ -133,8 +133,7 @@ function runInstaller(root, args, fakeBin, extraEnv = {}) {
   const home = path.join(root, 'home');
   fs.mkdirSync(home, { recursive: true });
   const record = path.join(root, 'record.txt');
-  const sep = IS_WIN ? ';' : ':';
-  const baseEnv = { ...process.env };
+  const baseEnv = isolatedEnv(home, [fakeBin]);
   delete baseEnv.GEMINI_CLI_TRUST_WORKSPACE;
   delete baseEnv.GEMINI_CLI_HOME; // the installer looks for the extension under it
   const r = spawnSync(process.execPath, [
@@ -144,12 +143,7 @@ function runInstaller(root, args, fakeBin, extraEnv = {}) {
   ], {
     env: {
       ...baseEnv,
-      HOME: home,
-      USERPROFILE: home,
-      XDG_CONFIG_HOME: path.join(home, '.config'),
-      NO_COLOR: '1',
       CAVEMAN_TEST_RECORD: record,
-      PATH: `${fakeBin}${sep}${process.env.PATH || ''}`,
       ...extraEnv,
     },
     input: '',
@@ -475,6 +469,34 @@ test('gemini install and uninstall see an installed caveman extension', () => {
     });
     assert.equal(removed.status, 0, `${removed.stdout}${removed.stderr}`);
     assert.match(tokens(record).join(' '), /extensions uninstall caveman/, 'uninstall left the extension installed');
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── 14. --force over an installed extension. Gemini CLI 0.53 refuses
+//       `extensions install` for it ("Please uninstall it first") and
+//       `extensions update` keeps one already at the latest release, so the
+//       reinstall uninstalls first. One the user turned off stays as it is:
+//       a reinstall would turn it back on. ──
+test('gemini --force reinstalls an installed extension, unless the user turned it off', () => {
+  const root = freshTmpDir();
+  try {
+    const fakeBin = fakeGeminiDir(root);
+    const home = path.join(root, 'home');
+    const extensions = path.join(home, '.gemini', 'extensions');
+    fs.mkdirSync(path.join(extensions, 'caveman'), { recursive: true });
+    fs.writeFileSync(path.join(extensions, 'caveman', 'gemini-extension.json'), '{"name": "caveman"}\n');
+    const enablement = path.join(extensions, 'extension-enablement.json');
+    fs.writeFileSync(enablement, JSON.stringify({ caveman: { overrides: [`!${home}/*`] } }));
+    const off = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], fakeBin);
+    assert.match(off.result.stdout, /turned off in Gemini CLI/);
+    assert.equal(fs.existsSync(off.record), false, 'reinstalled an extension the user turned off');
+
+    fs.writeFileSync(enablement, JSON.stringify({ caveman: { overrides: [`${home}/*`] } }));
+    const { result, record } = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], fakeBin);
+    assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
+    assert.match(tokens(record).join(' '), new RegExp(`extensions uninstall caveman .*extensions install ${URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

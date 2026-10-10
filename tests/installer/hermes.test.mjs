@@ -187,7 +187,7 @@ for (const [name, override] of [
     try {
       const r = spawnSync(process.execPath, [INSTALLER, '--only', 'hermes', '--config-dir', path.join(home, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, CAVE_TEST_HERMES_ROOT: home, HERMES_HOME: override, NO_COLOR: '1' },
+        env: { ...isolatedEnv(home), CAVE_TEST_HERMES_ROOT: home, HERMES_HOME: override },
         encoding: 'utf8',
       });
       assert.equal(r.status, 0, r.stderr);

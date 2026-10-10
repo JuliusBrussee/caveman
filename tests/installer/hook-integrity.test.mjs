@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const HOOKS = path.join(REPO_ROOT, 'src', 'hooks');
@@ -51,7 +52,7 @@ exit 22
     path.join(root, 'installer', 'install.js'),
     '--only', 'claude', ...args, '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
   ], {
-    env: { ...process.env, PATH: `${fakeBin}${path.delimiter}${process.env.PATH}`, CLAUDE_CONFIG_DIR: configDir, NO_COLOR: '1', ...extraEnv },
+    env: { ...isolatedEnv(path.join(root, 'home'), [fakeBin]), CLAUDE_CONFIG_DIR: configDir, ...extraEnv },
     encoding: 'utf8',
     cwd,
   });

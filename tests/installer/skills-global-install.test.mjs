@@ -8,6 +8,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nodeStub, stubEnv } from '../../packages/cli/tests/harness/stub-bin.mjs';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const INSTALLER = path.join(ROOT, 'installer/install.js');
@@ -27,7 +28,7 @@ for (const { id, profile } of profiles) {
     fs.mkdirSync(home);
     fs.mkdirSync(cwd);
     nodeStub(bin, 'npx', `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(ARGV));`);
-    const env = stubEnv({ ...process.env, HOME: home, USERPROFILE: home, IFLOW_HOME: '', CRUSH_SKILLS_DIR: '', CAVEMAN_REF: 'v9.9.9' }, bin);
+    const env = stubEnv({ ...isolatedEnv(home), IFLOW_HOME: '', CRUSH_SKILLS_DIR: '', CAVEMAN_REF: 'v9.9.9' }, bin);
     const result = spawnSync(process.execPath, [INSTALLER, '--only', id, '--non-interactive'], {
       encoding: 'utf8', cwd, env,
     });
@@ -44,7 +45,7 @@ test('dry run plans a global install without creating directories or invoking np
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-global-dry-'));
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const result = spawnSync(process.execPath, [INSTALLER, '--only', 'cursor', '--dry-run'], {
-    encoding: 'utf8', cwd: dir, env: { ...process.env, HOME: dir, USERPROFILE: dir },
+    encoding: 'utf8', cwd: dir, env: isolatedEnv(dir),
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /-g\b/);
@@ -63,7 +64,7 @@ test('no detected agents must not install skills for every upstream profile', (t
   // surface already resolves through the isolated home/PATH below.
   const preload = path.join(dir, 'hide-system-apps.cjs');
   fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  const env = isolatedEnv(dir);
   Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
   const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--non-interactive'], { encoding: 'utf8', cwd: dir, env });
   assert.equal(result.status, 0, result.stderr);
@@ -79,7 +80,7 @@ test('current Kiro and Mistral executables trigger their own install profiles', 
   nodeStub(bin, 'vibe', 'process.exit(0);');
   const preload = path.join(dir, 'hide-system-apps.cjs');
   fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  const env = isolatedEnv(dir);
   Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
   const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
     encoding: 'utf8', cwd: dir, env,
@@ -103,7 +104,8 @@ test('standalone Copilot CLI executable triggers the github-copilot profile', (t
   nodeStub(bin, 'copilot', 'process.exit(0);');
   const preload = path.join(dir, 'hide-system-apps.cjs');
   fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  const env = isolatedEnv(dir);
+  delete env.COPILOT_HOME; // beside a `copilot` binary, a set COPILOT_HOME already means GitHub Copilot CLI
   Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
   const run = () => spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
     encoding: 'utf8', cwd: dir, env,
@@ -127,7 +129,7 @@ test('CodeBuddy Code executable triggers the codebuddy profile', (t) => {
   nodeStub(bin, 'codebuddy', 'process.exit(0);');
   const preload = path.join(dir, 'hide-system-apps.cjs');
   fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  const env = isolatedEnv(dir);
   Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
   const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
     encoding: 'utf8', cwd: dir, env,
@@ -150,7 +152,7 @@ test('detection finds real Cline/Roo extensions and ignores look-alike names', (
   fs.mkdirSync(path.join(ext, 'marlon407.code-groovy-0.1.2'), { recursive: true });
   const preload = path.join(dir, 'hide-system-apps.cjs');
   fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  const env = isolatedEnv(dir);
   Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
   const run = () => {
     const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
@@ -172,4 +174,31 @@ test('detection finds real Cline/Roo extensions and ignores look-alike names', (
   const roo = run();
   assert.match(roo, /Roo Code detected/);
   assert.doesNotMatch(roo, /Cline detected/);
+});
+
+// Continue ships as Continue.continue and Augment as augment.vscode-augment;
+// a bare /continue/ or /augment/ matched any extension with the word in it.
+test('detection finds real Continue/Augment extensions and ignores look-alike names', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman look-alikes '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const ext = path.join(dir, '.vscode', 'extensions');
+  for (const name of ['someone.continue-on-save-1.0.0', 'someone.augmented-reality-0.2.0']) fs.mkdirSync(path.join(ext, name), { recursive: true });
+  const preload = path.join(dir, 'hide-system-apps.cjs');
+  fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
+  const env = isolatedEnv(dir);
+  Object.assign(env, { XDG_CONFIG_HOME: dir });
+  const run = () => {
+    const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
+      encoding: 'utf8', cwd: dir, env,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout;
+  };
+  assert.doesNotMatch(run(), /(Continue|Augment Code) detected/);
+
+  fs.mkdirSync(path.join(ext, 'continue.continue-1.2.10-darwin-arm64'));
+  fs.mkdirSync(path.join(ext, 'augment.vscode-augment-0.500.0'));
+  const found = run();
+  assert.match(found, /Continue detected/);
+  assert.match(found, /Augment Code detected/);
 });

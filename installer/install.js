@@ -250,10 +250,10 @@ const PROVIDERS = [
   { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor' },
   { id: 'windsurf',   label: 'Windsurf',            mech: 'npx skills add (windsurf)',     detect: 'command:windsurf||macapp:Windsurf', profile: 'windsurf' },
   { id: 'cline',      label: 'Cline',               mech: 'npx skills add (cline)',        detect: 'vscode-ext:^saoudrizwan\\.claude-dev||vscode-ext:^saoudrizwan\\.cline-nightly||command:cline', profile: 'cline' },
-  { id: 'continue',   label: 'Continue',            mech: 'native skills copy',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
+  { id: 'continue',   label: 'Continue',            mech: 'native skills copy',     detect: 'vscode-ext:^continue\\.continue-', profile: 'continue' },
   { id: 'kilo',       label: 'Kilo Code',           mech: 'npx skills add (kilo)',         detect: 'vscode-ext:kilocode', profile: 'kilo' },
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:^rooveterinaryinc\\.roo-cline', profile: 'roo' },
-  { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
+  { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:^augment\\.vscode-augment-||jetbrains-plugin:augment', profile: 'augment' },
 
   // GitHub Copilot: the standalone Copilot CLI (`copilot` binary, reads the
   // profile's ~/.copilot/skills) or the VS Code / Cursor extension dirs (no
@@ -679,19 +679,43 @@ function geminiHasCaveman() {
   return ['gemini-extension.json', '.gemini-extension-install.json'].some((f) => fs.existsSync(path.join(dir, f)));
 }
 
+// `gemini extensions disable` records a `!<path>` override here. Uninstalling
+// drops the record, so a reinstall would turn caveman back on.
+function geminiCavemanTurnedOff() {
+  const file = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'extension-enablement.json');
+  try {
+    const entry = JSON.parse(fs.readFileSync(file, 'utf8')).caveman;
+    return !!entry && Array.isArray(entry.overrides) && entry.overrides.some((o) => String(o).startsWith('!'));
+  } catch (_) { return false; }
+}
+
 function installGemini(ctx) {
-  const { say, note, opts, results } = ctx;
+  const { say, note, warn, opts, results } = ctx;
   results.detected++;
   say('→ Gemini CLI detected');
 
-  if (!opts.force) {
-    if (geminiHasCaveman()) {
-      note('  caveman extension already installed (use --force to reinstall)');
-      results.skipped.push(['gemini', 'extension already installed']);
-      process.stdout.write('\n');
-      return;
-    }
+  const installed = geminiHasCaveman();
+  if (installed && !opts.force) {
+    note('  caveman extension already installed (use --force to reinstall)');
+    results.skipped.push(['gemini', 'extension already installed']);
+    process.stdout.write('\n');
+    return;
   }
+  if (installed && geminiCavemanTurnedOff()) {
+    note('  caveman extension is turned off in Gemini CLI. Reinstalling would turn it back on, so it is left as is.');
+    note('  To reinstall anyway: gemini extensions uninstall caveman, then run this installer again.');
+    results.skipped.push(['gemini', 'extension turned off in Gemini CLI']);
+    process.stdout.write('\n');
+    return;
+  }
+  // Gemini CLI refuses `extensions install` for an installed extension
+  // ("Please uninstall it first"), and `extensions update` leaves one already at
+  // the latest release alone. So --force reinstalls: uninstall, then install.
+  const uninstallFirst = (spawnOpts) => {
+    if (!installed || spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
+    results.failed.push(['gemini', 'gemini extensions uninstall failed']);
+    return false;
+  };
   // Under `curl | bash`, stdin is the script, not a terminal. Gemini CLI reads
   // its workspace-trust and extension-consent answers from stdin, so the
   // install never ends. See issues #400 and #676. Two parts remove the two
@@ -726,7 +750,7 @@ function installGemini(ctx) {
         : (help.status === null ? 'spawn error' : help.status);
       note(`  could not read \`gemini --help\` (exit ${code}). ${tail}`);
     }
-    r = runSpawn('gemini', ['extensions', 'install', url], null, opts.dryRun);
+    if (uninstallFirst(null)) r = runSpawn('gemini', ['extensions', 'install', url], null, opts.dryRun);
   } else {
     // A trusted cwd lets Gemini CLI load .gemini/ config and .env files. Gemini
     // CLI also searches every parent directory up to the root for those files.
@@ -754,13 +778,16 @@ function installGemini(ctx) {
       }
     }
     try {
-      r = runSpawn('gemini', ['extensions', 'install', url, '--consent'], { env, cwd }, opts.dryRun);
+      if (uninstallFirst({ env, cwd })) r = runSpawn('gemini', ['extensions', 'install', url, '--consent'], { env, cwd }, opts.dryRun);
     } finally {
       if (cwd) { try { fs.rmSync(cwd, { recursive: true, force: true }); } catch (_) {} }
     }
   }
   if (spawnOk(r)) results.installed.push('gemini');
-  else results.failed.push(['gemini', 'gemini extensions install failed']);
+  else if (r) {
+    results.failed.push(['gemini', 'gemini extensions install failed']);
+    if (installed) warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+  }
   process.stdout.write('\n');
 }
 
@@ -1516,6 +1543,9 @@ function installOpencode(ctx) {
     const fencedBlock = `${OPENCODE_AGENTS_MD_BEGIN}\n${ruleBody}${OPENCODE_AGENTS_MD_END}\n`;
     if (fs.existsSync(agentsMd)) {
       const existing = fs.readFileSync(agentsMd, 'utf8');
+      // A CRLF file gets a CRLF block, so its line endings stay one style.
+      const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+      const block = fencedBlock.replace(/\r?\n/g, eol);
       // Both markers present is not enough: they must be exactly one matched
       // pair, in order. An END above a BEGIN (or an orphan BEGIN) made the
       // slice arithmetic below run on end === -1, which re-appended the whole
@@ -1538,12 +1568,12 @@ function installOpencode(ctx) {
         // had already installed — the block went stale forever. Only the
         // bytes between our own markers are touched; user content around
         // them is preserved exactly.
-        const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length + 1);
-        if (currentBlock === fencedBlock) {
+        const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length);
+        if (currentBlock === block.slice(0, -eol.length)) {
           note(`  ${agentsMd} already contains the current caveman ruleset`);
         } else {
-          const next = existing.slice(0, begin) + fencedBlock
-            + existing.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n/, '');
+          const next = existing.slice(0, begin) + block.slice(0, -eol.length)
+            + existing.slice(end + OPENCODE_AGENTS_MD_END.length);
           fs.writeFileSync(agentsMd, next, { mode: 0o644 });
           process.stdout.write(`  refreshed caveman ruleset in ${agentsMd}\n`);
         }
@@ -1564,7 +1594,7 @@ function installOpencode(ctx) {
           if (!fs.existsSync(agentsBak)) {
             try { fs.copyFileSync(agentsMd, agentsBak); } catch (_) {}
           }
-          const bodyTrim = ruleBody.trimEnd();
+          const bodyTrim = ruleBody.trimEnd().replace(/\r?\n/g, eol);
           let userPart;
           const exact = existing.indexOf(bodyTrim);
           if (exact !== -1) {
@@ -1575,13 +1605,13 @@ function installOpencode(ctx) {
             userPart = cutAt === -1 ? '' : existing.slice(0, cutAt).trim();
             note(`  legacy block did not match the current ruleset — everything from the sentinel down was replaced; original kept at ${agentsBak}`);
           }
-          const next = (userPart ? userPart + '\n\n' : '') + fencedBlock;
+          const next = (userPart ? userPart + eol + eol : '') + block;
           fs.writeFileSync(agentsMd, next, { mode: 0o644 });
           process.stdout.write(`  migrated ${agentsMd} legacy block to fenced (backup: ${agentsBak})\n`);
         }
       } else {
-        const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
-        fs.writeFileSync(agentsMd, existing + sep + fencedBlock, { mode: 0o644 });
+        const sep = existing.endsWith(eol + eol) ? '' : (existing.endsWith('\n') ? eol : eol + eol);
+        fs.writeFileSync(agentsMd, existing + sep + block, { mode: 0o644 });
         process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
       }
     } else {
@@ -2023,6 +2053,24 @@ function newerBundledCli() {
   return null;
 }
 
+// The `engines.node` floor of the CLI this package depends on, when this Node
+// is below it — `>=22.13` for 2.x, above the installer's own floor. Under npx
+// that CLI is also the `caveman` first on PATH. Null when there is no bundled
+// CLI or its floor is met.
+function bundledCliNodeFloorUnmet() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(require.resolve('@caveman-ai/cli/package.json'), 'utf8'));
+    const floor = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$/.exec((pkg.engines && pkg.engines.node) || '');
+    if (!floor) return null;
+    const have = process.versions.node.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+      const want = Number(floor[i + 1] || 0);
+      if (have[i] !== want) return have[i] < want ? floor[0].replace(/^>=\s*/, '').trim() : null;
+    }
+  } catch (_) { /* no bundled CLI */ }
+  return null;
+}
+
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
   let cleanupFailed = false;
@@ -2036,12 +2084,15 @@ function uninstall(ctx) {
   // under $CAVEMAN_HOME/cli when the global npm prefix is not writable, so an
   // older caveman can stay first on PATH; only the newer one undoes all it
   // wrote, and a second run finds nothing left, so both run. A caveman on PATH
-  // older than the bundled CLI hands its turn to the bundled one.
+  // older than the bundled CLI hands its turn to the bundled one. Never on a
+  // Node the bundled CLI does not support: it crashes or runs unsupported
+  // there, so the routes go to the guidance below instead.
+  const cliNodeFloor = bundledCliNodeFloorUnmet();
   const privateCli = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'cli',
     ...(process.platform === 'win32' ? ['caveman.cmd'] : ['bin', 'caveman']));
   const disables = [];
-  if (fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
-  if (hasCmd('caveman')) {
+  if (!cliNodeFloor && fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
+  if (!cliNodeFloor && hasCmd('caveman')) {
     const bundled = newerBundledCli();
     disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all']] : ['caveman', ['disable', '--all']]);
   }
@@ -2060,6 +2111,7 @@ function uninstall(ctx) {
   if (!opts.dryRun) {
     const stranded = remainingNativeIntegrations();
     for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
+    if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${process.version}. Upgrade Node first.`);
     if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
   }
 
@@ -2226,7 +2278,13 @@ function uninstall(ctx) {
           delete cfg.mcp['caveman-shrink'];
           if (Object.keys(cfg.mcp).length === 0) delete cfg.mcp;
         }
-        if (!opts.dryRun) SETTINGS.writeSettings(ocJson, cfg);
+        // Install backs up a config that was already there, so an emptied one
+        // without a backup is the one install created: it goes too.
+        const created = Object.keys(cfg).length === 0 && !fs.existsSync(ocJson + '.bak');
+        if (!opts.dryRun) {
+          if (created) fs.unlinkSync(ocJson);
+          else SETTINGS.writeSettings(ocJson, cfg);
+        }
         ok(`  pruned caveman entries from ${ocJson}`);
       }
     }
@@ -2240,10 +2298,11 @@ function uninstall(ctx) {
       const begin = body.indexOf(OPENCODE_AGENTS_MD_BEGIN);
       const end = body.indexOf(OPENCODE_AGENTS_MD_END);
       if (begin !== -1 && end !== -1 && end > begin) {
-        const before = body.slice(0, begin).replace(/\n+$/, '\n');
-        const after = body.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n+/, '\n');
+        // One line ending kept on each side of the cut, LF or CRLF.
+        const before = body.slice(0, begin).replace(/(\r?\n)+$/, '$1');
+        const after = body.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^(\r?\n)+/, '$1');
         let next = (before + after).trimEnd();
-        next = next ? next + '\n' : '';
+        next = next ? next + (body.includes('\r\n') ? '\r\n' : '\n') : '';
         if (!opts.dryRun) {
           if (next === '') {
             try { fs.unlinkSync(ocAgentsMd); } catch (_) {}
@@ -2270,6 +2329,7 @@ function uninstall(ctx) {
       const ocFlag = path.join(ocDir, name);
       if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
     }
+    OWNED.removeEmptyDirs(ocOwnership.createdDirs || []);
   }
 
   // OpenClaw native install — strip skill folder + SOUL.md marker block.
@@ -2331,9 +2391,11 @@ function uninstall(ctx) {
     warn(`  Hermes ownership journal invalid; left integration untouched: ${error.message}`);
   }
 
+  let grokSkillDirs = [];
   for (const prov of PROVIDERS.filter(prov => PROVIDER_SKILLS.usesNativeSkills(prov.id))) {
     try {
       const removed = PROVIDER_SKILLS.uninstall({ provider: prov.id, dryRun: opts.dryRun, note, warn });
+      if (prov.id === 'grok') grokSkillDirs = removed.createdDirs || [];
       if (removed.hadJournal && removed.changed.length === 0) ok(`  pruned owned caveman skills from ${prov.label}`);
       if (removed.changed.length) cleanupFailed = true;
     } catch (error) {
@@ -2388,8 +2450,9 @@ function uninstall(ctx) {
   const grokAgentsMd = grokAgentsMdPath();
   if (fs.existsSync(grokAgentsMd)) {
     try {
-      if (opts.dryRun) note(`  would strip caveman block from ${grokAgentsMd}`);
-      else {
+      if (opts.dryRun) {
+        if (fs.readFileSync(grokAgentsMd, 'utf8').includes(OPENCLAW.MARK_BEGIN)) note(`  would strip caveman block from ${grokAgentsMd}`);
+      } else {
         const r = OPENCLAW.stripBootstrapFromSoul(grokAgentsMd);
         if (r.changed) note(r.removed ? `  removed ${grokAgentsMd}` : `  stripped caveman block from ${grokAgentsMd}`);
       }
@@ -2398,6 +2461,8 @@ function uninstall(ctx) {
       warn(`  could not strip caveman block from ${grokAgentsMd}: ${error.message}`);
     }
   }
+  // GROK_HOME itself goes once the AGENTS.md beside the skills is gone too.
+  OWNED.removeEmptyDirs(grokSkillDirs);
 
   // Per-session state. Keep lifetime savings history unless user removes it.
   const stateFiles = [

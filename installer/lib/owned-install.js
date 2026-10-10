@@ -124,7 +124,34 @@ function loadJournal(journalPath, integration) {
     if (entry.restoreBackup !== undefined) safeRelative(entry.restoreBackup);
     for (const backup of entry.preservedBackups || []) safeRelative(backup);
   }
+  if (parsed.createdDirs !== undefined) {
+    if (!Array.isArray(parsed.createdDirs)) throw new Error(`invalid ${integration} ownership journal schema`);
+    for (const relative of parsed.createdDirs) safeRelative(relative);
+  }
   return parsed;
+}
+
+// Directories install made, relative to root ('.' is root itself), so the
+// uninstall that empties the journal can take back the ones left empty.
+// `first` is what mkdirSync({ recursive }) returns: the topmost one it made.
+// ponytail: ancestors above root (a missing ~/.config) are not recorded.
+function recordCreatedDirs(journal, root, first, deepest) {
+  if (!first) return;
+  const created = new Set(journal.createdDirs || []);
+  for (let dir = path.resolve(deepest); ; dir = path.dirname(dir)) {
+    const relative = path.relative(path.resolve(root), dir).split(path.sep).join('/') || '.';
+    if (relative === '..' || relative.startsWith('../')) break;
+    created.add(relative);
+    if (dir === path.resolve(first) || dir === path.dirname(dir)) break;
+  }
+  journal.createdDirs = [...created];
+}
+
+// rmdir, never rm: only an empty directory goes, and a symlink is refused.
+function removeEmptyDirs(dirs) {
+  for (const dir of dirs) {
+    try { fs.rmdirSync(dir); } catch (_) { /* holds something, or already gone */ }
+  }
 }
 
 function backupCurrent(root, backupRoot, relative, entry) {
@@ -203,7 +230,7 @@ function preflightOwnedInstall({ root, integration, operations, force = false })
 function installOwned({ root, integration, operations, force = false, note = () => {} }) {
   const { journalPath, backupRoot } = journalPaths(root, integration);
   const journal = preflightOwnedInstall({ root, integration, operations, force });
-  fs.mkdirSync(root, { recursive: true, mode: 0o700 });
+  recordCreatedDirs(journal, root, fs.mkdirSync(root, { recursive: true, mode: 0o700 }), root);
   for (const operation of operations) {
     const relative = safeRelative(operation.relativePath);
     const target = destination(root, relative);
@@ -214,7 +241,7 @@ function installOwned({ root, integration, operations, force = false, note = () 
 
     const stage = `${target}.caveman-stage-${process.pid}-${crypto.randomUUID()}`;
     const displaced = `${target}.caveman-old-${process.pid}-${crypto.randomUUID()}`;
-    fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    recordCreatedDirs(journal, root, fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 }), path.dirname(target));
     let entry = existingEntry ? { ...existingEntry } : {};
     let swapped = false;
     let committed = false;
@@ -337,7 +364,14 @@ function uninstallOwned({ root, integration, dryRun = false, note = () => {}, wa
     if (remaining.length === 0) removePath(backupRoot);
     else warn(`  preserved additional user backups at ${backupRoot}`);
   }
-  return { hadJournal: true, changed, preserved };
+  // Deepest first. Returned so a caller that removes its own files from root
+  // afterwards (AGENTS.md beside the payload) can sweep again.
+  const createdDirs = !dryRun && Object.keys(journal.entries).length === 0
+    ? (journal.createdDirs || []).map((relative) => destination(root, relative))
+      .sort((a, b) => b.split(path.sep).length - a.split(path.sep).length)
+    : [];
+  removeEmptyDirs(createdDirs);
+  return { hadJournal: true, changed, preserved, createdDirs };
 }
 
 module.exports = {
@@ -346,5 +380,6 @@ module.exports = {
   installOwned,
   journalPaths,
   preflightOwnedInstall,
+  removeEmptyDirs,
   uninstallOwned,
 };
