@@ -66,7 +66,7 @@ fi
     },
   });
   assert.equal(result.status, 0, result.stderr);
-  assert.match(result.stdout, /no Claude Code, Codex, Gemini CLI, opencode or aider sessions found/);
+  assert.match(result.stdout, /no Claude Code, Codex, Gemini CLI, opencode, aider or Pi sessions found/);
   assert.doesNotMatch(readFileSync(argsFile, "utf8"), /--plain/);
   assert.match(readFileSync(argsFile, "utf8"), /--since\n7d/);
 });

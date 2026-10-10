@@ -12,7 +12,7 @@ const base = {
 
 test("learn state 3 names real three-session threshold and prints no score", () => {
   const text = renderLearnPlan({ ...base, sessions_scanned: 0 }, { report: "/tmp/report.html" });
-  assert.match(text, /no Claude Code, Codex, Gemini CLI, opencode or aider sessions found in the last 30 days/);
+  assert.match(text, /no Claude Code, Codex, Gemini CLI, opencode, aider or Pi sessions found in the last 30 days/);
   assert.match(renderLearnPlan({ ...base, sessions_scanned: 0, window: { since: "7d" } }, { report: "/tmp/report.html" }), /found in the last 7 days/);
   assert.match(text, /same text repeated in at least 3 sessions/);
   assert.doesNotMatch(text, /Setup Score/);
