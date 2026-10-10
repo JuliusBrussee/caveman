@@ -70,6 +70,7 @@ import { portableInvocation } from "./portable-command.js";
 import { ensureModuleBinaries, NoModuleIndexError, readLock } from "./modules/index-file.js";
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
 import { nativePipePath } from "./native-pipe.js";
+import { leaveHomeAclAlone, systemTool } from "./home-acl.js";
 import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-trends.js";
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
@@ -641,7 +642,8 @@ setModuleHost({
       const listening = await portListening(host, port);
       const foreign = listening && !pid && Boolean(version?.capabilities.includes("run_state"));
       const stale = pid && state.version && version && state.version !== version.version ? { running: state.version, installed: version.version } : undefined;
-      return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(state.instance_token ? { token: state.instance_token } : {}), ...(stale ? { stale } : {}) };
+      const token = proxyShutdownToken(port, state.instance_token);
+      return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(token ? { token } : {}), ...(stale ? { stale } : {}) };
     }));
   },
   interactive,
@@ -3196,7 +3198,7 @@ async function restartOutdatedRuntime(): Promise<void> {
     process.stderr.write(`${mark("warn")} ${stillOld}\n`);
     return;
   }
-  const token = runtime.instance_token;
+  const token = proxyShutdownToken(port, runtime.instance_token);
   if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, ...(token ? { token } : {}) }])).length) {
     process.stderr.write(`${mark("warn")} ${stillOld}\n`);
     return;
@@ -12924,12 +12926,17 @@ export function ensureCavemanHome(): string {
   // inherits the drive's "Authenticated Users: Modify", so every local account
   // could read the credentials written here. Make it this user, SYSTEM and
   // Administrators only, as the proxy does (proxy/internal/securehome). The
-  // profile is private already and is left alone.
+  // profile is private already and is left alone, and so is a home that is
+  // not caveman's to rewrite (leaveHomeAclAlone).
   const outside = process.platform === "win32" && process.env.USERPROFILE ? relative(process.env.USERPROFILE, home) : "";
   if (outside.startsWith("..") || isAbsolute(outside)) {
-    const user = spawnSync("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
-    const sid = /,"(S-1-[\d-]+)"\s*$/.exec(user.stdout ?? "")?.[1];
-    if (sid) spawnSync("icacls", [home, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], { stdio: "ignore", windowsHide: true });
+    let seen: { names: string[]; resolved: string; link: boolean } | undefined;
+    try { seen = { names: readdirSync(home), resolved: realpathSync.native(home), link: lstatSync(home).isSymbolicLink() }; } catch { /* unreadable: leave it alone */ }
+    if (seen && !leaveHomeAclAlone(home, seen)) {
+      const user = spawnSync(systemTool("whoami"), ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
+      const sid = /,"(S-1-[\d-]+)"\s*$/.exec(user.stdout ?? "")?.[1];
+      if (sid) spawnSync(systemTool("icacls"), [home, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], { stdio: "ignore", windowsHide: true });
+    }
   }
   return home;
 }
@@ -19766,6 +19773,7 @@ type ProxyRuntimeState = PublishedUpstreams & {
   started_at?: string;
   version?: string;
   recovery_via_mcp?: boolean;
+  shutdown_token?: string;
 };
 
 function proxyRuntimeMatches(
@@ -19811,6 +19819,7 @@ function readRawProxyRunState(port: number): ProxyRuntimeState {
       ...(typeof parsed.started_at === "string" ? { started_at: parsed.started_at } : {}),
       ...(typeof parsed.version === "string" ? { version: parsed.version } : {}),
       ...(typeof parsed.recovery_via_mcp === "boolean" ? { recovery_via_mcp: parsed.recovery_via_mcp } : {}),
+      ...(typeof parsed.shutdown_token === "string" ? { shutdown_token: parsed.shutdown_token } : {}),
       provider_upstreams: publishedUpstreamsOf(parsed.provider_upstreams),
       compat_upstreams: publishedUpstreamsOf(parsed.compat_upstreams),
       compat_forward_headers: publishedForwardHeadersOf(parsed.compat_forward_headers),
@@ -19818,6 +19827,15 @@ function readRawProxyRunState(port: number): ProxyRuntimeState {
   } catch {
     return { owner: "unknown" };
   }
+}
+
+// What `caveman stop` sends to POST /caveman/shutdown. The shutdown token lives
+// only in the private run-state file, never on the listener or in `status
+// --json` (the instance token is published on /health/live, so anyone could
+// send that). Only for the generation the proxy just vouched for.
+function proxyShutdownToken(port: number, instanceToken: string | undefined): string | undefined {
+  const raw = readRawProxyRunState(port);
+  return instanceToken && raw.instance_token === instanceToken ? raw.shutdown_token : undefined;
 }
 
 function processAlive(pid: number): boolean {

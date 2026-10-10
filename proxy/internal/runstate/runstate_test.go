@@ -192,6 +192,9 @@ func TestNewUsesUTCAnd128BitToken(t *testing.T) {
 	if len(state.InstanceToken) != 32 {
 		t.Fatalf("token chars = %d, want 32", len(state.InstanceToken))
 	}
+	if len(state.ShutdownToken) != 32 || state.ShutdownToken == state.InstanceToken {
+		t.Fatalf("shutdown token %q must be its own 128-bit secret", state.ShutdownToken)
+	}
 	if state.StartedAt.Location() != time.UTC {
 		t.Fatalf("started_at location = %v", state.StartedAt.Location())
 	}
