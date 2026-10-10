@@ -8147,6 +8147,34 @@ function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchab
 
 function detectedAgentVersion(agent: AgentProfile): string | null { return nativeHostProbe(agent).version; }
 
+// A base URL Caveman wrote: a /w/ route on the local runtime or a Caveman
+// gateway. A wrapped session exports one in every vendor variable.
+function isCavemanRoute(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.pathname.startsWith("/w/") && (["localhost", "127.0.0.1", "[::1]", "gateway.caveman.so", "gw.caveman.so", "api.caveman.so"].includes(url.hostname)
+      || url.origin === new URL(gatewayURL()).origin);
+  } catch { return false; }
+}
+
+// An agent that already sends its requests to an endpoint of its own (a
+// company gateway, LiteLLM, a local model) is left as is. Its route would
+// swap that endpoint for the local proxy, whose upstream is the provider's
+// public API, so the requests and the key meant for the user's endpoint would
+// go there. The proxy has one upstream per provider for every agent, so it
+// cannot forward this one agent to the user's endpoint instead. Thrown before
+// any write; setup reports it as a skip.
+function refuseOwnEndpoint(agent: NativeAgent, key: string, value: unknown, file?: string): void {
+  if (typeof value !== "string" || !value.trim() || isCavemanRoute(value)) return;
+  const name = findAgent(agent)?.display_name ?? agent;
+  throw Object.assign(new Error(`${name} sends its requests to its own endpoint ${value} (${key} in ${file ?? "your shell"}). Caveman would send them, with their key, to the provider's public API instead, so ${name} was left as is. To route it through Caveman anyway, remove ${key} ${file ? "there" : "from your shell"} and run \`caveman enable ${agent}\`.`), { ownEndpoint: true });
+}
+
+// A YAML or dotenv scalar: comment and quotes off.
+function configValue(raw: string | undefined): string | undefined {
+  return raw?.replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
+}
+
 // One wiring per Claude Code profile: people keep several logins as sibling
 // config dirs and pick one with CLAUDE_CONFIG_DIR, and a profile left out
 // would silently bypass Caveman. A profile that cannot be wired is skipped
@@ -8181,11 +8209,12 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
   const env = settings.env && typeof settings.env === "object" && !Array.isArray(settings.env)
     ? settings.env as Record<string, unknown>
     : {};
-  // Another login that points somewhere else on purpose (its own gateway, a
-  // cloud provider lane) keeps doing so. The active one is the user's ask.
-  if (other && env.ANTHROPIC_BASE_URL !== undefined && env.ANTHROPIC_BASE_URL !== "" && !isCavemanClaudeRoute(env.ANTHROPIC_BASE_URL, false)) {
-    throw new Error("it sets its own ANTHROPIC_BASE_URL");
-  }
+  // A login that points somewhere else on purpose (its own gateway) keeps
+  // doing so, the active one too. Settings env outranks the shell's, so an
+  // exported endpoint would be replaced as well. Another login on a cloud
+  // provider lane keeps it.
+  refuseOwnEndpoint("claude", "ANTHROPIC_BASE_URL", env.ANTHROPIC_BASE_URL, settingsPath);
+  if (!env.ANTHROPIC_BASE_URL) refuseOwnEndpoint("claude", "ANTHROPIC_BASE_URL", process.env.ANTHROPIC_BASE_URL);
   if (other && claudeOffProxyLane(env)) throw new Error("it uses a provider lane that bypasses ANTHROPIC_BASE_URL");
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
@@ -8306,6 +8335,11 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const envBefore = fileBytes(envPath);
   const route = appendUrlPath(gw, "/w/gemini");
   const nativeEnv = geminiNativeEnv(envBefore?.toString("utf8") ?? "", route);
+  // The block goes last in the file, so it would win over the user's own.
+  for (const line of nativeEnv.text.replace(nativeEnv.block, "").split(/\r?\n/)) {
+    const own = line.match(/^\s*(?:export\s+)?(GEMINI_BASE_URL|GOOGLE_GEMINI_BASE_URL|GOOGLE_VERTEX_BASE_URL)\s*=(.*)$/);
+    if (own) refuseOwnEndpoint("gemini", own[1]!, configValue(own[2]), envPath);
+  }
   return [
     {
       file: settingsPath,
@@ -8795,6 +8829,10 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
   for (const [providerID, route] of Object.entries(routes)) {
     const provider = providers[providerID] && typeof providers[providerID] === "object" && !Array.isArray(providers[providerID]) ? providers[providerID] as Record<string, unknown> : {};
     const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options) ? provider.options as Record<string, unknown> : {};
+    // The provider SDKs read these when the config names no baseURL.
+    const shellKey = providerID === "openai" ? "OPENAI_BASE_URL" : providerID === "anthropic" ? "ANTHROPIC_BASE_URL" : undefined;
+    refuseOwnEndpoint("opencode", `provider.${providerID}.options.baseURL`, options.baseURL, configPath);
+    if (options.baseURL === undefined && shellKey) refuseOwnEndpoint("opencode", shellKey, process.env[shellKey]);
     previousRoutes[providerID] = options.baseURL ?? null;
     options.baseURL = route;
     provider.options = options;
@@ -8922,6 +8960,7 @@ function aiderNativeMutations(gw: string): NativeMutation[] {
   }
   const route = appendUrlPath(gw, "/w/aider/openai/v1");
   const native = aiderNativeConfig(configBefore?.toString("utf8") ?? "", route, corePath);
+  refuseOwnEndpoint("aider", "openai-api-base", configValue(native.previousRouteLine?.replace(/^openai-api-base\s*:/, "")), configPath);
   return [
     {
       file: configPath,
@@ -8979,6 +9018,15 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
+  // A provider of the user's own (Ollama, Azure, a gateway) is replaced by
+  // Caveman's, and so is the endpoint the built-in openai one takes from the shell.
+  let section = "";
+  const provider = (configBefore?.toString("utf8") ?? "").split(/\r?\n/).map((line) => {
+    section = codexTomlSectionName(line) ?? section;
+    return section === "" ? line.match(/^\s*model_provider\s*=\s*["']?([^"'#\s]*)/)?.[1] : undefined;
+  }).find(Boolean);
+  if (provider !== "openai" && provider !== "caveman") refuseOwnEndpoint("codex", "model_provider", provider, configPath);
+  if (provider !== "caveman") refuseOwnEndpoint("codex", "OPENAI_BASE_URL", process.env.OPENAI_BASE_URL);
   const subscription = detectCodexWrapAuthMode() === "subscription";
   const native = codexNativeConfig(configBefore?.toString("utf8") ?? "", gw, subscription, mcpBinary);
   const route = codexGatewayBase(gw, subscription);
@@ -9273,6 +9321,9 @@ function hermesNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const configPath = hermesConfigPath();
   const configBefore = fileBytes(configPath);
   const native = hermesNativeConfig(configBefore?.toString("utf8") ?? "", gw, mcpBinary);
+  // A custom provider is the user's own endpoint; a named one is the vendor's.
+  const previous = Object.fromEntries((native.owned.previous_route_lines as string[]).map((line) => [line.match(/^  ([^:]+):/)![1]!, configValue(line.slice(line.indexOf(":") + 1))]));
+  if (!previous.provider || previous.provider === "custom") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
   const pluginDir = hermesNativePluginDir();
   const manifestPath = join(pluginDir, "plugin.yaml");
   const initPath = join(pluginDir, "__init__.py");
@@ -10084,8 +10135,10 @@ function claudeUnwiredProfiles(journal: NativeJournal): string[] {
     const wired = new Set(journal.operations.filter((operation) => !claudeProfileGone(operation)).map((operation) => nativeRealPath(operation.file)));
     return claudeProfileRoots().filter((root) => {
       if (wired.has(nativeRealPath(join(root, "settings.json")))) return false;
-      if (root === claudeConfigDir()) return true;
-      try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch { return false; }
+      // The active one counts unless it is on its own endpoint.
+      try { return claudeProfileMutations(root, gatewayURL(), "caveman-mcp").length > 0; } catch (error) {
+        return root === claudeConfigDir() && !(error as { ownEndpoint?: boolean }).ownEndpoint;
+      }
     });
   } catch { return []; }
 }

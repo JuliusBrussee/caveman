@@ -470,3 +470,39 @@ test("on wires nothing the user disabled; a module switched off wires again", as
     fx.cleanup();
   }
 });
+
+// An agent pointed at its own endpoint (a company gateway, LiteLLM) is not
+// re-pointed at the proxy, whose upstream is the public vendor API: its traffic
+// and gateway token would go there. The plan and the run say so; it is a skip.
+test("an agent on its own endpoint is left as is, in the plan and in the run", async () => {
+  const fx = modulesFixture();
+  try {
+    const settingsPath = join(fx.home, ".claude", "settings.json");
+    mkdirSync(join(fx.home, ".claude"), { recursive: true });
+    const settings = JSON.stringify({ env: { ANTHROPIC_BASE_URL: "https://llm-gw.corp.example/anthropic", ANTHROPIC_AUTH_TOKEN: "corp-token" } }, null, 2) + "\n";
+    writeFileSync(settingsPath, settings);
+    const plan = await runCli(["on", "--all", "--dry-run"], fx.env);
+    assert.equal(plan.code, 0, plan.stderr);
+    assert.doesNotMatch(plan.stdout, /claude settings|claude config/);
+    assert.match(plan.stdout, /^note: Claude Code sends its requests to its own endpoint https:\/\/llm-gw\.corp\.example\/anthropic /m);
+    const on = await runCli(["on", "--all", "--yes"], fx.env);
+    assert.equal(on.code, 0, on.stderr);
+    assert.match(on.stdout, /^○ Claude Code sends its requests to its own endpoint .* so Claude Code was left as is\. To route it through Caveman anyway, remove ANTHROPIC_BASE_URL there and run `caveman enable claude`\.$/m);
+    assert.match(on.stdout, /^✓ Codex wired$/m);
+    assert.equal(readFileSync(settingsPath, "utf8"), settings);
+    assert.equal(existsSync(join(fx.home, ".claude.json")), false);
+
+  } finally {
+    fx.cleanup();
+  }
+  // Settings env outranks the shell's, so an exported endpoint is the same.
+  const shellFx = modulesFixture();
+  try {
+    const shell = await runCli(["on", "--all", "--yes"], { ...shellFx.env, ANTHROPIC_BASE_URL: "http://localhost:4000" });
+    assert.equal(shell.code, 0, shell.stderr);
+    assert.match(shell.stdout, /^○ .*http:\/\/localhost:4000 \(ANTHROPIC_BASE_URL in your shell\)\..* remove ANTHROPIC_BASE_URL from your shell and run `caveman enable claude`\.$/m);
+    assert.equal(existsSync(join(shellFx.home, ".claude", "settings.json")), false);
+  } finally {
+    shellFx.cleanup();
+  }
+});

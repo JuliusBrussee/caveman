@@ -256,12 +256,16 @@ test("another profile that routes elsewhere on purpose keeps its route", async (
     const status = await doctor(fx.env);
     assert.equal(status.state, "installed");
     assert.deepEqual(status.unwired_profiles, []);
-    // The active profile is still taken over, with its route remembered.
+    // The active profile keeps its own endpoint too: the proxy would send its
+    // token to api.anthropic.com. The refusal names the endpoint and the opt-in.
     assert.equal((await runCli(["disable", "claude"], fx.env)).code, 0);
+    const glmBefore = profileFiles(fx.home);
     const active = await runCli(["enable", "claude"], { ...fx.env, CLAUDE_CONFIG_DIR: glm });
-    assert.equal(active.code, 0, active.stderr);
-    assert.ok(routed(glm));
-    assert.equal(journal(fx.home).operations[0].owned.previous_route, "https://api.z.ai/api/anthropic");
+    assert.notEqual(active.code, 0);
+    assert.match(active.stderr, /sends its requests to its own endpoint https:\/\/api\.z\.ai\/api\/anthropic \(ANTHROPIC_BASE_URL in \S*\.claude-glm\/settings\.json\)/);
+    assert.match(active.stderr, /remove ANTHROPIC_BASE_URL there and run `caveman enable claude`/);
+    assert.deepEqual(profileFiles(fx.home), glmBefore);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")), false);
   } finally {
     fx.cleanup();
   }
