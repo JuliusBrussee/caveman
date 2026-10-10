@@ -32,8 +32,11 @@ test("cold package completes seeded six-beat quickstart", { skip: !enabled }, as
   const work = mkdtempSync(join(tmpdir(), "cave-cold-work-"));
   const agents = mkdtempSync(join(tmpdir(), "cave-cold-agent-"));
   const sessions = mkdtempSync(join(tmpdir(), "cave-cold-sessions-"));
-  const caveHome = process.env.CAVEMAN_HOME;
-  assert.ok(caveHome, "CAVEMAN_HOME is required");
+  // The sanitize preload deletes CAVEMAN_HOME, so the test owns a fresh one;
+  // the other runtime binaries come in through CAVEMAN_ENGINE_BIN,
+  // CAVEMAN_MCP_BIN and CAVEMEM_BIN.
+  const caveHome = mkdtempSync(join(tmpdir(), "cave-cold-cavehome-"));
+  let env;
 
   try {
     const proxyPort = await freePort();
@@ -53,7 +56,7 @@ test("cold package completes seeded six-beat quickstart", { skip: !enabled }, as
         "",
       ].join("\n"),
     );
-    const env = {
+    env = {
       ...process.env,
       HOME: home,
       CAVEMAN_HOME: caveHome,
@@ -78,7 +81,7 @@ test("cold package completes seeded six-beat quickstart", { skip: !enabled }, as
     assert.match(firstRun.stdout, /stub-agent: ok/);
     assert.match(
       firstRun.stderr,
-      /no compressible context|compression would have cut|turn it on:/,
+      /nothing compressible in this session|compression cut ~/,
       "session must end with an honest gate-specific line",
     );
 
@@ -96,7 +99,7 @@ test("cold package completes seeded six-beat quickstart", { skip: !enabled }, as
       timeoutMs: 30_000,
     });
     assert.equal(honestDayZero.code, 0, honestDayZero.stderr);
-    assert.match(honestDayZero.stdout, /practice: [a-z0-9-]+ · unmeasured — verified nowhere yet/);
+    assert.match(honestDayZero.stdout, /Setup Score \d+\/100\n.*an estimate, not your bill/);
 
     const login = await runCli(
       cli,
@@ -134,7 +137,9 @@ test("cold package completes seeded six-beat quickstart", { skip: !enabled }, as
     assert.equal(status.code, 0, status.stderr);
     assert.equal(JSON.parse(status.stdout).mem_blocks, 1);
   } finally {
+    // The first run leaves its proxy running; stop it before its home goes.
+    if (env) await runCli(cli, ["stop"], { env, cwd: work, timeoutMs: 15_000 }).catch(() => {});
     await Promise.allSettled([upstream.close(), api.close()]);
-    for (const dir of [home, work, agents, sessions]) rmSync(dir, { recursive: true, force: true });
+    for (const dir of [home, work, agents, sessions, caveHome]) rmSync(dir, { recursive: true, force: true });
   }
 });
