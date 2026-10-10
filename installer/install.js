@@ -1911,8 +1911,11 @@ function remainingNativeIntegrations() {
   const dir = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'integrations');
   try {
     return fs.readdirSync(dir)
-      // `.pending-<agent>.json` is an interrupted transaction, not an install.
-      .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+      // A journal is exactly `<agent>.json`. `.pending-<agent>.json` is an
+      // interrupted transaction; `<agent>.voice-skills.json`,
+      // `<agent>.agent-native-bundle*.json` and `claude-profiles.json` are
+      // records `disable` keeps on purpose, not routes.
+      .filter((name) => /^[^.]+\.json$/.test(name) && name !== 'claude-profiles.json')
       .map((name) => name.slice(0, -'.json'.length))
       .sort();
   } catch (_) {

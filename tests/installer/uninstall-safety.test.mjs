@@ -235,6 +235,27 @@ test('uninstall says so when a native route survives it', () => {
   }
 });
 
+// `disable --all` deletes `<agent>.json` but keeps the CLI's other records in
+// the same directory on purpose. They are not routes; warning about them sent
+// users to run `caveman disable --all` forever.
+test('uninstall ignores the CLI records a clean disable leaves behind', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedEnv(dir);
+  try {
+    const integrations = path.join(dir, 'home', '.caveman', 'integrations');
+    fs.mkdirSync(integrations, { recursive: true });
+    for (const name of ['claude-profiles.json', 'claude.voice-skills.json', 'codex.voice-skills.json', 'claude.agent-native-bundle.json']) {
+      fs.writeFileSync(path.join(integrations, name), '{}\n');
+    }
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.doesNotMatch(`${removed.stdout}${removed.stderr}`, /still installed|caveman disable --all/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('uninstall stays quiet when no native integration is journaled', () => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');
