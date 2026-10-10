@@ -223,3 +223,19 @@ test("setup --json still reports binary status for scripts", async () => {
     isolated.cleanup();
   }
 });
+
+// The reference sends readers to command help for the accepted flags: it must
+// list every documented form, setup's older verbs and bare doctor included.
+test("setup --help prints every setup form and doctor's usage names bare doctor", async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const setupHelp = await runIsolated(["setup", "--help"], { env: isolated.env });
+    assert.equal(setupHelp.code, 0, setupHelp.stderr);
+    assert.match(setupHelp.stdout, /^usage: caveman setup \[--yes\].* \| setup --install \[--json\] \| setup --json \| setup --agent-native <claude\|codex> \[--remove\]\n$/);
+    assert.equal(existsSync(join(isolated.home, "cloud.json")), false, "--help writes nothing");
+    const doctorHelp = await runIsolated(["doctor", "--help"], { env: isolated.env });
+    assert.match(doctorHelp.stderr, /^usage: caveman doctor \[<claude\|codex\|hermes\|gemini\|opencode\|pi\|aider\|generic> \[--fix\]\]\n$/);
+  } finally {
+    isolated.cleanup();
+  }
+});

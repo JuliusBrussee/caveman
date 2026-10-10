@@ -3543,11 +3543,17 @@ function removeAgentNativeBundle(agent: "claude" | "codex"): void {
   process.stderr.write(`${mark("ok")} ${agent}: agent-native bundle removed; prior skills and cloud MCP restored\n`);
 }
 
+const SETUP_USAGE = `${ONBOARD_USAGE} | setup --install [--json] | setup --json | setup --agent-native <claude|codex> [--remove]`;
+
 async function setup(argv: string[] = []) {
+  if (argv.includes("--help") || argv.includes("-h")) {
+    console.log(`usage: ${invokedAs()} ${SETUP_USAGE}`);
+    return;
+  }
   const onboarding = parseOnboardArgs(argv);
   if (onboarding && "error" in onboarding) {
     console.error(`caveman setup: ${onboarding.error}`);
-    commandUsage(ONBOARD_USAGE);
+    commandUsage(SETUP_USAGE);
   }
   if (onboarding) {
     const result = await runOnboarding(onboarding, undefined, true);
@@ -3570,7 +3576,7 @@ async function setup(argv: string[] = []) {
     && !arg.startsWith("--agent-native=")
     && argv[index - 1] !== "--agent-native");
   if (unknown.length > 0 || (hasAgentNativeFlag && !agentNative) || (agentNative && (json || install)) || (removeBundle && !agentNative)) {
-    commandUsage(`${ONBOARD_USAGE} | setup --install [--json] | setup --json | setup --agent-native <claude|codex> [--remove]`);
+    commandUsage(SETUP_USAGE);
   }
   if (agentNative) {
     if (agentNative !== "claude" && agentNative !== "codex") {
@@ -10562,7 +10568,7 @@ function genericIntegrationStatus(runtimeReachable: boolean) {
 async function nativeDoctor(argv: string[]) {
   const fix = argv.includes("--fix");
   const target = argv.find((arg) => arg !== "--fix");
-  if ((target !== "claude" && target !== "codex" && target !== "hermes" && target !== "gemini" && target !== "opencode" && target !== "pi" && target !== "aider" && target !== "generic") || argv.length !== (fix ? 2 : 1) || (fix && target === "generic")) commandUsage("doctor <claude|codex|hermes|gemini|opencode|pi|aider|generic> [--fix]");
+  if ((target !== "claude" && target !== "codex" && target !== "hermes" && target !== "gemini" && target !== "opencode" && target !== "pi" && target !== "aider" && target !== "generic") || argv.length !== (fix ? 2 : 1) || (fix && target === "generic")) commandUsage("doctor [<claude|codex|hermes|gemini|opencode|pi|aider|generic> [--fix]]");
   if (target === "generic") {
     const { host, port } = gatewayHostPort();
     const result = genericIntegrationStatus(await portListening(host, port));
