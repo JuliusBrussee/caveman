@@ -183,13 +183,19 @@ function preflightOwnedInstall({ root, integration, operations, force = false })
     catch (error) { conflicts.push(`${relative} (${error.message})`); continue; }
     if (!entry || currentDigest !== entry.installedDigest) conflicts.push(relative);
   }
+  // Checked first: --force backs up content but never replaces a link, so
+  // suggesting it here sent upgraders from `npx skills add` symlinks in a loop.
+  const links = conflicts.filter((value) => value.includes('symbolic-link'));
+  if (links.length) {
+    throw new Error(
+      `${integration} ownership conflict: ${links.join(', ')}; symbolic links are never replaced, even with --force. ` +
+      'Delete the link (an older `npx skills add` may have left it) and re-run',
+    );
+  }
   if (conflicts.length && !force) {
     throw new Error(
       `${integration} ownership conflict: ${conflicts.join(', ')}; refusing to overwrite user content (re-run with --force to back it up)`,
     );
-  }
-  if (conflicts.some((value) => value.includes('symbolic-link'))) {
-    throw new Error(`${integration} ownership conflict: symbolic links are never overwritten`);
   }
   return journal;
 }

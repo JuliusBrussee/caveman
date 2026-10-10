@@ -69,12 +69,16 @@ test('broken symbolic-link targets are conflicts even with force', { skip: proce
   try {
     const target = path.join(root, 'payload.txt');
     fs.symlinkSync(path.join(root, 'missing-target'), target);
-    assert.throws(() => OWNED.installOwned({
-      root,
-      integration: 'test',
-      force: true,
-      operations: [fileOperation('payload.txt', 'managed bytes\n')],
-    }), /symbolic links are never overwritten/);
+    for (const force of [true, false]) {
+      // --force cannot help here, so the message must not send the user to it.
+      assert.throws(() => OWNED.installOwned({
+        root,
+        integration: 'test',
+        force,
+        operations: [fileOperation('payload.txt', 'managed bytes\n')],
+      }), (error) => /symbolic links are never replaced/.test(error.message) &&
+        /Delete the link/.test(error.message) && !/--force to back it up/.test(error.message));
+    }
     assert.equal(fs.lstatSync(target).isSymbolicLink(), true);
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
