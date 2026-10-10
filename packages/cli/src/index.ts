@@ -4819,11 +4819,22 @@ function readWrapEntitlementState(): WrapEntitlementState | null {
 // entitlement/deviceId writes never clobber baseURL/gatewayUrl/telemetry etc.
 function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
   let out: Record<string, unknown> = {};
+  let raw = "";
   try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as unknown;
+    raw = readFileSync(configPath(), "utf8").replace(/^﻿/, "");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // only a missing file is a fresh config
+  }
+  if (raw.trim()) {
+    // A hand edit that broke the JSON still holds sign-in, module state and the
+    // telemetry decision: refuse rather than write {} plus this change over it.
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw);
+    } catch {
+      throw new Error(`${configPath()} is not valid JSON, so Caveman left it untouched. Fix the file or delete it, then run this again.`);
+    }
     if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) out = parsed as Record<string, unknown>;
-  } catch {
-    /* fresh config */
   }
   fn(out);
   mkdirSync(dirname(configPath()), { recursive: true });
@@ -5022,11 +5033,15 @@ function isoWeekKey(now = new Date()): string {
 function claimWeeklyRunRefresh(now = new Date()): boolean {
   const week = isoWeekKey(now);
   let claimed = false;
-  mutateRawConfig((out) => {
-    if (out.wrapEntitlementRunRefreshWeek === week) return;
-    out.wrapEntitlementRunRefreshWeek = week;
-    claimed = true;
-  });
+  try {
+    mutateRawConfig((out) => {
+      if (out.wrapEntitlementRunRefreshWeek === week) return;
+      out.wrapEntitlementRunRefreshWeek = week;
+      claimed = true;
+    });
+  } catch {
+    return false; // unreadable config: skip the refresh, never block the run
+  }
   return claimed;
 }
 

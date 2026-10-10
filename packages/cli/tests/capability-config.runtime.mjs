@@ -131,6 +131,30 @@ test("config set invalid mode exits 2 and leaves file byte-identical", async () 
   }
 });
 
+test("config set refuses to replace an unparseable cloud.json and keeps a BOM file's keys", async () => {
+  const isolated = isolatedCliEnv();
+  const path = join(isolated.home, "cloud.json");
+  try {
+    // A hand edit left a trailing comma: the write must name the file and touch nothing.
+    writeFileSync(path, '{"tokenStore":"file","telemetry":{"enabled":false,"decidedAt":"2026-10-01T00:00:00.000Z","promptVersion":3},}\n');
+    const before = readFileSync(path);
+    const bad = await runCli(["config", "set", "think.mode", "compress"], { env: isolated.env, prefix: "tools" });
+    assert.equal(bad.code, 1, bad.stderr);
+    assert.ok(bad.stderr.includes(path), bad.stderr);
+    assert.deepEqual(readFileSync(path), before);
+    // PowerShell's UTF-8 writes a BOM; that alone is not a broken file.
+    writeFileSync(path, `﻿${JSON.stringify({ tokenStore: "file", deviceId: "device-stable" })}`);
+    const bom = await runCli(["config", "set", "think.mode", "compress"], { env: isolated.env, prefix: "tools" });
+    assert.equal(bom.code, 0, bom.stderr);
+    const parsed = JSON.parse(readFileSync(path, "utf8"));
+    assert.equal(parsed.tokenStore, "file");
+    assert.equal(parsed.deviceId, "device-stable");
+    assert.equal(parsed.think.mode, "compress");
+  } finally {
+    isolated.cleanup();
+  }
+});
+
 test("config set writes grouped key, preserves deviceId, mode 0600, and reports source", async () => {
   const isolated = isolatedCliEnv();
   const path = writeGlobal(isolated.home, {
