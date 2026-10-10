@@ -250,10 +250,10 @@ const PROVIDERS = [
   { id: 'cursor',     label: 'Cursor',              mech: 'npx skills add (cursor)',       detect: 'command:cursor||macapp:Cursor', profile: 'cursor' },
   { id: 'windsurf',   label: 'Windsurf',            mech: 'npx skills add (windsurf)',     detect: 'command:windsurf||macapp:Windsurf', profile: 'windsurf' },
   { id: 'cline',      label: 'Cline',               mech: 'npx skills add (cline)',        detect: 'vscode-ext:^saoudrizwan\\.claude-dev||vscode-ext:^saoudrizwan\\.cline-nightly||command:cline', profile: 'cline' },
-  { id: 'continue',   label: 'Continue',            mech: 'native skills copy',     detect: 'vscode-ext:continue.continue||vscode-ext:continue', profile: 'continue' },
+  { id: 'continue',   label: 'Continue',            mech: 'native skills copy',     detect: 'vscode-ext:^continue\\.continue-', profile: 'continue' },
   { id: 'kilo',       label: 'Kilo Code',           mech: 'npx skills add (kilo)',         detect: 'vscode-ext:kilocode', profile: 'kilo' },
   { id: 'roo',        label: 'Roo Code',            mech: 'npx skills add (roo)',          detect: 'vscode-ext:^rooveterinaryinc\\.roo-cline', profile: 'roo' },
-  { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:augment||jetbrains-plugin:augment', profile: 'augment' },
+  { id: 'augment',    label: 'Augment Code',        mech: 'npx skills add (augment)',      detect: 'vscode-ext:^augment\\.vscode-augment-||jetbrains-plugin:augment', profile: 'augment' },
 
   // GitHub Copilot: the standalone Copilot CLI (`copilot` binary, reads the
   // profile's ~/.copilot/skills) or the VS Code / Cursor extension dirs (no

@@ -175,3 +175,30 @@ test('detection finds real Cline/Roo extensions and ignores look-alike names', (
   assert.match(roo, /Roo Code detected/);
   assert.doesNotMatch(roo, /Cline detected/);
 });
+
+// Continue ships as Continue.continue and Augment as augment.vscode-augment;
+// a bare /continue/ or /augment/ matched any extension with the word in it.
+test('detection finds real Continue/Augment extensions and ignores look-alike names', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman look-alikes '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const ext = path.join(dir, '.vscode', 'extensions');
+  for (const name of ['someone.continue-on-save-1.0.0', 'someone.augmented-reality-0.2.0']) fs.mkdirSync(path.join(ext, name), { recursive: true });
+  const preload = path.join(dir, 'hide-system-apps.cjs');
+  fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
+  const env = isolatedEnv(dir);
+  Object.assign(env, { XDG_CONFIG_HOME: dir });
+  const run = () => {
+    const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
+      encoding: 'utf8', cwd: dir, env,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout;
+  };
+  assert.doesNotMatch(run(), /(Continue|Augment Code) detected/);
+
+  fs.mkdirSync(path.join(ext, 'continue.continue-1.2.10-darwin-arm64'));
+  fs.mkdirSync(path.join(ext, 'augment.vscode-augment-0.500.0'));
+  const found = run();
+  assert.match(found, /Continue detected/);
+  assert.match(found, /Augment Code detected/);
+});
