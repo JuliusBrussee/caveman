@@ -73,7 +73,7 @@ import { learnTrendLines, learnTrendTable, type LearnTrends } from "./learn-tren
 import { publishedForwardHeadersOf, publishedUpstreamsOf, trimTrailingSlashes, unforwardedProviderHeaders, verifiedProviderRoute, type PublishedUpstreams } from "./provider-routing.js";
 import { openClawRequestCompatibilityIssue, preserveOpenClawProviderCompat } from "./openclaw-provider-compat.js";
 import { parseStatsOptions, renderStatsSummary, STATS_HELP, STATS_USAGE, type StatsCLIReport } from "./stats-cli.js";
-import { currentSelection, moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
+import { claimRuntimePort, currentSelection, moduleHost, moduleStates, moduleSwitchCommand, setModuleHost } from "./modules/apply.js";
 import { billingCommand, cloudMe, printSignInLines, signInLines, routingStatus, type CloudMe } from "./modules/cloud.js";
 import { modulesDoctor } from "./modules/doctor.js";
 import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule, MODULES } from "./modules/registry.js";
@@ -464,7 +464,7 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   on: (argv) => moduleSwitchCommand(true, argv),
   off: (argv) => moduleSwitchCommand(false, argv),
   stop: () => stopRuntime(),
-  enable: (argv) => enableNative(argv),
+  enable: async (argv) => { await claimRuntimePort(); enableNative(argv); },
   disable: (argv) => disableNative(argv),
   inspect: (argv) => nativeInspect(argv),
   why: (argv) => nativeWhy(argv),
@@ -3598,6 +3598,7 @@ async function setup(argv: string[] = []) {
       console.error(`caveman setup: --agent-native must be claude or codex (got ${agentNative})`);
       process.exit(2);
     }
+    if (!removeBundle) await claimRuntimePort();
     return withIntegrationLock(`agent-native-bundle-${agentNative}`, () => {
       if (removeBundle) {
         removeAgentNativeBundle(agentNative);
@@ -6073,6 +6074,7 @@ async function agentShortcut(rest: string[]) {
   if (native === "claude" && !readNativeJournal(native) && setupRan() && !setupDeclined() && listed(doorConfig.setupAgents)
     && !listed(doorConfig.nativeOptOut) && MODULES.some((m) => m.wiresAgents && currentSelection()[m.id])) {
     try {
+      await claimRuntimePort();
       enableNative([native], { quiet: true });
     } catch (error) {
       process.stderr.write(`${mark("warn")} Claude Code native setup failed (${(error as Error).message}); this session only\n`);
@@ -10589,6 +10591,7 @@ async function nativeDoctor(argv: string[]) {
     } else if (!before.available) {
       throw new Error(`${findAgent(target)?.display_name ?? target} is unavailable; repair host installation first`);
     } else if (!before.installed) {
+      await claimRuntimePort();
       enableNative([target]);
       fixResult = "enabled";
     } else if (before.state === "installed" && !agentStaleRoute(target)) {

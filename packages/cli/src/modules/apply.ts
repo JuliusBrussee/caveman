@@ -424,6 +424,16 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   return { selection: { ...selection }, agents: [...agents], lines, ...(only ? { only: [...only] } : {}), ...(notes.length ? { notes } : {}) };
 }
 
+// Every door that wires an agent, or points one at the local runtime, runs this
+// first: never to a port another program answers on (runtimePortTaken).
+export async function claimRuntimePort(say: (line: string) => void = (line) => process.stderr.write(`${line}\n`)): Promise<void> {
+  const h = moduleHost();
+  const moved = await h.runtimePortTaken();
+  if (!moved) return;
+  h.useRuntimePort(moved.free);
+  say(`○ ${moved.held} is in use by another program · local runtime on port ${moved.free}`);
+}
+
 // `progress` gets one line per step as it completes ("✓ Claude Code wired");
 // failures come back in `problems` with their full message.
 export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void; downloading?: (name: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
@@ -451,6 +461,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const { state, effects } = configChanges(plan.selection, plan.only);
   const { wire, unwire } = wiringChanges(plan.selection, plan.agents, plan.only);
   const refresh = refreshAgents(effects, unwire, state);
+  if (wire.some((agent) => agent !== "aider") || refresh.some((agent) => h.agentStaleRoute(agent))) await claimRuntimePort(say);
   const runs = externalRuns(plan.selection, plan.only, plan.agents, wire.length > 0);
   const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
 

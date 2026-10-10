@@ -65,6 +65,9 @@ if (process.argv[2] === "shrink-hook") {
     CAVEMAN_HOME: join(home, ".caveman"),
     CAVEMAN_MCP_BIN: mcp,
     CAVEMAN_PROXY_BIN: proxy,
+    // These tests are about wiring, not the port check: a pinned address keeps a
+    // machine that already runs something on 8787 from moving the runtime.
+    CAVEMAN_LISTEN: "127.0.0.1:8787",
     // Full CLI suite runs several process-heavy files concurrently. Keep this
     // fixture's valid shell probes distinct from dedicated 2s hung-probe tests.
     CAVE_BINARY_PROBE_TIMEOUT_MS: "10000",

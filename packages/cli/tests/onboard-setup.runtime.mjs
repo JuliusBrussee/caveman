@@ -193,6 +193,30 @@ function runtimeOn(fx, port) {
   return env;
 }
 
+// enable, on and setup --agent-native wire agents too: each moves the runtime
+// off a held port before the first agent is wired, as setup does.
+test("every door that wires a first agent moves the runtime off a port another program holds", { skip }, async () => {
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const held = holder.address().port;
+  const fixtures = [];
+  try {
+    for (const argv of [["enable", "claude"], ["on", "--all", "--yes"], ["setup", "--agent-native", "claude"]]) {
+      const fx = modulesFixture({ agents: ["claude"] });
+      fixtures.push(fx);
+      const out = await runCli(argv, runtimeOn(fx, held));
+      const said = `${out.stdout}${out.stderr}`;
+      assert.equal(out.code, 0, `${argv.join(" ")}: ${said}`);
+      const port = said.match(new RegExp(`○ 127\\.0\\.0\\.1:${held} is in use by another program · local runtime on port (\\d+)\\n`))?.[1];
+      assert.ok(port, `${argv.join(" ")}: ${said}`);
+      assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${port}/w/claude`, argv.join(" "));
+    }
+  } finally {
+    holder.close();
+    for (const fx of fixtures) fx.cleanup();
+  }
+});
+
 // Nothing answers on a port inside a Windows excluded range (Hyper-V, WSL,
 // Docker reserve them), yet the runtime cannot bind it. A socket bound without
 // listening is the same case on any OS.
