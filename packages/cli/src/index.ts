@@ -8102,7 +8102,10 @@ function durableUnlink(path: string): void {
 function parseJsonFileObject(path: string, bytes: Buffer | null): Record<string, unknown> {
   if (!bytes || bytes.length === 0) return {};
   // JSONC-tolerant: Claude Code and OpenCode both accept comments here.
-  const parsed = parseJsonc(bytes.toString("utf8"));
+  let parsed: unknown;
+  try { parsed = parseJsonc(bytes.toString("utf8")); } catch (error) {
+    throw new Error(`${path} is not valid JSON (${(error as Error).message}); fix it and try again`);
+  }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error(`${path} is not a JSON object`);
   return parsed as Record<string, unknown>;
 }
@@ -10175,10 +10178,16 @@ function restoreNativeJournalFiles(journal: NativeJournal | undefined, allClaude
   if (allClaudeProfiles) {
     for (const file of claudeProfileFiles(journal)) {
       const bytes = restored.has(file) ? restored.get(file) : fileBytes(file);
-      if (!bytes) continue;
-      const root = parseJsonc(bytes.toString("utf8"));
-      if (!root || typeof root !== "object" || Array.isArray(root)) throw new Error(`${file} is not a JSON object`);
-      if (cleanClaudeProfile(root as Record<string, unknown>)) restored.set(file, jsonBytes(root as Record<string, unknown>));
+      if (!bytes || bytes.length === 0) continue;
+      let root: Record<string, unknown>;
+      try { root = parseJsonFileObject(file, bytes); } catch (error) {
+        // A file Caveman wrote must parse. Any other one Claude Code cannot
+        // read either, so it holds no hook to remove: it must not block undo.
+        if (restored.has(file)) throw error;
+        process.stderr.write(`${mark("warn")} left ${file} as is: it is not a JSON object\n`);
+        continue;
+      }
+      if (cleanClaudeProfile(root)) restored.set(file, jsonBytes(root));
     }
   }
   const current = [...restored].map(([file]) => ({ file, bytes: fileBytes(file) }));

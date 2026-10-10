@@ -984,18 +984,35 @@ test("disable preserves foreign routes and MCP registrations while removing only
   assert.equal(readFileSync(join(root, ".claude.json"), "utf8"), mcp);
 });
 
-test("disable preflights every profile before restoring a journal or changing any settings", async () => {
+test("disable preflights every file Caveman wrote, names one it cannot read, and skips unreadable files it never wrote", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
-  const installed = readFileSync(join(fx.home, ".claude", "settings.json"), "utf8");
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  const installed = readFileSync(settingsPath, "utf8");
+  const journalPath = join(fx.home, ".caveman", "integrations", "claude.json");
+  // A file Caveman wrote that no longer parses stops disable before any write.
+  const mcpPath = join(fx.home, ".claude.json");
+  const mcp = readFileSync(mcpPath, "utf8");
+  writeFileSync(mcpPath, '{"mcpServers":');
+  const refused = await run(["disable", "claude"], fx.env);
+  assert.notEqual(refused.code, 0);
+  assert.ok(refused.stderr.includes(`${mcpPath} is not valid JSON`), refused.stderr);
+  assert.equal(readFileSync(settingsPath, "utf8"), installed);
+  assert.ok(existsSync(journalPath));
+  writeFileSync(mcpPath, mcp);
+  // Files Caveman never wrote, empty or not JSON: Claude Code cannot read them
+  // either, so they hold no hook to remove and must not block the undo.
+  writeFileSync(join(fx.home, ".claude", "settings.local.json"), "");
   const bad = join(fx.home, ".claude-broken");
   mkdirSync(bad);
-  writeFileSync(join(bad, "settings.json"), '{"env":');
+  writeFileSync(join(bad, "settings.json"), "not json at all");
   const out = await run(["disable", "claude"], fx.env);
-  assert.notEqual(out.code, 0);
-  assert.equal(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8"), installed);
-  assert.equal(readFileSync(join(bad, "settings.json"), "utf8"), '{"env":');
-  assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
+  assert.equal(out.code, 0, out.stderr);
+  assert.match(out.stderr, /left \S*\.claude-broken\/settings\.json as is: it is not a JSON object/);
+  assert.equal(existsSync(settingsPath), false);
+  assert.equal(existsSync(mcpPath), false);
+  assert.equal(readFileSync(join(bad, "settings.json"), "utf8"), "not json at all");
+  assert.equal(existsSync(journalPath), false);
 });
 
 test("native and shared fixtures isolate inherited Claude profiles from enable and disable", async () => {
