@@ -39,6 +39,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -296,9 +297,9 @@ test('gemini install reports a failure when the CLI rejects the command', () => 
   }
 });
 
-// ── 5. The default path without --force. The installer first runs
-//      `gemini extensions list`, then the install. This is the issue #400 path. ──
-test('gemini install without --force runs the list preflight and then the same command', () => {
+// ── 5. The default path without --force. The installer first checks for an
+//      installed extension, then runs the install. This is the issue #400 path. ──
+test('gemini install without --force checks for an installed extension and then runs the same command', () => {
   const root = freshTmpDir();
   try {
     const fakeBin = fakeGeminiDir(root);
@@ -445,6 +446,34 @@ test('gemini legacy path keeps an inherited GEMINI_CLI_TRUST_WORKSPACE', () => {
     assert.ok(t.indexOf(URL) > t.indexOf('install'), `repository URL missing or misplaced: ${t.join(' ')}`);
     assertCallerCwd(record, home);
     assert.match(result.stdout, /no --skip-trust/);
+  } finally {
+    fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// ── 13. An installed caveman extension. Gemini CLI writes `extensions list` to
+//       stderr (0.40 writes nothing without --debug), so a stdout probe never
+//       saw it: install ran again and failed, uninstall skipped it and left
+//       caveman on. The install directory is the same on every version. ──
+test('gemini install and uninstall see an installed caveman extension', () => {
+  const root = freshTmpDir();
+  try {
+    const fakeBin = fakeGeminiDir(root);
+    const home = path.join(root, 'home');
+    const ext = path.join(home, '.gemini', 'extensions', 'caveman');
+    fs.mkdirSync(ext, { recursive: true });
+    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
+    const { result, record } = runInstaller(root, ['--only', 'gemini', '--non-interactive'], fakeBin);
+    assert.match(result.stdout, /caveman extension already installed/);
+    assert.equal(fs.existsSync(record), false, 'install ran over an installed extension');
+
+    const removed = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--config-dir', path.join(root, 'claude'), '--non-interactive'], {
+      env: { ...isolatedEnv(home, [fakeBin]), CAVEMAN_TEST_RECORD: record },
+      input: '',
+      encoding: 'utf8',
+    });
+    assert.equal(removed.status, 0, `${removed.stdout}${removed.stderr}`);
+    assert.match(tokens(record).join(' '), /extensions uninstall caveman/, 'uninstall left the extension installed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }

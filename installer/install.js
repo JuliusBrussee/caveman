@@ -624,14 +624,22 @@ async function installClaude(ctx) {
   process.stdout.write('\n');
 }
 
+// Gemini CLI writes `extensions list` to stderr, and 0.40 writes nothing
+// without --debug, so a stdout probe never saw caveman. Every version installs
+// to <GEMINI_CLI_HOME or ~>/.gemini/extensions/<name>; a linked extension
+// holds only the install record.
+function geminiHasCaveman() {
+  const dir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'caveman');
+  return ['gemini-extension.json', '.gemini-extension-install.json'].some((f) => fs.existsSync(path.join(dir, f)));
+}
+
 function installGemini(ctx) {
   const { say, note, opts, results } = ctx;
   results.detected++;
   say('→ Gemini CLI detected');
 
   if (!opts.force) {
-    const r = captureSpawn('gemini', ['extensions', 'list']);
-    if (r.status === 0 && /caveman/i.test(r.stdout || '')) {
+    if (geminiHasCaveman()) {
       note('  caveman extension already installed (use --force to reinstall)');
       results.skipped.push(['gemini', 'extension already installed']);
       process.stdout.write('\n');
@@ -2075,8 +2083,7 @@ function uninstall(ctx) {
 
   // Gemini extension. Same idempotency probe as claude.
   if (hasCmd('gemini')) {
-    const probe = captureSpawn('gemini', ['extensions', 'list']);
-    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+    if (geminiHasCaveman()) {
       runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], null, opts.dryRun);
     } else {
       note('  gemini extension not installed — skipping');
