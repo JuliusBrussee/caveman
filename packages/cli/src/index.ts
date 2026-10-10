@@ -12522,6 +12522,17 @@ export function ensureCavemanHome(): string {
   const home = cavemanHome();
   mkdirSync(home, { recursive: true, mode: 0o700 });
   try { chmodSync(home, 0o700); } catch { /* not ours / Windows */ }
+  // Windows ignores both modes. A home outside the profile (D:\caveman)
+  // inherits the drive's "Authenticated Users: Modify", so every local account
+  // could read the credentials written here. Make it this user, SYSTEM and
+  // Administrators only, as the proxy does (proxy/internal/securehome). The
+  // profile is private already and is left alone.
+  const outside = process.platform === "win32" && process.env.USERPROFILE ? relative(process.env.USERPROFILE, home) : "";
+  if (outside.startsWith("..") || isAbsolute(outside)) {
+    const user = spawnSync("whoami", ["/user", "/fo", "csv", "/nh"], { encoding: "utf8", windowsHide: true });
+    const sid = /,"(S-1-[\d-]+)"\s*$/.exec(user.stdout ?? "")?.[1];
+    if (sid) spawnSync("icacls", [home, "/inheritance:r", "/grant:r", `*${sid}:(OI)(CI)F`, "*S-1-5-18:(OI)(CI)F", "*S-1-5-32-544:(OI)(CI)F"], { stdio: "ignore", windowsHide: true });
+  }
   return home;
 }
 

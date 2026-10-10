@@ -9,6 +9,7 @@ import { stubEnv } from "./harness/index.mjs";
 import {
   binaryInstallFilename,
   commandHasPath,
+  ensureCavemanHome,
   executableCandidateNames,
   generatedPluginInvocation,
   hookExecutableInvocation,
@@ -85,6 +86,21 @@ test("CLI normalizes every path in Windows lifecycle hook commands", () => {
 test("native runtime pipe name matches the Go proxy for non-ASCII homes", () => {
   assert.equal(nativePipePath("C:\\Users\\İlker\\ΝΙΚΟΣ\\.caveman"), "\\\\.\\pipe\\caveman-native-4f3f9f7846224643");
   assert.equal(nativePipePath("C:/Users/Jane Doe/.caveman"), "\\\\.\\pipe\\caveman-native-0b9a73ef77a5671a");
+});
+
+// A drive root grants Authenticated Users Modify to everything below it, so a
+// CAVEMAN_HOME there left the credentials in it readable by every account.
+test("a caveman home outside the Windows profile is private to this user", { skip: process.platform !== "win32" && "Windows ACLs" }, () => {
+  const parent = mkdtempSync(join(tmpdir(), "caveman-acl-"));
+  assert.equal(spawnSync("icacls", [parent, "/grant", "*S-1-5-11:(OI)(CI)M"]).status, 0);
+  const saved = { CAVEMAN_HOME: process.env.CAVEMAN_HOME, USERPROFILE: process.env.USERPROFILE };
+  Object.assign(process.env, { CAVEMAN_HOME: join(parent, "home"), USERPROFILE: join(parent, "profile") });
+  try { ensureCavemanHome(); } finally {
+    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : process.env[key] = value;
+  }
+  const acl = spawnSync("icacls", [join(parent, "home")], { encoding: "utf8" }).stdout;
+  assert.doesNotMatch(acl, /Authenticated Users/);
+  assert.match(acl, /NT AUTHORITY\\SYSTEM:\(OI\)\(CI\)\(F\)/);
 });
 
 test("every Windows hook executable prefix uses PowerShell invocation", () => {

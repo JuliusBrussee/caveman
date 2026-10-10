@@ -46,6 +46,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativehook"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
 	"github.com/JuliusBrussee/caveman/proxy/internal/runstate"
+	"github.com/JuliusBrussee/caveman/proxy/internal/securehome"
 	"github.com/JuliusBrussee/caveman/proxy/internal/sessionusage"
 	"github.com/JuliusBrussee/caveman/proxy/internal/standalone"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
@@ -1277,6 +1278,9 @@ func mustHome(logger *slog.Logger) string {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		logger.Error("cannot create ~/.caveman", "error", err)
 		os.Exit(1)
+	}
+	if err := securehome.Restrict(home); err != nil {
+		logger.Warn("cannot make ~/.caveman private to this user", "error", err)
 	}
 	return home
 }
