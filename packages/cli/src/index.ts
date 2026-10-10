@@ -192,7 +192,7 @@ async function portHeldByOther(host: string, port: number, version = probeProxyV
   }
 }
 
-// The instance token a runtime's /health/live publishes (loopback listeners
+// The instance token a runtime's /health/live publishes (to loopback callers
 // only). A wildcard bind is reached through loopback, as caveman-proxy's own
 // check does.
 function liveInstanceToken(host: string, port: number): Promise<string | undefined> {
