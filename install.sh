@@ -45,8 +45,13 @@ fi
 # first_run ends the install in the CLI's first run. The terminal comes from
 # /dev/tty because under curl | bash stdin is the script itself.
 first_run() {
+  launch=1
   for arg in "$@"; do
-    case "$arg" in -h|--help|--list|-u|--uninstall|--dry-run) return 0 ;; esac
+    case "$arg" in
+      -h|--help|--list|-u|--uninstall|--dry-run) return 0 ;;
+      # Never prompt: name the first run instead of starting it.
+      --non-interactive) launch=0 ;;
+    esac
   done
   # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
   node_version=$(node -p "process.versions.node")
@@ -59,12 +64,15 @@ first_run() {
     echo "  Upgrade Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@$CLI_VERSION"
     return 0
   fi
-  if command -v caveman >/dev/null 2>&1; then
+  # The caveman on PATH only when it is this release: an older CLI has an
+  # older setup. npx runs this one, and its setup installs it for good.
+  if command -v caveman >/dev/null 2>&1 &&
+    caveman --version 2>/dev/null </dev/null | grep -Eq "\"version\": *\"$CLI_VERSION\""; then
     set -- caveman setup
   else
     set -- npx -y "@caveman-ai/cli@$CLI_VERSION" setup
   fi
-  if [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then
+  if [ "$launch" = 1 ] && [ -t 1 ] && { : </dev/tty; } 2>/dev/null; then
     echo
     "$@" </dev/tty
   else

@@ -51,11 +51,13 @@ export type OnboardDeps = {
   // the install it will run when this version is not installed yet; `run`
   // does it and returns the command to name in hints (it throws when it
   // cannot, and setup then writes nothing); `apply` has the installed copy do
-  // the wiring, so nothing records a path into the cache.
+  // the wiring, so nothing records a path into the cache. `shadow` is the
+  // other caveman that typing `caveman` reaches, when there is one.
   installCli?: {
     command?: string;
     run(): Promise<string>;
     apply(selection: ModuleSelection, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }>;
+    shadow?(): string | undefined;
   };
   // Setup may end by offering to start the agent; `launch` in the result names it.
   offerLaunch?: boolean;
@@ -216,7 +218,8 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
         out.write(`${ask ? PAD : ""}${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${ask ? PAD : ""}${c.dim("Nothing else changed.")}\n`);
         return { confirmed: true, cancelled: false, ok: false, plan };
       }
-      if (deps.installCli.command) progress(`✓ caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} · not on your PATH`}`);
+      const shadow = cmd === "caveman" ? undefined : deps.installCli.shadow?.();
+      if (deps.installCli.command) progress(`✓ caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} · ${shadow ? `typing caveman runs another copy at ${tilde(shadow)}` : "not on your PATH"}`}`);
       result = await deps.installCli.apply(selection, agents, (line) => line.startsWith("downloading ") ? busy.show(line) : progress(line));
     } else {
       // Before the first agent is wired: never to a port another program answers on.
