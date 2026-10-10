@@ -7532,7 +7532,13 @@ function codexGatewayBase(gw: string, subscription: boolean): string {
 // Codex clears the stdio MCP environment, including these non-secret store
 // selectors. Forward their names so the proxy and recovery server share the
 // current launch's store without persisting provider credentials or stale paths.
-const CODEX_RECOVERY_ENV = 'env_vars = ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"]';
+// Only the ones set: `codex doctor` warns on every run about a name that is not.
+// Empty when neither is set; the recovery server then finds the default store
+// under HOME, which Codex keeps.
+function codexRecoveryEnv(): string {
+  const names = ["CAVEMAN_HOME", "CAVEMAN_CCR_DB"].filter((name) => process.env[name]);
+  return names.length ? `env_vars = [${names.map((name) => JSON.stringify(name)).join(", ")}]` : "";
+}
 
 function codexCavemanProviderToml(gw: string, subscription = true): string {
   return [
@@ -7995,8 +8001,9 @@ function buildCodexEphemeralHome(
   const providerLines = codexCavemanProviderToml(gw, subscription).split("\n");
   const providerRoot = providerLines.shift()!;
   const providerTables = providerLines.join("\n");
+  const recoveryEnv = codexRecoveryEnv();
   const mcp = mcpBinary
-    ? `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n${CODEX_RECOVERY_ENV}\n`
+    ? `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n${recoveryEnv ? `${recoveryEnv}\n` : ""}`
     : "\n";
   const delegateArgs = delegateMcp?.args.length
     ? `\nargs = [${delegateMcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]`
@@ -9242,7 +9249,7 @@ function codexNativeConfig(source: string, gw: string, subscription: boolean, mc
     "",
     "[mcp_servers.caveman]",
     `command = ${JSON.stringify(mcpBinary)}`,
-    CODEX_RECOVERY_ENV,
+    ...[codexRecoveryEnv()].filter(Boolean),
     CODEX_NATIVE_TABLES_END,
   ].join("\n");
   const middle = stripped ? `\n\n${stripped}` : "";
@@ -15610,7 +15617,7 @@ function installMcpCodexToml(mcp: { command: string; args: string[] }, serverNam
   }
   const header = `[mcp_servers.${serverName}]`;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((s) => JSON.stringify(s)).join(", ")}]` : "";
-  const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
+  const recoveryEnv = serverName === "caveman" && codexRecoveryEnv() ? `\n${codexRecoveryEnv()}` : "";
   const expectedBlock = `${header}\ncommand = ${JSON.stringify(mcp.command)}${argsLine}${recoveryEnv}\n`;
   if (existing.includes(header)) {
     const headerMatch = new RegExp(`(^|\\n)[ \\t]*\\[mcp_servers\\.${escapeRegExp(serverName)}\\][ \\t]*(?:\\r?\\n|$)`, "m").exec(existing);
@@ -15664,7 +15671,7 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
   const nextHeaderOffset = existing.slice(contentStart).search(/^[ \t]*\[/m);
   const blockEnd = nextHeaderOffset === -1 ? existing.length : contentStart + nextHeaderOffset;
   const argsLine = mcp.args.length ? `\nargs = [${mcp.args.map((arg) => JSON.stringify(arg)).join(", ")}]` : "";
-  const recoveryEnv = serverName === "caveman" ? `\n${CODEX_RECOVERY_ENV}` : "";
+  const recoveryEnv = serverName === "caveman" && codexRecoveryEnv() ? `\n${codexRecoveryEnv()}` : "";
   const expected = `[mcp_servers.${serverName}]\ncommand = ${JSON.stringify(mcp.command)}${argsLine}${recoveryEnv}`;
   return existing.slice(blockStart, blockEnd).trim() === expected.trim();
 }
