@@ -7659,7 +7659,8 @@ function detectCodexWrapAuthMode(): CodexWrapAuthMode {
 
 function codexTomlSectionName(line: string): string | undefined {
   // `[[x]]` (an array of tables, e.g. Codex's [[skills.config]]) starts a section too.
-  const match = line.match(/^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?$/);
+  // A quoted key may hold `]` (a CODEX_HOME path in a hooks.state key).
+  const match = line.match(/^\s*\[\[?((?:[^\]"']|"(?:[^"\\]|\\.)*"|'[^']*')+)\]\]?\s*(?:#.*)?$/);
   return match?.[1]?.trim();
 }
 
@@ -9719,6 +9720,8 @@ function codexHooksTrusted(): boolean {
   const real = (path: string) => { try { return realpathSync(path.replace(/^\\\\\?\\/, "")); } catch { return undefined; } };
   const target = real(hooksPath);
   let trusting = false;
+  let trusted = false;
+  let off = false;
   for (const line of (fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "").split(/\r?\n/)) {
     const section = codexTomlSectionName(line);
     if (section !== undefined) {
@@ -9727,9 +9730,14 @@ function codexHooksTrusted(): boolean {
       try { key = quoted === undefined ? undefined : quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted); } catch { key = undefined; }
       const at = typeof key === "string" ? key.match(/^(.*):session_start:(\d+):0$/) : null;
       trusting = Boolean(at && Number(at[2]) === group && target && real(at[1]!) === target);
-    } else if (trusting && line.match(/^\s*trusted_hash\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/)?.slice(1).includes(hash)) return true;
+    } else if (trusting && line.match(/^\s*trusted_hash\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/)?.slice(1).includes(hash)) {
+      trusted = true;
+    } else if (trusting && /^\s*enabled\s*=\s*false\s*(?:#.*)?$/.test(line)) {
+      // Turned off in /hooks: trusted, but Codex does not run it.
+      off = true;
+    }
   }
-  return false;
+  return trusted && !off;
 }
 
 // The hash Codex trusts a hooks.json SessionStart hook by (codex-rs hooks

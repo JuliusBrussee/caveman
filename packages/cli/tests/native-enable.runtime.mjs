@@ -713,6 +713,25 @@ test("doctor codex reads a trust hash recorded for another hook at the same posi
   assert.deepEqual(trusted.warnings, []);
 });
 
+// A `]` in CODEX_HOME sits inside the quoted hooks.state key; a hook the user
+// turned off in /hooks (enabled = false) does not run though it is trusted.
+test("doctor codex reads trust under a CODEX_HOME with a ], and not for a hook turned off", async () => {
+  const fx = fixture();
+  const codexHome = join(fx.home, "co]dex");
+  mkdirSync(codexHome, { recursive: true });
+  const env = { ...fx.env, CODEX_HOME: codexHome };
+  assert.equal((await run(["enable", "codex"], env)).code, 0);
+  const hooksPath = join(codexHome, "hooks.json");
+  const configPath = join(codexHome, "config.toml");
+  const groups = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  const group = groups.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  const key = `${realpathSync(hooksPath)}:session_start:${group}:0`;
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "${codexHookHash(groups[group])}"\n`);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], env)).stdout).components.lifecycle_hooks, true);
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}enabled = false\n`);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], env)).stdout).components.lifecycle_hooks, false);
+});
+
 // Codex declines command-output rewrite since #1037, so doctor never claims one.
 test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
   const fx = fixture();
