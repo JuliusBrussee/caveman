@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -30,7 +31,7 @@ function freshHome() {
 
 function runInstaller(args, hermesHome) {
   return spawnSync(process.execPath, [INSTALLER, ...args, '--config-dir', path.join(hermesHome, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
-    env: { ...process.env, HERMES_HOME: hermesHome, NO_COLOR: '1' },
+    env: { ...isolatedEnv(path.join(hermesHome, 'home')), HERMES_HOME: hermesHome },
     encoding: 'utf8',
   });
 }
