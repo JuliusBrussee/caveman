@@ -180,6 +180,31 @@ test("both shims carry the same PATH CLI probe", () => {
   assert.match(sh, /timeout:1e4/);
 });
 
+// Two prereleases of one release rank by semver precedence: a PATH CLI at
+// 2.1.0-beta.1 is older than a pinned 2.1.0-beta.2, so npx runs the pinned one.
+test("the PATH CLI probe orders two prereleases of one release by semver", { skip: process.platform === "win32" }, () => {
+  const probe = shellShim.match(/node -e '([^']+)' "\$CLI_VERSION"/)?.[1];
+  const fakeBin = mkdtempSync(join(tmpdir(), "caveman-shim-prerelease-"));
+  try {
+    const keepsPath = (have, want) => {
+      writeFileSync(join(fakeBin, "caveman"), `#!/bin/sh\nprintf '%s\\n' '${JSON.stringify({ version: have })}'\n`, { mode: 0o755 });
+      return spawnSync(process.execPath, ["-e", probe, want], { env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` } }).status === 0;
+    };
+    for (const [have, want, keep] of [
+      ["2.1.0-beta.1", "2.1.0-beta.2", false],
+      ["2.1.0-beta.2", "2.1.0-beta.1", true],
+      ["2.1.0-beta.10", "2.1.0-beta.2", true],
+      ["2.1.0-alpha", "2.1.0-alpha.1", false],
+      ["2.1.0-1", "2.1.0-alpha", false],
+      ["2.1.0-rc.1", "2.1.0-rc.1", true],
+      ["2.1.0-rc.1", "2.1.0", false],
+      ["2.1.0", "2.1.0-rc.1", true],
+    ]) assert.equal(keepsPath(have, want), keep, `${have} on PATH, ${want} pinned`);
+  } finally {
+    rmSync(fakeBin, { recursive: true, force: true });
+  }
+});
+
 // With a terminal the shim starts the first run, unless --non-interactive
 // ("never prompt") asked it not to: then it names the command.
 const python = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
