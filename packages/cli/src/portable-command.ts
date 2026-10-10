@@ -1,3 +1,4 @@
+// packages/pi-extension bundles this file as its own: keep it to node: builtins.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
@@ -14,16 +15,25 @@ export function parseWindowsNodeShim(source: string): string | null {
       ?? line.match(/"([A-Za-z]:[\\/][^"\r\n]+\.(?:cjs|mjs|js))"\s+%\*/i);
     if (match) return match[1]!;
   }
-  return null;
+  // Node's own npm.cmd / npx.cmd (first on PATH on every Windows Node install)
+  // do not inline the script. They set
+  //   SET "NPM_CLI_JS=%~dp0\node_modules\npm\bin\npm-cli.js"
+  // and launch `"%NODE_EXE%" "%NPM_CLI_JS%" %*`. Only that pair is accepted;
+  // arbitrary variable expansion stays rejected. Same as installer/lib/portable-process.js.
+  // ponytail: the stock shim prefers a globally upgraded npm (NPM_PREFIX_*);
+  // this takes the npm bundled with Node. Mirror npm-prefix.js if that bites.
+  const npm = source.match(/SET\s+"(NP[MX])_CLI_JS=%~dp0\\([^"\r\n]+\.js)"[\s\S]*"%NODE_EXE%"\s+"%\1_CLI_JS%"\s+%\*/i);
+  return npm ? npm[2]! : null;
 }
 
 // A shim that forwards to a native executable beside it: what npm writes for a
-// package whose bin is an .exe (Claude Code ships one). The executable is run
-// directly, so no batch syntax is evaluated here either.
+// package whose bin is an .exe (Claude Code ships one), and pnpm's
+// `@"<target>" %*` form, drive-absolute when the store is on another drive.
+// The executable is run directly, so no batch syntax is evaluated here either.
 export function parseWindowsExeShim(source: string): string | null {
   for (const line of source.split(/\r?\n/)) {
-    const match = line.match(/^[ \t]*"%(?:dp0%|~dp0)\\?([^"\r\n]+\.exe)"[ \t]+%\*[ \t]*$/i);
-    if (match) return match[1]!;
+    const match = line.match(/^[ \t]*@?"(?:%(?:dp0%|~dp0)\\?([^"\r\n]+\.exe)|([A-Za-z]:[\\/][^"\r\n]+\.exe))"[ \t]+%\*[ \t]*$/i);
+    if (match) return match[1] ?? match[2]!;
   }
   return null;
 }

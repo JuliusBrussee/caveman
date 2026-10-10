@@ -243,6 +243,6 @@ Write-Host "Done! Restart Claude Code to complete the uninstall." -ForegroundCol
 # Guidance for other agents
 Write-Host ""
 Write-Host "Other agents:"
-Write-Host "  npx skills remove caveman      # Cursor, Windsurf, Cline, Copilot, etc."
+Write-Host "  npx skills remove JuliusBrussee/caveman -g  # Cursor, Windsurf, Cline, Copilot, etc."
 Write-Host "  claude plugin disable caveman   # Claude Code plugin"
 Write-Host "  gemini extensions uninstall caveman  # Gemini CLI"

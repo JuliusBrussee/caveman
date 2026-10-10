@@ -48,6 +48,68 @@ type openAIToolCall struct {
 		Name      string `json:"name"`
 		Arguments string `json:"arguments"`
 	} `json:"function"`
+	// ExtraContent holds the thought signature Gemini 3 puts on a call; it
+	// refuses the next request when the call comes back without it.
+	ExtraContent *struct {
+		Google struct {
+			ThoughtSignature string `json:"thought_signature"`
+		} `json:"google"`
+	} `json:"extra_content,omitempty"`
+}
+
+// thought is the thought signature the call carries, "" for none.
+func (c openAIToolCall) thought() string {
+	if c.ExtraContent == nil {
+		return ""
+	}
+	return c.ExtraContent.Google.ThoughtSignature
+}
+
+// thoughtTag starts the carrier of a tool call's thought signature in an
+// agent's history (a redacted_thinking block's data, also inside a Codex
+// reasoning envelope): "caveman:ts:<n>:<chat signature>:", then the call id,
+// ':' and the signature. The chat signature names the route and model, so
+// only that pair gets it back; every other host strips it as "caveman:".
+func thoughtTag(chatSignature string) string {
+	return signaturePrefix + "ts:" + routeTag(chatSignature)
+}
+
+// thoughtOf reads a carrier made with tag: the call it rode on and the
+// signature (base64: the last ':' ends the call id); false for anything else.
+func thoughtOf(data, tag string) (call, signature string, ok bool) {
+	rest, ok := strings.CutPrefix(data, tag)
+	at := strings.LastIndexByte(rest, ':')
+	if !ok || at < 1 || at == len(rest)-1 {
+		return "", "", false
+	}
+	return rest[:at], rest[at+1:], true
+}
+
+// thoughts is how the route takes the thought signatures of its tool calls
+// back (Gemini, extra_content): the thoughtTag of what it wrote, and the
+// stand-in for a step's first call that carries none, Google's skip value,
+// on Gemini 3 and later (which refuse such a call; earlier ones never check
+// it). Both "" for any other route.
+func (o Options) thoughts() (tag, standIn string) {
+	if o.Route != "gemini" {
+		return "", ""
+	}
+	if !strings.HasPrefix(o.Model, "gemini-1") && !strings.HasPrefix(o.Model, "gemini-2") {
+		standIn = "skip_thought_signature_validator"
+	}
+	return thoughtTag(o.chatSignature()), standIn
+}
+
+// appendThought writes a chat tool call's extra_content: the signature it
+// carried, else standIn on a step's first call; nothing when neither.
+func appendThought(dst []byte, signature, standIn string, first bool) []byte {
+	if signature == "" && first {
+		signature = standIn
+	}
+	if signature == "" {
+		return dst
+	}
+	return append(appendString(append(dst, `,"extra_content":{"google":{"thought_signature":`...), signature), "}}"...)
 }
 
 // chatUsage is the OpenAI chat usage object plus DeepSeek's cache spelling.
@@ -125,12 +187,19 @@ func chatToAnthropic(body []byte, model, signature string) ([]byte, chatUsage) {
 			blocks = append(blocks, map[string]any{"type": "text", "text": choice.Message.Content})
 		}
 		for i, call := range choice.Message.ToolCalls {
+			callID := wireCallID(call.ID, id, i)
+			if thought := call.thought(); thought != "" {
+				blocks = append(blocks, map[string]any{"type": "redacted_thinking", "data": thoughtTag(signature) + callID + ":" + thought})
+			}
 			blocks = append(blocks, map[string]any{
-				"type": "tool_use", "id": wireCallID(call.ID, id, i), "name": call.Function.Name,
+				"type": "tool_use", "id": callID, "name": call.Function.Name,
 				"input": toolInput(call.Function.Arguments),
 			})
 		}
 		stop = anthropicStopReason(choice.FinishReason)
+		if stop == "end_turn" && len(choice.Message.ToolCalls) > 0 {
+			stop = "tool_use" // a host that ends a tool call with "stop" (Gemini): the calls still run
+		}
 	}
 	return mustJSON(map[string]any{
 		"id": id, "type": "message", "role": "assistant",

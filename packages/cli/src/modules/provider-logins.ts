@@ -285,5 +285,8 @@ export function providersLogin(argv: string[], proxyBin: string): number {
   if (provider.kind !== "oauth") throw new Error(`caveman: ${provider.id} takes an API key: caveman providers add ${provider.id}`);
   const run = spawnSync(proxyBin, ["provider-login", provider.id], { stdio: "inherit" });
   if (run.error) throw new Error(`caveman: could not start ${proxyBin}: run \`caveman setup\` to install the runtime`);
+  // Exit 2 is a caveman-proxy from before provider logins: the command
+  // checked the provider already, so only the subcommand is unknown to it.
+  if (run.status === 2) throw new Error(`caveman: ${proxyBin} is too old for provider login: run \`caveman setup --install\``);
   return run.status ?? 1;
 }

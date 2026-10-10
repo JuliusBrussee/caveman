@@ -30,9 +30,12 @@ function run(surface, item, action) {
   return spawnSync(surface.command, args, { cwd: root, env: item.env, encoding: 'utf8', timeout: 60_000 });
 }
 
+// pwsh writes its profile cache under HOME even for `exit 0`: probe in a throwaway one.
+const probeHome = mkdtempSync(join(tmpdir(), 'caveman hook probe '));
+test.after(() => rmSync(probeHome, { recursive: true, force: true }));
 for (const surface of surfaces) {
   const probe = spawnSync(surface.command, surface.extension === 'ps1'
-    ? ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'] : ['--version'], { encoding: 'utf8' });
+    ? ['-NoProfile', '-NonInteractive', '-Command', 'exit 0'] : ['--version'], { encoding: 'utf8', env: { ...process.env, HOME: probeHome } });
   const options = { skip: probe.error?.code === 'ENOENT' ? `${surface.command} is not installed` : false };
 
   for (const [label, content, installOK] of [

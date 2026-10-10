@@ -13,6 +13,7 @@ import { homedir } from "node:os";
 import { join, sep } from "node:path";
 import { portableInvocation } from "../portable-command.js";
 import { cloudAnswer, cloudProduct, ROUTING_ON_LINE, routeState, routingPause, type MeAnswer } from "./cloud.js";
+import { setupRan } from "./onboard.js";
 import { findModule, MODULES, type ModuleDef, type ModuleId } from "./registry.js";
 import { moduleFix } from "./status.js";
 
@@ -26,7 +27,11 @@ export type ModuleState = { id: ModuleId; on: boolean; active: boolean; reason?:
 
 // optedOut: the user ran `caveman disable <agent>` and has not enabled it since.
 export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean; optedOut?: boolean };
-export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number };
+// token: the run state's instance token. stale: the runtime still runs an
+// older caveman-proxy than the one now installed.
+// runFile: the runtime's run-state record, which a runtime ended the hard way
+// (Windows) never removes itself.
+export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number; token?: string; runFile?: string; stale?: { running: string; installed: string } };
 // A capability as every layer resolves it (defaults → global → project → env),
 // plus the global-file value alone, which is what module state is recorded in.
 export type Capability = { value: unknown; source: string; global: unknown; invalid?: string };
@@ -42,11 +47,13 @@ export type ModuleHost = {
   binaryRelease: string;
   resolveBinary(name: string): string | null;
   // `downloading` is told each binary as its download starts; with it the
-  // install prints nothing itself.
-  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<void>;
+  // install prints nothing itself and returns what it would have warned.
+  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<string[]>;
   // Binaries the hub installed for a module, from modules.lock.json.
   lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
+  // Hub binaries in ~/.caveman/bin installed from another release than the pin.
+  binariesBehindPin(): string[];
   which(name: string): string | null;
   // Every agent the native wiring supports, detected on PATH or journaled.
   nativeAgents(): NativeAgentInfo[];
@@ -73,10 +80,19 @@ export type ModuleHost = {
   // Whether the local runtime answers, waiting up to waitMs for it.
   runtimeListening(waitMs: number): Promise<boolean>;
   agentState(agent: string): string;
+  // What clears a degraded agent: `caveman doctor <agent> --fix`, or the way
+  // out when that repair would refuse (a user edit to what Caveman wrote).
+  agentFix(agent: string): string;
   coreActive(): boolean;
   signedIn(): boolean;
   cloudCheck(): Promise<void>;
   localRuntimes(): Promise<LocalRuntime[]>;
+  // What doctor says, with the fix, when wired agents send their requests to a
+  // local runtime that is not running; undefined otherwise.
+  runtimeDown(): Promise<string | undefined>;
+  // What a wired agent still asks of the user before Caveman's hooks run
+  // (Codex: trust them in /hooks); undefined when nothing.
+  agentAsk(agent: string): string | undefined;
   interactive(): boolean;
   confirm(question: string): Promise<boolean>;
   // Where new wiring sends agent traffic, and the line status prints; `fix`
@@ -207,12 +223,14 @@ function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire:
 
 // Modules in scope that are on and miss a binary they need. An external
 // binary is missing when no usable copy resolves, unless an override names
-// one: a download would not be the copy used then.
+// one: a download would not be the copy used then. A hub binary an older
+// release installed counts as missing too: a CLI upgrade leaves it in place.
 function binaryNeeds(selection: ModuleSelection, only: ModuleId[] | undefined) {
   const h = moduleHost();
   const on = MODULES.filter((m) => selection[m.id] && inScope(m.id, only));
+  const behind = h.binariesBehindPin();
   const missingOf = (m: ModuleDef) => [
-    ...m.binaries.filter((name) => !h.resolveBinary(name)),
+    ...m.binaries.filter((name) => !h.resolveBinary(name) || behind.includes(name)),
     ...(m.external && !externalOverride(m) && !externalBin(m) ? [m.external.binary] : []),
   ];
   const missing = [...new Set(on.flatMap(missingOf))];
@@ -379,7 +397,14 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
       for (const file of h.planWiring(agent)) {
         lines.push({ action: file.exists ? "UPDATE" : "CREATE", target: tilde(file.file), detail: file.kind.replace("-", " ") });
       }
-    } catch {
+    } catch (error) {
+      // An agent on its own endpoint is left as is. The plan says so in short;
+      // the step's result says why and how to route it anyway, once.
+      const own = (error as { ownEndpoint?: string }).ownEndpoint;
+      if (own) {
+        notes.push(`${h.agentName(agent)} stays as is: it sends its requests to its own endpoint ${own}`);
+        continue;
+      }
       // The binaries the plan downloads first are what this needs; enable
       // reports any real refusal when it runs.
       lines.push({ action: "UPDATE", target: `${agent} config`, detail: "route + hooks" });
@@ -424,6 +449,16 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
   return { selection: { ...selection }, agents: [...agents], lines, ...(only ? { only: [...only] } : {}), ...(notes.length ? { notes } : {}) };
 }
 
+// Every door that wires an agent, or points one at the local runtime, runs this
+// first: never to a port another program answers on (runtimePortTaken).
+export async function claimRuntimePort(say: (line: string) => void = (line) => process.stderr.write(`${line}\n`)): Promise<void> {
+  const h = moduleHost();
+  const moved = await h.runtimePortTaken();
+  if (!moved) return;
+  h.useRuntimePort(moved.free);
+  say(`○ ${moved.held} is in use by another program · local runtime on port ${moved.free}`);
+}
+
 // `progress` gets one line per step as it completes ("✓ Claude Code wired");
 // failures come back in `problems` with their full message.
 export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progress?: (line: string) => void; downloading?: (name: string) => void }): Promise<{ ok: boolean; problems: string[] }> {
@@ -439,7 +474,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const needs = binaryNeeds(plan.selection, plan.only);
   if (needs.missing.length) {
     try {
-      await h.installBinaries(needs.modules, opts.downloading);
+      for (const note of await h.installBinaries(needs.modules, opts.downloading)) say(`○ ${note}`);
       // A release from before modules.json brings no external binary.
       const still = binaryNeeds(plan.selection, plan.only).missing;
       const got = needs.missing.filter((name) => !still.includes(name));
@@ -451,19 +486,41 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const { state, effects } = configChanges(plan.selection, plan.only);
   const { wire, unwire } = wiringChanges(plan.selection, plan.agents, plan.only);
   const refresh = refreshAgents(effects, unwire, state);
+  if (wire.some((agent) => agent !== "aider") || refresh.some((agent) => h.agentStaleRoute(agent))) await claimRuntimePort(say);
   const runs = externalRuns(plan.selection, plan.only, plan.agents, wire.length > 0);
   const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
 
-  if (state.length) h.mutateConfig((out) => { out.modules = { ...objectOf(out.modules), ...Object.fromEntries(state) }; });
-  // Effects land before wiring: enable and repair read think.shrink for hooks.
-  for (const [key, value] of effects) h.setConfigValue(key, value);
   const step = (agent: string, done: string, act: () => void) => {
     try {
       act();
       say(`✓ ${h.agentName(agent)} ${done}`);
-    } catch (error) { fail(agent, error); }
+      return true;
+    } catch (error) {
+      // An agent on its own endpoint is left as is: a note, not a failure.
+      if ((error as { ownEndpoint?: boolean }).ownEndpoint) { say(`○ ${(error as Error).message}`); return true; }
+      fail(agent, error);
+      return false;
+    }
   };
-  for (const agent of unwire) step(agent, "unwired", () => h.unwireAgent(agent));
+  // Unwiring reads no config, so it goes first. When the last agent-wired
+  // module goes off and an agent stays wired, the modules this run switched
+  // off keep their state and keys: status must not say off over a wired
+  // agent, and running off again retries the unwire. A config the writes
+  // would refuse (broken JSON) stops the run here, before any agent changes.
+  if (state.length || effects.length) h.mutateConfig(() => {});
+  const wasOn = currentSelection();
+  const stuck = unwire.filter((agent) => !step(agent, "unwired", () => h.unwireAgent(agent)));
+  const kept = stuck.length && !MODULES.some((m) => m.wiresAgents && plan.selection[m.id])
+    ? MODULES.filter((m) => m.wiresAgents && wasOn[m.id]) : [];
+  if (kept.length) {
+    const ids = kept.map((m) => m.id);
+    const list = (items: string[]) => new Intl.ListFormat("en").format(items);
+    problems.push(`${list(ids)} stay${ids.length > 1 ? "" : "s"} on while ${list(stuck.map((agent) => h.agentName(agent)))} ${stuck.length > 1 ? "are" : "is"} still wired; fix the problem above, then run this again`);
+  }
+  const recorded = state.filter(([id]) => !kept.some((m) => m.id === id));
+  if (recorded.length) h.mutateConfig((out) => { out.modules = { ...objectOf(out.modules), ...Object.fromEntries(recorded) }; });
+  // Effects land before wiring: enable and repair read think.shrink for hooks.
+  for (const [key, value] of effects) if (!kept.some((m) => m.capabilities.some((effect) => effect.key === key))) h.setConfigValue(key, value);
   for (const agent of wire) step(agent, "wired", () => h.wireAgent(agent));
   const target = h.agentTraffic().target === "local" ? "local runtime" : "managed gateway";
   for (const agent of refresh) step(agent, h.agentStaleRoute(agent) ? `routing: ${target}` : "hooks refreshed", () => h.refreshAgent(agent));
@@ -483,6 +540,10 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
     if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}${output ? `\n${output}` : ""}`);
     else if (run.install) for (const line of externalReady(run.def, run.bin, run.flags, run.before)) say(line);
     else say(`✓ ${run.def.id}: ${name} ${run.args.join(" ")}`);
+  }
+  for (const agent of wire) {
+    const ask = h.agentAsk(agent);
+    if (ask) say(`○ ${ask}`);
   }
   return { ok: problems.length === 0, problems };
 }
@@ -538,6 +599,8 @@ function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: bool
 export async function moduleStates(): Promise<ModuleState[]> {
   const h = moduleHost();
   const selection = currentSelection();
+  const stored = storedModules();
+  const setUp = setupRan();
   const agents = h.nativeAgents().filter((agent) => agent.detected || agent.wired);
   const signedIn = h.signedIn();
   const cloud = signedIn && MODULES.some((m) => m.needsSignIn && selection[m.id]) ? await cloudAnswer() : null;
@@ -545,7 +608,10 @@ export async function moduleStates(): Promise<ModuleState[]> {
     const on = selection[m.id];
     const bin = on && m.external ? externalBin(m) : null;
     const status = m.external && bin ? externalStatus(m, bin) : undefined;
-    const reason = on ? inactiveReason(m, selection, signedIn, { bin, status }, cloud) : undefined;
+    const why = on ? inactiveReason(m, selection, signedIn, { bin, status }, cloud) : undefined;
+    // Before the first setup, a module that acts only once setup records it
+    // on (Cloud routing, Blocks' hooks) is not set up yet rather than broken.
+    const reason = why && !setUp && (m.needsSignIn || m.external) && typeof stored[m.id] !== "boolean" ? "not set up" : why;
     const perAgent = Object.fromEntries(agents.map((agent) => [
       agent.id,
       m.wiresAgents ? agent.wired ? "wired" : "not wired" : externalAgentState(status, agent.id),

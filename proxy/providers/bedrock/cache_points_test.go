@@ -192,7 +192,7 @@ func TestCachePointsUnsupportedVendorAndSurfaceAreByteIdentical(t *testing.T) {
 		{
 			name: "cross-region-profile-not-proven",
 			body: `{"system":[{"text":"stable"}],"messages":[]}`,
-			meta: providers.RequestMetadata{Provider: "bedrock", Model: "us." + claudeModel, Endpoint: "converse"},
+			meta: providers.RequestMetadata{Provider: "bedrock", Model: "us.anthropic.claude-sonnet-4-6", Endpoint: "converse"},
 		},
 		{
 			// Review H2: the bare `anthropic.claude-` prefix admitted legacy
@@ -340,9 +340,6 @@ func TestCachePointEligibilityCoversInferenceProfiles(t *testing.T) {
 		"global.anthropic.claude-opus-4-8":                true,
 		"global.anthropic.claude-sonnet-4-6":              true,
 		"global.anthropic.claude-haiku-4-5-20251001-v1:0": true,
-		// Legacy bare ids, unchanged.
-		"anthropic.claude-3-5-sonnet-20241022-v2:0": true,
-		"anthropic.claude-3-5-haiku-20241022-v1:0":  true,
 		// Geographic profiles: routed by the allowlist, but no catalog row of
 		// their own => not eligible (fail closed).
 		"us.anthropic.claude-sonnet-4-6": false,

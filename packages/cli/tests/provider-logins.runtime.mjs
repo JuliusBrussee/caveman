@@ -74,6 +74,23 @@ test("logins whose terms forbid a third-party client are refused with the reason
   }
 });
 
+// A caveman-proxy from before provider logins (CLI 2.x's binaries) answers
+// the unknown subcommand with exit 2 and a raw log line; say what fixes it.
+test("providers login with a runtime too old for it names the update", async () => {
+  const iso = isolatedCliEnv();
+  try {
+    if (process.platform === "win32") return;
+    const fake = join(iso.home, "bin", "old-proxy");
+    writeFileSync(fake, `#!/bin/sh\necho '{"level":"ERROR","msg":"unknown caveman-proxy subcommand","command":"provider-login"}' >&2\nexit 2\n`, { mode: 0o755 });
+    chmodSync(fake, 0o755);
+    const result = await runCli(["providers", "login", "chatgpt"], { env: { ...iso.env, CAVEMAN_PROXY_BIN: fake } });
+    assert.notEqual(result.code, 0);
+    assert.match(result.stderr, /is too old for provider login: run `caveman setup --install`/);
+  } finally {
+    iso.cleanup();
+  }
+});
+
 test("providers login chatgpt runs the runtime's sign-in", async () => {
   const iso = isolatedCliEnv();
   try {

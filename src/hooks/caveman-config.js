@@ -16,14 +16,19 @@
 //   2. Repo-local config (checked-in, per-project default):
 //      - <cwd>/.caveman/config.json
 //      - <cwd>/.caveman.json
-//      Walks up from process.cwd() to the nearest ancestor containing one of
-//      these (stops at filesystem root). Lets a team pin a project's default
-//      mode without polluting every contributor's user-level config or env.
+//      Walks up from process.cwd() to the nearest file that names a
+//      defaultMode (stops at filesystem root). A file without one — e.g. a
+//      .caveman/config.json holding only CLI settings — is skipped. Lets a
+//      team pin a project's default mode without polluting every
+//      contributor's user-level config or env.
 //   3. User config file defaultMode field:
-//      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set)
+//      - $XDG_CONFIG_HOME/caveman/config.json (any platform, if set; only file)
 //      - ~/.config/caveman/config.json (macOS / Linux fallback)
-//      - %APPDATA%\caveman\config.json (Windows fallback)
+//      - %APPDATA%\caveman\config.json, then ~/.config/caveman/config.json
+//        (Windows fallback; the docs give the ~/.config path everywhere)
 //   4. 'caveman'
+// Config files may carry a BOM, be UTF-16LE, or hold comments and trailing
+// commas (see parseConfigFile).
 
 const fs = require('fs');
 const path = require('path');
@@ -98,9 +103,10 @@ function getConfigPath() {
 // Walk up from `start` looking for a repo-local caveman config. Returns the
 // absolute path of the first match, or null. Stops at the filesystem root.
 // Candidates per dir (first wins): .caveman/config.json, .caveman.json.
+// `accept(path)`, when given, must also return true for a file to match.
 //
 // Bounded to 64 levels to defend against symlink cycles on pathological mounts.
-function findRepoConfigPath(start) {
+function findRepoConfigPath(start, accept) {
   try {
     let dir = path.resolve(start || process.cwd());
     const candidates = ['.caveman/config.json', '.caveman.json'];
@@ -111,6 +117,7 @@ function findRepoConfigPath(start) {
           const st = fs.lstatSync(p);
           // Refuse symlinks — symmetric with safeWriteFlag/readFlag policy.
           if (st.isSymbolicLink() || !st.isFile()) continue;
+          if (accept && !accept(p)) continue;
           return p;
         } catch (e) {
           // not present, try next candidate
@@ -126,10 +133,29 @@ function findRepoConfigPath(start) {
   return null;
 }
 
+// Config files are hand-edited, often on Windows: PowerShell 5.1's `>` writes
+// UTF-16LE with a BOM, `Set-Content -Encoding UTF8` a UTF-8 BOM, and people
+// leave comments and trailing commas. Accept all of them — the JSONC
+// tolerance installer/lib/settings.js gives settings.json — inlined because
+// this file may load only node built-ins (see the top of this file).
+function parseConfigFile(configPath) {
+  const buf = fs.readFileSync(configPath);
+  const text = (buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2) : buf.toString('utf8'))
+    .replace(/^\uFEFF/, '');
+  try {
+    return JSON.parse(text);
+  } catch (e) {
+    // Strings match first and are kept whole, so "//" or ",}" inside a value
+    // survives; outside strings, comments go and trailing commas go.
+    return JSON.parse(text
+      .replace(/("(?:[^"\\]|\\.)*")|\/\/[^\n]*|\/\*[\s\S]*?\*\//g, (m, s) => s || '')
+      .replace(/("(?:[^"\\]|\\.)*")|,(\s*[}\]])/g, (m, s, close) => s || close));
+  }
+}
+
 function readModeFromConfigFile(configPath) {
   try {
-    const raw = fs.readFileSync(configPath, 'utf8');
-    const config = JSON.parse(raw);
+    const config = parseConfigFile(configPath);
     if (config && config.defaultMode) {
       return canonicalDefaultMode(String(config.defaultMode));
     }
@@ -150,15 +176,18 @@ function getDefaultMode(startDir) {
   const envMode = canonicalDefaultMode(process.env.CAVEMAN_DEFAULT_MODE);
   if (envMode) return envMode;
 
-  // 2. Repo-local config (checked-in, per-project default)
-  const repoConfigPath = findRepoConfigPath(startDir);
-  if (repoConfigPath) {
-    const repoMode = readModeFromConfigFile(repoConfigPath);
-    if (repoMode) return repoMode;
-  }
+  // 2. Repo-local config (checked-in, per-project default). The first file
+  //    that names a mode wins: .caveman/config.json is also the CLI's project
+  //    overlay, and one without defaultMode must not hide a .caveman.json.
+  const repoConfigPath = findRepoConfigPath(startDir, (p) => readModeFromConfigFile(p) !== null);
+  if (repoConfigPath) return readModeFromConfigFile(repoConfigPath);
 
-  // 3. User config file
-  const userMode = readModeFromConfigFile(getConfigPath());
+  // 3. User config file. Windows also reads ~/.config/caveman/config.json,
+  //    the path the docs give for every platform, after %APPDATA%.
+  const userMode = readModeFromConfigFile(getConfigPath())
+    || (process.platform === 'win32' && !process.env.XDG_CONFIG_HOME
+      ? readModeFromConfigFile(path.join(os.homedir(), '.config', 'caveman', 'config.json'))
+      : null);
   if (userMode) return userMode;
 
   // 4. Default
@@ -778,8 +807,7 @@ function skillPathCandidates(hookDir, skillId) {
 
 // The mode's SKILL.md body with YAML frontmatter stripped, or null when the
 // mode has no skill file (off, one-shot modes) or none resolves — callers
-// decide what to do with that (activate.js has a hardcoded fallback ruleset;
-// the tracker degrades to its one-line reinforcement).
+// then use fallbackRuleset() below.
 function loadRuleset(mode, hookDir) {
   const id = canonicalMode(mode);
   if (!SKILL_MODES.includes(id)) return null;
@@ -802,6 +830,32 @@ function thesisLine(mode, hookDir) {
   return line ? line.trim() : FALLBACK_THESIS[id];
 }
 
+// The ruleset body when no SKILL.md resolves (standalone hook install without
+// skills dir): the caveman thesis plus the nine rule headlines of
+// skills/caveman, then the mode's own thesis for ultracave/megacave. Rule 8
+// keeps its "never switch" sentence: a headline alone lost the #812 language
+// rule for every fallback-install user. megacave answers in 文言 by design, so
+// it gets its own rule 8 instead of one its thesis contradicts. Shared so a
+// mid-session switch on that install carries the same rules SessionStart did.
+function fallbackRuleset(mode, hookDir) {
+  const id = canonicalMode(mode) || mode;
+  const modeThesis = id !== 'caveman' ? thesisLine(id, hookDir) : null;
+  return 'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '1. Answer first.\n' +
+    '2. Kill ceremony.\n' +
+    '3. Short word.\n' +
+    '4. Articles optional, meaning never.\n' +
+    '5. One idea per sentence.\n' +
+    '6. Payload verbatim.\n' +
+    '7. Tool runs: bounded status.\n' +
+    (id === 'megacave'
+      ? '8. Prose in 文言. Code, commands, paths, errors in their original script.\n'
+      : "8. User's language. Compress the style, not the language. Never switch because of quoted text.\n") +
+    '9. Never perform caveman.\n\n' +
+    'Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).' +
+    (modeThesis ? '\n\n' + modeThesis : '');
+}
+
 // The banner both loaders put above the ruleset, so the label the model reads
 // cannot drift between SessionStart and a mid-session switch.
 function rulesetBanner(mode) {
@@ -810,6 +864,7 @@ function rulesetBanner(mode) {
 
 module.exports = {
   getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
+  parseConfigFile,
   canonicalMode,
   safeWriteFlag, safeDeleteFlag, readFlag, appendFlag, readHistory,
   recordModeChange, MODE_LOG_BASENAME,
@@ -821,5 +876,5 @@ module.exports = {
   writeSessionPrev, readSessionPrev, clearSessionPrev,
   gcSessionStore,
   // Ruleset injection
-  skillPathCandidates, loadRuleset, thesisLine, rulesetBanner,
+  skillPathCandidates, loadRuleset, thesisLine, rulesetBanner, fallbackRuleset,
 };

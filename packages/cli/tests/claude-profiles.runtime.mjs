@@ -144,16 +144,13 @@ test("a malformed profile is skipped with a warning; a malformed active profile 
     assert.deepEqual(json(join(fx.home, ".claude-bad", ".claude.json")), MARKER);
     for (const dir of [fx.dirs.main, fx.dirs.max, fx.dirs.work]) assert.ok(routed(dir), `${dir} routed`);
     assert.equal((await doctor(fx.env)).state, "installed", "a profile enable skips does not degrade the install");
-    // Disable reads every discovered profile and refuses while one is not a
-    // JSON object (as before profiles were wired); nothing is changed by it.
-    const wired = profileFiles(fx.home);
-    const refused = await runCli(["disable", "claude"], fx.env);
-    assert.notEqual(refused.code, 0);
-    assert.match(refused.stderr, /\.claude-bad\S* is not a JSON object/);
-    assert.deepEqual(profileFiles(fx.home), wired);
-    put(bad, "{}\n");
-    assert.equal((await runCli(["disable", "claude"], fx.env)).code, 0);
-    put(bad, "[]\n");
+    // Disable reads every discovered profile. One it never wrote and cannot
+    // read holds no hook Claude Code runs: it is named and left as is.
+    const off = await runCli(["disable", "claude"], fx.env);
+    assert.equal(off.code, 0, off.stderr);
+    assert.match(off.stderr, /left \S*\.claude-bad\/settings\.json as is: it is not a JSON object/);
+    assert.equal(readFileSync(bad, "utf8"), "[]\n");
+    for (const dir of [fx.dirs.main, fx.dirs.max, fx.dirs.work]) assert.ok(!routed(dir), `${dir} unrouted`);
 
     const before = profileFiles(fx.home);
     const loud = await runCli(["enable", "claude"], { ...fx.env, CLAUDE_CONFIG_DIR: dirname(bad) });
@@ -259,12 +256,16 @@ test("another profile that routes elsewhere on purpose keeps its route", async (
     const status = await doctor(fx.env);
     assert.equal(status.state, "installed");
     assert.deepEqual(status.unwired_profiles, []);
-    // The active profile is still taken over, with its route remembered.
+    // The active profile keeps its own endpoint too: the proxy would send its
+    // token to api.anthropic.com. The refusal names the endpoint and the opt-in.
     assert.equal((await runCli(["disable", "claude"], fx.env)).code, 0);
+    const glmBefore = profileFiles(fx.home);
     const active = await runCli(["enable", "claude"], { ...fx.env, CLAUDE_CONFIG_DIR: glm });
-    assert.equal(active.code, 0, active.stderr);
-    assert.ok(routed(glm));
-    assert.equal(journal(fx.home).operations[0].owned.previous_route, "https://api.z.ai/api/anthropic");
+    assert.notEqual(active.code, 0);
+    assert.match(active.stderr, /sends its requests to its own endpoint https:\/\/api\.z\.ai\/api\/anthropic \(ANTHROPIC_BASE_URL in \S*\.claude-glm\/settings\.json\)/);
+    assert.match(active.stderr, /remove ANTHROPIC_BASE_URL there and run `caveman enable claude`/);
+    assert.deepEqual(profileFiles(fx.home), glmBefore);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")), false);
   } finally {
     fx.cleanup();
   }

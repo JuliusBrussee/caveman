@@ -7,6 +7,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { fileURLToPath } from "node:url";
 
 import { hardenedGitArgs, hardenedGitEnv } from "./git-safe.js";
+import { nativePipePath } from "./native-pipe.js";
 import { confirmLearnNudge, maybeSpawnAutopilot } from "./learn-autopilot.js";
 import { cloudConfigPath } from "./modules/config-home.js";
 
@@ -371,7 +372,7 @@ function callRuntime(value: Record<string, unknown>): Promise<RuntimeResponse | 
     let bytes = 0;
     const chunks: Buffer[] = [];
     const endpoint = process.platform === "win32"
-      ? `\\\\.\\pipe\\caveman-native-${createHash("sha256").update(resolve(caveHome()).replaceAll("/", "\\").toLowerCase()).digest("hex").slice(0, 16)}`
+      ? nativePipePath(caveHome())
       : join(caveHome(), "run", "native.sock");
     const socket = netConnect({ path: endpoint });
     const finish = (response?: RuntimeResponse) => {

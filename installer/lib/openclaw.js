@@ -17,8 +17,8 @@
 //      pointing the agent at the skill. SOUL.md is auto-injected each turn,
 //      so this is what actually drives always-on behavior.
 //
-// Idempotent on both writes. Uninstall removes the skill folder and strips
-// the marker block from SOUL.md while preserving any user-authored content.
+// Idempotent on both writes. Uninstall removes the skill caveman wrote and
+// strips the marker block from SOUL.md while preserving any user-authored content.
 
 'use strict';
 
@@ -26,12 +26,16 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
+const { removeEmptyDirs } = require('./owned-install');
 
 const SKILL_NAME = 'caveman';
 const SKILL_VERSION = '1.0.0';
 const MARK_BEGIN = '<!-- caveman-begin -->';
 const MARK_END = '<!-- caveman-end -->';
 const SOUL_FILE = 'SOUL.md';
+// Kept in the skill folder caveman owns: which workspace directories install
+// made, so uninstall can take them back once they are empty.
+const CREATED_FILE = '.caveman-created-dirs.json';
 
 function resolveWorkspace(env = process.env) {
   if (env.OPENCLAW_WORKSPACE) return path.resolve(env.OPENCLAW_WORKSPACE);
@@ -116,16 +120,34 @@ function unlinkRegular(p, expectedStat) {
   fs.unlinkSync(p);
 }
 
+// True when it made the directory.
 function ensureRealDirectory(p, create = false) {
   let stat;
+  let made = false;
   try { stat = fs.lstatSync(p); } catch (error) {
     if (!error || error.code !== 'ENOENT' || !create) throw error;
     fs.mkdirSync(p);
+    made = true;
     stat = fs.lstatSync(p);
   }
   if (stat.isSymbolicLink() || !stat.isDirectory()) {
     throw new Error(`openclaw: refusing non-directory or symlink ${p}`);
   }
+  return made;
+}
+
+// Reads and removes the record install left; only the two directories install
+// can make are honored. Deepest first.
+function takeCreatedDirs(ws, skillDir) {
+  const file = path.join(skillDir, CREATED_FILE);
+  let list;
+  try {
+    const { content, stat } = readRegularIfExists(file);
+    if (content === null) return [];
+    list = JSON.parse(content);
+    unlinkRegular(file, stat);
+  } catch (_) { return []; }
+  return ['skills', '.'].filter((d) => Array.isArray(list) && list.includes(d)).map((d) => path.join(ws, d));
 }
 
 function restoreRegularSnapshot(p, snapshot) {
@@ -173,6 +195,19 @@ function mergeOpenclawFrontmatter(src, opts = {}) {
   if (additions.length === 0 && frontmatter) return src;
   const fmBody = (frontmatter ? frontmatter.trimEnd() + '\n' : '') + additions.join('\n') + (additions.length ? '\n' : '');
   return '---\n' + fmBody + '---\n' + body;
+}
+
+// The copy installOpenclaw writes: caveman's own skill, `name: caveman` and the
+// merged `always: true`. Any other skills/caveman/SKILL.md is the user's — a
+// hand-written one or a ClawHub skill of the same name — and uninstall leaves it.
+// ponytail: a shape check, not an install-time digest; an edited caveman copy
+// still reads as ours.
+function isCavemanSkill(content) {
+  if (content === null) return false;
+  const { frontmatter, body } = splitFrontmatter(content);
+  return /(^|\n)name:\s*caveman\s*(\r?\n|$)/.test(frontmatter) &&
+    /(^|\n)always:\s*true\s*(\r?\n|$)/.test(frontmatter) &&
+    body.includes('Respond terse like smart caveman');
 }
 
 // ── Bootstrap snippet load ────────────────────────────────────────────────
@@ -241,10 +276,11 @@ function stripAllBootstrapBlocks(text) {
       i = b + MARK_BEGIN.length; // orphan begin — drop only the marker itself
     }
     // Collapse the blank-line scar around the cut (same cosmetic rule the
-    // old single-cut code applied): keep at most one newline on each side.
-    result = result.replace(/\n+$/, '\n');
-    const lead = /^\n+/.exec(text.slice(i));
-    if (lead) i += lead[0].length - (result ? 1 : 0);
+    // old single-cut code applied): keep at most one line ending on each
+    // side, LF or CRLF.
+    result = result.replace(/(\r?\n)+$/, '$1');
+    const lead = /^(\r?\n)+/.exec(text.slice(i));
+    if (lead) i += lead[0].length - (result ? lead[1].length : 0);
   }
   // Orphan end markers (begin already gone or never written) — drop marker only.
   while (result.includes(MARK_END)) { found = true; result = result.replace(MARK_END, ''); }
@@ -255,6 +291,9 @@ function appendBootstrapToSoul(soulPath, snippet) {
   const opened = readRegularIfExists(soulPath);
   const existing = opened.content;
   const count = (s, sub) => s.split(sub).length - 1;
+  // A CRLF file gets a CRLF block, so its line endings stay one style.
+  const eol = existing && existing.includes('\r\n') ? '\r\n' : '\n';
+  snippet = snippet.replace(/\r?\n/g, eol);
   let base = existing;
   let repaired = false;
   if (existing) {
@@ -267,7 +306,7 @@ function appendBootstrapToSoul(soulPath, snippet) {
       // the bytes between our own markers move; user content is preserved.
       const b = existing.indexOf(MARK_BEGIN);
       const e = existing.indexOf(MARK_END) + MARK_END.length;
-      const wanted = snippet.replace(/\n+$/, '');
+      const wanted = snippet.replace(/(\r?\n)+$/, '');
       if (existing.slice(b, e) === wanted) {
         return { changed: false, reason: 'already present' };
       }
@@ -283,7 +322,7 @@ function appendBootstrapToSoul(soulPath, snippet) {
   }
   let next;
   if (base && base.length) {
-    const sep = base.endsWith('\n\n') ? '' : (base.endsWith('\n') ? '\n' : '\n\n');
+    const sep = base.endsWith(eol + eol) ? '' : (base.endsWith('\n') ? eol : eol + eol);
     next = base + sep + snippet;
   } else {
     next = snippet;
@@ -299,7 +338,7 @@ function stripBootstrapFromSoul(soulPath) {
   const { next: stripped, found } = stripAllBootstrapBlocks(existing);
   if (!found) return { changed: false, reason: 'no marker block' };
   let next = stripped.trimEnd();
-  next = next ? next + '\n' : '';
+  next = next ? next + (existing.includes('\r\n') ? '\r\n' : '\n') : '';
   if (next === '') {
     // SOUL.md only contained our block — remove the file so OpenClaw doesn't
     // bootstrap an empty section every turn.
@@ -321,13 +360,14 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   }
   const snippet = loadBootstrapSnippet(repoRoot);
 
+  const created = [];
   if (!fs.existsSync(ws)) {
     if (!force) {
       log.warn(`  openclaw workspace not found at ${ws}.`);
       log.note('  Either install OpenClaw (https://openclaw.ai) and re-run, or pass --force to mkdir.');
       return { ok: false, reason: 'workspace missing' };
     }
-    if (!dryRun) fs.mkdirSync(ws, { recursive: true });
+    if (!dryRun) { fs.mkdirSync(ws, { recursive: true }); created.push('.'); }
   }
 
   const skillDir = path.join(ws, 'skills', SKILL_NAME);
@@ -341,7 +381,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   }
 
   ensureRealDirectory(ws);
-  ensureRealDirectory(path.join(ws, 'skills'), true);
+  if (ensureRealDirectory(path.join(ws, 'skills'), true)) created.push('skills');
   ensureRealDirectory(skillDir, true);
   const priorSkill = readRegularIfExists(skillFile);
   const merged = mergeOpenclawFrontmatter(skillBody, { version });
@@ -350,6 +390,8 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   // it did not write; this path has no journal, so a user who tuned their
   // SOUL-adjacent skill silently lost it. Back up once — a second install
   // would otherwise overwrite the only pre-caveman copy with our own output.
+  // A caveman copy the user tuned looks like ours, so it is kept too; uninstall
+  // deletes a caveman-shaped backup rather than restore it.
   const skillBak = skillFile + '.bak';
   if (priorSkill.content !== null && priorSkill.content !== merged && !fs.existsSync(skillBak)) {
     try {
@@ -370,7 +412,7 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
       const currentSkill = readRegularIfExists(skillFile);
       if (priorSkill.content === null) {
         if (currentSkill.stat) unlinkRegular(skillFile, currentSkill.stat);
-        try { fs.rmdirSync(skillDir); } catch (_) {}
+        removeEmptyDirs([skillDir]);
       } else {
         atomicWriteRegular(skillFile, priorSkill.content, currentSkill.stat);
       }
@@ -378,6 +420,10 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
     throw error;
   }
   log.write(`  installed: ${skillFile}\n`);
+  const createdFile = path.join(skillDir, CREATED_FILE);
+  if (created.length && !fs.existsSync(createdFile)) {
+    try { fs.writeFileSync(createdFile, JSON.stringify(created) + '\n', { mode: 0o600, flag: 'wx' }); } catch (_) { /* best effort */ }
+  }
 
   return { ok: true };
 }
@@ -385,27 +431,37 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
 function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) {
   const ws = workspace || resolveWorkspace();
   const skillDir = path.join(ws, 'skills', SKILL_NAME);
+  const skillFile = path.join(skillDir, 'SKILL.md');
+  const skillBak = skillFile + '.bak';
   const soulFile = path.join(ws, SOUL_FILE);
 
   let touched = false;
 
   const hasSoul = fs.existsSync(soulFile);
-  const hasSkill = fs.existsSync(skillDir);
+  // Only the SKILL.md caveman wrote goes. The backup install made of the user's
+  // own SKILL.md comes back, and every other file in the folder stays.
+  let skill = { content: null, stat: null };
+  let bak = { content: null, stat: null };
+  if (fs.existsSync(skillDir)) {
+    ensureRealDirectory(path.join(ws, 'skills'));
+    ensureRealDirectory(skillDir);
+    skill = readRegularIfExists(skillFile);
+    bak = readRegularIfExists(skillBak);
+    if (!isCavemanSkill(skill.content)) log.note(`  left ${skillDir} (not the copy caveman installed)`);
+  }
+  const ours = isCavemanSkill(skill.content);
+  const restore = ours && bak.content !== null && !isCavemanSkill(bak.content);
   if (dryRun) {
-    if (hasSoul) { log.note(`  would strip caveman block from ${soulFile}`); touched = true; }
-    if (hasSkill) { log.note(`  would remove ${skillDir}/`); touched = true; }
+    if (hasSoul && stripAllBootstrapBlocks(readIfExists(soulFile) || '').found) {
+      log.note(`  would strip caveman block from ${soulFile}`);
+      touched = true;
+    }
+    if (ours) { log.note(`  would ${restore ? 'restore your backup over' : 'remove'} ${skillFile}`); touched = true; }
     return { ok: true, touched };
   }
 
   const soulSnapshot = readRegularIfExists(soulFile);
-  let stagedSkill = null;
   try {
-    if (hasSkill) {
-      ensureRealDirectory(path.join(ws, 'skills'));
-      ensureRealDirectory(skillDir);
-      stagedSkill = path.join(path.dirname(skillDir), `.${SKILL_NAME}.remove.${process.pid}.${cryptoRandom()}`);
-      fs.renameSync(skillDir, stagedSkill);
-    }
     if (hasSoul) {
       const r = stripBootstrapFromSoul(soulFile);
       if (r.changed) {
@@ -413,16 +469,24 @@ function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) 
         touched = true;
       }
     }
-    if (stagedSkill) {
-      fs.rmSync(stagedSkill, { recursive: true, force: true });
-      log.note(`  removed ${skillDir}`);
+    if (ours) {
+      if (restore) {
+        if (!sameSnapshot(skill.stat, readRegularIfExists(skillFile).stat)) {
+          throw new Error(`openclaw: ${skillFile} changed during uninstall`);
+        }
+        fs.renameSync(skillBak, skillFile);
+        log.note(`  restored your original ${skillFile}`);
+      } else {
+        unlinkRegular(skillFile, skill.stat);
+        if (bak.content !== null) unlinkRegular(skillBak, bak.stat);
+        log.note(`  removed ${skillFile}`);
+      }
+      // Each one goes only when empty and not a link the user put there.
+      removeEmptyDirs([skillDir, ...takeCreatedDirs(ws, skillDir)]);
       touched = true;
     }
   } catch (error) {
     try { restoreRegularSnapshot(soulFile, soulSnapshot); } catch (_) {}
-    try {
-      if (stagedSkill && fs.existsSync(stagedSkill) && !fs.existsSync(skillDir)) fs.renameSync(stagedSkill, skillDir);
-    } catch (_) {}
     throw error;
   }
 

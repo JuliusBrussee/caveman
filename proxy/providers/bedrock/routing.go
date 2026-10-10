@@ -109,8 +109,8 @@ var defaultMantleRegions = []string{
 }
 
 // defaultModelPrefixes is the built-in model-id allowlist, matched as prefixes
-// so versioned model ids (e.g. anthropic.claude-3-5-sonnet-20241022-v2:0) and
-// cross-region inference profiles (e.g. us.anthropic.claude-3-5-sonnet…) are
+// so versioned model ids (e.g. anthropic.claude-haiku-4-5-20251001-v1:0) and
+// cross-region inference profiles (e.g. us.anthropic.claude-sonnet-4-6) are
 // covered. Operators override it with CAVE_BEDROCK_MODEL_ALLOWLIST.
 var defaultModelPrefixes = []string{
 	"anthropic.claude-",

@@ -11,6 +11,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nodeStub, stubEnv } from '../../packages/cli/tests/harness/stub-bin.mjs';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const INSTALLER = path.join(ROOT, 'installer/install.js');
@@ -35,9 +36,7 @@ if (ARGV[1] === 'list') console.log(JSON.stringify({ imports: fs.existsSync(${JS
 if (ARGV[1] === 'uninstall') fs.rmSync(${JSON.stringify(installed)}, { recursive: true, force: true });
 `);
   // Only the stub (and node, which Windows shims need by name) on PATH.
-  const base = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
-  base.PATH = process.platform === 'win32' ? path.dirname(process.execPath) : '/usr/bin:/bin';
-  const env = stubEnv({ ...base, HOME: home, USERPROFILE: home, NO_COLOR: '1' }, path.join(dir, 'bin'));
+  const env = stubEnv(isolatedEnv(home), path.join(dir, 'bin'));
   const run = (args, extra = {}) => spawnSync(process.execPath, [INSTALLER, ...args, '--non-interactive'], {
     encoding: 'utf8', cwd: dir, env: { ...env, ...extra },
   });

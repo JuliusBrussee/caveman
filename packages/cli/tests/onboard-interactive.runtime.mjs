@@ -87,7 +87,7 @@ test("routing ticked and sign-in closed: setup still succeeds and routing waits 
   assert.deepEqual([result.confirmed, result.ok], [true, true]);
   assert.match(tty.text(), / {2}Setup\n {4}Agents {4}none\n {4}Modules {3}output · input · waste fixes · routing · scripts · browse\n {4}Routing {3}asks to Auto go to Cloud to pick model \+ effort · free account\n/);
   assert.match(tty.text(), / {2}Sign in to switch on Auto {2}free account · everything else already works\n {2}○ Auto {6}Sign-in is not open on api\.caveman\.so yet · caveman login\n/);
-  assert.match(tty.text(), /\n {2}✓ Ready {5}caveman claude · caveman status\n\[disclosure\]\n$/, "telemetry disclosure is the last line");
+  assert.match(tty.text(), /\n {2}✓ Ready {5}No agent set up yet · install one \(for example Claude Code\), then caveman setup\n\[disclosure\]\n$/, "telemetry disclosure is the last line");
   assert.equal(JSON.parse(readFileSync(configPath, "utf8")).modules.routing, true);
 });
 
@@ -211,7 +211,9 @@ test("found logins are shown; an exported key joins Auto's pool only when ticked
     assert.match(tty.text(), / {4}Agents {4}Claude Code \(2 logins\) · Codex\n/);
     // A key already in the pool is never offered or added again.
     assert.deepEqual(added, tick ? ["anthropic"] : []);
-    if (tick) assert.match(tty.text(), / {2}✓ Keys {6}Anthropic added for Auto · undo: caveman providers remove <id>\n/);
+    // `off --all` leaves a stored key: the screen and the result name its own undo.
+    if (tick) assert.match(tty.text(), /◼ let Auto spend on ANTHROPIC_API_KEY · undo: caveman providers remove anthropic\n/);
+    if (tick) assert.match(tty.text(), / {2}✓ Keys {6}Anthropic added for Auto · undo: caveman providers remove anthropic\n/);
     // Signed in already: Auto's row, and what it sends in short.
     assert.match(tty.text(), / {2}✓ Auto {6}on · signed in\n {14}On Auto, your last two asks \(with what the agent attaches\), the end of its\n {14}last reply and request facts go to Caveman Cloud; the Free plan may keep them\.\n {14}Stop: caveman off routing · every word: caveman on routing\n/);
   }

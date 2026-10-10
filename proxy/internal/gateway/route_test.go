@@ -576,6 +576,28 @@ func TestRateLimitedRetryDoesNotDoubleTheAgentsRetries(t *testing.T) {
 	}
 }
 
+// A routed model at its rate limit (a 429 with Retry-After) or overloaded
+// (529, any 5xx) is returned as is, never replayed, and the decision is
+// rejected: the agent's own retry runs the asked model.
+func TestRoutedModelAtItsLimitGivesWayToTheAskedModel(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, 529, http.StatusInternalServerError} {
+		srv, models, statuses := heldServer(t, rejectingCloud(RouteAnswer{Model: "claude-sonnet-5-5", Outcome: "routed"}))
+		statuses["claude-sonnet-5-5"] = status
+		base := srv.httpClient.Transport
+		srv.httpClient.Transport = roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			resp, err := base.RoundTrip(r)
+			if err == nil && resp.StatusCode == http.StatusTooManyRequests {
+				resp.Header.Set("Retry-After", "30") // a rate limit, as Anthropic sends it
+			}
+			return resp, err
+		})
+		first, second := sendAuto(t, srv, nil), sendAuto(t, srv, nil)
+		if got := strings.Join(*models, " "); first != status || second != http.StatusOK || got != "claude-sonnet-5-5 claude-opus-5-5" {
+			t.Errorf("routed model answering %d: agent read %d then %d, upstream models %q", status, first, second, got)
+		}
+	}
+}
+
 // A held model that does not serve is not held again: the next attempt runs
 // the fallback. One that is refused costs the replay once.
 func TestHeldModelThatFailsGivesWayToTheFallback(t *testing.T) {

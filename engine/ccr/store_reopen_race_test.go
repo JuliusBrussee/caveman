@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -138,6 +139,35 @@ func TestOpenRejectsImpossibleBudgetBeforePreparingFiles(t *testing.T) {
 			if _, err := os.Stat(path + suffix); !errors.Is(err, os.ErrNotExist) {
 				t.Fatalf("budget %d prepared database%s: %v", budget, suffix, err)
 			}
+		}
+	}
+}
+
+// A fan-out of fresh processes (cavemem remember, caveman-mcp) opens one new
+// ccr.db at once. Switching it to WAL can return SQLITE_BUSY without waiting on
+// busy_timeout; before Open retried that, most runs of this lost an open.
+func TestConcurrentFreshOpensAllSucceed(t *testing.T) {
+	for round := 0; round < 40; round++ {
+		path := filepath.Join(t.TempDir(), "ccr.db")
+		var wg sync.WaitGroup
+		errs := make(chan error, 24)
+		for i := 0; i < 24; i++ {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s, err := Open(path)
+				if err == nil {
+					err = s.Close()
+				}
+				if err != nil {
+					errs <- err
+				}
+			}()
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			t.Fatalf("round %d: concurrent open: %v", round, err)
 		}
 	}
 }

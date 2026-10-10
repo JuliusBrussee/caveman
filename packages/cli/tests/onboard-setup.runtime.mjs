@@ -1,8 +1,9 @@
 import { test } from "node:test";
 import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedCliEnv, runCli as runIsolated } from "./_cli.mjs";
@@ -33,6 +34,74 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
     assert.match(out.stdout, /routing is on and starts after you sign in · caveman login/, "no sign-in prompt without a terminal");
     assert.match(out.stdout, /✓ Ready\. Try: {2}caveman claude {6}See it: {2}caveman status\n/);
     assert.deepEqual(modules(fx), { output: true, input: true, "waste-fixes": true, routing: true, scripts: true, browse: true });
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Codex runs none of Caveman's hooks until the user trusts them in /hooks, and
+// Caveman never trusts them itself: without them nothing restarts the runtime
+// after a reboot. Setup says so once; bare doctor keeps it as a note.
+test("setup --yes tells a Codex user once to trust Caveman's hooks in /hooks", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  const ask = "○ Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself\n";
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout.split(ask).length, 2, out.stdout);
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.match(doctor.stdout, /^· codex: Caveman's hooks do not run until Codex trusts them · open \/hooks in Codex once and trust them, so the local runtime restarts by itself$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Codex on an endpoint of its own (Ollama here) is left as is. Setup says why
+// once, as the step's result (the plan only notes it ahead), and the closing
+// line suggests only an agent it actually wired.
+test("setup --yes says once why Codex on its own endpoint is left alone, and does not suggest it", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  try {
+    mkdirSync(join(fx.home, ".codex"), { recursive: true });
+    writeFileSync(join(fx.home, ".codex", "config.toml"), 'model_provider = "ollama"\n');
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout.split("Caveman would send them, with their key").length, 2, out.stdout);
+    assert.match(out.stdout, /^note: Codex stays as is: it sends its requests to its own endpoint ollama$/m);
+    assert.doesNotMatch(out.stdout, /caveman codex/);
+    assert.match(out.stdout, /✓ Ready\. See it: {2}caveman status\n/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// `caveman enable codex` refuses while Codex has a model_provider of its own,
+// so neither status nor doctor may offer it as the next step.
+test("status and doctor do not offer enable for Codex on its own endpoint", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  try {
+    mkdirSync(join(fx.home, ".codex"), { recursive: true });
+    writeFileSync(join(fx.home, ".codex", "config.toml"), 'model_provider = "ollama"\n');
+    assert.equal((await runCli(["setup", "--yes"], fx.env)).code, 0);
+    const status = await runCli(["status"], fx.env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.doesNotMatch(status.stdout, /next: caveman enable/);
+    const doctor = JSON.parse((await runCli(["doctor", "codex"], fx.env)).stdout);
+    assert.equal(doctor.repair, null);
+    assert.match(doctor.warnings.join("\n"), /its own endpoint ollama/);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// With no agent on PATH there is nothing to try: never suggest `caveman claude`.
+test("setup --yes with no agent installed says to install one instead of naming an agent", { skip }, async () => {
+  const fx = modulesFixture({ agents: [] });
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.doesNotMatch(out.stdout, /Try:/);
+    assert.match(out.stdout, /✓ Ready\. No agent set up yet · install one \(for example Claude Code\), then caveman setup\n/);
   } finally {
     fx.cleanup();
   }
@@ -183,6 +252,142 @@ test("a first setup moves the runtime off a port another program holds, and late
   }
 });
 
+// The runtime's port as setup recorded it (localPort), for a test to hold.
+function runtimeOn(fx, port) {
+  const env = { ...fx.env };
+  delete env.CAVE_GATEWAY_URL;
+  delete env.CAVEMAN_LISTEN;
+  mkdirSync(env.CAVEMAN_HOME, { recursive: true });
+  writeFileSync(join(env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ localPort: port }));
+  return env;
+}
+
+// enable, on and setup --agent-native wire agents too: each moves the runtime
+// off a held port before the first agent is wired, as setup does.
+test("every door that wires a first agent moves the runtime off a port another program holds", { skip }, async () => {
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const held = holder.address().port;
+  const fixtures = [];
+  try {
+    for (const argv of [["enable", "claude"], ["on", "--all", "--yes"], ["setup", "--agent-native", "claude"]]) {
+      const fx = modulesFixture({ agents: ["claude"] });
+      fixtures.push(fx);
+      const out = await runCli(argv, runtimeOn(fx, held));
+      const said = `${out.stdout}${out.stderr}`;
+      assert.equal(out.code, 0, `${argv.join(" ")}: ${said}`);
+      const port = said.match(new RegExp(`○ 127\\.0\\.0\\.1:${held} is in use by another program · local runtime on port (\\d+)\\n`))?.[1];
+      assert.ok(port, `${argv.join(" ")}: ${said}`);
+      assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${port}/w/claude`, argv.join(" "));
+    }
+  } finally {
+    holder.close();
+    for (const fx of fixtures) fx.cleanup();
+  }
+});
+
+// Help, a typo, or an agent that never routes through the runtime moves
+// nothing: the port is claimed only once such an agent is being wired.
+test("enable --help, an unknown agent and aider leave the runtime's port alone", { skip }, async () => {
+  const holder = createServer();
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  const held = holder.address().port;
+  const fx = modulesFixture({ agents: ["claude", "aider"] });
+  try {
+    const env = runtimeOn(fx, held);
+    for (const argv of [["enable", "--help"], ["enable", "bogus"], ["enable", "aider"]]) {
+      const out = await runCli(argv, env);
+      assert.doesNotMatch(`${out.stdout}${out.stderr}`, /in use by another program/, argv.join(" "));
+      assert.equal(JSON.parse(readFileSync(join(env.CAVEMAN_HOME, "cloud.json"), "utf8")).localPort, held, argv.join(" "));
+    }
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
+// A listener on 127.0.0.1 whose /health/live names `token` (as a Caveman
+// runtime names its run state's instance token), or nothing.
+async function healthListener(token) {
+  const holder = createHttpServer((req, res) => {
+    res.writeHead(200, token && req.url === "/health/live" ? { "X-Caveman-Instance": token } : {});
+    res.end("ok");
+  });
+  await new Promise((resolve) => holder.listen(0, "127.0.0.1", resolve));
+  return holder;
+}
+
+// A runtime's status probe can outlast its 2 s timeout on a loaded machine
+// (or run before the runtime has written its run state). A run-state record
+// for the port that the listener vouches for is still ours: the port stays.
+test("a runtime whose status probe is slow is still ours, and enable keeps its port", { skip }, async () => {
+  const holder = await healthListener("t");
+  const held = holder.address().port;
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const env = runtimeOn(fx, held);
+    const proxy = env.CAVEMAN_PROXY_BIN;
+    writeFileSync(proxy, readFileSync(proxy, "utf8").replace("status) ", "status) sleep 3; "));
+    mkdirSync(join(env.CAVEMAN_HOME, "run"), { recursive: true });
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${held}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "wrap", pid: process.pid, port: held, listen: `127.0.0.1:${held}`, instance_token: "t", version: "1.0.0",
+    }));
+    const out = await runCli(["enable", "claude"], env);
+    const said = `${out.stdout}${out.stderr}`;
+    assert.equal(out.code, 0, said);
+    assert.doesNotMatch(said, /in use by another program/);
+    assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${held}/w/claude`);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
+// A crash, kill -9 or power loss leaves the run-state record behind, naming a
+// pid the OS reuses (pid 1 is always alive). A program on the port that does
+// not vouch for the record is not ours: enable moves off it, start refuses it.
+test("a run-state record left by a crash does not make a foreign listener ours", { skip }, async () => {
+  const holder = await healthListener();
+  const held = holder.address().port;
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const env = runtimeOn(fx, held);
+    mkdirSync(join(env.CAVEMAN_HOME, "run"), { recursive: true });
+    writeFileSync(join(env.CAVEMAN_HOME, "run", `${held}.json`), JSON.stringify({
+      schema: "caveman.proxy.run.v1", owner: "wrap", instance_token: "tok", pid: 1, port: held,
+    }));
+    const out = await runCli(["enable", "claude"], env);
+    const said = `${out.stdout}${out.stderr}`;
+    assert.equal(out.code, 0, said);
+    const port = said.match(new RegExp(`○ 127\\.0\\.0\\.1:${held} is in use by another program · local runtime on port (\\d+)\\n`))?.[1];
+    assert.ok(port, said);
+    assert.equal(JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).env.ANTHROPIC_BASE_URL, `http://127.0.0.1:${port}/w/claude`);
+    const started = await runCli(["start", "--port", String(held)], env);
+    assert.equal(started.code, 1, started.stderr);
+    assert.match(started.stderr, new RegExp(`127\\.0\\.0\\.1:${held} is held by another program`));
+    assert.doesNotMatch(started.stderr, /already running/);
+  } finally {
+    holder.close();
+    fx.cleanup();
+  }
+});
+
+// Nothing answers on a port inside a Windows excluded range (Hyper-V, WSL,
+// Docker reserve them), yet the runtime cannot bind it. A socket bound without
+// listening is the same case on any OS.
+test("a first setup moves the runtime off a port it cannot bind even though nothing answers there", { skip }, async () => {
+  const python = spawn("python3", ["-c", "import socket, sys\ns = socket.socket()\ns.bind(('127.0.0.1', 0))\nprint(s.getsockname()[1], flush=True)\nsys.stdin.read()"], { stdio: ["pipe", "pipe", "inherit"] });
+  const held = Number(String(await new Promise((resolve, reject) => { python.stdout.once("data", resolve); python.once("error", reject); })).trim());
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const dry = await runCli(["setup", "--dry-run"], runtimeOn(fx, held));
+    assert.match(dry.stdout, new RegExp(`RUN +local runtime on port \\d+ {2}127\\.0\\.0\\.1:${held} is in use by another program\\n`));
+  } finally {
+    python.kill();
+    fx.cleanup();
+  }
+});
+
 test("setup refuses unknown modules and agents that are not installed", { skip }, async () => {
   const fx = modulesFixture();
   try {
@@ -206,6 +411,22 @@ test("setup --json still reports binary status for scripts", async () => {
     assert.ok(Array.isArray(report.binaries) && report.binaries.some((b) => b.name === "caveman-proxy"));
     assert.equal(typeof report.ready, "boolean");
     assert.equal(existsSync(join(isolated.home, "cloud.json")), false, "--json is read-only");
+  } finally {
+    isolated.cleanup();
+  }
+});
+
+// The reference sends readers to command help for the accepted flags: it must
+// list every documented form, setup's older verbs and bare doctor included.
+test("setup --help prints every setup form and doctor's usage names bare doctor", async () => {
+  const isolated = isolatedCliEnv();
+  try {
+    const setupHelp = await runIsolated(["setup", "--help"], { env: isolated.env });
+    assert.equal(setupHelp.code, 0, setupHelp.stderr);
+    assert.match(setupHelp.stdout, /^usage: caveman setup \[--yes\].* \| setup --install \[--json\] \| setup --json \| setup --agent-native <claude\|codex> \[--remove\]\n$/);
+    assert.equal(existsSync(join(isolated.home, "cloud.json")), false, "--help writes nothing");
+    const doctorHelp = await runIsolated(["doctor", "--help"], { env: isolated.env });
+    assert.match(doctorHelp.stderr, /^usage: caveman doctor \[<claude\|codex\|hermes\|gemini\|opencode\|pi\|aider\|generic> \[--fix\]\]\n$/);
   } finally {
     isolated.cleanup();
   }

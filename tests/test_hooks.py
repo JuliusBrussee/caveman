@@ -211,6 +211,30 @@ class HookScriptTests(unittest.TestCase):
                 self.assertNotIn("STATUSLINE REPAIR NEEDED", result.stdout, command)
                 self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout, command)
 
+    def test_activate_reads_a_commented_settings_json(self):
+        # settings.json may hold comments and trailing commas. A statusLine that
+        # is only commented out is not configured, and a live one whose script
+        # is gone still needs the repair offer.
+        gone = "/nonexistent/caveman/hooks/caveman-statusline.sh"
+        for settings, marker in (
+            '{\n  // "statusLine": {"type": "command", "command": "bash /tmp/old.sh"},\n  "theme": "dark",\n}\n',
+            False,
+        ), (
+            '{\n  /* badge */\n  "statusLine": {"type": "command", "command": "bash \\"' + gone + '\\""},\n}\n',
+            True,
+        ):
+            with tempfile.TemporaryDirectory(prefix="caveman-hooks-jsonc-") as tmp:
+                home = Path(tmp)
+                claude_dir = home / ".claude"
+                claude_dir.mkdir(parents=True)
+                if marker:
+                    (claude_dir / ".caveman-nudge-shown").write_text("1", encoding="utf-8")
+                (claude_dir / "settings.json").write_text(settings, encoding="utf-8")
+
+                result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+                self.assertIn("STATUSLINE SETUP NEEDED", result.stdout, settings)
+
     # --- #1147: the statusline nudge must not pin a versioned plugin-cache path ---
     #
     # A plugin install runs the hook out of
@@ -236,6 +260,12 @@ class HookScriptTests(unittest.TestCase):
         self.assertIsNotNone(match, f"no statusline command in nudge:\n{stdout}")
         return json.loads(match.group(1))
 
+    def _nudge_script(self, command):
+        """The quoted script path in a recommended command, in either OS's form."""
+        match = re.search(r'"([^"]*caveman-statusline\.(?:sh|ps1))"', command)
+        self.assertIsNotNone(match, f"no script path in command: {command}")
+        return Path(match.group(1))
+
     def test_nudge_does_not_recommend_a_versioned_plugin_cache_path(self):
         with tempfile.TemporaryDirectory(prefix="caveman-nudge-pin-") as tmp:
             home = Path(tmp)
@@ -260,9 +290,7 @@ class HookScriptTests(unittest.TestCase):
             result = self.run_cmd(["node", str(hooks / "caveman-activate.js")], home)
             command = self._nudge_command(result.stdout)
 
-            match = re.search(r"(/[^\"]*caveman-statusline\.(?:sh|ps1))", command)
-            self.assertIsNotNone(match, f"no script path in command: {command}")
-            script = Path(match.group(1))
+            script = self._nudge_script(command)
             self.assertTrue(script.exists(), f"nudge recommended a missing script: {script}")
             self.assertIn(
                 ".caveman-sessions",
@@ -278,7 +306,7 @@ class HookScriptTests(unittest.TestCase):
 
             result = self.run_cmd(["node", str(old_hooks / "caveman-activate.js")], home)
             command = self._nudge_command(result.stdout)
-            script = Path(re.search(r"(/[^\"]*caveman-statusline\.(?:sh|ps1))", command).group(1))
+            script = self._nudge_script(command)
             self.assertTrue(script.exists())
 
             # Claude Code updates the plugin and prunes the version it replaced.
@@ -307,8 +335,25 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn("STATUSLINE SETUP NEEDED", result.stdout)
             command = self._nudge_command(result.stdout)
             self.assertNotIn("1.0.0", command, f"re-offered the dead path: {command}")
-            script = Path(re.search(r"(/[^\"]*caveman-statusline\.(?:sh|ps1))", command).group(1))
+            script = self._nudge_script(command)
             self.assertTrue(script.exists(), f"re-offer recommended a missing script: {script}")
+
+    def test_activate_reoffers_a_gone_statusline_under_a_short_name_path(self):
+        """A `~` inside a path is literal, as in Windows 8.3 names (RUNNER~1)."""
+        with tempfile.TemporaryDirectory(prefix="caveman-nudge-tilde-") as tmp:
+            home = Path(tmp) / "RUNNER~1"
+            hooks = self._plugin_install(home)
+            claude_dir = home / ".claude"
+            pruned = claude_dir / "plugins" / "cache" / "caveman" / "caveman" / "1.0.0" / "src" / "hooks" / "caveman-statusline.sh"
+            (claude_dir / "settings.json").write_text(
+                json.dumps({"statusLine": {"type": "command", "command": f'bash "{pruned}"'}}) + "\n",
+                encoding="utf-8",
+            )
+            (claude_dir / ".caveman-nudge-shown").write_text("1", encoding="utf-8")
+
+            result = self.run_cmd(["node", str(hooks / "caveman-activate.js")], home)
+
+            self.assertIn("STATUSLINE REPAIR NEEDED", result.stdout)
 
     def test_activate_leaves_a_working_statusline_alone(self):
         """A configured statusline that resolves must not be re-nudged."""
@@ -382,10 +427,10 @@ class HookScriptTests(unittest.TestCase):
             self.assertIn("outdated copy", result.stdout)
             command = self._nudge_command(result.stdout)
             self.assertNotIn("3.0.0", command, f"re-offered the outdated path: {command}")
-            script = Path(re.search(r"(/[^\"]*caveman-statusline\.(?:sh|ps1))", command).group(1))
+            script = self._nudge_script(command)
             self.assertEqual(
                 script.read_text(encoding="utf-8"),
-                (hooks / "caveman-statusline.sh").read_text(encoding="utf-8"),
+                (hooks / script.name).read_text(encoding="utf-8"),
                 "repair recommended a script that is not the current one",
             )
 

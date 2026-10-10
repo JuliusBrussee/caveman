@@ -191,6 +191,74 @@ test('new mode ids are accepted from every source', (tmp) => {
   assert.strictEqual(getDefaultMode(), 'manual', 'manual stays a default-policy value');
 });
 
+// C37: hand-edited config files. PowerShell 5.1's `>` writes UTF-16LE with a
+// BOM, `Set-Content -Encoding UTF8` a UTF-8 BOM; comments and trailing commas
+// are what installer/lib/settings.js already tolerates in settings.json.
+test('a BOM, UTF-16LE, a comment or a trailing comma does not drop defaultMode', (tmp) => {
+  const json = '{"defaultMode":"off"}';
+  const variants = {
+    'UTF-8 BOM': Buffer.concat([Buffer.from([0xef, 0xbb, 0xbf]), Buffer.from(json)]),
+    'UTF-16LE BOM': Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(json, 'utf16le')]),
+    'line comment': '// mine\n{"defaultMode":"off"} // trailing',
+    'block comment': '/* mine */ {"defaultMode": /* why */ "off"}',
+    'trailing comma': '{\n  "defaultMode": "off",\n}',
+    'comment-like string': '{"note": "http://x // y,}", "defaultMode": "off",}',
+  };
+  fs.mkdirSync(path.join(tmpHome, 'caveman'), { recursive: true });
+  process.chdir(tmp);
+  try {
+    for (const [name, content] of Object.entries(variants)) {
+      fs.writeFileSync(path.join(tmpHome, 'caveman', 'config.json'), content);
+      assert.strictEqual(getDefaultMode(), 'off', `user config with ${name}`);
+      fs.writeFileSync(path.join(tmp, '.caveman.json'), content);
+      assert.strictEqual(getDefaultMode(), 'off', `.caveman.json with ${name}`);
+      fs.rmSync(path.join(tmp, '.caveman.json'));
+    }
+  } finally {
+    fs.rmSync(path.join(tmpHome, 'caveman'), { recursive: true, force: true });
+  }
+});
+
+// C38: the docs give ~/.config/caveman/config.json for every platform. Windows
+// reads %APPDATA%\caveman\config.json first, then that path.
+test('Windows reads %APPDATA% then ~/.config for the user config', (tmp) => {
+  const saved = { XDG_CONFIG_HOME: process.env.XDG_CONFIG_HOME, APPDATA: process.env.APPDATA,
+    HOME: process.env.HOME, USERPROFILE: process.env.USERPROFILE };
+  const platform = Object.getOwnPropertyDescriptor(process, 'platform');
+  delete process.env.XDG_CONFIG_HOME;
+  process.env.APPDATA = path.join(tmp, 'appdata');
+  process.env.HOME = process.env.USERPROFILE = path.join(tmp, 'home');
+  Object.defineProperty(process, 'platform', { value: 'win32' });
+  try {
+    process.chdir(tmp);
+    fs.mkdirSync(path.join(tmp, 'home', '.config', 'caveman'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'home', '.config', 'caveman', 'config.json'), '{"defaultMode":"off"}');
+    assert.strictEqual(getDefaultMode(), 'off', '~/.config is read when %APPDATA% has none');
+    fs.mkdirSync(path.join(tmp, 'appdata', 'caveman'), { recursive: true });
+    fs.writeFileSync(path.join(tmp, 'appdata', 'caveman', 'config.json'), '{"defaultMode":"ultra"}');
+    assert.strictEqual(getDefaultMode(), 'ultracave', '%APPDATA% wins when both name a mode');
+  } finally {
+    Object.defineProperty(process, 'platform', platform);
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k]; else process.env[k] = v;
+    }
+  }
+});
+
+// C39: .caveman/config.json is also the CLI's project overlay, so it often
+// holds no defaultMode. It must not hide a sibling .caveman.json or a parent's.
+test('a .caveman/config.json without defaultMode does not hide .caveman.json', (tmp) => {
+  fs.mkdirSync(path.join(tmp, '.caveman'));
+  fs.writeFileSync(path.join(tmp, '.caveman', 'config.json'), JSON.stringify({ execute: { mcp: false } }));
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ defaultMode: 'off' }));
+  const nested = path.join(tmp, 'sub');
+  fs.mkdirSync(path.join(nested, '.caveman'), { recursive: true });
+  fs.writeFileSync(path.join(nested, '.caveman', 'config.json'), '{}');
+  process.chdir(tmp);
+  assert.strictEqual(getDefaultMode(), 'off', 'sibling .caveman.json');
+  assert.strictEqual(getDefaultMode(nested), 'off', 'parent directory');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 fs.rmSync(tmpHome, { recursive: true, force: true });
 process.exit(failed === 0 ? 0 : 1);

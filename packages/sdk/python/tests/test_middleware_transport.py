@@ -241,6 +241,14 @@ class TestDefaultTransport(unittest.TestCase):
         with patch.dict(os.environ, env), MiddlewareRuntime(endpoint="https://runtime.test", allow_remote_content=True, deadline_ms=300) as runtime:
             self.assert_bounded(runtime, 0.3)
 
+    def test_trickles_are_bounded_when_shutdown_cannot_wake_a_read(self):
+        # On Windows the watchdog's shutdown never wakes the blocked read: every trickle above ran to its end.
+        with patch.object(transport, "_shutdown", lambda sock: None):
+            self.test_trickled_response_phases_are_bounded_by_the_deadline()
+            self.test_trickled_connect_tunnel_is_bounded_by_the_deadline()
+            if shutil.which("openssl"):
+                self.test_trickled_tls_handshake_is_bounded_by_the_deadline()
+
     @unittest.skipUnless(shutil.which("openssl"), "openssl CLI mints the throwaway certificate")
     def test_trickled_tls_handshake_is_bounded_by_the_deadline(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -312,6 +320,28 @@ class TestDefaultTransport(unittest.TestCase):
         self.addCleanup(server.close)
         with self.assertRaises(http.client.IncompleteRead):
             transport.HTTPTransport(env={})("GET", f"http://127.0.0.1:{server.getsockname()[1]}/", {}, None, 2.0)
+
+    def test_close_releases_a_call_when_shutdown_cannot_wake_its_read(self):
+        # On Windows close()'s shutdown never wakes the blocked read, so the call waited out its whole deadline.
+        server = raw_server(lambda conn: (conn.recv(65536), time.sleep(3), conn.close()))
+        self.addCleanup(server.close)
+        pool = transport.HTTPTransport(env={})
+        threading.Timer(0.2, pool.close).start()
+        started = time.monotonic()
+        with patch.object(transport, "_shutdown", lambda sock: None), self.assertRaises(OSError):
+            pool("GET", f"http://127.0.0.1:{server.getsockname()[1]}/", {}, None, 2.0)
+        self.assertLess(time.monotonic() - started, 1)
+
+    def test_a_response_reader_keeps_its_socket_open_across_close(self):
+        # A reader holding no reference let close() on another thread free the descriptor under a blocked read: EBADF,
+        # or a read that slept out its timeout on whatever socket reused the number.
+        sock, peer = socket.socketpair()
+        self.addCleanup(peer.close)
+        response = transport._budgeted(time.monotonic() + 5, lambda: False)(sock)
+        sock.close()
+        self.assertNotEqual(sock.fileno(), -1)
+        response.close()
+        self.assertEqual(sock.fileno(), -1)
 
     def test_late_watchdog_never_shuts_down_a_pooled_connection(self):
         # A's timer fired after A pooled its connection and shut it down under B, whose body came back truncated.

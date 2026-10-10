@@ -31,7 +31,8 @@ function fixture() {
   const proxy = nativeStub(bin, "caveman-proxy", `if (ARGV[0] === "version" && ARGV[1] === "--json") {
   process.stdout.write('{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}\\n');
 } else if (ARGV[0] === "status") {
-  process.stdout.write('{"owner":"unknown"}\\n');
+  // A Caveman runtime answers where Pi is wired.
+  process.stdout.write('{"owner":"start"}\\n');
 } else if (ARGV[0] === "stats") {
   process.stdout.write('{}\\n');
 }
@@ -157,9 +158,12 @@ test("doctor flags a pi extension whose baked invocation no longer exists and --
     const versioned = join(fx.root, "nvm", "v26.9.0", "bin");
     mkdirSync(versioned, { recursive: true });
     nodeStub(versioned, "caveman", "");
-    const env = { ...fx.env, PATH: `${versioned}${delimiter}${fx.env.PATH}` };
+    // Windows spells the inherited key `Path`; `fx.env.PATH` would be undefined.
+    const pathKey = Object.keys(fx.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const env = { ...fx.env, [pathKey]: `${versioned}${delimiter}${fx.env[pathKey]}` };
 
-    assert.equal((await run(["enable", "pi"], env)).code, 0, "enable pi");
+    const enabled = await run(["enable", "pi"], env);
+    assert.equal(enabled.code, 0, `enable pi: ${enabled.stderr}${enabled.stdout}`);
     // Pin the shape the health check parses: if the generator stops baking the
     // invocation into CAVEMAN_PI_HOOK_CMD, the check verifies nothing.
     assert.match(readFileSync(fx.extension, "utf8"), /^process\.env\.CAVEMAN_PI_HOOK_CMD \?\?= ".*v26\.9\.0.*";$/m);

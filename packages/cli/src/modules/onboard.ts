@@ -51,11 +51,13 @@ export type OnboardDeps = {
   // the install it will run when this version is not installed yet; `run`
   // does it and returns the command to name in hints (it throws when it
   // cannot, and setup then writes nothing); `apply` has the installed copy do
-  // the wiring, so nothing records a path into the cache.
+  // the wiring, so nothing records a path into the cache. `shadow` is the
+  // other caveman that typing `caveman` reaches, when there is one.
   installCli?: {
     command?: string;
     run(): Promise<string>;
     apply(selection: ModuleSelection, agents: string[], say: (line: string) => void): Promise<{ ok: boolean; problems: string[] }>;
+    shadow?(): string | undefined;
   };
   // Setup may end by offering to start the agent; `launch` in the result names it.
   offerLaunch?: boolean;
@@ -216,7 +218,8 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
         out.write(`${ask ? PAD : ""}${c.red("✗")} ${error instanceof Error ? error.message : String(error)}\n${ask ? PAD : ""}${c.dim("Nothing else changed.")}\n`);
         return { confirmed: true, cancelled: false, ok: false, plan };
       }
-      if (deps.installCli.command) progress(`✓ caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} · not on your PATH`}`);
+      const shadow = cmd === "caveman" ? undefined : deps.installCli.shadow?.();
+      if (deps.installCli.command) progress(`✓ caveman command installed${cmd === "caveman" ? "" : ` at ${tilde(cmd)} · ${shadow ? `typing caveman runs another copy at ${tilde(shadow)}` : "not on your PATH"}`}`);
       result = await deps.installCli.apply(selection, agents, (line) => line.startsWith("downloading ") ? busy.show(line) : progress(line));
     } else {
       // Before the first agent is wired: never to a port another program answers on.
@@ -234,11 +237,11 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     // Whatever throws, the progress line never stays under the error.
     busy.stop();
   }
-  const added: string[] = [];
+  const added: typeof keys = [];
   for (const key of keys.filter((item) => item.on)) {
     try {
       deps.addKey!(key);
-      if (ask) added.push(key.name);
+      if (ask) added.push(key);
       else out.write(`${c.green("✓")} ${key.name} key added for Auto ${c.dim(`· ${cmd} providers remove ${key.id} takes it back`)}\n`);
     } catch (error) {
       result.problems.push(`${key.name} key: ${error instanceof Error ? error.message.replace(/^caveman: /, "") : String(error)}`);
@@ -246,30 +249,40 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     }
   }
   busy.stop();
-  if (added.length) done.push(`✓ keys: ${added.join(" · ")} added for Auto · undo: ${cmd} providers remove <id>`);
+  if (added.length) done.push(`✓ keys: ${added.map((key) => key.name).join(" · ")} added for Auto · undo: ${added.map((key) => `${cmd} providers remove ${key.id}`).join(" · ")}`);
   if (ask) for (const line of stepRows(done, c)) out.write(`${line}\n`);
   for (const problem of result.problems) out.write(`${ask ? PAD : ""}${c.red("✗")} ${problem}\n`);
   if (!ask) out.write("\n");
   const auto = !selection.routing ? false
     : ask ? await signInStep({ ...deps, cmd }, input, out, c)
     : await routingStep(opts, { ...deps, cmd }, input, out, c);
-  const tryAgent = ["claude", "codex"].find((id) => agents.includes(id)) ?? agents[0] ?? "claude";
+  // Only an agent this setup wired: one left on its own endpoint is not.
+  const wiredNow = agents.filter((id) => moduleHost().nativeAgents().some((agent) => agent.id === id && agent.wired));
+  const tryAgent = ["claude", "codex"].find((id) => wiredNow.includes(id)) ?? wiredNow[0];
   let launch: string | undefined;
+  // No agent set up means nothing to try: `caveman claude` would only fail.
+  const noAgent = `No agent set up yet · install one (for example Claude Code), then ${cmd} setup`;
   if (ask) {
     const hint = auto ? `\n${PAD}${" ".repeat(12)}${c.dim(`Auto is in the model picker${tryAgent === "claude" ? " · /model in Claude Code" : ""}`)}` : "";
     out.write(!result.ok ? `\n${PAD}${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`
       : deps.launching ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(`starting ${deps.launching}`)}\n`
+      : !agents.length ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(noAgent)}\n`
+      : !tryAgent ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.cyan(`${cmd} status`)}\n`
       : `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.cyan(`${cmd} ${tryAgent}`)} ${c.dim("·")} ${c.cyan(`${cmd} status`)}${hint}\n`);
   } else if (!result.ok) {
     out.write(`${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`);
   } else if (deps.launching) {
     out.write(`${c.green("✓")} Ready. Starting ${deps.launching}.\n`);
+  } else if (!agents.length) {
+    out.write(`${c.green("✓")} Ready. ${noAgent}\n`);
+  } else if (!tryAgent) {
+    out.write(`${c.green("✓")} Ready. See it:  ${c.cyan(`${cmd} status`)}\n`);
   } else {
     out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${cmd} status`)}\n`);
   }
   if (ask) await deps.discloseTelemetry();
-  const startable = byId.get(tryAgent);
-  if (ask && result.ok && deps.offerLaunch && !deps.launching && startable?.installed && agents.includes(tryAgent)) {
+  const startable = tryAgent ? byId.get(tryAgent) : undefined;
+  if (ask && result.ok && deps.offerLaunch && !deps.launching && startable?.installed) {
     out.write("\n");
     if (await confirm(input, out, c, `Start ${startable.name} now?`)) launch = tryAgent;
   }
@@ -767,8 +780,10 @@ function choose(input: NodeJS.ReadStream, out: NodeJS.WriteStream, c: Colors, ro
       const text = found.length === 1
         ? `let Auto spend on ${found[0]!.env}`
         : `let Auto spend on ${found.length} keys · ${found.map((key) => key.env).join(", ")}`;
-      const on = found.some((key) => key.on);
-      lines.push(`  ${c.dim("Keys".padEnd(10))}${on ? c.accent(g.on) : g.off} ${clip(text, width() - 14 - g.on.length)}`);
+      const on = found.filter((key) => key.on);
+      // `off --all` (the Changes row's undo) leaves a stored key in place.
+      const undo = on.length ? ` · undo: ${on.map((key) => `caveman providers remove ${key.id}`).join(" · ")}` : "";
+      lines.push(`  ${c.dim("Keys".padEnd(10))}${on.length ? c.accent(g.on) : g.off} ${clip(text + undo, width() - 14 - g.on.length)}`);
     }
     // Customize and Details take this screen's place and bring it back after.
     if (!active) return gaveWay() ? [] : [...lines, "", `${c.dim(g.pointer)} ${options[at]!.label}`];

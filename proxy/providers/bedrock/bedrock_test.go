@@ -11,7 +11,7 @@ import (
 )
 
 const stubBase = "https://bedrock-runtime.us-east-1.amazonaws.com"
-const claudeModel = "anthropic.claude-3-5-sonnet-20241022-v2:0"
+const claudeModel = "global.anthropic.claude-sonnet-4-6"
 
 func newAdapter(t *testing.T) Adapter {
 	t.Helper()

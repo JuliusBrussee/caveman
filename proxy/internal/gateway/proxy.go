@@ -749,6 +749,15 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			s.routes.refuseKey(run.key) // later requests of the session go without it
 		}
 	}
+	// A moved model at its rate limit (a 429 with Retry-After) or overloaded
+	// (529, any 5xx) is per model: the answer goes back as is, never replayed
+	// (that would double a rate limit), and the rest of this ask runs the
+	// asked model, so the agent's own retry reaches it.
+	if meta.Model != modelRequested && (rateLimited(resp) || resp.StatusCode >= 500) {
+		if reject := evidence.route.Reject; reject != nil {
+			reject()
+		}
+	}
 	if resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(transform.Body, original) && !rateLimited(resp) &&
 		!(run != nil && (run.applied || run.dropBlocks || run.stripped) && meta.Model == modelRequested && resp.StatusCode == http.StatusTooManyRequests) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))

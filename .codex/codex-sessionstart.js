@@ -30,7 +30,8 @@
 //      walking up to the filesystem root
 //   3. User config: $XDG_CONFIG_HOME/caveman/config.json, then
 //      ~/.config/caveman/config.json (macOS/Linux) or
-//      %APPDATA%\caveman\config.json (Windows)
+//      %APPDATA%\caveman\config.json then ~/.config/caveman/config.json
+//      (Windows)
 //   4. 'caveman'
 //
 // Deliberate non-goal (#185 scope): this hook resolves the CONFIGURED default
@@ -82,7 +83,10 @@ const INDEPENDENT_MODES = new Set(['commit', 'review', 'compress']);
 function fallbackReadMode(file) {
   try {
     if (!fs.lstatSync(file).isFile()) return null;
-    return fallbackCanonicalMode(JSON.parse(fs.readFileSync(file, 'utf8')).defaultMode);
+    // A BOM or UTF-16LE (PowerShell 5.1) must not drop an opt-out here either.
+    const buf = fs.readFileSync(file);
+    const text = buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2) : buf.toString('utf8').replace(/^\uFEFF/, '');
+    return fallbackCanonicalMode(JSON.parse(text).defaultMode);
   } catch (e) { /* absent, unreadable, or malformed → next source */ }
   return null;
 }
@@ -93,6 +97,9 @@ function fallbackUserConfigMode() {
     userConfigPath = path.join(process.env.XDG_CONFIG_HOME, 'caveman', 'config.json');
   } else if (process.platform === 'win32') {
     userConfigPath = path.join(process.env.APPDATA || path.join(os.homedir(), 'AppData', 'Roaming'), 'caveman', 'config.json');
+    // Then ~/.config, the path the docs give for every platform.
+    return fallbackReadMode(userConfigPath)
+      || fallbackReadMode(path.join(os.homedir(), '.config', 'caveman', 'config.json'));
   } else {
     userConfigPath = path.join(os.homedir(), '.config', 'caveman', 'config.json');
   }

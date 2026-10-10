@@ -306,9 +306,9 @@ test("the routing-failure line maps an unsupported doctor target to generic", ()
   assert.doesNotMatch(lines[0], /caveman doctor openclaw/);
 });
 
-// (b→broken) Eligible requests but a zero cut → compression ran and saved nothing;
-// warn and point at the doctor rather than printing a byte-safe win.
-test("a compress session that ran but saved nothing warns and points at the doctor", () => {
+// (b) Eligible requests but a zero cut: the proxy counts candidates, not wins, so a
+// session with nothing compressible is healthy. Byte-safe line, no doctor hint.
+test("a compress session that ran but found nothing to cut stays byte-safe without a doctor hint", () => {
   const lines = formatSessionSavings(
     "compress",
     { spans: 6, tokens_in: 200_000, requests_eligible_for_compression: 6, compression_tokens_saved: 0 },
@@ -317,9 +317,8 @@ test("a compress session that ran but saved nothing warns and points at the doct
     "claude",
   );
   assert.equal(lines.length, 1);
-  assert.match(lines[0], /compression ran on 6 requests this session but saved nothing/);
-  assert.match(lines[0], /caveman doctor claude/);
-  assert.doesNotMatch(lines[0], /byte-safe/);
+  assert.match(lines[0], /nothing compressible in this session — the layer stayed byte-safe/);
+  assert.doesNotMatch(lines[0], /doctor/);
 });
 
 // (a) Eligible requests AND a real cut → the honest positive line still renders.

@@ -175,3 +175,31 @@ test("parseWindowsNodeShim reads both the shim-relative and drive-absolute forms
   );
   assert.equal(parseWindowsNodeShim("@echo off\r\necho hi\r\n"), null);
 });
+
+// Node's own npx.cmd (npm 10.9.7 shape) and npm's shim for a native .exe bin.
+// The old copy of the helper here refused both with "non-Node Windows command shim".
+test("win32: stock npx.cmd runs its CLI script; an .exe-forwarding shim runs the .exe", () => {
+  const { root, bin } = fixture();
+  try {
+    const script = join(bin, "node_modules", "npm", "bin", "npx-cli.js");
+    mkdirSync(join(bin, "node_modules", "npm", "bin"), { recursive: true });
+    writeFileSync(script, "");
+    writeFileSync(join(bin, "npx.CMD"), [
+      "@ECHO OFF", "SETLOCAL", 'SET "NODE_EXE=%~dp0\\node.exe"',
+      'SET "NPX_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npx-cli.js"', '"%NODE_EXE%" "%NPX_CLI_JS%" %*', "",
+    ].join("\r\n"));
+    const env = { PATH: bin, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
+    assert.deepEqual(portableInvocation("npx", ["-y", "a&b"], "win32", env), {
+      command: process.execPath, args: [script, "-y", "a&b"],
+    });
+    const exe = join(bin, "native", "caveman.exe");
+    mkdirSync(join(bin, "native"));
+    writeFileSync(exe, "MZ");
+    writeFileSync(join(bin, "caveman.CMD"), '@SETLOCAL\r\n@"%~dp0\\native\\caveman.exe"   %*\r\n');
+    assert.deepEqual(portableInvocation("caveman", ["native-hook", "pi", "Stop"], "win32", env), {
+      command: exe, args: ["native-hook", "pi", "Stop"],
+    });
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});

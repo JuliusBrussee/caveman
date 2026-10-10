@@ -1,6 +1,7 @@
 package cloudlink
 
 import (
+	"cmp"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -29,6 +31,10 @@ const promptText = "PROMPT-TEXT-ONLY-THE-ROUTE-ASK-CARRIES"
 func cloudHome(t *testing.T, cloud string, routing bool, credentials string) string {
 	t.Helper()
 	home := t.TempDir()
+	// The old ~/.caveman-cloud file is read too: never the developer's. Windows
+	// finds it under USERPROFILE (Node's os.homedir()), every other OS under HOME.
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
 	doc := map[string]any{"baseURL": cloud, "gatewayUrl": cloud, "tokenStore": "file", "deviceId": "device-1", "modules": map[string]any{"routing": routing}}
 	raw, _ := json.Marshal(doc)
 	if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {
@@ -860,9 +866,47 @@ func TestEventsFollowMeAndTheOptOut(t *testing.T) {
 	if got := send(optedOut); len(got) != 0 {
 		t.Fatalf("telemetry off still sent %v", got)
 	}
+	// An older CLI on PATH writes `telemetry off` to ~/.caveman-cloud only.
+	oldCLI := cloudHome(t, cloud.URL, true, signedIn)
+	_ = os.MkdirAll(filepath.Join(oldCLI, ".caveman-cloud"), 0o700)
+	_ = os.WriteFile(filepath.Join(oldCLI, ".caveman-cloud", "config.json"), []byte(`{"telemetry":{"enabled":false}}`), 0o600)
+	if got := send(oldCLI); len(got) != 0 {
+		t.Fatalf("the old file's telemetry off still sent %v", got)
+	}
 	t.Setenv("DO_NOT_TRACK", "1")
 	if got := send(cloudHome(t, cloud.URL, true, signedIn)); len(got) != 0 {
 		t.Fatalf("DO_NOT_TRACK still sent %v", got)
+	}
+}
+
+// The old CLI wrote that opt-out under Node's os.homedir(). PowerShell and cmd
+// leave HOME unset, and the user home there (USERPROFILE) is not the parent of
+// a CAVEMAN_HOME set elsewhere. On Windows Node ignores HOME even when MSYS2,
+// Cygwin or Git Bash set one.
+func TestLegacyOptOutPathFollowsTheUserHome(t *testing.T) {
+	cavemanHome := filepath.Join(t.TempDir(), "elsewhere", ".caveman")
+	profile := t.TempDir()
+	previous := userHomeDir
+	defer func() { userHomeDir = previous }()
+	userHomeDir = func() (string, error) { return profile, nil }
+	set := ""
+	if runtime.GOOS == "windows" {
+		set = profile
+	}
+	for _, tt := range []struct{ home, want string }{
+		{"", profile},
+		{t.TempDir(), set},
+	} {
+		t.Setenv("HOME", tt.home)
+		want := filepath.Join(cmp.Or(tt.want, tt.home), ".caveman-cloud", "config.json")
+		if _, legacy, _ := New(cavemanHome, nil).cloudPaths(); legacy != want {
+			t.Fatalf("HOME=%q: legacy opt-out read from %s, want %s", tt.home, legacy, want)
+		}
+	}
+	t.Setenv("HOME", "")
+	userHomeDir = func() (string, error) { return "", fmt.Errorf("no home") }
+	if _, legacy, _ := New(cavemanHome, nil).cloudPaths(); legacy != filepath.Join(filepath.Dir(cavemanHome), ".caveman-cloud", "config.json") {
+		t.Fatalf("no user home: legacy opt-out read from %s", legacy)
 	}
 }
 

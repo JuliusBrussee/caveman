@@ -119,7 +119,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `ETag`) while the link reports `AutoOffered` (signed in, routing on). Every POST there has its
   first 64 KiB read (decoded when gzip, deflate or zstd; a br body is never looked into) for a
   top-level `"model":"caveman-auto"`; any other streams on unchanged. `/responses` naming Auto asks
-  with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx (a rate-limit 429, a 401 and a 403 are returned instead; a served replay pins the conversation raw, and the decision is rejected only then or when the replay is itself a 429); any other
+  with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx (a rate-limit 429, a 401 and a 403 are returned instead; a served replay pins the conversation raw, and the decision is rejected only then or when the replay is itself a 429; a 5xx on a moved model is returned and rejects the decision, a rate-limit 429 keeps it: the plan's limit holds for every model); any other
   path (Codex compaction) runs `gpt-6.1-sol` unasked; a body over `CAVE_MAX_REQUEST_BYTES` streams
   with only its model changed. The agent reads the Auto id it sent. The
   ask starts before compression (parse, ask, compress, route), waits at most 800 ms, carries the
@@ -195,7 +195,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `allowance` or `billing_limit` answer keeps the asked model (the held model above for a transient failure) and pauses new asks (1 min; 10 min
   for 401/403 and billing_limit; until the 1st for allowance). Refusals and limits land in
   `$CAVEMAN_HOME/route-state.json` (with Cloud's notice) for `caveman status`; a new login lifts
-  the pause. A provider 4xx on the routed model replays the original bytes on the asked model, and the decision is rejected for the rest of the ask only when that replay is served or is itself a 429 (so the agent's own retries send one request each); a
+  the pause. A provider 4xx on the routed model replays the original bytes on the asked model, and the decision is rejected for the rest of the ask only when that replay is served or is itself a 429 (so the agent's own retries send one request each); a rate-limit 429 (with Retry-After) or a 5xx on the routed model is returned as is, never replayed, and rejects the decision, so the agent's own retry runs the asked model; a
   429 on the asked model of a request whose bytes the route stage changed (effort, marks, strip,
   drop_block, a heal retry) is returned as is. When the model moved, the agent's copy of the
   answer names the model it asked for (Claude Code drops its thinking on another name): a JSON

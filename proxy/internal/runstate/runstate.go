@@ -28,6 +28,9 @@ const Schema = "caveman.proxy.run.v1"
 // file. Probes never send the expected token to the listener.
 const InstanceHeader = "X-Caveman-Instance"
 
+// ShutdownHeader carries State.ShutdownToken on POST /caveman/shutdown.
+const ShutdownHeader = "X-Caveman-Shutdown"
+
 type State struct {
 	Schema         string    `json:"schema"`
 	PID            int       `json:"pid"`
@@ -48,6 +51,10 @@ type State struct {
 	// Missing entries cannot certify a wrapper's original provider endpoint.
 	ProviderUpstreams    map[string]string   `json:"provider_upstreams,omitempty"`
 	CompatForwardHeaders map[string][]string `json:"compat_forward_headers,omitempty"`
+	// ShutdownToken stops this proxy. Unlike InstanceToken, which /health/live
+	// publishes, it lives only in this 0600 file: never in a response header,
+	// PublicState or status output.
+	ShutdownToken string `json:"shutdown_token,omitempty"`
 }
 
 type PublicState struct {
@@ -111,8 +118,11 @@ func New(listen, mode, owner, version string) (State, error) {
 	if owner != "wrap" && owner != "start" {
 		owner = "start"
 	}
-	var token [16]byte
+	var token, shutdown [16]byte
 	if _, err := rand.Read(token[:]); err != nil {
+		return State{}, err
+	}
+	if _, err := rand.Read(shutdown[:]); err != nil {
 		return State{}, err
 	}
 	return State{
@@ -123,6 +133,7 @@ func New(listen, mode, owner, version string) (State, error) {
 		Mode:          mode,
 		Owner:         owner,
 		InstanceToken: hex.EncodeToString(token[:]),
+		ShutdownToken: hex.EncodeToString(shutdown[:]),
 		StartedAt:     time.Now().UTC(),
 		Version:       version,
 	}, nil

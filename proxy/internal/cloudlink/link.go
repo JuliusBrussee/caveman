@@ -146,8 +146,16 @@ type settings struct {
 
 func (s settings) signedIn() bool { return s.cloud != "" && (s.key != "" || s.access != "") }
 
+var userHomeDir = os.UserHomeDir
+
+// The legacy file is where the old CLI wrote it: Node's os.homedir(), which is
+// USERPROFILE on Windows even when HOME is set (MSYS2, Cygwin and Git Bash set
+// one that differs), and HOME elsewhere.
 func (l *Link) cloudPaths() (current, legacy, credentials string) {
 	userHome := os.Getenv("HOME")
+	if runtime.GOOS == "windows" || userHome == "" {
+		userHome, _ = userHomeDir()
+	}
 	if userHome == "" {
 		userHome = filepath.Dir(l.home)
 	}
@@ -239,6 +247,12 @@ func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) s
 	raw, err := os.ReadFile(current)
 	if os.IsNotExist(err) {
 		raw, err = os.ReadFile(legacy)
+	} else if old, oldErr := os.ReadFile(legacy); oldErr == nil {
+		// An older CLI still on PATH writes `telemetry off` to the old file only.
+		var oldDoc map[string]any
+		if json.Unmarshal(old, &oldDoc) == nil && telemetryOptOut(oldDoc) {
+			out.noTelemetry = true
+		}
 	}
 	var doc map[string]any
 	if err != nil || json.Unmarshal(raw, &doc) != nil {
@@ -247,7 +261,7 @@ func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) s
 	if modules, ok := doc["modules"].(map[string]any); ok {
 		out.routing = modules["routing"] == true
 	}
-	if telemetry, ok := doc["telemetry"].(map[string]any); ok && telemetry["enabled"] == false {
+	if telemetryOptOut(doc) {
 		out.noTelemetry = true
 	}
 	out.cloud = safeBase(stringOf(doc["baseURL"]))
@@ -277,6 +291,12 @@ func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) s
 	sum := sha256.Sum256([]byte(id))
 	out.install = hex.EncodeToString(sum[:])
 	return out
+}
+
+// telemetryOptOut is the CLI's persisted `telemetry off` in a config document.
+func telemetryOptOut(doc map[string]any) bool {
+	telemetry, ok := doc["telemetry"].(map[string]any)
+	return ok && telemetry["enabled"] == false
 }
 
 // telemetryEnvOff mirrors the CLI: DO_NOT_TRACK set (and not 0), or

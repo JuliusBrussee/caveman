@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -30,7 +31,7 @@ function freshHome() {
 
 function runInstaller(args, hermesHome) {
   return spawnSync(process.execPath, [INSTALLER, ...args, '--config-dir', path.join(hermesHome, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
-    env: { ...process.env, HERMES_HOME: hermesHome, NO_COLOR: '1' },
+    env: { ...isolatedEnv(path.join(hermesHome, 'home')), HERMES_HOME: hermesHome },
     encoding: 'utf8',
   });
 }
@@ -162,8 +163,9 @@ test('hermes uninstall leaves modified installed content and retains ownership r
     fs.appendFileSync(changed, '\n# local edit\n');
 
     const removed = runInstaller(['--uninstall'], home);
-    assert.equal(removed.status, 0, removed.stderr);
+    assert.equal(removed.status, 1, removed.stderr);
     assert.match(removed.stderr, /left modified/);
+    assert.match(removed.stderr, /uninstall incomplete/);
     assert.match(fs.readFileSync(changed, 'utf8'), /# local edit/);
     assert.ok(fs.existsSync(path.join(prod, '.caveman-hermes-ownership.json')));
   } finally {
@@ -185,7 +187,7 @@ for (const [name, override] of [
     try {
       const r = spawnSync(process.execPath, [INSTALLER, '--only', 'hermes', '--config-dir', path.join(home, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
         cwd,
-        env: { ...process.env, HOME: home, USERPROFILE: home, CAVE_TEST_HERMES_ROOT: home, HERMES_HOME: override, NO_COLOR: '1' },
+        env: { ...isolatedEnv(home), CAVE_TEST_HERMES_ROOT: home, HERMES_HOME: override },
         encoding: 'utf8',
       });
       assert.equal(r.status, 0, r.stderr);

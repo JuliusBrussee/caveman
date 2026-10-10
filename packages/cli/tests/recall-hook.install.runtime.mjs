@@ -1,9 +1,9 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
-import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, chmodSync } from "node:fs";
+import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, chmodSync, symlinkSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
@@ -66,6 +66,7 @@ test("recall-hook injects above-threshold hits as priced additionalContext", asy
 // Fail-open matrix: every problem path must exit 0 with no output (never blocks).
 for (const [label, payload, emptyHits, bin] of [
   ["malformed stdin", "not json", false, undefined],
+  ["JSON null payload", "null", false, undefined],
   ["missing prompt", JSON.stringify({ foo: 1 }), false, undefined],
   ["empty hits", JSON.stringify({ prompt: "nothing relevant" }), true, undefined],
   ["missing cavemem", JSON.stringify({ prompt: "x" }), false, join(tmpdir(), "no-cavemem-xyz")],
@@ -108,6 +109,29 @@ test("mem hook install is idempotent and preserves the user's own UserPromptSubm
   const ups = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks.UserPromptSubmit;
   assert.equal(ups.filter((e) => e.hooks.some((h) => (h.command || "").includes("mem recall-hook"))).length, 1, "exactly one caveman recall hook");
   assert.ok(ups.some((e) => e.hooks.some((h) => h.command === "my-own-prompt-hook.sh")), "the user's own hook must remain");
+});
+
+// A Claude Code started from the Dock or launchd often has no node on PATH, and
+// npm's `caveman` is a `#!/usr/bin/env node` script: the hook names the node
+// that wrote it. A hook an older caveman wrote bare is migrated, never doubled.
+test("mem hook install runs caveman under its node and migrates a bare-caveman hook in place", { skip: process.platform === "win32" ? "npm links no script on Windows" : false }, async () => {
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const bin = mkdtempSync(join(tmpdir(), "cave-bin-"));
+  const caveman = join(bin, "caveman");
+  symlinkSync(cli, caveman);
+  const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")), PATH: `${bin}${delimiter}${process.env.PATH}` };
+  mkdirSync(join(home, ".claude"), { recursive: true });
+  writeFileSync(join(home, ".claude", "settings.json"), JSON.stringify({ hooks: { UserPromptSubmit: [
+    { hooks: [{ type: "command", command: "my-own-prompt-hook.sh" }] },
+    { hooks: [{ type: "command", command: `'${caveman}' mem recall-hook` }] },
+  ] } }, null, 2));
+  const out = await runCli(["mem", "hook", "install", "claude"], env);
+  assert.equal(out.code, 0, out.stderr);
+  const commands = JSON.parse(readFileSync(join(home, ".claude", "settings.json"), "utf8")).hooks.UserPromptSubmit.flatMap((e) => e.hooks.map((h) => h.command));
+  assert.equal(commands.length, 2, `one caveman recall hook, not two: ${commands}`);
+  assert.equal(commands[0], "my-own-prompt-hook.sh");
+  const node = commands[1].match(/^'([^']+\/node)' '([^']+)' mem recall-hook$/);
+  assert.ok(node && existsSync(node[1]) && node[2] === caveman, commands[1]);
 });
 
 test("mem hook install refuses to corrupt a non-object settings.json", async () => {

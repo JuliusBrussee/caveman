@@ -41,6 +41,6 @@
   ],
   "packageManager": "pnpm@10.14.0",
   "dependencies": {
-    "@caveman-ai/cli": "^1.1.0"
+    "@caveman-ai/cli": "^2.1.0"
   }
 }

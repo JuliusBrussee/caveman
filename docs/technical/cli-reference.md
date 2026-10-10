@@ -4,9 +4,9 @@
 useful in terminals; scripts should prefer `caveman` because its meaning is
 clearer to readers. The npm CLI requires Node.js 22.13 or newer.
 
-Run `caveman help <command>` for installed-version help. This page explains the
-command groups and important behavior; command help remains the exact source
-for accepted flags.
+Run `caveman help` for the installed version's commands; `caveman help wrap`,
+`caveman help learn` and `caveman setup --help` print those commands' flags.
+This page explains the command groups and important behavior.
 
 ## Main commands
 
@@ -18,7 +18,7 @@ for accepted flags.
 | `caveman learn` | Rank locally observed improvements | No |
 | `caveman status` | Show which modules are on, which agents they reach, and one next step | No |
 | `caveman on <module>` / `caveman off <module>` | Turn a module on or off, after showing what will change | No |
-| `caveman doctor` | Check this machine without the network: one problem per line, with its fix | No |
+| `caveman doctor` | Check this machine: one problem per line, with its fix. Signed in, it also checks Cloud | No |
 | `caveman stop` | Stop the local runtime that `caveman start` or `caveman <agent>` started | No |
 | `caveman login` | Connect the installation to Caveman Cloud | Yes |
 | `caveman tools` | Open the local tool namespace | No |
@@ -225,10 +225,14 @@ file. It stores local operational data in `~/.caveman/caveman.db`.
 
 ### `setup`
 
-Inspect or install local runtime components.
+Choose modules and agents, show what will change, then apply it. `--yes`
+applies without asking; `--dry-run` only prints the plan. `--install` and
+`--json` install or report the local runtime components.
 
 ```bash
 caveman setup
+caveman setup --yes --agents claude
+caveman setup --dry-run
 caveman setup --install
 caveman setup --json
 caveman setup --agent-native claude

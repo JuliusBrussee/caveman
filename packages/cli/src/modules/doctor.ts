@@ -26,15 +26,22 @@ export async function modulesDoctor(): Promise<void> {
       if (invalid !== undefined) failures.push(`${effect.key} has an invalid value: ${invalid} · fix: caveman ${selection[m.id] ? "on" : "off"} ${m.id}`);
     }
   }
-  for (const name of h.staleBinaries()) failures.push(`${name} is out of date · fix: caveman setup --install`);
+  const stale = h.staleBinaries();
+  if (stale.length) failures.push(`${stale.join(", ")} ${stale.length > 1 ? "are" : "is"} out of date · fix: caveman setup --install`);
   for (const runtime of await h.localRuntimes()) {
     if (runtime.foreign) failures.push(`${runtime.host}:${runtime.port} is held by another program · fix: stop it, then caveman start`);
+    // A runtime keeps the binary it started from until it restarts.
+    else if (runtime.stale) failures.push(`${runtime.host}:${runtime.port} still runs caveman-proxy ${runtime.stale.running}; ${runtime.stale.installed} is installed · fix: caveman stop, then start your agent again`);
   }
+  const down = await h.runtimeDown();
+  if (down) failures.push(down);
   const wired = h.nativeAgents().filter((agent) => agent.wired);
   for (const agent of wired) {
     const state = h.agentState(agent.id);
-    if (state === "degraded") failures.push(`${agent.id}: wiring degraded · fix: caveman doctor ${agent.id} --fix`);
+    if (state === "degraded") failures.push(`${agent.id}: wiring degraded · fix: ${h.agentFix(agent.id)}`);
     else if (state === "unavailable") failures.push(`${agent.id}: wired but not runnable · fix: reinstall ${agent.id}, or caveman disable ${agent.id}`);
+    const ask = h.agentAsk(agent.id);
+    if (ask) notes.push(`· ${agent.id}: ${ask}`);
   }
   const traffic = h.agentTraffic();
   if (traffic.fix) notes.push(`· ${traffic.line} · ${traffic.fix}`);
@@ -46,8 +53,14 @@ export async function modulesDoctor(): Promise<void> {
     try {
       await h.cloudCheck();
     } catch (error) {
-      cloudFailed = true;
-      console.log(`✗ cloud: ${error instanceof Error ? error.message : String(error)} · fix: caveman login`);
+      const message = error instanceof Error ? error.message : String(error);
+      const status = (error as { status?: unknown }).status;
+      // Down, slow or erroring (no answer, 5xx): signing in again fixes none of it.
+      if (status === 0 || (typeof status === "number" && status >= 500)) console.log(`· cloud: ${message} · try again later`);
+      else {
+        cloudFailed = true;
+        console.log(`✗ cloud: ${message} · fix: caveman login`);
+      }
     }
   }
   if (failures.length || cloudFailed) {

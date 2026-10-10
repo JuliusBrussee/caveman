@@ -95,6 +95,29 @@ test("root installer unwraps the Node.js npm npx.cmd variable form", () => {
   });
 });
 
+// npm.cmd has the same shape; `npm view` (--with-mcp-shrink) runs through it.
+test("root installer unwraps the Node.js npm npm.cmd variable form", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-installer-npm-"));
+  const shim = join(root, "npm.CMD");
+  const script = join(root, "node_modules", "npm", "bin", "npm-cli.js");
+  mkdirSync(dirname(script), { recursive: true });
+  writeFileSync(shim, [
+    "@ECHO OFF",
+    "SETLOCAL",
+    'SET "NPM_CLI_JS=%~dp0\\node_modules\\npm\\bin\\npm-cli.js"',
+    '"%NODE_EXE%" "%NPM_CLI_JS%" %*',
+    "",
+  ].join("\r\n"));
+  writeFileSync(script, "");
+  assert.deepEqual(portable.portableInvocation(shim, ["view", "x"], {
+    platform: "win32",
+    execPath: "node.exe",
+  }), {
+    command: "node.exe",
+    args: [script, "view", "x"],
+  });
+});
+
 test("root installer rejects non-Node command shims", () => {
   const root = mkdtempSync(join(tmpdir(), "caveman-installer-win-"));
   const shim = join(root, "unsafe.cmd");
@@ -140,4 +163,36 @@ test("OMP npm shims use Bun without interpreting argument bytes in a shell", (t)
   assert.deepEqual(portable.portableInvocation("omp", args, options), { command: bun, args: [script, ...args] });
   // Other callers retain their Node-only launch contract.
   assert.equal(portable.portableInvocation("omp", args, { ...options, allowBun: false }).command, "node.exe");
+});
+
+// Claude Code's npm package ships claude.exe, so npm's claude.cmd forwards to a
+// native executable, and pnpm writes `@"<target>" %*` for the same bin. The
+// installer's `claude plugin install` / `claude mcp ...` spawns go through here.
+test("root installer runs npm and pnpm shims that forward to an .exe directly", (t) => {
+  const root = mkdtempSync(join(tmpdir(), "caveman installer exe "));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const exe = join(root, "node_modules", "@anthropic-ai", "claude-code", "bin", "claude.exe");
+  mkdirSync(dirname(exe), { recursive: true });
+  writeFileSync(exe, "MZ");
+  const shim = join(root, "claude.CMD");
+  const env = { Path: root, PATHEXT: ".EXE;.CMD" };
+  const args = ["plugin", "install", "caveman@caveman", "a&b %PATH%"];
+  const invoke = (options = {}) => portable.portableInvocation("claude", args, {
+    platform: "win32", env, execPath: "node.exe", ...options,
+  });
+  writeFileSync(shim, [
+    "@ECHO off", "GOTO start", ":find_dp0", "SET dp0=%~dp0", "EXIT /b", ":start", "SETLOCAL", "CALL :find_dp0",
+    '"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*', "",
+  ].join("\r\n"));
+  assert.deepEqual(invoke(), { command: exe, args });
+  // allowBun reads a script header; an executable target never reaches it.
+  assert.deepEqual(invoke({ allowBun: true }), { command: exe, args });
+  writeFileSync(shim, '@SETLOCAL\r\n@"%~dp0\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*\r\n');
+  assert.deepEqual(invoke(), { command: exe, args });
+  assert.equal(portable.parseWindowsExeShim('@SETLOCAL\r\n@"D:\\pnpm\\claude.exe"   %*\r\n'), "D:\\pnpm\\claude.exe");
+  // Anything after the forward refuses the whole shim; a missing target too.
+  writeFileSync(shim, '"%~dp0node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe" %* & echo unsafe\r\n');
+  assert.throws(() => invoke(), /cannot safely launch non-Node Windows command shim/);
+  writeFileSync(shim, '"%~dp0missing.exe" %*\r\n');
+  assert.throws(() => invoke(), /Windows command shim target is missing/);
 });

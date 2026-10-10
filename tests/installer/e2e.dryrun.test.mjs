@@ -7,6 +7,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INSTALLER = path.resolve(HERE, '..', '..', 'installer', 'install.js');
@@ -15,25 +16,28 @@ function freshTmpDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'cm-dryrun-'));
 }
 
+// Even a dry run asks `claude`, `caveman` and `agy` what they have installed:
+// a throwaway home and no agent CLI on PATH keep it off the real ones.
+function dryRunEnv(cfg) {
+  return { ...isolatedEnv(path.join(freshTmpDir(), 'home')), CLAUDE_CONFIG_DIR: cfg };
+}
+
 test('dry-run --only claude prints plan and writes nothing', () => {
   const cfg = freshTmpDir();
-  const r = spawnSync('node', [INSTALLER,
+  const r = spawnSync(process.execPath, [INSTALLER,
     // --with-hooks: since #392/#393 the default only wires standalone hooks
     // when the plugin install fails. Force the hook-planning path so the
     // "would install / would merge" assertions below are exercised.
     '--dry-run', '--only', 'claude', '--with-hooks', '--no-mcp-shrink', '--non-interactive',
     '--config-dir', cfg,
-  ], { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg } });
+  ], { encoding: 'utf8', env: dryRunEnv(cfg) });
   assert.equal(r.status, 0);
-  // Only fires if `claude` is on PATH on the test runner. If not, this assertion
-  // is a no-op (the installer just prints "no agents detected" and exits 0).
-  if (/Claude Code detected/.test(r.stdout)) {
-    assert.match(r.stdout, /would run: claude plugin marketplace add/);
-    assert.match(r.stdout, /would run: claude plugin install caveman@caveman/);
-    assert.match(r.stdout, /would mkdir -p .*[\\\/]hooks/);
-    assert.match(r.stdout, /would install .*caveman-activate\.js/);
-    assert.match(r.stdout, /would merge SessionStart \+ SubagentStart \+ UserPromptSubmit \+ SessionEnd \+ statusline/);
-  }
+  assert.match(r.stdout, /Claude Code detected/);
+  assert.match(r.stdout, /would run: claude plugin marketplace add/);
+  assert.match(r.stdout, /would run: claude plugin install caveman@caveman/);
+  assert.match(r.stdout, /would mkdir -p .*[\\\/]hooks/);
+  assert.match(r.stdout, /would install .*caveman-activate\.js/);
+  assert.match(r.stdout, /would merge SessionStart \+ SubagentStart \+ UserPromptSubmit \+ SessionEnd \+ statusline/);
   // Nothing should have been written.
   assert.equal(fs.existsSync(path.join(cfg, 'settings.json')), false);
   assert.equal(fs.existsSync(path.join(cfg, 'hooks')), false);
@@ -49,8 +53,8 @@ test('dry-run --uninstall does not delete files', () => {
     JSON.stringify({ hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node ' + fake }] }] } }, null, 2));
   const before = fs.readFileSync(path.join(cfg, 'settings.json'), 'utf8');
 
-  const r = spawnSync('node', [INSTALLER, '--uninstall', '--dry-run', '--non-interactive', '--config-dir', cfg],
-    { encoding: 'utf8', env: { ...process.env, CLAUDE_CONFIG_DIR: cfg } });
+  const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--non-interactive', '--config-dir', cfg],
+    { encoding: 'utf8', env: dryRunEnv(cfg) });
   assert.equal(r.status, 0);
 
   // File still present, settings unchanged.

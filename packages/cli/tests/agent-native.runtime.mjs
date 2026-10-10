@@ -133,9 +133,8 @@ test("setup --agent-native codex installs complete native integration plus MCP a
     const hooksPath = join(isolated.home, ".codex", "hooks.json");
     const canonicalHooks = readFileSync(hooksPath, "utf8");
     const changedHooks = JSON.parse(canonicalHooks);
-    const changedEntry = changedHooks.hooks.PreToolUse.find((entry) => JSON.stringify(entry).includes("shrink-hook"));
-    assert.ok(changedEntry, "fixture missing owned shrink-hook entry");
-    changedEntry.changed_after_setup = true;
+    // Codex gets no shrink-hook entry any more; an older install's, changed since.
+    changedHooks.hooks.PreToolUse.push({ hooks: [{ type: "command", command: "caveman shrink-hook" }], changed_after_setup: true });
     writeFileSync(hooksPath, JSON.stringify(changedHooks, null, 2) + "\n");
     const refusedNativeDriftRemoval = await runCli(["setup", "--agent-native", "codex", "--remove"], { env: isolated.env });
     assert.notEqual(refusedNativeDriftRemoval.code, 0);

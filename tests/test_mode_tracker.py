@@ -48,6 +48,7 @@ class ModeTrackerTests(unittest.TestCase):
             env=env,
             input=json.dumps({"prompt": prompt}),
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=True,
         )
@@ -366,6 +367,7 @@ class SessionScopedModeTests(unittest.TestCase):
             env=env,
             input=json.dumps({"prompt": prompt, "session_id": session_id}),
             text=True,
+            encoding="utf-8",
             capture_output=True,
             check=True,
         )

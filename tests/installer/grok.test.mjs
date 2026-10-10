@@ -17,6 +17,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -36,7 +37,7 @@ function freshHome() {
 function runInstaller(args, grokHome, cwd = grokHome) {
   return spawnSync(process.execPath, [INSTALLER, ...args, '--config-dir', path.join(grokHome, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
     cwd,
-    env: { ...process.env, GROK_HOME: grokHome, NO_COLOR: '1' },
+    env: { ...isolatedEnv(path.join(grokHome, 'home')), GROK_HOME: grokHome },
     encoding: 'utf8',
   });
 }
@@ -106,7 +107,7 @@ test('grok relative GROK_HOME resolves cwd-relative', () => {
     fs.mkdirSync(project);
     const r = spawnSync(process.execPath, [INSTALLER, '--only', 'grok', '--config-dir', path.join(home, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
       cwd: project,
-      env: { ...process.env, GROK_HOME: 'custom grok', NO_COLOR: '1' },
+      env: { ...isolatedEnv(path.join(home, 'home')), GROK_HOME: 'custom grok' },
       encoding: 'utf8',
     });
     assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);

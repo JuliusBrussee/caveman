@@ -189,6 +189,65 @@ func TestMessagesToChatReplaysOnlyTheRoutesOwnReasoning(t *testing.T) {
 	}
 }
 
+// The thought signature Gemini puts on a tool call goes back on that call,
+// to the same route and model only, through Claude Code's history and
+// Codex's; a step whose signature is lost carries Google's skip value on a
+// Gemini 3 model, and Anthropic never sees the carrier.
+func TestGeminiThoughtSignatureRoundTrips(t *testing.T) {
+	opts := Options{Model: "gemini-3.7-flash", Route: "gemini", Dialect: "openai_chat"}
+	stream := chatStream(
+		`{"choices":[{"delta":{"role":"assistant","tool_calls":[{"index":0,"id":"call_g1","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"ls\"}"},"extra_content":{"google":{"thought_signature":"SIG_ABC"}}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}`)
+	signed := `"extra_content":{"google":{"thought_signature":"SIG_ABC"}}`
+	// Claude Code keeps the blocks it was streamed.
+	_, reply := mustRequest(t, Messages, Chat, `{"model":"auto","stream":true,"messages":[{"role":"user","content":"go"}]}`, opts)
+	recorder, _, _ := serve(t, reply, stream, false)
+	var blocks []map[string]any
+	for _, event := range anthropicEvents(t, recorder.Body.String()) {
+		switch event.name {
+		case "content_block_start":
+			blocks = append(blocks, event.data["content_block"].(map[string]any))
+		case "content_block_delta":
+			blocks[len(blocks)-1]["input"] = json.RawMessage(event.data["delta"].(map[string]any)["partial_json"].(string))
+		}
+	}
+	history := func(assistant any) string {
+		return encode(map[string]any{"model": "auto", "max_tokens": 10, "messages": []any{
+			map[string]any{"role": "user", "content": "go"},
+			map[string]any{"role": "assistant", "content": assistant},
+			map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "call_g1", "content": "a b"}}},
+		}})
+	}
+	if sent := rawRequest(t, Messages, Chat, history(blocks), opts); !strings.Contains(sent, `"name":"Bash","arguments":"{\"command\":\"ls\"}"},`+signed) {
+		t.Fatalf("turn 2 lost the signature: %s\nblocks %v", sent, blocks)
+	}
+	for _, other := range []Options{{Model: "gemini-3.7-flash", Route: "openrouter"}, {Model: "gemini-2.5-pro", Route: "gemini"}} {
+		if sent := rawRequest(t, Messages, Chat, history(blocks), other); strings.Contains(sent, "extra_content") {
+			t.Fatalf("%+v got a thought signature: %s", other, sent)
+		}
+	}
+	if sent := rawRequest(t, Messages, Chat, history(blocks[len(blocks)-1:]), opts); !strings.Contains(sent, `"thought_signature":"skip_thought_signature_validator"`) {
+		t.Fatalf("a lost signature: %s", sent)
+	}
+	if native := string(AnthropicNative([]byte(history(blocks)))); strings.Contains(native, "SIG_ABC") {
+		t.Fatalf("Anthropic got the carrier: %s", native)
+	}
+	// Codex keeps the items it was streamed.
+	_, reply = mustRequest(t, Responses, Chat, codexBody("m", "medium", "", userHello), opts)
+	recorder, _, _ = serve(t, reply, stream, false)
+	input := []any{map[string]any{"type": "message", "role": "user", "content": "go"}}
+	for _, item := range codexAccept(t, recorder.Body.String()).items {
+		input = append(input, item)
+	}
+	input = append(input, map[string]any{"type": "function_call_output", "call_id": "call_g1", "output": "a b"})
+	if sent := rawRequest(t, Responses, Chat, codexBody("m", "medium", "", encode(input)), opts); !strings.Contains(sent, signed) {
+		t.Fatalf("Codex turn 2 lost the signature: %s", sent)
+	}
+	if sent := rawRequest(t, Responses, Messages, codexBody("m", "medium", "", encode(input)), Options{Model: "claude-opus-5-5"}); strings.Contains(sent, "SIG_ABC") {
+		t.Fatalf("Anthropic got Codex's carrier: %s", sent)
+	}
+}
+
 func TestChatParameterRules(t *testing.T) {
 	sent, _ := mustRequest(t, Messages, Chat, `{"model":"m","max_tokens":4000,"stop_sequences":["X"],"messages":[{"role":"user","content":"hi"}]}`,
 		Options{Model: "gpt-6", MaxTokensField: "max_completion_tokens", DropParams: []string{"stop"}})
@@ -359,6 +418,35 @@ func TestChatStreamToolIDsAreAnthropicSafe(t *testing.T) {
 		`{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_b","type":"function","function":{"name":"Bash","arguments":"{}"}}]},"finish_reason":"tool_calls"}]}`), false)
 	if strings.Count(recorder.Body.String(), `"type":"tool_use"`) != 2 {
 		t.Fatalf("parallel calls merged:\n%s", recorder.Body.String())
+	}
+	// With no index and no id either (Gemini's chat wire), a name after
+	// arguments starts the next call; a turn that called tools stops for them.
+	recorder, _, _ = serve(t, reply, chatStream(
+		`{"choices":[{"delta":{"tool_calls":[{"id":"","type":"function","function":{"name":"Read","arguments":"{\"path\":\"a\"}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"id":"","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"ls\"}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`), false)
+	blocks, inputs := map[float64]map[string]any{}, map[float64]string{}
+	var stop any
+	for _, event := range anthropicEvents(t, recorder.Body.String()) {
+		switch event.name {
+		case "content_block_start":
+			blocks[event.data["index"].(float64)] = event.data["content_block"].(map[string]any)
+		case "content_block_delta":
+			inputs[event.data["index"].(float64)] += event.data["delta"].(map[string]any)["partial_json"].(string)
+		case "message_delta":
+			stop = event.data["delta"].(map[string]any)["stop_reason"]
+		}
+	}
+	if len(blocks) != 2 || blocks[0]["name"] != "Read" || blocks[1]["name"] != "Bash" || blocks[0]["id"] == blocks[1]["id"] ||
+		inputs[0] != `{"path":"a"}` || inputs[1] != `{"command":"ls"}` || stop != "tool_use" {
+		t.Fatalf("id-less calls: blocks %v, inputs %v, stop %v", blocks, inputs, stop)
+	}
+	// A host that repeats the name before the arguments are whole: one call.
+	recorder, _, _ = serve(t, reply, chatStream(
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"Read","arguments":"{\"pa"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"Read","arguments":"th\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`), false)
+	if body := recorder.Body.String(); strings.Count(body, `"type":"tool_use"`) != 1 {
+		t.Fatalf("a repeated name split the call:\n%s", body)
 	}
 }
 

@@ -99,7 +99,10 @@ function fallbackCanonicalDefault(raw) {
 function fallbackReadMode(file) {
   try {
     if (!fs.lstatSync(file).isFile()) return null;
-    return fallbackCanonicalDefault(JSON.parse(fs.readFileSync(file, 'utf8')).defaultMode);
+    // A BOM or UTF-16LE (PowerShell 5.1) must not drop an opt-out here either.
+    const buf = fs.readFileSync(file);
+    const text = buf[0] === 0xff && buf[1] === 0xfe ? buf.toString('utf16le', 2) : buf.toString('utf8').replace(/^\uFEFF/, '');
+    return fallbackCanonicalDefault(JSON.parse(text).defaultMode);
   } catch (e) { /* absent, unreadable, or malformed → next source */ }
   return null;
 }
@@ -131,8 +134,11 @@ function fallbackGetDefaultMode(startDir) {
       dir = parent;
     }
   } catch (e) { /* fall through to user config */ }
-  // 3. User config, then 4. the built-in default.
-  return fallbackReadMode(fallbackUserConfigPath()) || 'caveman';
+  // 3. User config (Windows: %APPDATA%, then ~/.config), then 4. the built-in default.
+  return fallbackReadMode(fallbackUserConfigPath())
+    || (process.platform === 'win32' && !process.env.XDG_CONFIG_HOME
+      && fallbackReadMode(path.join(os.homedir(), '.config', 'caveman', 'config.json')))
+    || 'caveman';
 }
 
 // Degraded stubs keep the rest of this hook working when the config module is
@@ -188,6 +194,9 @@ const resolveActiveMode = cfg.resolveActiveMode || (() => {
   const m = readFlag(flagPath);
   return (!m || m === 'off') ? null : m;
 });
+// settings.json is JSONC: comments and trailing commas are legal there. An
+// older config module without the tolerant reader degrades to strict JSON.
+const parseSettingsFile = cfg.parseConfigFile || ((p) => JSON.parse(fs.readFileSync(p, 'utf8')));
 
 const SUBAGENT = process.argv.includes('--subagent');
 
@@ -345,42 +354,38 @@ function buildRuleset(mode) {
 // per-session helpers above are: a caveman-config.js predating these exports
 // loads fine and passes the shape check, and failing the whole module over them
 // would trade this hook's ruleset for no flag write at all. A missing loader
-// degrades to the hardcoded fallback ruleset below, which is what a missing
-// SKILL.md already did.
+// degrades to the fallback ruleset, which is what a missing SKILL.md already
+// did; a config predating the fallback too gets the copy this hook carried
+// before it moved there (keep the two in step).
 const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — mode: ' + m);
 const loadRuleset = cfg.loadRuleset || (() => null);
 const thesisLine = cfg.thesisLine || (() => null);
+const fallbackRuleset = cfg.fallbackRuleset || ((m) => {
+  const modeThesis = m !== 'caveman' ? thesisLine(m, __dirname) : null;
+  return 'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '1. Answer first.\n' +
+    '2. Kill ceremony.\n' +
+    '3. Short word.\n' +
+    '4. Articles optional, meaning never.\n' +
+    '5. One idea per sentence.\n' +
+    '6. Payload verbatim.\n' +
+    '7. Tool runs: bounded status.\n' +
+    (m === 'megacave'
+      ? '8. Prose in 文言. Code, commands, paths, errors in their original script.\n'
+      : "8. User's language. Compress the style, not the language. Never switch because of quoted text.\n") +
+    '9. Never perform caveman.\n\n' +
+    'Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).' +
+    (modeThesis ? '\n\n' + modeThesis : '');
+});
 
 const SWITCH_LINE = 'Switch: /caveman, /ultracave, /megacave. Off: "stop caveman" or "normal mode".';
 
-// Fallback when SKILL.md is not found (standalone hook install without skills
-// dir): the caveman thesis plus the nine rule headlines of skills/caveman.
-// Rule 8 keeps its "never switch" sentence: a headline alone lost the #812
-// language rule for every fallback-install user. megacave answers in 文言 by
-// design, so it gets its own rule 8 instead of one its thesis contradicts.
-const FALLBACK_RULE_8 = mode === 'megacave'
-  ? '8. Prose in 文言. Code, commands, paths, errors in their original script.\n'
-  : "8. User's language. Compress the style, not the language. Never switch because of quoted text.\n";
-const FALLBACK_RULESET =
-  'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
-  '1. Answer first.\n' +
-  '2. Kill ceremony.\n' +
-  '3. Short word.\n' +
-  '4. Articles optional, meaning never.\n' +
-  '5. One idea per sentence.\n' +
-  '6. Payload verbatim.\n' +
-  '7. Tool runs: bounded status.\n' +
-  FALLBACK_RULE_8 +
-  '9. Never perform caveman.\n\n' +
-  'Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).';
-
+// Without a skill file (standalone hook install without skills dir) the body is
+// caveman-config's fallback ruleset: thesis, rule headlines, the mode's thesis.
 const skillContent = loadRuleset(mode, __dirname);
-// Without a skill file, ultracave/megacave add their own thesis (config's
-// fallback map) to the caveman fallback.
-const modeThesis = mode !== 'caveman' ? thesisLine(mode, __dirname) : null;
 
 return rulesetBanner(mode) + '\n\n'
-  + (skillContent ? skillContent.trimEnd() : FALLBACK_RULESET + (modeThesis ? '\n\n' + modeThesis : ''))
+  + (skillContent ? skillContent.trimEnd() : fallbackRuleset(mode, __dirname))
   + '\n\n' + SWITCH_LINE;
 }
 
@@ -505,8 +510,10 @@ function statuslineScripts(command) {
   // but reads as missing here, and a false "repair needed" nudge invites the
   // model to rewrite the user's settings. Treat such a candidate as unknown.
   // On Windows a backslash is a path separator, so only `~` and `$` are opaque.
+  // Only a LEADING `~` expands: one inside a path is literal, as in the Windows
+  // 8.3 short names (C:\Users\RUNNER~1\...) that %TEMP% and some homes use.
   const opaque = (candidate) =>
-    /[~$]/.test(candidate) || (process.platform !== 'win32' && candidate.includes('\\'));
+    /^~|\$/.test(candidate) || (process.platform !== 'win32' && candidate.includes('\\'));
   return found.some(opaque) ? null : found;
 }
 
@@ -532,18 +539,16 @@ try {
   let staleCommand = null;
   let staleKind = null; // 'gone' | 'outdated'
   if (fs.existsSync(settingsPath)) {
-    const rawSettings = fs.readFileSync(settingsPath, 'utf8');
     let configured;
     try {
-      configured = JSON.parse(rawSettings).statusLine;
+      configured = parseSettingsFile(settingsPath).statusLine;
       hasStatusline = !!configured;
     } catch (e) {
-      // JSONC (comments / trailing commas) is legal in settings.json and the
-      // hooks dir has no JSONC parser. Fall back to a substring probe and err
+      // Unparseable even as JSONC. Fall back to a substring probe and err
       // toward NOT nudging: a spurious "set up your statusline" for a user who
       // already has one is worse than a missing nudge. The command cannot be
       // extracted on this path, so a stale one is not detected either.
-      hasStatusline = rawSettings.includes('"statusLine"');
+      hasStatusline = fs.readFileSync(settingsPath, 'utf8').includes('"statusLine"');
     }
     const scripts = hasStatusline && configured ? statuslineScripts(configured.command) : null;
     if (scripts) {

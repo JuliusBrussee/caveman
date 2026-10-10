@@ -48,7 +48,10 @@ function parseWindowsNodeShim(source) {
       || line.match(/"([A-Za-z]:[\\/][^"\r\n]+\.(?:cjs|mjs|js))"\s+%\*/i);
     if (match) return match[1];
   }
-  return null;
+  // Node's own npx.cmd / npm.cmd: `SET "NPX_CLI_JS=%~dp0\...js"` then
+  // `"%NODE_EXE%" "%NPX_CLI_JS%" %*`. Only that pair; no other expansion.
+  const npm = source.match(/SET\s+"(NP[MX])_CLI_JS=%~dp0\\([^"\r\n]+\.js)"[\s\S]*"%NODE_EXE%"\s+"%\1_CLI_JS%"\s+%\*/i);
+  return npm ? npm[2] : null;
 }
 
 function getSpawnInvocation(command, args, platform = process.platform, env = process.env) {

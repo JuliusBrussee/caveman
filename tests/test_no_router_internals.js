@@ -10,7 +10,8 @@ const path = require('node:path');
 const { execFileSync } = require('node:child_process');
 
 const root = path.resolve(__dirname, '..');
-const self = path.relative(root, __filename);
+// git ls-files names paths with forward slashes on every OS.
+const self = path.relative(root, __filename).split(path.sep).join('/');
 const terms = [
   'localpolicy', 'ClassifyTask', 'ScoutSignals', 'scoutAsk', 'taskclass', 'jevprior',
   'decideAsk', 'continueAsk', 'sliderStop', 'effort_binding', 'askwords', 'evidence matrix', 'routerd',

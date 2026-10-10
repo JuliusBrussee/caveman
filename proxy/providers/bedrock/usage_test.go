@@ -245,12 +245,12 @@ func TestUsageAndCost_NonZeroForCatalogModel(t *testing.T) {
 		t.Fatalf("parse: %v", err)
 	}
 	total := cost.EstimateUSD(price, cost.Usage{InputTokens: usage.InputTokens, OutputTokens: usage.OutputTokens})
-	// Current extended-access price: 1M input @ $6 + 0.5M output @ $30 = $21.
+	// us-east-1 price: 1M input @ $3 + 0.5M output @ $15 = $10.50.
 	if total <= 0 {
 		t.Fatalf("computed cost = %v, want > 0", total)
 	}
-	if total != 21 {
-		t.Errorf("computed cost = %v, want 21", total)
+	if total != 10.5 {
+		t.Errorf("computed cost = %v, want 10.5", total)
 	}
 }
 

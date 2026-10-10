@@ -19,6 +19,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -46,6 +47,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativehook"
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
 	"github.com/JuliusBrussee/caveman/proxy/internal/runstate"
+	"github.com/JuliusBrussee/caveman/proxy/internal/securehome"
 	"github.com/JuliusBrussee/caveman/proxy/internal/sessionusage"
 	"github.com/JuliusBrussee/caveman/proxy/internal/standalone"
 	"github.com/JuliusBrussee/caveman/proxy/internal/store"
@@ -105,6 +107,7 @@ func runNativeHookBridge(args []string) {
 	}
 	agent := args[0]
 	adapter := argFlag(args[1:], "--adapter", "")
+	node := argFlag(args[1:], "--node", "")
 	home := env.String("CAVEMAN_HOME", "")
 	if home == "" {
 		userHome, err := os.UserHomeDir()
@@ -117,7 +120,7 @@ func runNativeHookBridge(args []string) {
 	if err != nil || len(raw) > nativeHookMaxPayloadBytes {
 		return
 	}
-	_ = nativehook.Run(context.Background(), home, agent, adapter, raw, os.Stdout, os.Stderr)
+	_ = nativehook.Run(context.Background(), home, agent, adapter, node, raw, os.Stdout, os.Stderr)
 }
 
 func readNativeHookPayload(r io.Reader) ([]byte, error) {
@@ -368,7 +371,7 @@ func runServe(logger *slog.Logger) {
 	for name, mount := range cfg.CompatUpstreams() {
 		state.CompatForwardHeaders[name] = append([]string(nil), mount.ForwardHeaders...)
 	}
-	srv.Handler = withInstanceIdentity(handler, state.InstanceToken, loopbackListen(cfg.Listen))
+	srv.Handler = withRunState(handler, state, loopbackListen(cfg.Listen), cancel)
 	if err := runstate.Write(home, state); err != nil {
 		_ = listener.Close()
 		logger.Error("cannot write proxy run state", "error", err)
@@ -475,11 +478,48 @@ func loopbackListen(addr string) bool {
 // a run-state file it can already read, so on a shared listener the header
 // hands every unauthenticated /health/live caller a value that correlates
 // restarts and distinguishes instances behind a load balancer, for nothing.
-func withInstanceIdentity(next http.Handler, token string, loopback bool) http.Handler {
+// A wildcard bind (0.0.0.0, ::) is the one shared listener the CLI and status
+// still reach through loopback, so there a loopback caller gets the header and
+// a caller from the network still does not.
+func withInstanceIdentity(next http.Handler, token, listen string) http.Handler {
+	loopback := loopbackListen(listen)
+	host, _, err := net.SplitHostPort(listen)
+	ip := net.ParseIP(host)
+	wildcard := err == nil && (host == "" || ip != nil && ip.IsUnspecified())
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if loopback && r.Method == http.MethodGet && r.URL.Path == "/health/live" {
+		if (loopback || wildcard && loopbackListen(r.RemoteAddr)) && r.Method == http.MethodGet && r.URL.Path == "/health/live" {
 			w.Header().Set(runstate.InstanceHeader, token)
 			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withRunState serves the two run-state endpoints: the instance identity any
+// local caller may read, and the shutdown only the run-state file's reader may
+// send.
+func withRunState(next http.Handler, state runstate.State, loopback bool, stop func()) http.Handler {
+	return withShutdown(withInstanceIdentity(next, state.InstanceToken, state.Listen), state.ShutdownToken, loopback, stop)
+}
+
+// withShutdown is `caveman stop` on Windows, where no signal reaches a
+// detached process gracefully: POST /caveman/shutdown runs the same drain as
+// SIGTERM. Loopback only, and only for the caller holding this generation's
+// run-state shutdown token; it sits outside the inbound token gate like the
+// keepalive. The CLI sends no Origin or Sec-Fetch-Site and names a loopback
+// Host, so a request carrying either header or another Host (a browser page,
+// a DNS-rebound name) is refused before the token is compared.
+func withShutdown(next http.Handler, token string, loopback bool, stop func()) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if loopback && token != "" && r.Method == http.MethodPost && r.URL.Path == "/caveman/shutdown" {
+			if len(r.Header.Values("Origin")) > 0 || len(r.Header.Values("Sec-Fetch-Site")) > 0 || !loopbackListen(r.Host) ||
+				subtle.ConstantTimeCompare([]byte(r.Header.Get(runstate.ShutdownHeader)), []byte(token)) != 1 {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			stop()
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
@@ -1276,6 +1316,9 @@ func mustHome(logger *slog.Logger) string {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		logger.Error("cannot create ~/.caveman", "error", err)
 		os.Exit(1)
+	}
+	if err := securehome.Restrict(home); err != nil {
+		logger.Warn("cannot make ~/.caveman private to this user", "error", err)
 	}
 	return home
 }

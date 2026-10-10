@@ -6,6 +6,7 @@ import { findModule, type ModuleId } from "./registry.js";
 // The command that clears an on-but-inactive module, when there is one.
 export function moduleFix(state: ModuleState): string | undefined {
   const reason = state.reason ?? "";
+  if (reason === "not set up") return "caveman setup";
   if (reason.startsWith("sign in") || reason === "login expired") return "caveman login";
   if (reason.startsWith(`${state.id} paused · `)) return "caveman billing";
   if (reason.startsWith(`${state.id} degraded · `)) return "caveman login";
@@ -16,21 +17,22 @@ export function moduleFix(state: ModuleState): string | undefined {
 }
 
 // An inactive module the user's own choices explain (not signed in, an
-// override, input off) rather than something broken.
+// override, input off, setup not run yet) rather than something broken.
 export function moduleChoice(state: ModuleState): boolean {
   const reason = state.reason ?? "";
-  return ["sign in", "waiting for Cloud", "overridden by", "paused while", "record mode", `${state.id} paused · `].some((start) => reason.startsWith(start))
+  return ["not set up", "sign in", "waiting for Cloud", "overridden by", "paused while", "record mode", `${state.id} paused · `].some((start) => reason.startsWith(start))
     || reason.endsWith(" in config");
 }
 
-export function nextStep(states: ModuleState[], opts: { degraded?: string | undefined; fallback: string | null }): string | null {
+// `leftAlone`: agents on an endpoint of their own, which enable refuses.
+export function nextStep(states: ModuleState[], opts: { degraded?: string | undefined; fallback: string | null; leftAlone?: string[] }): string | null {
   const inactive = states.filter((state) => state.on && !state.active && moduleFix(state));
   if (inactive.some((state) => moduleFix(state) === "caveman setup --install")) return "caveman setup --install";
   const broken = inactive.find((state) => !moduleChoice(state));
   if (broken) return moduleFix(broken)!;
   if (opts.degraded) return `caveman doctor ${opts.degraded} --fix`;
   const wiredOn = states.filter((state) => state.on && findModule(state.id)?.wiresAgents);
-  const unwired = Object.keys(wiredOn[0]?.perAgent ?? {}).filter((agent) => wiredOn[0]!.perAgent[agent] === "not wired");
+  const unwired = Object.keys(wiredOn[0]?.perAgent ?? {}).filter((agent) => wiredOn[0]!.perAgent[agent] === "not wired" && !opts.leftAlone?.includes(agent));
   if (unwired.length) return `caveman enable ${unwired.length > 1 ? "--detected" : unwired[0]}`;
   if (inactive[0]) return moduleFix(inactive[0])!;
   return opts.fallback;
