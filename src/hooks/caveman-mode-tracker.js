@@ -220,7 +220,10 @@ function handle(raw) {
         // entire budget means the host kills the hook before the child's own
         // timeout can fire and produce the fallback message. Windows process
         // spawn is ~10x macOS before antivirus (#819), so the margin is real.
-        block = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 2500 }).trim();
+        // windowsHide: Claude Code Desktop has no console of its own, so Windows
+        // would give this child a NEW console window on every prompt (#1214).
+        // Ignored on other platforms.
+        block = execFileSync(process.execPath, argv, { encoding: 'utf8', timeout: 2500, windowsHide: true }).trim();
       } catch (e) {
         block = 'caveman-stats: could not run stats script.\nTry manually: node ' + statsPath;
       }

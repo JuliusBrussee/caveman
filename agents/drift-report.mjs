@@ -175,12 +175,32 @@ for (const r of drifted) {
   // The state line doubles as the "already current" key below, so drift and broken
   // at the same version must not be the same line.
   const stateLine = `- installed (@latest): \`${observed}\`${broken ? " (probe broken)" : ""}`;
+  // A broken probe has exactly one of two causes and the artifact already says which:
+  // a surface that did not launch, or a clean launch that yielded no newer version.
+  // Reporting them as a disjunction ("it did not launch ... or ...") contradicted the
+  // flags printed beside it and made the maintainer re-run the probe to find out
+  // which it was (#1236).
+  const unlaunchable = broken
+    ? [...(r.version_ok ? [] : ["`--version`"]), ...(r.help_ok ? [] : ["`--help`"])]
+    : [];
+  const launched = [...(r.version_ok ? ["`--version`"] : []), ...(r.help_ok ? ["`--help`"] : [])];
+  let brokenSentence = null;
+  if (!broken) {
+    // Not computed for a drift result: every branch below describes a probe
+    // failure, and a drift result is a clean probe.
+  } else if (unlaunchable.length === 0) {
+    brokenSentence = `The \`${r.id}\` @latest binary launched on both \`--version\` and \`--help\`, but the version it reported (\`${observed}\`) is not newer than the pin, so the probe cannot confirm a drift.`;
+  } else if (launched.length === 0) {
+    brokenSentence = `The \`${r.id}\` @latest binary installed, but neither \`--version\` nor \`--help\` launched under the isolated probe environment.`;
+  } else {
+    brokenSentence = `The \`${r.id}\` @latest binary installed and ${launched.join(" and ")} launched, but ${unlaunchable.join(" and ")} failed under the isolated probe environment.`;
+  }
   // version_error/help_error stay out of the issue: they are untrusted upstream output.
   const body = [
     marker,
     "",
     broken
-      ? `The \`${r.id}\` @latest binary installed but failed the probe: it did not launch (\`--version\` ok: ${r.version_ok}, \`--help\` ok: ${r.help_ok}) or it reported a version that is not newer than the pin.`
+      ? brokenSentence
       : `The \`${r.id}\` upstream released a version newer than the pin the profile claims to test.`,
     "",
     stateLine,
@@ -189,7 +209,9 @@ for (const r of drifted) {
     "",
     "This is a non-blocking drift report from the nightly Agent conformance workflow. To clear it:",
     broken
-      ? `1. Find why \`${r.id}@latest\` fails the probe; if the latest-drift install line tracks something other than a release, point it at one.`
+      ? (unlaunchable.length
+        ? `1. Find why ${unlaunchable.join(" and ")} fails for \`${r.id}@latest\`; the captured output is in the probe artifact, not copied here. If the latest-drift install line tracks something other than a release, point it at one.`
+        : `1. Find why the probe could not read a newer version for \`${r.id}@latest\`; if the latest-drift install line tracks something other than a release, point it at one.`)
       : `1. Verify \`${r.id}@${r.observed}\` wraps correctly.`,
     `2. Bump \`tested_agent_version\` in \`agents/profiles/${r.id}.json\` (the conformance CI pin is derived from it and enforced by \`compile.mjs\`).`,
     `3. Update \`last_verified_at\`/\`verified_by\` if the profile carries them.`,

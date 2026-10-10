@@ -1112,6 +1112,49 @@ def verify_untrusted_git_invocations() -> None:
     print(f"{len(sources)} sources checked; git only reaches untrusted repositories through {len(wrappers)} hardened wrappers")
 
 
+def verify_hidden_child_windows() -> None:
+    """#1214: no host-side child process may open a console window on Windows.
+
+    A hook or in-process extension runs inside a host that often has no console
+    of its own (Claude Code desktop, OpenCode under a multiplexer, a GUI
+    launcher). Windows then gives every console child a NEW console window, so
+    the user gets one flashing window per prompt, tool call or bash command.
+    `windowsHide: true` suppresses it and is ignored on every other platform.
+
+    These files have no shared runtime with the CLI that already sets the
+    option, so each spawn carries its own literal — exactly the shape that
+    drifts. The generated plugin templates are guarded behaviorally instead, by
+    assertHidesChildWindows in packages/cli/tests, because they are emitted as
+    text and only the written artifact proves what a user actually runs.
+    """
+    section("Hidden Child Windows (Windows console flash)")
+    call_re = re.compile(r"\b(?:execFileSync|execSync|spawnSync|execFile|spawn)\s*\(")
+    targets = [
+        ROOT / "src/hooks/caveman-mode-tracker.js",
+        ROOT / "src/mcp-servers/caveman-shrink/index.js",
+        ROOT / "packages/pi-extension/src/recovery.ts",
+        ROOT / "packages/pi-extension/src/lifecycle.ts",
+    ]
+    for path in targets:
+        text = path.read_text(encoding="utf-8")
+        # An import/destructure of the API is not a call site.
+        body = "\n".join(
+            line for line in text.splitlines()
+            if "require(" not in line and not line.lstrip().startswith("import ")
+        )
+        calls = len(call_re.findall(body))
+        if calls == 0:
+            continue
+        hidden = body.count("windowsHide: true") + body.count("getSpawnOptions()")
+        ensure(
+            hidden >= calls,
+            f"{path.relative_to(ROOT)}: {calls} child-process call(s) but {hidden} "
+            "windowsHide/getSpawnOptions — a host child must not open a console window (#1214)",
+        )
+        print(f"  {path.relative_to(ROOT)}: {calls} call(s) hidden")
+    print("Hidden child window checks OK")
+
+
 def main() -> int:
     checks = [
         verify_license_boundaries,
@@ -1124,6 +1167,7 @@ def main() -> int:
         verify_manifests_and_syntax,
         verify_package_contents,
         verify_powershell_static,
+        verify_hidden_child_windows,
         verify_python_text_io_encoding,
         verify_compress_fixtures,
         verify_compress_cli,

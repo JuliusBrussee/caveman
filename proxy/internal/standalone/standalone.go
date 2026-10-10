@@ -110,6 +110,20 @@ func tokenEqual(presented, token string) bool {
 	return subtle.ConstantTimeCompare([]byte(presented), []byte(token)) == 1
 }
 
+// inboundBearerEquals reports whether the request's Authorization header is a
+// Bearer carrying exactly this key. The comparison is constant-time: the value
+// is a secret and the outcome is observable in the forwarded headers.
+func inboundBearerEquals(r *http.Request, key string) bool {
+	if r == nil || key == "" {
+		return false
+	}
+	fields := strings.Fields(strings.TrimSpace(r.Header.Get("authorization")))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return false
+	}
+	return tokenEqual(fields[1], key)
+}
+
 // Creds preserves a real inbound provider credential first; otherwise it falls
 // back to the operator's BYOK env key. A key taken from an inbound
 // `Authorization: Bearer` keeps that scheme (Claude Pro/Max OAuth tokens only
@@ -184,6 +198,22 @@ func (c Creds) Resolve(provider string, r *http.Request) providers.Credential {
 		credential := providers.Credential{Mode: "ephemeral_header", Key: k, AuthFallbackEnv: fallbackEnv}
 		if provider == "bedrock" {
 			credential.AuthKind = "bedrock_api_key"
+		}
+		// One credential can arrive twice. A pi provider with `authHeader: true`
+		// sends its key as `Authorization: Bearer <key>` AND as `x-api-key:
+		// <key>`. x-api-key is resolved first so a shared listener cannot
+		// replace the caller's principal with its own, but an IDENTICAL bearer
+		// is that same principal, not a competing account. Dropping it left a
+		// bearer-only compat upstream with no credential it accepts: the named
+		// mount deletes authorization on an Anthropic-protocol path unless the
+		// credential declares the scheme, so such a gateway answered 401 and no
+		// configuration both routed and authenticated (#1215).
+		//
+		// Scoped to openai_compatible because that is the only provider whose
+		// upstream header this decides. anthropic and gemini read a bearer as
+		// OAuth pass-through, which a duplicated API key must not opt into.
+		if provider == "openai_compatible" && inboundBearerEquals(r, k) {
+			credential.Scheme = "bearer"
 		}
 		return credential
 	}

@@ -156,6 +156,11 @@ provider name; native routes use the listener's published native endpoint.
 Unknown or credential-bearing base URLs remain direct with a notice. A
 same-host path mismatch is not a verified route.
 
+A host provider that answers in-process rather than over HTTP publishes a
+sentinel base URL with no host. It stays direct and its notice does not propose
+a compat mount: the provider dispatches on that sentinel value, so routing it
+would disable the provider instead of compressing it.
+
 The proxy publishes credential-free endpoint identities in its run-state file
 and returns its instance identity on the local health route. Wrappers require
 that live identity before trusting the file, so a stale process record plus an

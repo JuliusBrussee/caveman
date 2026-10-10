@@ -113,3 +113,44 @@ for (const [id, block] of [
     assert.match(result.stderr, new RegExp(`missing shipped profile id\\(s\\): ${id}`));
   });
 }
+
+// A profile may pin its own `install` command (kilo and qwen do; every other
+// profile leaves it unpinned). Nothing derived that pin from
+// tested_agent_version, so a version bump that updated the profile pin and the
+// conformance matrix could leave `install` one version behind — handing users a
+// documented install command for a version the project does not claim to test.
+// Caught for real: the 2026-10-06 qwen bump to 0.25.0 left install at 0.24.7.
+test("compiler catches a profile install pin that diverges from tested_agent_version", (t) => {
+  const repo = fixtureRepo();
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const file = join(repo, "agents", "profiles", "kilo.json");
+  const profile = JSON.parse(readFileSync(file, "utf8"));
+  assert.match(
+    profile.install,
+    new RegExp(`@${escapeRegExp(KILO_PIN)}(?:$|[^0-9A-Za-z.-])`),
+    "fixture expects the kilo profile to pin a version in its install command",
+  );
+  profile.install = replaceExactly(profile.install, KILO_PIN, KILO_BUMPED);
+  writeFileSync(file, JSON.stringify(profile, null, 2) + "\n");
+
+  const result = compile(repo);
+  assert.notEqual(result.status, 0, result.stdout + result.stderr);
+  assert.match(
+    result.stderr,
+    new RegExp(`kilo install pins ${escapeRegExp(KILO_BUMPED)} but profile tested_agent_version is ${escapeRegExp(KILO_PIN)}`),
+  );
+});
+
+// The common case must stay legal: most profiles give an unpinned install
+// command, and that is not a drift report waiting to happen.
+test("compiler accepts an unpinned profile install command", (t) => {
+  const repo = fixtureRepo();
+  t.after(() => rmSync(repo, { recursive: true, force: true }));
+  const file = join(repo, "agents", "profiles", "qwen.json");
+  const profile = JSON.parse(readFileSync(file, "utf8"));
+  profile.install = "npm i -g @qwen-code/qwen-code";
+  writeFileSync(file, JSON.stringify(profile, null, 2) + "\n");
+
+  const result = compile(repo);
+  assert.equal(result.status, 0, result.stdout + result.stderr);
+});

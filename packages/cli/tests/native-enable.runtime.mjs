@@ -7,6 +7,7 @@ import { createServer } from "node:net";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { isolatedCliEnv } from "./_cli.mjs";
+import { assertHidesChildWindows, assertHidesChildWindowsPython } from "./harness/hidden-window.mjs";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
@@ -1159,6 +1160,7 @@ test("enable/disable hermes installs native lifecycle pack and preserves unrelat
   assert.match(plugin, /native-hook/);
   assert.match(plugin, /"task_continuation": _task_continuation\(user_message\)/);
   assert.match(plugin, /ctx\.register_hook\("pre_tool_call"/);
+  assertHidesChildWindowsPython(plugin, "hermes native plugin");
   const compiled = spawnSync("python3", ["-m", "py_compile", join(pluginDir, "__init__.py")], {
     env: { ...env, PYTHONPYCACHEPREFIX: join(fx.home, "pycache") },
     encoding: "utf8",
@@ -1280,6 +1282,7 @@ test("enable/disable opencode installs one native plugin, routed providers and r
     assert.match(plugin, new RegExp(surface.replaceAll(".", "\\.")));
   }
   assert.match(plugin, /native-hook", "opencode/);
+  assertHidesChildWindows(plugin, "opencode native plugin");
   assert.match(plugin, /export const CavemanNative/, "an OpenCode 1.x host keeps the V1 hook map (#1083)");
   const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
   assert.equal(syntax.status, 0, syntax.stderr);

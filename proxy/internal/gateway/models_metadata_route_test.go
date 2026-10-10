@@ -304,3 +304,60 @@ func TestCompatModelsMetadataRoute(t *testing.T) {
 		t.Errorf("encoded separator status = %d, want 404 (body %s)", rec.Code, rec.Body.String())
 	}
 }
+
+// TestModelsMetadataRoutePreservesQueryAndDoublePrefix covers the two cases
+// #1188 asserted and TestModelsMetadataRouteForwardsUnchanged does not.
+//
+// Pagination query: OpenAI's catalog read takes query parameters, and clients
+// that page the list send them. The metadata passthrough builds its upstream
+// request from ResolveUpstreamURL rather than cloning the inbound one, so query
+// preservation is a property of that seam, not something the mount gets for
+// free — nothing else here pins it.
+//
+// Double prefix: /w/<agent> attribution and the /openai provider prefix compose,
+// and the agent-mount cases above only ever pair /w/<agent> with a bare path.
+func TestModelsMetadataRoutePreservesQueryAndDoublePrefix(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		path         string
+		wantUpstream string
+		wantQuery    string
+	}{
+		{"query preserved", "/v1/models?limit=1", "/v1/models", "limit=1"},
+		{"query preserved on agent mount", "/w/hermes/v1/models?limit=1", "/v1/models", "limit=1"},
+		{"double prefix", "/w/hermes/openai/v1/models", "/v1/models", ""},
+		{"double prefix single model", "/w/hermes/openai/v1/models/Main", "/v1/models/Main", ""},
+		{"double prefix with query", "/w/hermes/openai/v1/models?limit=1", "/v1/models", "limit=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream, gotReq, gotBody := modelsUpstream(t, modelsCatalog)
+
+			sink := &captureSink{}
+			srv := newStandaloneTestServer(t, upstream.URL, RequestContext{Label: "local", RuntimeMode: "compress"}, sink)
+
+			req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+			req.Header.Set("authorization", "Bearer sk-from-agent")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body %s)", rec.Code, rec.Body.String())
+			}
+			if rec.Body.String() != modelsCatalog {
+				t.Errorf("response body = %s, want the upstream catalog byte-for-byte", rec.Body.String())
+			}
+			if gotReq.URL.Path != tc.wantUpstream {
+				t.Errorf("upstream path = %q, want %q", gotReq.URL.Path, tc.wantUpstream)
+			}
+			if gotReq.URL.RawQuery != tc.wantQuery {
+				t.Errorf("upstream query = %q, want %q", gotReq.URL.RawQuery, tc.wantQuery)
+			}
+			if *gotBody != "" {
+				t.Errorf("upstream body = %q, want empty for a metadata read", *gotBody)
+			}
+			if len(sink.rows) != 0 {
+				t.Errorf("metadata read recorded %d spend rows, want 0", len(sink.rows))
+			}
+		})
+	}
+}

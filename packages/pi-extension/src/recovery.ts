@@ -153,7 +153,7 @@ export class RecoveryClient {
     return new Promise((resolve) => {
       const portable = this.invocation(["version", "--json"]);
       if (!portable) return resolve(false);
-      execFile(portable.command, portable.args, { timeout: PROBE_TIMEOUT_MS, encoding: "utf8" }, (error, stdout) => {
+      execFile(portable.command, portable.args, { timeout: PROBE_TIMEOUT_MS, encoding: "utf8", windowsHide: true }, (error, stdout) => {
         if (error) return resolve(false);
         try {
           const parsed = JSON.parse(stdout);
@@ -171,7 +171,9 @@ export class RecoveryClient {
     try {
       const portable = this.invocation([]);
       if (!portable) return false;
-      child = spawn(portable.command, portable.args, { stdio: ["pipe", "pipe", "ignore"] });
+      // windowsHide: pi runs this extension in-process, so a host without a
+      // console of its own would give this child a console window (#1214).
+      child = spawn(portable.command, portable.args, { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     } catch {
       return false;
     }

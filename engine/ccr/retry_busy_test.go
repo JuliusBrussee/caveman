@@ -52,3 +52,28 @@ func TestRetryOnBusyReturnsNonBusyErrorWithoutSleeping(t *testing.T) {
 		t.Fatal("non-busy error must not sleep")
 	}
 }
+
+func TestRetryOnBusyRetriesAfterSQLiteTimeout(t *testing.T) {
+	busy := errors.New("SQLITE_BUSY")
+	now := time.Unix(0, 0)
+	calls := 0
+	err := retryOnBusy(
+		func() error {
+			calls++
+			if calls == 1 {
+				now = now.Add(5 * time.Second)
+				return busy
+			}
+			return nil
+		},
+		busyRetryBudget,
+		func() time.Time { return now },
+		func(delay time.Duration) { now = now.Add(delay) },
+	)
+	if err != nil {
+		t.Fatalf("err=%v want nil", err)
+	}
+	if calls != 2 {
+		t.Fatalf("calls=%d want 2", calls)
+	}
+}

@@ -7646,6 +7646,10 @@ function call(event, payload = {}) {
       encoding: "utf8",
       timeout: 2000,
       maxBuffer: 2 * 1024 * 1024,
+      // A host with no console of its own — OpenCode under a multiplexer or a
+      // GUI launcher — makes Windows give every console child a NEW console
+      // window, so the user sees one flash per event. Ignored off Windows.
+      windowsHide: true,
     });
     if (!raw.trim()) return undefined;
     const value = JSON.parse(raw);
@@ -7767,6 +7771,7 @@ export const CavemanNative = async () => ({
         input: JSON.stringify({ tool_name: "Bash", tool_input: { command: output.args.command } }),
         encoding: "utf8",
         timeout: 750,
+        windowsHide: true,
       });
       const rewritten = JSON.parse(raw)?.hookSpecificOutput?.updatedInput?.command;
       if (typeof rewritten === "string" && rewritten) output.args.command = rewritten;
@@ -7817,6 +7822,10 @@ function call(event, payload = {}) {
       encoding: "utf8",
       timeout: 2000,
       maxBuffer: 2 * 1024 * 1024,
+      // A host with no console of its own — OpenCode under a multiplexer or a
+      // GUI launcher — makes Windows give every console child a NEW console
+      // window, so the user sees one flash per event. Ignored off Windows.
+      windowsHide: true,
     });
     if (!raw.trim()) return undefined;
     const value = JSON.parse(raw);
@@ -7973,6 +7982,7 @@ export default {
             input: JSON.stringify({ tool_name: "Bash", tool_input: { command: input.command } }),
             encoding: "utf8",
             timeout: 750,
+            windowsHide: true,
           });
           const rewritten = JSON.parse(raw)?.hookSpecificOutput?.updatedInput?.command;
           if (typeof rewritten === "string" && rewritten) input.command = rewritten;
@@ -8284,6 +8294,11 @@ import subprocess
 
 _CAVEMAN_CMD = ${JSON.stringify(cmd)}
 _CAVEMAN_PRE = ${JSON.stringify(pre)}
+# A Hermes host with no console of its own makes Windows give every console
+# child a NEW console window, so the user sees one flash per hook call.
+# subprocess ignores Node's windowsHide, and CREATE_NO_WINDOW is absent off
+# Windows, so resolve it at run time and pass 0 everywhere else (#1214).
+_CAVEMAN_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _digest(value):
@@ -8357,6 +8372,7 @@ def _call(event, payload=None):
             text=True,
             capture_output=True,
             timeout=1,
+            creationflags=_CAVEMAN_NO_WINDOW,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
             return None
@@ -9837,6 +9853,7 @@ function shrinkText(text) {
     input: text,
     encoding: "utf8",
     maxBuffer: 64 * 1024 * 1024,
+    windowsHide: true,
   });
   return typeof out === "string" && out.trim() ? out : "";
 }
@@ -16121,6 +16138,7 @@ export const CavemanShrink = async () => ({
       const res = execFileSync(${JSON.stringify(cmd)}, ${argv}, {
         input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
         encoding: "utf8",
+        windowsHide: true,
       });
       if (!res) return;
       const rewritten = JSON.parse(res)?.hookSpecificOutput?.updatedInput?.command;
@@ -16193,6 +16211,11 @@ import subprocess
 
 _CAVEMAN_CMD = ${JSON.stringify(cmd)}
 _CAVEMAN_PRE = ${JSON.stringify(pre)}
+# A Hermes host with no console of its own makes Windows give every console
+# child a NEW console window, so the user sees one flash per hook call.
+# subprocess ignores Node's windowsHide, and CREATE_NO_WINDOW is absent off
+# Windows, so resolve it at run time and pass 0 everywhere else (#1214).
+_CAVEMAN_NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
 
 def _argv(*tail):
@@ -16217,6 +16240,7 @@ def _eligible(command):
             text=True,
             capture_output=True,
             timeout=10,
+            creationflags=_CAVEMAN_NO_WINDOW,
         )
         return proc.returncode == 0 and bool((proc.stdout or "").strip())
     except Exception:
@@ -16240,6 +16264,7 @@ def _transform_terminal_output(command=None, output=None, **kwargs):
             text=True,
             capture_output=True,
             timeout=_int_env("CAVE_HERMES_SHRINK_TIMEOUT_SECONDS", 60),
+            creationflags=_CAVEMAN_NO_WINDOW,
         )
         if proc.returncode != 0 or not proc.stdout:
             return None
