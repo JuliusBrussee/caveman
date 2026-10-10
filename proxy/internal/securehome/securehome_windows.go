@@ -4,6 +4,7 @@
 package securehome
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -19,7 +20,8 @@ import (
 // could read the 0600 credentials inside it and the CCR parent check refused
 // compression. Setting the DACL propagates to files already there. A home that
 // grants no one else, like the default one under %USERPROFILE%, is left alone,
-// and so is one that is not Caveman's to rewrite (see ours).
+// and so is one that is not Caveman's to rewrite (see ours): that returns
+// ErrNotOurs, saying why, so the person learns why compression is refused.
 func Restrict(home string) error {
 	descriptor, err := windows.GetNamedSecurityInfo(home, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
@@ -35,8 +37,8 @@ func Restrict(home string) error {
 			return err
 		}
 	}
-	if !ours(home) {
-		return nil
+	if why := ours(home); why != "" {
+		return fmt.Errorf("%w: %s", ErrNotOurs, why)
 	}
 	private, err := windows.SecurityDescriptorFromString("D:P(A;OICI;FA;;;" + user.User.Sid.String() + ")(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)")
 	if err != nil {
@@ -50,34 +52,37 @@ func Restrict(home string) error {
 		windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 }
 
-// ours reports whether home is a plain local folder holding only what Caveman
-// writes there. A junction or symlink (the DACL would land on its target), a
-// network drive, a volume root or a populated folder keeps its permissions.
-func ours(home string) bool {
+// ours says why home is not a plain local folder holding only what Caveman
+// writes there, or "" when it is. A junction or symlink (the DACL would land
+// on its target), a network drive, a volume root or a populated folder keeps
+// its permissions.
+func ours(home string) string {
 	clean, err := filepath.Abs(home)
 	if err != nil {
-		return false
+		return err.Error()
 	}
 	path, err := windows.UTF16PtrFromString(clean)
 	if err != nil {
-		return false
+		return err.Error()
 	}
-	if attrs, err := windows.GetFileAttributes(path); err != nil || attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
-		return false
+	if attrs, err := windows.GetFileAttributes(path); err != nil {
+		return err.Error()
+	} else if attrs&windows.FILE_ATTRIBUTE_REPARSE_POINT != 0 {
+		return "it is a junction or link"
 	}
 	root, err := windows.UTF16PtrFromString(filepath.VolumeName(clean) + `\`)
 	if err != nil || windows.GetDriveType(root) == windows.DRIVE_REMOTE {
-		return false
+		return "it is on a network drive"
 	}
 	entries, err := os.ReadDir(clean)
 	if err != nil {
-		return false
+		return err.Error()
 	}
 	names := make([]string, 0, len(entries))
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-	return !leaveAlone(clean, names)
+	return leaveAlone(clean, names)
 }
 
 // Allow-type ACEs x/sys/windows has no names for.

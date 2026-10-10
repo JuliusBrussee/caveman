@@ -3,6 +3,7 @@
 package securehome
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +24,9 @@ func TestRestrictMakesABroadHomeOwnerOnlyAndLeavesItAloneAfter(t *testing.T) {
 	setDACL(t, home, "D:P(A;OICI;0x1301bf;;;AU)(A;OICI;FA;;;"+user.User.Sid.String()+")")
 	secret := filepath.Join(home, "credentials")
 	if err := os.WriteFile(secret, []byte("token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "cloud.json"), []byte("{}"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if !broadPath(t, secret) {
@@ -50,7 +54,7 @@ func TestRestrictMakesABroadHomeOwnerOnlyAndLeavesItAloneAfter(t *testing.T) {
 
 // CAVEMAN_HOME pointed at a folder the user keeps other things in, or a
 // junction to one: the owner-only DACL would replace theirs for good, with no
-// copy of the old one kept.
+// copy of the old one kept. Restrict says why it left it, which the proxy logs.
 func TestRestrictLeavesAPopulatedFolderAndAJunctionAlone(t *testing.T) {
 	broad := "D:P(A;OICI;0x1301bf;;;AU)(A;OICI;FA;;;" + tokenUser(t) + ")"
 	populated := t.TempDir()
@@ -64,10 +68,10 @@ func TestRestrictLeavesAPopulatedFolderAndAJunctionAlone(t *testing.T) {
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
 		t.Fatalf("mklink /J: %v %s", err, out)
 	}
-	for _, tt := range []struct{ home, check string }{{populated, populated}, {link, target}} {
+	for _, tt := range []struct{ home, check, why string }{{populated, populated, "it holds notes.txt"}, {link, target, "it is a junction or link"}} {
 		before := sddl(t, tt.check)
-		if err := Restrict(tt.home); err != nil {
-			t.Fatal(err)
+		if err := Restrict(tt.home); !errors.Is(err, ErrNotOurs) || err.Error() != ErrNotOurs.Error()+": "+tt.why {
+			t.Fatalf("Restrict(%s) = %v, want %v: %s", tt.home, err, ErrNotOurs, tt.why)
 		}
 		if after := sddl(t, tt.check); after != before {
 			t.Fatalf("Restrict(%s) rewrote %s:\nbefore %s\nafter  %s", tt.home, tt.check, before, after)
@@ -85,8 +89,8 @@ func TestLeaveAloneWindowsRootsAndShares(t *testing.T) {
 		`\\?\D:\caveman`:         true,
 		`D:\caveman`:             false,
 	} {
-		if got := leaveAlone(home, nil); got != want {
-			t.Errorf("leaveAlone(%q) = %v, want %v", home, got, want)
+		if got := leaveAlone(home, nil); (got != "") != want {
+			t.Errorf("leaveAlone(%q) = %q, want left alone %v", home, got, want)
 		}
 	}
 }
