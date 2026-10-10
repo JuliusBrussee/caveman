@@ -554,6 +554,30 @@ test("disable refuses a removed pre-existing file and keeps journal", async () =
   assert.ok(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")));
 });
 
+// The installer's always-on Codex hook (`--only codex`) injects the caveman voice
+// every session. Once Caveman wires Codex natively, output is the one injection:
+// enable leaves the installer's entry out, and disable does not bring it back,
+// so `caveman disable codex` / `off --all` leave Codex with none.
+test("enable codex takes over from the installer's always-on hook, and disable leaves neither", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  const foreign = { hooks: [{ type: "command", command: "echo foreign" }] };
+  const installer = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `node "${join(fx.home, ".codex", "caveman", "hooks", "codex-sessionstart.js")}"`, timeout: 5 }] };
+  writeFileSync(hooksPath, JSON.stringify({ hooks: { SessionStart: [foreign, installer] } }, null, 2) + "\n");
+
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const wired = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  assert.doesNotMatch(JSON.stringify(wired), /codex-sessionstart/);
+  assert.deepEqual(wired[0], foreign);
+  assert.match(JSON.stringify(wired), /native-hook codex/);
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).state, "installed");
+
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(hooksPath, "utf8")), { hooks: { SessionStart: [foreign] } });
+});
+
 // An install from before carries a shrink-hook entry (a second PreToolUse hook
 // on every Codex tool call that declines it) and a PostToolUseFailure entry
 // Codex never runs. Doctor sends it to --fix, which takes both out.

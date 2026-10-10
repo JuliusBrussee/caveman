@@ -874,6 +874,14 @@ function installCodexHook(ctx) {
     results.skipped.push(['codex-hooks', 'needs the full caveman package']);
     return;
   }
+  // The caveman CLI wires Codex natively: its output module is the one
+  // injection, and `caveman off` switches it. This hook would inject again
+  // and outlive `caveman off`.
+  if (remainingNativeIntegrations().includes('codex')) {
+    note('  skipped Codex always-on hook: caveman already wires Codex (caveman on|off output switches it)');
+    results.skipped.push(['codex-hooks', 'caveman already wires Codex']);
+    return;
+  }
   if (opts.dryRun) {
     note(`  would install the owned caveman hook payload under ${path.join(home, CODEX_PAYLOAD_DIR)}`);
     note(`  would merge a caveman SessionStart entry into ${hooksPath}`);

@@ -9324,6 +9324,28 @@ function codexNativeRestoreText(file: string, text: string, tablesBlock: string,
   return body ? `${bom}${body}\n` : bom;
 }
 
+// The always-on hook Caveman's installer merges into Codex's hooks.json
+// (`--only codex`, $CODEX_HOME/caveman/hooks/codex-sessionstart.js) injects the
+// caveman voice every session. Once Codex is wired natively, output is the one
+// injection and `caveman off`/`disable` must stop it, so the native document
+// leaves that entry out and disable does not restore it. The payload stays for
+// the installer's own uninstall.
+function withoutInstallerCodexHook(root: Record<string, unknown>): Record<string, unknown> {
+  const out = JSON.parse(JSON.stringify(root)) as Record<string, unknown>;
+  const hooks = out.hooks && typeof out.hooks === "object" && !Array.isArray(out.hooks) ? out.hooks as Record<string, unknown> : undefined;
+  if (!hooks || !Array.isArray(hooks.SessionStart)) return out;
+  const installer = (handler: unknown) => typeof (handler as { command?: unknown })?.command === "string"
+    && (handler as { command: string }).command.replace(/\\/g, "/").includes("/caveman/hooks/codex-sessionstart.js");
+  hooks.SessionStart = (hooks.SessionStart as Array<Record<string, unknown>>).filter((group) => {
+    if (!Array.isArray(group?.hooks) || !group.hooks.some(installer)) return true;
+    group.hooks = (group.hooks as unknown[]).filter((handler) => !installer(handler));
+    return (group.hooks as unknown[]).length > 0;
+  });
+  if ((hooks.SessionStart as unknown[]).length === 0) delete hooks.SessionStart;
+  if (Object.keys(hooks).length === 0) delete out.hooks;
+  return out;
+}
+
 function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooksPath = codexHooksPath();
   const hooksBefore = fileBytes(hooksPath);
@@ -9331,7 +9353,7 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   assertNativeHooksShape(hooksPath, hooksRoot, "codex");
   // No shrink-hook: it declines every Codex tool call (#1037), so it would only
   // run a second process per call. An older install's entry goes too.
-  const hooks = nativeHooksDocument("codex", false, hooksRoot);
+  const hooks = nativeHooksDocument("codex", false, withoutInstallerCodexHook(hooksRoot));
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
   // A provider of the user's own (Ollama, Azure, a gateway) is replaced by
@@ -10180,7 +10202,13 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     if (operation.before_exists) throw new Error(`${operation.file} was removed after enable; refusing destructive disable`);
     return null;
   }
-  if (bytesHash(current) === operation.after_sha256) return before;
+  if (bytesHash(current) === operation.after_sha256) {
+    // Enable took the installer's Codex hook out; disable leaves it out.
+    if (operation.kind !== "codex-hooks" || !before) return before;
+    const root = parseJsonFileObject(operation.file, before);
+    const stripped = withoutInstallerCodexHook(root);
+    return JSON.stringify(stripped) === JSON.stringify(root) ? before : Object.keys(stripped).length ? jsonBytes(stripped) : null;
+  }
 
   if (operation.kind === "claude-settings") {
     const currentRoot = parseJsonFileObject(operation.file, current);
@@ -10243,7 +10271,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     return jsonBytes(currentRoot);
   }
   if (operation.kind === "codex-hooks") {
-    return jsonBytes(removeNativeHookEntries(parseJsonFileObject(operation.file, current), "codex"));
+    return jsonBytes(removeNativeHookEntries(withoutInstallerCodexHook(parseJsonFileObject(operation.file, current)), "codex"));
   }
   if (operation.kind === "gemini-settings") {
     const currentRoot = removeNativeHookEntries(parseJsonFileObject(operation.file, current), "gemini");
