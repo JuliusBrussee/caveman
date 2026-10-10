@@ -13108,18 +13108,27 @@ function startMcpRecoveryAvailable(): boolean {
 }
 
 function anyMcpInstalled(): boolean {
-  return AGENTS.some((agent) => mcpInstalled(agent.id)) || nativeMcpRegistered("claude") || nativeMcpRegistered("codex");
+  return AGENTS.some((agent) => mcpInstalled(agent.id))
+    || (["claude", "codex", "hermes", "gemini", "pi"] as const).some((agent) => nativeMcpRegistered(agent));
 }
 
-// Native Claude/Codex wiring registers the caveman MCP server in the host's own
-// config (journaled, no `mcp install` marker). It counts while that journaled
-// registration is still in the file.
-function nativeMcpRegistered(agent: "claude" | "codex"): boolean {
-  const operation = readNativeJournal(agent)?.operations.find((item) => item.kind === `${agent}-${agent === "claude" ? "mcp" : "config"}`);
+// Native wiring registers the caveman MCP server in the host's own files
+// (journaled, no `mcp install` marker): Claude's and Gemini's mcpServers entry,
+// Codex's TOML table, Hermes's mcp_servers block, and Pi's extension, which
+// carries caveman_retrieve itself (OpenCode's entry is read by mcpInstalled).
+// It counts while that journaled registration is still in the file — the same
+// file and entry doctor's ownership check reads, so status never calls recovery
+// missing while doctor reports it on.
+function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "pi"): boolean {
+  const kind = { claude: "claude-mcp", codex: "codex-config", hermes: "hermes-config", gemini: "gemini-settings", pi: "pi-extension" }[agent];
+  const operation = readNativeJournal(agent)?.operations.find((item) => item.kind === kind);
   const current = operation ? fileBytes(operation.file) : null;
   if (!operation || !current) return false;
   try {
     if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
+    // A null block: the user's own caveman-native entry was already there.
+    if (agent === "hermes") return operation.owned?.mcp_block === null || (typeof operation.owned?.mcp_block === "string" && current.toString("utf8").includes(operation.owned.mcp_block));
+    if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
     const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
     return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
   } catch {

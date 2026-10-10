@@ -1593,6 +1593,25 @@ test("status reports native OpenCode MCP recovery missing when its registration 
   assert.match(status.stdout, /^ {2}on {2}output .* degraded /m);
 });
 
+test("status agrees with doctor on MCP recovery when only Gemini or only Pi is wired", async () => {
+  for (const agent of ["gemini", "pi"]) {
+    const fx = fixture();
+    const env = { ...fx.env };
+    if (agent === "pi") {
+      writeFileSync(join(fx.home, "bin", "pi"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'pi 1.0.0'; fi\n", { mode: 0o755 });
+      env.CAVEMAN_PI_EXTENSION = join(fx.home, "pi-extension.mjs");
+      writeFileSync(env.CAVEMAN_PI_EXTENSION, "export default function cavemanPiFixture() {}\n");
+    }
+    const enabled = await run(["enable", agent], env);
+    assert.equal(enabled.code, 0, enabled.stderr);
+    const doctor = JSON.parse((await run(["doctor", agent], env)).stdout);
+    assert.equal(doctor.components.mcp_recovery, true, `${agent}: doctor reports MCP recovery on`);
+    const status = await run(["status", "--json"], env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.deepEqual(JSON.parse(status.stdout).off_states.map((state) => state.id).filter((id) => id === "mcp-missing"), [], `${agent}: status must not call recovery missing`);
+  }
+});
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");
