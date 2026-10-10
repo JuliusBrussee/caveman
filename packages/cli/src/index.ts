@@ -159,11 +159,12 @@ function validLocalPort(port: unknown): port is number {
 // before any agent is wired: that port and the next free one. Wiring an agent
 // to a port someone else answers on would send every request to them. Once an
 // agent is wired the address stays (doctor names a conflict), and an explicit
-// CAVE_GATEWAY_URL is the user's own choice.
+// CAVE_GATEWAY_URL is the user's own choice. An agent still wired to an earlier
+// login's managed gateway is getting a new address, so it pins nothing.
 async function runtimePortTaken(): Promise<{ held: string; free: number } | undefined> {
   if (process.env.CAVE_GATEWAY_URL || process.env.CAVEMAN_LISTEN) return undefined;
   const gw = gatewayURL();
-  if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired)) return undefined;
+  if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
   if (!(await portListening(host, port))) return undefined;
   // Ours when the runtime's own record names a live process on that port. A
