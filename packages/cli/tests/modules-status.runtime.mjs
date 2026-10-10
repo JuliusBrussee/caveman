@@ -1,9 +1,10 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
+import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { modulesFixture, runCli } from "./_modules.mjs";
 
@@ -284,10 +285,17 @@ test("stop on Windows asks the runtime to drain before ending it", async () => {
   const current = await fake();
   assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: current.port, listening: true, foreign: false, pid: current.child.pid, token: "t" }], "win32"), []);
   assert.equal(await current.out(), "drained\n");
-  // An older proxy has no such endpoint (404): ended the hard way.
+  // An older proxy has no such endpoint (404), and one from before this
+  // release has no shutdown token at all: ended the hard way, so it never
+  // removes its run state. Stop drops a record that still names it.
   const older = await fake();
-  assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: older.port, listening: true, foreign: false, pid: older.child.pid, token: "old" }], "win32"), []);
+  const records = mkdtempSync(join(tmpdir(), "caveman-run-"));
+  const runFile = join(records, `${older.port}.json`);
+  writeFileSync(runFile, JSON.stringify({ schema: "caveman.proxy.run.v1", owner: "start", pid: older.child.pid, port: older.port, instance_token: "public" }));
+  assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: older.port, listening: true, foreign: false, pid: older.child.pid, runFile }], "win32"), []);
   assert.equal(await older.out(), "killed\n");
+  assert.equal(existsSync(runFile), false, "the hard-killed runtime's run state is gone");
+  rmSync(records, { recursive: true, force: true });
 
   // The token stop sends is the run-state file's shutdown token. The instance
   // token is no secret: /health/live hands it to any local caller.

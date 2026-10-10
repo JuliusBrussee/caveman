@@ -29,7 +29,9 @@ export type ModuleState = { id: ModuleId; on: boolean; active: boolean; reason?:
 export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean; optedOut?: boolean };
 // token: the run state's instance token. stale: the runtime still runs an
 // older caveman-proxy than the one now installed.
-export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number; token?: string; stale?: { running: string; installed: string } };
+// runFile: the runtime's run-state record, which a runtime ended the hard way
+// (Windows) never removes itself.
+export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number; token?: string; runFile?: string; stale?: { running: string; installed: string } };
 // A capability as every layer resolves it (defaults → global → project → env),
 // plus the global-file value alone, which is what module state is recorded in.
 export type Capability = { value: unknown; source: string; global: unknown; invalid?: string };

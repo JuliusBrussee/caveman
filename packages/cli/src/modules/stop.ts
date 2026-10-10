@@ -1,6 +1,7 @@
 // `caveman stop`: end the local runtime `caveman start` or `caveman <agent>`
 // started. Only a proxy whose run state answers for its own listener is
 // signalled; anything else on the port is left alone. Idempotent.
+import { readFileSync, unlinkSync } from "node:fs";
 import { request } from "node:http";
 import { moduleHost, type LocalRuntime } from "./apply.js";
 
@@ -46,7 +47,9 @@ function askToStop(runtime: LocalRuntime): Promise<boolean> {
 // Ends the given runtimes and returns the pids still alive. On Windows
 // process.kill ends a process at once, with no drain, so each proxy is first
 // asked over its listener to shut down; one that does not take the request,
-// or is still up after the drain, is then ended the hard way.
+// or is still up after the drain, is then ended the hard way. A runtime from
+// before the shutdown token is never sent its public instance token: it has
+// no shutdown endpoint, and that token is no credential.
 export async function endRuntimes(runtimes: LocalRuntime[], platform: NodeJS.Platform = process.platform): Promise<number[]> {
   const owned = runtimes.filter((runtime, index) => runtime.pid !== undefined && alive(runtime.pid)
     && runtimes.findIndex((other) => other.pid === runtime.pid) === index);
@@ -60,6 +63,16 @@ export async function endRuntimes(runtimes: LocalRuntime[], platform: NodeJS.Pla
   if (late.length) {
     signal(late);
     await exited(late, 2000);
+  }
+  // Ended the hard way, a runtime leaves its run state behind: drop a record
+  // that still names a process that is gone.
+  if (platform === "win32") {
+    for (const runtime of owned) {
+      if (!runtime.runFile || alive(runtime.pid!)) continue;
+      try {
+        if ((JSON.parse(readFileSync(runtime.runFile, "utf8")) as { pid?: unknown }).pid === runtime.pid) unlinkSync(runtime.runFile);
+      } catch { /* gone already, or not a record to touch */ }
+    }
   }
   return pids.filter(alive);
 }

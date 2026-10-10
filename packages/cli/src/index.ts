@@ -706,7 +706,7 @@ setModuleHost({
       const foreign = listening && !pid && Boolean(version?.capabilities.includes("run_state"));
       const stale = pid && state.version && version && state.version !== version.version ? { running: state.version, installed: version.version } : undefined;
       const token = proxyShutdownToken(port, state.instance_token);
-      return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(token ? { token } : {}), ...(stale ? { stale } : {}) };
+      return { host, port, listening, foreign, ...(pid ? { pid, runFile: proxyRunStatePath(port) } : {}), ...(token ? { token } : {}), ...(stale ? { stale } : {}) };
     }));
   },
   agentAsk: (agent) => agent === "codex" && readNativeJournal("codex") && !codexHooksTrusted() ? CODEX_TRUST_ASK : undefined,
@@ -3331,7 +3331,7 @@ async function restartOutdatedRuntime(explicit = false): Promise<void> {
     return;
   }
   const token = proxyShutdownToken(port, runtime.instance_token);
-  if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, ...(token ? { token } : {}) }])).length) {
+  if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, runFile: proxyRunStatePath(port), ...(token ? { token } : {}) }])).length) {
     warn();
     return;
   }
