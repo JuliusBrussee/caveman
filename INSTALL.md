@@ -451,7 +451,7 @@ What it removes:
 
 What it does **not** remove:
 
-- Skills installed via `npx skills add` — the `skills` CLI manages those. Run `npx skills remove caveman` (or use your IDE's skill manager).
+- Skills installed via `npx skills add` — the `skills` CLI manages those. Remove them with `npx skills remove JuliusBrussee/caveman -g`. It lists the skills and asks before deleting. It clears those names from every agent's folder, so if you keep a skill of your own with one of them (such as `migration`), add `-a <agent>` with the name after `-a` in that agent's row above to limit it. Replit: run it inside the project, without `-g`.
 - Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). Delete by hand if you want.
 - `$CLAUDE_CONFIG_DIR/.caveman-history.jsonl`, which keeps lifetime stats. Delete it manually if you want history removed too.
 

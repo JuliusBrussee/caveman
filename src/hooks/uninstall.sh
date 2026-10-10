@@ -206,6 +206,6 @@ echo "Done! Restart Claude Code to complete the uninstall."
 # Guidance for other agents
 echo ""
 echo "Other agents:"
-echo "  npx skills remove caveman    # Cursor, Windsurf, Cline, Copilot, etc."
+echo "  npx skills remove JuliusBrussee/caveman -g  # Cursor, Windsurf, Cline, Copilot, etc."
 echo "  claude plugin disable caveman  # Claude Code plugin"
 echo "  gemini extensions uninstall caveman  # Gemini CLI"

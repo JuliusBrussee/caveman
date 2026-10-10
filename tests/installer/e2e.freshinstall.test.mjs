@@ -168,6 +168,9 @@ test('uninstall removes session state but keeps lifetime history', () => {
     }
     assert.ok(fs.existsSync(history), 'lifetime history must survive uninstall');
     assert.match(removed.stdout, /kept .*caveman-history\.jsonl.*lifetime history/);
+    // `npx skills remove caveman` matched 1 of 22 global skills; the source
+    // name matches every skill caveman's install recorded.
+    assert.match(removed.stdout, /npx skills remove JuliusBrussee\/caveman -g /);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

@@ -216,6 +216,8 @@ On npm 12 or newer, new npm block git install. One-liners above handle it themse
 
 Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall` (on npm 12+, add `--allow-git=root` too)
 
+Only grabbed the skill? `npx skills remove JuliusBrussee/caveman -g` take it back out.
+
 Install broke? Open your agent in this repo and say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
 
 </details>

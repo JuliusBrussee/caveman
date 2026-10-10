@@ -2327,7 +2327,11 @@ function uninstall(ctx) {
   } else {
     ok('uninstall done.');
   }
-  ok('npx-skills installs (Cursor/Windsurf/etc.) — remove via your IDE\'s skill manager');
+  // Not run for the user: `skills remove` deletes same-named skill folders in
+  // every agent's directory, and generic names (migration, lean-build) can be
+  // the user's own. Run by hand it lists the names and asks first.
+  ok('skills added by `npx skills` (Cursor/Windsurf/Cline/etc.) stay. To remove them:');
+  ok('  npx skills remove JuliusBrussee/caveman -g   (lists the skills and asks first)');
   ok('per-repo init files (.cursor/, .windsurf/, AGENTS.md) — remove with your editor');
   return cleanupFailed ? 1 : 0;
 }
