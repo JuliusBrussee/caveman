@@ -270,6 +270,35 @@ test('uninstall stays quiet when no native integration is journaled', () => {
   }
 });
 
+// Writing settings.json back re-serializes plain JSON: comments and trailing
+// commas go. A file with nothing of caveman's in it stays byte-identical, and
+// one that does get rewritten keeps its commented original as settings.json.bak.
+test('uninstall leaves a settings.json without caveman entries untouched', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedEnv(dir);
+  const settingsPath = path.join(configDir, 'settings.json');
+  try {
+    fs.mkdirSync(configDir, { recursive: true });
+    const mine = '{\n  // my note\n  "model": "opus",\n  "statusLine": {"type": "command", "command": "~/bin/s.sh",},\n}\n';
+    fs.writeFileSync(settingsPath, mine);
+    const r = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(r.status, 0, r.stderr || r.stdout);
+    assert.equal(fs.readFileSync(settingsPath, 'utf8'), mine, 'uninstall rewrote a settings.json caveman never touched');
+    assert.equal(fs.existsSync(`${settingsPath}.bak`), false);
+
+    const hook = path.join(configDir, 'hooks', 'caveman-activate.js');
+    const withHook = `{\n  // my note\n  "hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "node ${hook}"}]}]},\n}\n`;
+    fs.writeFileSync(settingsPath, withHook);
+    const r2 = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(r2.status, 0, r2.stderr || r2.stdout);
+    assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), {});
+    assert.equal(fs.readFileSync(`${settingsPath}.bak`, 'utf8'), withHook, 'commented original not kept');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test("install and uninstall leave another plugin's hooks/package.json alone", () => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');

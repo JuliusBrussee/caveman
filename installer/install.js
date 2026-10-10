@@ -1986,7 +1986,8 @@ function uninstall(ctx) {
   // write is a hard stop for the deletion, not a warning to continue past.
   let settingsClean = true;
   if (fs.existsSync(settingsPath)) {
-    const settings = SETTINGS.readSettings(settingsPath);
+    const settingsMeta = {};
+    const settings = SETTINGS.readSettings(settingsPath, settingsMeta);
     if (!settings) {
       settingsClean = false;
       cleanupFailed = true;
@@ -1994,6 +1995,10 @@ function uninstall(ctx) {
       warn('  Remove the caveman entries from it by hand, then re-run --uninstall.');
     }
     if (settings) {
+      // Rewriting re-serializes plain JSON, so comments and trailing commas
+      // go: write only when something of ours came out, and keep the
+      // commented original first, as install does.
+      const before = JSON.stringify(settings);
       const removed = SETTINGS.removeCavemanHooks(settings);
       // Drop our statusline if it points at our script
       if (settings.statusLine) {
@@ -2001,9 +2006,20 @@ function uninstall(ctx) {
         if (cmd.includes('caveman-statusline')) delete settings.statusLine;
       }
       SETTINGS.validateHookFields(settings);
+      const changed = JSON.stringify(settings) !== before;
+      const entries = `${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`;
       try {
-        if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
-        ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
+        if (changed && opts.dryRun) note(`  would remove ${entries}`);
+        else if (changed) {
+          if (settingsMeta.jsonc) {
+            const bak = settingsPath + '.bak';
+            if (!fs.existsSync(bak)) fs.copyFileSync(settingsPath, bak);
+            warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
+            warn(`        Your original (with comments) is preserved at ${bak}`);
+          }
+          SETTINGS.writeSettings(settingsPath, settings);
+          ok(`  removed ${entries}`);
+        }
       } catch (e) {
         settingsClean = false;
         cleanupFailed = true;
