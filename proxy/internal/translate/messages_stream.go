@@ -14,6 +14,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -208,7 +209,6 @@ type messageStream struct {
 	order         []int
 	current       map[int]int    // upstream index -> call key (the order calls opened in)
 	upstream      map[int]string // call key -> the id the upstream gave it ("" = minted)
-	argued        map[int]bool   // call key -> its arguments started
 	stop          string
 	started       bool
 	errored       bool
@@ -221,6 +221,8 @@ type messageStream struct {
 	// estimateFrom is the caller's request when inputEstimate is counted
 	// from it, as message_start goes.
 	estimateFrom []byte
+	// args are each call's arguments so far, by call key.
+	args map[int]*strings.Builder
 }
 
 // streamChatToAnthropic re-emits a chat SSE stream as Anthropic events, with
@@ -229,7 +231,7 @@ type messageStream struct {
 func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string, estimateFrom []byte) (chatUsage, error) {
 	stream := &messageStream{
 		out: newSSEWriter(w), model: model, signature: signature, estimateFrom: estimateFrom,
-		current: map[int]int{}, upstream: map[int]string{}, argued: map[int]bool{}, stop: "end_turn", id: responsesItemID("msg"),
+		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: responsesItemID("msg"),
 	}
 	lines, cut, stop, endBy := sseLines(upstream)
 	defer stop()
@@ -382,17 +384,21 @@ func (m *messageStream) delta(delta map[string]any) {
 // toolCall opens a tool_use block the first time a chat tool index appears and
 // streams its arguments as partial JSON after that. An upstream that sends
 // parallel calls all at index 0 (Gemini, Ollama) is told apart by id: a new
-// upstream id at a known index is a new call, and so is a name after the
-// call's arguments started (Gemini sends whole calls with no id at all).
+// upstream id at a known index is a new call, and so is a name with no id
+// once the call's arguments are whole JSON (Gemini sends whole calls with no
+// id at all; a host that repeats the name mid-arguments stays one call).
 func (m *messageStream) toolCall(call openAIToolCall) {
 	key, known := m.current[call.Index]
-	if known && (call.ID != "" && m.upstream[key] != "" && m.upstream[key] != call.ID || call.Function.Name != "" && m.argued[key]) {
+	if known && (call.ID != "" && m.upstream[key] != "" && m.upstream[key] != call.ID || nextCall(call, m.args[key].String())) {
 		known = false
 	}
 	if !known {
 		key = len(m.order)
 		id := wireCallID(call.ID, m.id, key) // the id Claude Code gets is fixed when the block opens
-		m.current[call.Index], m.upstream[key] = key, call.ID
+		if m.args == nil {
+			m.args = map[int]*strings.Builder{}
+		}
+		m.current[call.Index], m.upstream[key], m.args[key] = key, call.ID, &strings.Builder{}
 		m.order = append(m.order, key)
 		if thought := call.thought(); thought != "" {
 			// The host refuses the next request without it (Gemini 3): it
@@ -407,8 +413,14 @@ func (m *messageStream) toolCall(call openAIToolCall) {
 	if call.Function.Arguments == "" {
 		return
 	}
-	m.argued[key] = true
+	m.args[key].WriteString(call.Function.Arguments)
 	m.delta(map[string]any{"type": "input_json_delta", "partial_json": call.Function.Arguments})
+}
+
+// nextCall reports a chunk at a known index that starts another call: a name
+// with no id after the open call's arguments are whole.
+func nextCall(call openAIToolCall, arguments string) bool {
+	return call.ID == "" && call.Function.Name != "" && json.Valid([]byte(arguments))
 }
 
 func (m *messageStream) finish() {

@@ -441,6 +441,13 @@ func TestChatStreamToolIDsAreAnthropicSafe(t *testing.T) {
 		inputs[0] != `{"path":"a"}` || inputs[1] != `{"command":"ls"}` || stop != "tool_use" {
 		t.Fatalf("id-less calls: blocks %v, inputs %v, stop %v", blocks, inputs, stop)
 	}
+	// A host that repeats the name before the arguments are whole: one call.
+	recorder, _, _ = serve(t, reply, chatStream(
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"Read","arguments":"{\"pa"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"function":{"name":"Read","arguments":"th\":\"x\"}"}}]},"finish_reason":"tool_calls"}]}`), false)
+	if body := recorder.Body.String(); strings.Count(body, `"type":"tool_use"`) != 1 {
+		t.Fatalf("a repeated name split the call:\n%s", body)
+	}
 }
 
 // --- Messages -> Messages ------------------------------------------------------
