@@ -2706,7 +2706,8 @@ test("doctor and enable name a shell endpoint the native route overrides", async
     const again = await run(["enable", agent], corp);
     assert.match(again.stderr, /Unset OPENAI_BASE_URL to keep Caveman/, agent);
     assert.ok(existsSync(join(fx.home, ".caveman", "integrations", `${agent}.json`)), agent);
-    assert.deepEqual(JSON.parse((await run(["doctor", agent], fx.env)).stdout).warnings, [], agent);
+    // Without the shell endpoint nothing about it remains (Codex still notes its /hooks trust).
+    assert.doesNotMatch(JSON.parse((await run(["doctor", agent], fx.env)).stdout).warnings.join("\n"), /own endpoint/, agent);
   }
 });
 
