@@ -16643,15 +16643,15 @@ async function memRecallHook() {
   telemetryCommandSent = true;
   let raw: Buffer;
   try { raw = await readHookStdin(); } catch { process.exit(0); }
-  let evt: { prompt?: string };
+  let evt: { prompt?: string } | null; // `null` is valid JSON too
   try { evt = JSON.parse(raw.toString("utf8") || "{}"); } catch { process.exit(0); }
-  const prompt = typeof evt.prompt === "string" ? evt.prompt.trim() : "";
+  const prompt = typeof evt?.prompt === "string" ? evt.prompt.trim() : "";
   if (!prompt) process.exit(0);
   const out = cavememRun(["recall", prompt, "3"], { soft: true });
   if (!out) process.exit(0);
-  let parsed: { hits?: Array<{ text?: string; tokens_added?: number; recovery_handle?: string }> };
+  let parsed: { hits?: Array<{ text?: string; tokens_added?: number; recovery_handle?: string }> } | null;
   try { parsed = JSON.parse(out); } catch { process.exit(0); }
-  const hits = Array.isArray(parsed.hits) ? parsed.hits : [];
+  const hits = Array.isArray(parsed?.hits) ? parsed.hits : [];
   if (hits.length === 0) process.exit(0);
   const blocks = hits.map((h) => {
     const tokens = typeof h.tokens_added === "number" ? h.tokens_added : 0;
