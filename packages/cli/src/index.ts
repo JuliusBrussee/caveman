@@ -4476,7 +4476,7 @@ function projectCapabilityDocument(): Record<string, unknown> {
   try {
     const bytes = readFileSync(join(process.cwd(), ".caveman", "config.json"));
     const text = bytes[0] === 0xff && bytes[1] === 0xfe ? bytes.toString("utf16le", 2) : bytes.toString("utf8");
-    return objectValue(parseJsonc(text.replace(/^﻿/, "")));
+    return objectValue(parseJsonc(text.replace(/^\uFEFF/, "")));
   } catch {
     return {};
   }
@@ -5000,7 +5000,7 @@ function readWrapEntitlementState(): WrapEntitlementState | null {
 // state and the telemetry decision: refuse, naming the file, rather than let
 // a write put {} plus its change over it.
 function parseRawConfig(text: string): Record<string, unknown> {
-  const raw = text.replace(/^﻿/, "");
+  const raw = text.replace(/^\uFEFF/, "");
   if (!raw.trim()) return {};
   let parsed: unknown;
   try {
@@ -9217,7 +9217,7 @@ function codexEditedTablesFix(journal: NativeJournal | undefined): string | unde
   const block = operation?.owned?.tables_block;
   const text = operation ? fileBytes(operation.file)?.toString("utf8") : undefined;
   if (typeof block !== "string" || text === undefined) return undefined;
-  const edited = [...codexNativeTables(codexTomlLines(text.replace(/^﻿/, "")), block)].filter(([, owned]) => !owned).map(([table]) => `[${table}]`);
+  const edited = [...codexNativeTables(codexTomlLines(text.replace(/^\uFEFF/, "")), block)].filter(([, owned]) => !owned).map(([table]) => `[${table}]`);
   if (!edited.length) return undefined;
   return `undo your edit to Codex ${edited.join(", ")} in ${operation!.file} or delete ${edited.length > 1 ? "those tables" : "that table"}, then caveman doctor codex --fix`;
 }
@@ -15857,17 +15857,18 @@ function shouldShrink(command: string): boolean {
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
   // Never a package runner's cached copy when a lasting one exists.
   const command = durableCaveman() ?? which("caveman") ?? which("cave");
+  if (!command) return hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
   // npm links `caveman` to a `#!/usr/bin/env node` script, and a host started
   // from a GUI or launchd often has no node on PATH (nvm, volta, Homebrew):
   // run it with this node, as the lifecycle hooks name theirs (`--node`).
   // Doctor flags that node once an upgrade removes it; --fix re-renders.
-  let viaNode = !command;
+  let script = false;
   try {
-    viaNode ||= hookCommandBasename(process.execPath) === "node" && /\.[cm]?js$/.test(realpathSync(command!));
+    script = hookCommandBasename(process.execPath) === "node" && /\.[cm]?js$/.test(realpathSync(command));
   } catch { /* unresolvable: run it as found */ }
-  return !viaNode
-    ? hookExecutableInvocation(command!, undefined, process.platform, powershell)
-    : hookExecutableInvocation(process.execPath, command ?? process.argv[1]!, process.platform, powershell);
+  return script
+    ? hookExecutableInvocation(process.execPath, command, process.platform, powershell)
+    : hookExecutableInvocation(command, undefined, process.platform, powershell);
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can

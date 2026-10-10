@@ -172,7 +172,7 @@ test("a broken cloud.json is named, never a raw SyntaxError: writes refuse, read
     assert.doesNotMatch(whoami.stderr, /SyntaxError|Unexpected token|Expected/);
     assert.deepEqual(readFileSync(path), before);
     // Every reader takes the BOM the writers accept.
-    writeFileSync(path, `﻿${JSON.stringify({ think: { mode: "record" } })}`);
+    writeFileSync(path, `\uFEFF${JSON.stringify({ think: { mode: "record" } })}`);
     const get = await runCli(["config", "get", "think.mode"], { env: isolated.env, prefix: "tools" });
     assert.match(get.stdout, /^think\.mode = record  \(global\)$/m);
   } finally {
@@ -249,7 +249,7 @@ test("project allowlist contributes local capability sources only", async () => 
 // Hand-edited like the hooks' repo config: a BOM (or PowerShell 5.1's UTF-16LE),
 // comments and trailing commas still apply the overlay.
 for (const [label, encode] of [
-  ["a BOM, comments and trailing commas", (text) => Buffer.from(`﻿${text}`, "utf8")],
+  ["a BOM, comments and trailing commas", (text) => Buffer.from(`\uFEFF${text}`, "utf8")],
   ["UTF-16LE", (text) => Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(text, "utf16le")])],
 ]) {
   test(`project overlay with ${label} still applies`, async () => {
