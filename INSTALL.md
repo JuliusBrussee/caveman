@@ -18,7 +18,7 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/instal
 irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.ps1 | iex
 ```
 
-> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, and hook downloads stay pinned to that release tag, never the moving `main` branch. Hook files are checked against a SHA-256 list from the same tag: that catches a broken or partial download, not a tag that was moved. If that list can't be fetched or any file fails it, no hook is installed and your settings stay as they were. Runtime binaries are checked against a checksum list signed with a key built into the CLI. Set `CAVEMAN_REF` only when intentionally testing another ref.
+> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v3.2.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, skill, and hook downloads stay pinned to that release tag, never the moving `main` branch. Hook files are checked against a SHA-256 list from the same tag: that catches a broken or partial download, not a tag that was moved. If that list can't be fetched or any file fails it, no hook is installed and your settings stay as they were. Runtime binaries are checked against a checksum list signed with a key built into the CLI. Set `CAVEMAN_REF` only when intentionally testing another ref.
 
 What it does:
 
@@ -451,7 +451,7 @@ What it removes:
 
 What it does **not** remove:
 
-- Skills installed via `npx skills add` — the `skills` CLI manages those. Run `npx skills remove caveman` (or use your IDE's skill manager).
+- Skills installed via `npx skills add` — the `skills` CLI manages those. Remove them with `npx skills remove JuliusBrussee/caveman -g`. It lists the skills and asks before deleting. It clears those names from every agent's folder, so if you keep a skill of your own with one of them (such as `migration`), add `-a <agent>` with the name after `-a` in that agent's row above to limit it. Replit: run it inside the project, without `-g`.
 - Per-repo rule files written by `--with-init` (`.cursor/rules/`, `.windsurf/rules/`, `.clinerules/`, `.github/copilot-instructions.md`, `.opencode/AGENTS.md`, `AGENTS.md`). Delete by hand if you want.
 - `$CLAUDE_CONFIG_DIR/.caveman-history.jsonl`, which keeps lifetime stats. Delete it manually if you want history removed too.
 
@@ -518,17 +518,18 @@ The installer uses a JSONC-tolerant parser (`installer/lib/settings.js`) so comm
 
 **"I'm in a managed env where I can't install hooks."**
 
-Use the rule-file-only path. Hooks are Claude Code-specific; everything else works via static rule files:
+Use the rule-file-only path. Static rule files need no hook:
 
 ```bash
-# Just install for one agent, no Claude hooks
-node installer/install.js --only cursor
+# Skills for one agent, no hooks (still writes that agent's skills, and for Cursor the Cavecrew agents, in your home folder)
+node installer/install.js --only cursor --no-hooks
 
-# Or write rule files into the current repo only (no global state)
-node installer/install.js --with-init --only cursor --only windsurf
+# Or write rule files into the current repo only (no global state), one agent per run
+node src/tools/caveman-init.js --only cursor
+node src/tools/caveman-init.js --only windsurf
 ```
 
-This drops `.cursor/rules/caveman.mdc` (and friends) into your repo. No hooks, no global config, nothing outside the repo.
+The second form drops `.cursor/rules/caveman.mdc` and `.windsurf/rules/caveman.md` into your repo. No hooks, no global config, nothing outside the repo. (`--with-init` on the installer is not repo-only: it also runs the normal install for every agent.)
 
 **"`npx skills add` errored on a profile slug."**
 

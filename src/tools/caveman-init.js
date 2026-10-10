@@ -138,6 +138,11 @@ function processAgent(agent, targetDir, ruleBody, opts) {
     return processOpenclaw(opts);
   }
   const fullPath = path.join(targetDir, agent.file);
+  // A symlinked rule file (AGENTS.md -> CLAUDE.md) is the user's single source.
+  // writeAtomic's rename would replace the link with a diverging copy.
+  let link = false;
+  try { link = fs.lstatSync(fullPath).isSymbolicLink(); } catch (_) {}
+  if (link) return { status: 'skipped-symlink', label: '?' };
   const exists = fs.existsSync(fullPath);
   const isAppend = agent.mode === 'append';
   // Append targets are shared with the user, so our contribution is fenced.
@@ -224,7 +229,9 @@ function processOpenclaw(opts) {
     workspace: process.env.OPENCLAW_WORKSPACE || undefined,
     repoRoot,
     dryRun: opts.dryRun,
-    force: opts.force,
+    // --force overwrites rule files. Only an explicit `--only openclaw` may
+    // also create a missing workspace; per-repo init never invents one.
+    force: opts.force && opts.only === 'openclaw',
     log,
   });
   if (!r.ok) {

@@ -198,5 +198,49 @@ test('an end marker above the begin marker is refused, not spliced', (tmp) => {
   assert.equal(fs.readFileSync(agents, 'utf8'), original);
 });
 
+test('a symlinked rule file stays a link and its target is left alone', (tmp) => {
+  if (process.platform === 'win32') return; // symlinks need developer mode
+  // AGENTS.md -> CLAUDE.md is a common single-source setup. The atomic rename
+  // used to swap the link for a regular copy, so the two files drifted.
+  fs.writeFileSync(path.join(tmp, 'CLAUDE.md'), '# rules\n');
+  fs.symlinkSync('CLAUDE.md', path.join(tmp, 'AGENTS.md'));
+  fs.mkdirSync(path.join(tmp, '.github'));
+  fs.symlinkSync('../AGENTS.md', path.join(tmp, '.github/copilot-instructions.md'));
+  const out = runInit(tmp);
+  assert.match(out, /AGENTS\.md \(skipped-symlink\)/);
+  assert.match(out, /copilot-instructions\.md \(skipped-symlink\)/);
+  assert.ok(fs.lstatSync(path.join(tmp, 'AGENTS.md')).isSymbolicLink());
+  assert.ok(fs.lstatSync(path.join(tmp, '.github/copilot-instructions.md')).isSymbolicLink());
+  assert.strictEqual(fs.readFileSync(path.join(tmp, 'CLAUDE.md'), 'utf8'), '# rules\n');
+});
+
+test('--force does not create an OpenClaw workspace that is not there', (tmp) => {
+  // --force means "overwrite rule files"; it used to also mkdir
+  // ~/.openclaw/workspace, after which every run "detected" OpenClaw.
+  assert.match(runInit(tmp, '--force'), /skipped-workspace missing/);
+  assert.strictEqual(fs.existsSync(path.join(tmp, 'no-openclaw')), false);
+});
+
+test('INSTALL.md repo-only commands write nothing outside the repo', (tmp) => {
+  // The managed-env section used to promise "nothing outside the repo" for
+  // `install.js --with-init`, which runs every global install first.
+  const doc = fs.readFileSync(path.join(ROOT, 'INSTALL.md'), 'utf8');
+  const commands = [...doc.matchAll(/^node src\/tools\/caveman-init\.js (.+)$/gm)].map(m => m[1].split(' '));
+  assert.ok(commands.length, 'INSTALL.md documents no repo-only caveman-init command');
+  const repo = path.join(tmp, 'repo');
+  const home = path.join(tmp, 'home');
+  const ws = path.join(home, '.openclaw', 'workspace');
+  fs.mkdirSync(repo);
+  fs.mkdirSync(ws, { recursive: true });
+  for (const args of commands) {
+    execFileSync(process.execPath, [INIT, ...args], {
+      cwd: repo, env: { ...process.env, HOME: home, USERPROFILE: home, OPENCLAW_WORKSPACE: ws },
+    });
+  }
+  assert.deepStrictEqual(fs.readdirSync(ws), [], 'repo-only init wrote into the OpenClaw workspace');
+  assert.deepStrictEqual(fs.readdirSync(home), ['.openclaw']);
+  assert.ok(fs.readdirSync(repo).length > 0, 'nothing written into the repo');
+});
+
 console.log(`\n${passed} passed, ${failed} failed`);
 process.exit(failed ? 1 : 0);

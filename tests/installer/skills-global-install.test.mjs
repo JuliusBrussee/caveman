@@ -27,13 +27,13 @@ for (const { id, profile } of profiles) {
     fs.mkdirSync(home);
     fs.mkdirSync(cwd);
     nodeStub(bin, 'npx', `import fs from 'node:fs'; fs.writeFileSync(${JSON.stringify(log)}, JSON.stringify(ARGV));`);
-    const env = stubEnv({ ...process.env, HOME: home, USERPROFILE: home, IFLOW_HOME: '', CRUSH_SKILLS_DIR: '' }, bin);
+    const env = stubEnv({ ...process.env, HOME: home, USERPROFILE: home, IFLOW_HOME: '', CRUSH_SKILLS_DIR: '', CAVEMAN_REF: 'v9.9.9' }, bin);
     const result = spawnSync(process.execPath, [INSTALLER, '--only', id, '--non-interactive'], {
       encoding: 'utf8', cwd, env,
     });
     assert.equal(result.status, 0, result.stdout + result.stderr);
     assert.deepEqual(JSON.parse(fs.readFileSync(log, 'utf8')), [
-      '-y', 'skills', 'add', 'JuliusBrussee/caveman', '--skill', '*', '-a', profile, '--yes', ...(projectOnly ? [] : ['-g']),
+      '-y', 'skills', 'add', 'JuliusBrussee/caveman#v9.9.9', '--skill', '*', '-a', profile, '--yes', ...(projectOnly ? [] : ['-g']),
     ]);
     if (projectOnly) assert.ok(result.stdout.includes(`Installing into this project: ${fs.realpathSync(cwd)}`), result.stdout);
     assert.deepEqual(fs.readdirSync(cwd), [], 'install must not use the caller directory');
@@ -48,6 +48,8 @@ test('dry run plans a global install without creating directories or invoking np
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /-g\b/);
+  // Copy-pastable: an unquoted * would glob-expand to the files in cwd.
+  assert.match(result.stdout, /would run: npx -y skills add 'JuliusBrussee\/caveman#[^']+' --skill '\*' -a cursor/);
   assert.deepEqual(fs.readdirSync(dir), []);
 });
 
@@ -133,4 +135,41 @@ test('CodeBuddy Code executable triggers the codebuddy profile', (t) => {
   assert.equal(result.status, 0, result.stdout + result.stderr);
   assert.match(result.stdout, /CodeBuddy Code detected/);
   assert.match(result.stdout, /-a codebuddy --yes -g/);
+});
+
+// Cline ships as saoudrizwan.claude-dev, so a bare /cline/ never matched it but
+// did match Roo Code (rooveterinaryinc.roo-cline); /roo/ matched any Groovy
+// extension. goose, forge and bob are also a DB migrator, Foundry and a neovim
+// manager, so the binary alone is not an agent: its config dir must exist too.
+test('detection finds real Cline/Roo extensions and ignores look-alike names', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman look-alikes '));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const bin = path.join(dir, 'bin');
+  for (const name of ['goose', 'forge', 'bob']) nodeStub(bin, name, 'process.exit(0);');
+  const ext = path.join(dir, '.vscode', 'extensions');
+  fs.mkdirSync(path.join(ext, 'marlon407.code-groovy-0.1.2'), { recursive: true });
+  const preload = path.join(dir, 'hide-system-apps.cjs');
+  fs.writeFileSync(preload, `const fs = require('fs'); const exists = fs.existsSync; fs.existsSync = p => String(p).startsWith('/Applications/') ? false : exists(p);`);
+  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) => key.toLowerCase() !== 'path'));
+  Object.assign(env, { PATH: process.platform === 'win32' ? bin : `${bin}:/usr/bin:/bin`, HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir });
+  const run = () => {
+    const result = spawnSync(process.execPath, ['--require', preload, INSTALLER, '--minimal', '--dry-run', '--non-interactive'], {
+      encoding: 'utf8', cwd: dir, env,
+    });
+    assert.equal(result.status, 0, result.stdout + result.stderr);
+    return result.stdout;
+  };
+  assert.doesNotMatch(run(), /(IBM Bob|ForgeCode|Block Goose|Roo Code|Cline) detected/);
+
+  for (const name of ['.bob', '.forge', path.join('.config', 'goose')]) fs.mkdirSync(path.join(dir, name), { recursive: true });
+  fs.mkdirSync(path.join(ext, 'saoudrizwan.claude-dev-4.1.23'));
+  const found = run();
+  for (const label of ['IBM Bob', 'ForgeCode', 'Block Goose', 'Cline']) assert.match(found, new RegExp(`${label} detected`));
+  assert.doesNotMatch(found, /Roo Code detected/);
+
+  fs.rmSync(path.join(ext, 'saoudrizwan.claude-dev-4.1.23'), { recursive: true });
+  fs.mkdirSync(path.join(ext, 'rooveterinaryinc.roo-cline-3.25.0'));
+  const roo = run();
+  assert.match(roo, /Roo Code detected/);
+  assert.doesNotMatch(roo, /Cline detected/);
 });
