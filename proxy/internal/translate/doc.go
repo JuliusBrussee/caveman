@@ -36,7 +36,12 @@
 //     reasoning item's encrypted_content under a "caveman" envelope;
 //   - a chat caller gets the same envelope (signed thinking, or a Responses
 //     host's encrypted_content tagged with its route) in reasoning_details,
-//     next to the text as reasoning_content.
+//     next to the text as reasoning_content;
+//   - the thought signature Gemini puts on a chat tool call (extra_content)
+//     rides in a redacted_thinking block "caveman:ts:<n>:<chat signature>:
+//     <call id>:<signature>" (for Codex inside a reasoning envelope) and
+//     goes back on that call to that route and model only; a Gemini 3
+//     step's first call that carries none gets Google's skip value.
 //
 // Everything signed "caveman:" (and every unsigned block) is stripped before a
 // body reaches Anthropic's own API (AnthropicNative), every envelope before a

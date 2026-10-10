@@ -676,7 +676,10 @@ func TestLargeSessionDeletesUnderTheDefaultDeadline(t *testing.T) {
 		t.Skip("writes 500 MiB of originals")
 	}
 	eachStore(t, func(t *testing.T, b backend) {
-		r := runtimeOn(t, b.store, func(c *Config) { c.Limits = Limits{} })
+		// The delete keeps the default deadline; the optimize that sets the
+		// session up gets the test-sized one every other fixture uses, so a
+		// loaded -race run does not fail before the delete is reached.
+		r := runtimeOn(t, b.store, func(c *Config) { c.Limits = Limits{DeadlineMS: 5000} })
 		req := requestFor(r)
 		optimizeOK(t, r, req)
 		auth := authority("alice", req.Scope)

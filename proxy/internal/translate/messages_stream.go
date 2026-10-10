@@ -14,6 +14,7 @@ import (
 	"io"
 	"iter"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
 )
@@ -138,17 +139,29 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(
 		return cut
 	}
 	stop := func() { once.Do(func() { close(done) }) }
+	var end time.Time
 	endBy := func(d time.Duration) {
-		if deadline == nil {
-			deadline = time.After(d)
+		if at := time.Now().Add(d); deadline == nil || at.Before(end) {
+			deadline, end = time.After(d), at // only ever sooner
 		}
 	}
 	return lines, ended, stop, endBy
 }
 
 // usageGrace is how long a stream whose answer is over (a chat finish_reason)
-// still waits for the usage chunk and [DONE] that follow it.
-var usageGrace = 100 * time.Millisecond
+// still waits for [DONE] once the usage chunk is in; lateUsageGrace is how
+// long it waits for a usage chunk that has not come yet (a host can send it
+// well after the finish, and without it the turn records no tokens).
+var usageGrace, lateUsageGrace = 100 * time.Millisecond, 2 * time.Second
+
+// finishGrace is the wait after a chat finish_reason: usageGrace once the
+// usage chunk arrived, lateUsageGrace before.
+func finishGrace(usage bool) time.Duration {
+	if usage {
+		return usageGrace
+	}
+	return lateUsageGrace
+}
 
 // sseDone reports chat's last line, `data: [DONE]`.
 func sseDone(line []byte) bool {
@@ -201,12 +214,15 @@ type messageStream struct {
 	errored       bool
 	finished      bool // a finish_reason or [DONE] arrived: the upstream ended the answer itself
 	usage         chatUsage
+	gotUsage      bool // the usage chunk arrived
 	id            string
 	// signature marks translated thinking as the runtime's (caveman:…).
 	signature string
 	// estimateFrom is the caller's request when inputEstimate is counted
 	// from it, as message_start goes.
 	estimateFrom []byte
+	// args are each call's arguments so far, by call key.
+	args map[int]*strings.Builder
 }
 
 // streamChatToAnthropic re-emits a chat SSE stream as Anthropic events, with
@@ -229,7 +245,7 @@ func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, sig
 			break // the answer is over: an upstream that lingers holds neither it nor the fallback
 		}
 		if stream.finished {
-			endBy(usageGrace) // only the usage chunk and [DONE] may follow
+			endBy(finishGrace(stream.gotUsage)) // only the usage chunk and [DONE] may follow
 		}
 	}
 	if stream.errored {
@@ -295,7 +311,7 @@ func (m *messageStream) consume(line []byte) {
 		return
 	}
 	if chunk.Usage != nil {
-		m.usage = *chunk.Usage
+		m.usage, m.gotUsage = *chunk.Usage, true
 	}
 	for _, choice := range chunk.Choices {
 		if reasoning := choice.Delta.Reasoning + choice.Delta.ReasoningContent; reasoning != "" {
@@ -368,17 +384,27 @@ func (m *messageStream) delta(delta map[string]any) {
 // toolCall opens a tool_use block the first time a chat tool index appears and
 // streams its arguments as partial JSON after that. An upstream that sends
 // parallel calls all at index 0 (Gemini, Ollama) is told apart by id: a new
-// upstream id at a known index is a new call.
+// upstream id at a known index is a new call, and so is a name with no id
+// once the call's arguments are whole JSON (Gemini sends whole calls with no
+// id at all; a host that repeats the name mid-arguments stays one call).
 func (m *messageStream) toolCall(call openAIToolCall) {
 	key, known := m.current[call.Index]
-	if known && call.ID != "" && m.upstream[key] != "" && m.upstream[key] != call.ID {
+	if known && (call.ID != "" && m.upstream[key] != "" && m.upstream[key] != call.ID || nextCall(call, m.args[key].String())) {
 		known = false
 	}
 	if !known {
 		key = len(m.order)
-		id := wireCallID(call.ID, m.id, call.Index) // the id Claude Code gets is fixed when the block opens
-		m.current[call.Index], m.upstream[key] = key, call.ID
+		id := wireCallID(call.ID, m.id, key) // the id Claude Code gets is fixed when the block opens
+		if m.args == nil {
+			m.args = map[int]*strings.Builder{}
+		}
+		m.current[call.Index], m.upstream[key], m.args[key] = key, call.ID, &strings.Builder{}
 		m.order = append(m.order, key)
+		if thought := call.thought(); thought != "" {
+			// The host refuses the next request without it (Gemini 3): it
+			// rides in the agent's history back to this route and model.
+			m.openBlock("redacted_thinking", map[string]any{"type": "redacted_thinking", "data": thoughtTag(m.signature) + id + ":" + thought})
+		}
 		// Arguments always stream into the block that is open. Providers emit
 		// tool calls one after another; an interleaved pair would need its own
 		// block bookkeeping, and none observed does that.
@@ -387,7 +413,14 @@ func (m *messageStream) toolCall(call openAIToolCall) {
 	if call.Function.Arguments == "" {
 		return
 	}
+	m.args[key].WriteString(call.Function.Arguments)
 	m.delta(map[string]any{"type": "input_json_delta", "partial_json": call.Function.Arguments})
+}
+
+// nextCall reports a chunk at a known index that starts another call: a name
+// with no id after the open call's arguments are whole.
+func nextCall(call openAIToolCall, arguments string) bool {
+	return call.ID == "" && call.Function.Name != "" && json.Valid([]byte(arguments))
 }
 
 func (m *messageStream) finish() {
@@ -396,6 +429,9 @@ func (m *messageStream) finish() {
 	}
 	m.start()
 	m.closeBlock()
+	if m.stop == "end_turn" && len(m.order) > 0 {
+		m.stop = "tool_use" // a host that ends a tool call with "stop" (Gemini): the calls still run
+	}
 	usage := anthropicUsageFromChat(m.usage)
 	if m.inputEstimate > 0 && usage.InputTokens == 0 && usage.CacheReadInputTokens+usage.CacheCreationInputTokens > 0 {
 		// All input cached: a client that keeps message_start's count when

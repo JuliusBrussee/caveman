@@ -389,6 +389,22 @@ func responsesChatBody(top map[string]json.RawMessage, opts Options) (map[string
 	tools, bridge := bridgeTools(items0(top["tools"]))
 	system, items := splitSystem(top["instructions"], items)
 	replay := opts.replay()
+	thoughts, standIn := opts.thoughts()
+	var signatures map[string]string // call id -> the thought signature carried for it
+	if thoughts != "" {
+		signatures = map[string]string{}
+		for _, item := range items {
+			blocks, _ := envelopeBlocks(item.encrypted) // a reasoning item's, the runtime's own only
+			for _, block := range blocks {
+				var fields struct{ Type, Data string }
+				if json.Unmarshal(block, &fields) == nil && fields.Type == "redacted_thinking" {
+					if call, signature, ok := thoughtOf(fields.Data, thoughts); ok {
+						signatures[call] = signature
+					}
+				}
+			}
+		}
+	}
 	w := chatWriter{dst: make([]byte, 0, capHint(len(top["input"]), capHint(len(top["instructions"]), 1024)))}
 	w.dst = append(w.dst, '[')
 	if len(system) > 0 {
@@ -415,11 +431,11 @@ func responsesChatBody(top map[string]json.RawMessage, opts Options) (map[string
 			if len(arguments) <= 2 {
 				arguments = []byte(`"{}"`)
 			}
-			w.call(safeCallID(item.callID), bridge.wire(item.namespace, item.name), arguments)
+			w.call(safeCallID(item.callID), bridge.wire(item.namespace, item.name), arguments, signatures[item.callID], standIn)
 			calls[item.callID] = true
 		case "custom_tool_call":
 			w.call(safeCallID(item.callID), bridge.wire(item.namespace, item.name),
-				appendString(nil, append(append([]byte(`{"input":`), tok(item.input)...), '}')))
+				appendString(nil, append(append([]byte(`{"input":`), tok(item.input)...), '}')), signatures[item.callID], standIn)
 			calls[item.callID] = true
 		case "function_call_output", "custom_tool_call_output":
 			if !calls[item.callID] {
@@ -649,11 +665,15 @@ func (w *chatWriter) addReasoning(text string) {
 	}
 }
 
-func (w *chatWriter) call(id, name string, arguments []byte) {
+// call adds a tool call to the open assistant message, with the thought
+// signature carried for it (else standIn on the message's first call).
+func (w *chatWriter) call(id, name string, arguments []byte, thought, standIn string) {
 	w.openAssistant()
+	first := w.calls == nil
 	w.calls = appendString(append(openElem(w.calls), `{"id":`...), id)
 	w.calls = appendString(append(w.calls, `,"type":"function","function":{"name":`...), name)
-	w.calls = append(append(append(w.calls, `,"arguments":`...), arguments...), "}}"...)
+	w.calls = append(append(append(w.calls, `,"arguments":`...), arguments...), '}')
+	w.calls = append(appendThought(w.calls, thought, standIn, first), '}')
 }
 
 // flush writes the open assistant message and any parts tool outputs left.

@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -231,7 +232,7 @@ func TestCacheWarmShutdownSavesWhatItLearned(t *testing.T) {
 		t.Fatalf("held after close: %d entries, %d bytes", len(w.entries), w.bytes)
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("gaps not saved 0600 at shutdown: %v", err)
 	}
 	got := newWarmTable(path).counts["main/end/5m"]

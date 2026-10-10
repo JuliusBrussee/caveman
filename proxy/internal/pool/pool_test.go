@@ -204,7 +204,7 @@ func TestSaveWritesTheIndexAndAFileSecret(t *testing.T) {
 		t.Fatalf("logins = %+v", logins)
 	}
 	info, err := os.Stat(filepath.Join(store.home, secretDir, "chatgpt"))
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("secret file = %v, %v", info, err)
 	}
 	index, _ := os.ReadFile(filepath.Join(store.home, indexFile))
