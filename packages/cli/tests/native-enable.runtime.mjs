@@ -916,7 +916,6 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
 for (const [name, rewrite] of [
   ["adapter", (command, dead) => command.replace(/--adapter\s+.*$/, `--adapter '${dead}/native-hook-fast.js'`)],
   ["executable", (command, dead) => command.replace(/^.*?(?=native-hook claude|shrink-hook)/, `'${dead}/bin/${command.includes("shrink-hook") ? "caveman" : "caveman-proxy"}' `)],
-  ["node", (command, dead) => command.replace(/--node\s+.*$/, `--node '${dead}/bin/node'`)],
 ]) {
   test(`doctor flags a managed hook whose ${name} no longer exists and --fix re-renders it`, async () => {
     const fx = fixture();
@@ -951,6 +950,64 @@ for (const [name, rewrite] of [
     assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook/);
   });
 }
+
+// `brew upgrade` (nvm, fnm, volta alike) deletes the versioned node a bridge
+// hook names. The bridge then runs PATH's node, so that alone is not broken and
+// is never rewritten (Codex would ask to approve the hooks again); with no
+// node on PATH either, doctor flags it and --fix re-renders it.
+test("a dangling --node is healthy while PATH has a node, and flagged without one", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const path = join(fx.home, ".claude", "settings.json");
+  const dead = join(fx.home, "Cellar", "node", "26.9.0", "bin", "node");
+  const settings = JSON.parse(readFileSync(path, "utf8"));
+  for (const entries of Object.values(settings.hooks)) {
+    for (const entry of entries) {
+      const hook = entry.hooks?.[0];
+      if (typeof hook?.command === "string" && hook.command.includes("--node")) hook.command = hook.command.replace(/--node\s+.*$/, `--node '${dead}'`);
+    }
+  }
+  const dangling = JSON.stringify(settings, null, 2) + "\n";
+  assert.match(dangling, /26\.9\.0/);
+  writeFileSync(path, dangling);
+  const bin = join(fx.home, "bin");
+  const env = { ...fx.env, PATH: bin };
+  delete env.NODE;
+
+  symlinkSync(process.execPath, join(bin, "node"));
+  const healthy = await run(["doctor", "claude"], env);
+  assert.equal(healthy.code, 0, healthy.stdout + healthy.stderr);
+  assert.equal(JSON.parse(healthy.stdout).state, "installed");
+  assert.equal(readFileSync(path, "utf8"), dangling);
+
+  unlinkSync(join(bin, "node"));
+  const degraded = await run(["doctor", "claude"], env);
+  assert.notEqual(degraded.code, 0);
+  assert.equal(JSON.parse(degraded.stdout).state, "degraded");
+  const fixed = await run(["doctor", "claude", "--fix"], env);
+  assert.equal(fixed.code, 0, fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).fix.result, "repaired");
+  assert.doesNotMatch(readFileSync(path, "utf8"), /26\.9\.0/);
+});
+
+// Homebrew's process.execPath is the versioned Cellar node `brew upgrade`
+// deletes; PATH's node is the same binary under a name that survives. fnm's
+// per-shell "multishell" links vanish with their shell, so never those.
+test("the bridge hook names PATH's node when it is this node, never an fnm multishell link", async () => {
+  const nodeArg = (fx) => JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).hooks.SessionStart
+    .map((entry) => entry.hooks[0].command).find((command) => command.includes("native-hook claude")).match(/--node '([^']+)'$/)?.[1];
+  const stable = fixture();
+  symlinkSync(process.execPath, join(stable.home, "bin", "node"));
+  assert.equal((await run(["enable", "claude"], stable.env)).code, 0);
+  assert.equal(nodeArg(stable), join(stable.home, "bin", "node"));
+
+  const fnm = fixture();
+  const multishell = join(fnm.home, "fnm_multishells", "4242_1760000000000", "bin");
+  mkdirSync(multishell, { recursive: true });
+  symlinkSync(process.execPath, join(multishell, "node"));
+  assert.equal((await run(["enable", "claude"], { ...fnm.env, PATH: `${multishell}:${fnm.env.PATH}` })).code, 0);
+  assert.equal(nodeArg(fnm), process.execPath);
+});
 
 test("doctor --fix transactionally repairs missing owned hooks and preserves unrelated edits", async () => {
   const fx = fixture();

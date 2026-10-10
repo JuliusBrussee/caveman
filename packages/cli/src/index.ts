@@ -7611,7 +7611,7 @@ export function nativeHookInvocation(
   agentId: string,
   executableIsProxy: boolean,
   platform: NodeJS.Platform = process.platform,
-  node: string = process.execPath,
+  node: string = stableNodePath(),
 ): string {
   const executableInvocation = hookExecutableInvocation(
     executable,
@@ -7625,6 +7625,15 @@ export function nativeHookInvocation(
     ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)} --node ${quoteHookPath(node, platform)}`
     : `${executableInvocation} native-hook ${agentId}`;
   return invocation;
+}
+
+// The node a bridge hook names. Homebrew's process.execPath is the versioned
+// Cellar path `brew upgrade` deletes; PATH's node, when it is this same binary
+// (/opt/homebrew/bin/node), survives the upgrade. fnm's multishell links are
+// per-shell temp paths that vanish with the shell, so never those.
+function stableNodePath(): string {
+  const onPath = which("node");
+  return onPath && !/[\\/]fnm_multishells[\\/]/i.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
 }
 
 export function hookExecutableInvocation(
@@ -7877,9 +7886,11 @@ function invocationTargetsExist(tokens: string[]): boolean {
   const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
   const adapter = tokens.indexOf("--adapter");
   if (adapter !== -1) files.push(tokens[adapter + 1]);
-  // The bridge's recorded `--node` dangles the same way after an nvm or Homebrew upgrade.
+  // The bridge's recorded `--node` dangles the same way after an nvm or Homebrew
+  // upgrade, but the bridge then runs $NODE or PATH's node: broken only when
+  // that is gone too, so an upgrade alone never rewrites the hooks.
   const node = tokens.indexOf("--node");
-  if (node !== -1) files.push(tokens[node + 1]);
+  if (node !== -1 && !which(process.env.NODE || "node")) files.push(tokens[node + 1]);
   return !files.some((file) => file !== undefined && !existsSync(file));
 }
 
