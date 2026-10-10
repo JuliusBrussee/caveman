@@ -1,6 +1,7 @@
 package catalog_test
 
 import (
+	"cmp"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -67,10 +68,14 @@ func TestCurrentCatalogRowsAreFreshAndStructurallyValid(t *testing.T) {
 // literal updated to match), that is exactly the conflation bug task C6's
 // review caught: a capability-only edit silently re-attesting a price nobody
 // looked at, resetting the 120-day staleness alarm on a row that needed it
-// most. anthropic.claude-3-5-haiku-20241022-v1:0 is deliberately the pinned
-// row: it carries the oldest verified_at in the catalog today, so it is the
-// one closest to actually firing TestCurrentCatalogRowsAreFreshAndStructurallyValid's
-// staleness alarm — the exact row a silent bump would put back to sleep.
+// most. The pinned row is the one with the oldest verified_at in the catalog
+// today, ties broken by provider, then model, then region (byte order), so the
+// pin never depends on row order in current.yaml. It is the row closest to
+// actually firing TestCurrentCatalogRowsAreFreshAndStructurallyValid's
+// staleness alarm — the exact row a silent bump would put back to sleep. When
+// that row is removed (as bedrock anthropic.claude-3-5-haiku-20241022-v1:0 was
+// on 2026-10-10, after AWS retired the model), re-pin to whatever this rule
+// picks next; never by moving a date.
 func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 	entries := catalog.List()
 	if len(entries) == 0 {
@@ -83,14 +88,15 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s/%s verified_at = %q: %v", entry.Provider, entry.Model, entry.VerifiedAt, err)
 		}
-		if i == 0 || verified.Before(oldestTime) {
+		tieBreak := cmp.Or(cmp.Compare(entry.Provider, oldest.Provider), cmp.Compare(entry.Model, oldest.Model), cmp.Compare(entry.Region, oldest.Region))
+		if i == 0 || verified.Before(oldestTime) || (verified.Equal(oldestTime) && tieBreak < 0) {
 			oldest, oldestTime = entry, verified
 		}
 	}
-	wantProvider, wantModel, wantVerifiedAt := "bedrock", "anthropic.claude-3-5-haiku-20241022-v1:0", "2026-06-14T00:00:00Z"
-	if oldest.Provider != wantProvider || oldest.Model != wantModel || oldest.VerifiedAt != wantVerifiedAt {
-		t.Fatalf("oldest verified_at row = %s/%s@%s verified_at=%s, want %s/%s verified_at=%s (a capability-only edit must never move this)",
-			oldest.Provider, oldest.Model, oldest.Region, oldest.VerifiedAt, wantProvider, wantModel, wantVerifiedAt)
+	wantProvider, wantModel, wantRegion, wantVerifiedAt := "anthropic", "claude-haiku-4-5", "global", "2026-07-10T00:00:00Z"
+	if oldest.Provider != wantProvider || oldest.Model != wantModel || oldest.Region != wantRegion || oldest.VerifiedAt != wantVerifiedAt {
+		t.Fatalf("oldest verified_at row = %s/%s@%s verified_at=%s, want %s/%s@%s verified_at=%s (a capability-only edit must never move this)",
+			oldest.Provider, oldest.Model, oldest.Region, oldest.VerifiedAt, wantProvider, wantModel, wantRegion, wantVerifiedAt)
 	}
 
 	// Pinning only the OLDEST row left the mass re-attest undetectable: on
@@ -103,8 +109,7 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 	// must likewise update this expectation in the same commit as its catalog
 	// price row; capability-only changes must not alter VerifiedAt.
 	wantDates := map[string]int{
-		"2026-06-14T00:00:00Z": 1,
-		"2026-07-10T00:00:00Z": 15,
+		"2026-07-10T00:00:00Z": 13, // anthropic claude-opus-4-1 and bedrock claude-3-5-sonnet v2 removed 2026-10-10 (retired)
 		"2026-07-23T00:00:00Z": 23,
 		"2026-08-05T00:00:00Z": 1,
 		"2026-08-07T00:00:00Z": 1,
