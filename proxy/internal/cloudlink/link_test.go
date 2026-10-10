@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -877,16 +878,21 @@ func TestEventsFollowMeAndTheOptOut(t *testing.T) {
 
 // The old CLI wrote that opt-out under Node's os.homedir(). PowerShell and cmd
 // leave HOME unset, and the user home there (USERPROFILE) is not the parent of
-// a CAVEMAN_HOME set elsewhere.
+// a CAVEMAN_HOME set elsewhere. On Windows Node ignores HOME even when MSYS2,
+// Cygwin or Git Bash set one.
 func TestLegacyOptOutPathFollowsTheUserHome(t *testing.T) {
 	cavemanHome := filepath.Join(t.TempDir(), "elsewhere", ".caveman")
 	profile := t.TempDir()
 	previous := userHomeDir
 	defer func() { userHomeDir = previous }()
 	userHomeDir = func() (string, error) { return profile, nil }
+	set := ""
+	if runtime.GOOS == "windows" {
+		set = profile
+	}
 	for _, tt := range []struct{ home, want string }{
 		{"", profile},
-		{t.TempDir(), ""},
+		{t.TempDir(), set},
 	} {
 		t.Setenv("HOME", tt.home)
 		want := filepath.Join(cmp.Or(tt.want, tt.home), ".caveman-cloud", "config.json")
