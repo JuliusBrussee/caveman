@@ -131,6 +131,9 @@ func chatToAnthropic(body []byte, model, signature string) ([]byte, chatUsage) {
 			})
 		}
 		stop = anthropicStopReason(choice.FinishReason)
+		if stop == "end_turn" && len(choice.Message.ToolCalls) > 0 {
+			stop = "tool_use" // a host that ends a tool call with "stop" (Gemini): the calls still run
+		}
 	}
 	return mustJSON(map[string]any{
 		"id": id, "type": "message", "role": "assistant",

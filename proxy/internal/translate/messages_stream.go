@@ -208,6 +208,7 @@ type messageStream struct {
 	order         []int
 	current       map[int]int    // upstream index -> call key (the order calls opened in)
 	upstream      map[int]string // call key -> the id the upstream gave it ("" = minted)
+	argued        map[int]bool   // call key -> its arguments started
 	stop          string
 	started       bool
 	errored       bool
@@ -228,7 +229,7 @@ type messageStream struct {
 func streamChatToAnthropic(w http.ResponseWriter, upstream io.Reader, model, signature string, estimateFrom []byte) (chatUsage, error) {
 	stream := &messageStream{
 		out: newSSEWriter(w), model: model, signature: signature, estimateFrom: estimateFrom,
-		current: map[int]int{}, upstream: map[int]string{}, stop: "end_turn", id: responsesItemID("msg"),
+		current: map[int]int{}, upstream: map[int]string{}, argued: map[int]bool{}, stop: "end_turn", id: responsesItemID("msg"),
 	}
 	lines, cut, stop, endBy := sseLines(upstream)
 	defer stop()
@@ -381,15 +382,16 @@ func (m *messageStream) delta(delta map[string]any) {
 // toolCall opens a tool_use block the first time a chat tool index appears and
 // streams its arguments as partial JSON after that. An upstream that sends
 // parallel calls all at index 0 (Gemini, Ollama) is told apart by id: a new
-// upstream id at a known index is a new call.
+// upstream id at a known index is a new call, and so is a name after the
+// call's arguments started (Gemini sends whole calls with no id at all).
 func (m *messageStream) toolCall(call openAIToolCall) {
 	key, known := m.current[call.Index]
-	if known && call.ID != "" && m.upstream[key] != "" && m.upstream[key] != call.ID {
+	if known && (call.ID != "" && m.upstream[key] != "" && m.upstream[key] != call.ID || call.Function.Name != "" && m.argued[key]) {
 		known = false
 	}
 	if !known {
 		key = len(m.order)
-		id := wireCallID(call.ID, m.id, call.Index) // the id Claude Code gets is fixed when the block opens
+		id := wireCallID(call.ID, m.id, key) // the id Claude Code gets is fixed when the block opens
 		m.current[call.Index], m.upstream[key] = key, call.ID
 		m.order = append(m.order, key)
 		// Arguments always stream into the block that is open. Providers emit
@@ -400,6 +402,7 @@ func (m *messageStream) toolCall(call openAIToolCall) {
 	if call.Function.Arguments == "" {
 		return
 	}
+	m.argued[key] = true
 	m.delta(map[string]any{"type": "input_json_delta", "partial_json": call.Function.Arguments})
 }
 
@@ -409,6 +412,9 @@ func (m *messageStream) finish() {
 	}
 	m.start()
 	m.closeBlock()
+	if m.stop == "end_turn" && len(m.order) > 0 {
+		m.stop = "tool_use" // a host that ends a tool call with "stop" (Gemini): the calls still run
+	}
 	usage := anthropicUsageFromChat(m.usage)
 	if m.inputEstimate > 0 && usage.InputTokens == 0 && usage.CacheReadInputTokens+usage.CacheCreationInputTokens > 0 {
 		// All input cached: a client that keeps message_start's count when

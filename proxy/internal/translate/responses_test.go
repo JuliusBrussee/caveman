@@ -394,6 +394,15 @@ func TestResponsesToChatToolNamesAndParallelCalls(t *testing.T) {
 	if calls := itemsOfType(codexAccept(t, recorder.Body.String()), "function_call"); len(calls) != 2 || calls[0]["arguments"] != `{"cmd":"a"}` || calls[1]["arguments"] != `{"cmd":"b"}` {
 		t.Fatalf("index-0 parallel calls = %v", calls)
 	}
+	// With no index and no id either (Gemini's chat wire), a name after
+	// arguments starts the next call.
+	recorder, _, _ = serve(t, reply, chatStream(
+		`{"choices":[{"delta":{"tool_calls":[{"id":"","type":"function","function":{"name":"`+hashed+`","arguments":"{\"cmd\":\"a\"}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"id":"","type":"function","function":{"name":"`+hashed+`","arguments":"{\"cmd\":\"b\"}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`), false)
+	if calls := itemsOfType(codexAccept(t, recorder.Body.String()), "function_call"); len(calls) != 2 || calls[0]["arguments"] != `{"cmd":"a"}` || calls[1]["arguments"] != `{"cmd":"b"}` || calls[0]["call_id"] == calls[1]["call_id"] {
+		t.Fatalf("id-less parallel calls = %v", calls)
+	}
 	// History names map the same way.
 	input := `[{"type":"message","role":"user","content":"x"},
 	  {"type":"function_call","call_id":"call_1","name":"create_issue","namespace":"mcp__github__","arguments":"{}"},

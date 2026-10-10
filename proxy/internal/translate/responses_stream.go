@@ -741,8 +741,10 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 				closeReasoning()
 				closeText()
 				key, known := current[call.Index]
-				// A minted id is no upstream id: a late id is the same call.
-				if !known || call.ID != "" && calls[key].upstream && calls[key].id != call.ID {
+				// A minted id is no upstream id: a late id is the same call. A
+				// name after the call's arguments started is the next call
+				// (Gemini sends whole calls with no id at all).
+				if !known || call.ID != "" && calls[key].upstream && calls[key].id != call.ID || call.Function.Name != "" && calls[key].arguments.Len() > 0 {
 					key = len(order)
 					current[call.Index] = key
 					calls[key] = &chatStreamCall{}

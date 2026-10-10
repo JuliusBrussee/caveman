@@ -360,6 +360,28 @@ func TestChatStreamToolIDsAreAnthropicSafe(t *testing.T) {
 	if strings.Count(recorder.Body.String(), `"type":"tool_use"`) != 2 {
 		t.Fatalf("parallel calls merged:\n%s", recorder.Body.String())
 	}
+	// With no index and no id either (Gemini's chat wire), a name after
+	// arguments starts the next call; a turn that called tools stops for them.
+	recorder, _, _ = serve(t, reply, chatStream(
+		`{"choices":[{"delta":{"tool_calls":[{"id":"","type":"function","function":{"name":"Read","arguments":"{\"path\":\"a\"}"}}]}}]}`,
+		`{"choices":[{"delta":{"tool_calls":[{"id":"","type":"function","function":{"name":"Bash","arguments":"{\"command\":\"ls\"}"}}]}}]}`,
+		`{"choices":[{"delta":{},"finish_reason":"stop"}]}`), false)
+	blocks, inputs := map[float64]map[string]any{}, map[float64]string{}
+	var stop any
+	for _, event := range anthropicEvents(t, recorder.Body.String()) {
+		switch event.name {
+		case "content_block_start":
+			blocks[event.data["index"].(float64)] = event.data["content_block"].(map[string]any)
+		case "content_block_delta":
+			inputs[event.data["index"].(float64)] += event.data["delta"].(map[string]any)["partial_json"].(string)
+		case "message_delta":
+			stop = event.data["delta"].(map[string]any)["stop_reason"]
+		}
+	}
+	if len(blocks) != 2 || blocks[0]["name"] != "Read" || blocks[1]["name"] != "Bash" || blocks[0]["id"] == blocks[1]["id"] ||
+		inputs[0] != `{"path":"a"}` || inputs[1] != `{"command":"ls"}` || stop != "tool_use" {
+		t.Fatalf("id-less calls: blocks %v, inputs %v, stop %v", blocks, inputs, stop)
+	}
 }
 
 // --- Messages -> Messages ------------------------------------------------------
