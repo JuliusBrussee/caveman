@@ -8431,6 +8431,15 @@ function refuseOwnEndpoint(agent: NativeAgent, key: string, value: unknown, file
   throw Object.assign(new Error(`${name} sends its requests to its own endpoint ${own} (${key} in ${file ?? "your shell"}). Caveman would send them, with their key, to the provider's public API instead, so ${name} was left as is. To route it through Caveman anyway, remove ${key} ${file ? "there" : "from your shell"} and run \`caveman enable ${agent}\`.`), { ownEndpoint: own });
 }
 
+// Why enable leaves an agent as is, when it is on an endpoint of its own
+// (refuseOwnEndpoint), worked out without writing anything.
+function nativeOwnEndpoint(agent: NativeAgent): string | undefined {
+  try { nativeMutationsFor(agent, gatewayURL(), "caveman-mcp", { plan: true }); } catch (error) {
+    if ((error as { ownEndpoint?: string }).ownEndpoint) return (error as Error).message;
+  }
+  return undefined;
+}
+
 // A YAML or dotenv scalar: comment and quotes off.
 function configValue(raw: string | undefined): string | undefined {
   return raw?.replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
@@ -11093,9 +11102,12 @@ async function nativeDoctor(argv: string[]) {
   }
   const untrusted = target === "codex" && result.installed && !codexHooksTrusted();
   if (untrusted) result.warnings.push(CODEX_TRUST_ASK);
+  // Enable refuses an agent on its own endpoint; the warning says what would.
+  const own = !result.installed && result.available ? nativeOwnEndpoint(target) : undefined;
+  if (own) result.warnings.push(own);
   print({
     ...result,
-    repair: result.installed ? `caveman doctor ${target} --fix` : `caveman enable ${target}`,
+    repair: result.installed ? `caveman doctor ${target} --fix` : own ? null : `caveman enable ${target}`,
     trust: target === "codex" && result.installed ? untrusted ? "not trusted yet · open /hooks in Codex" : "trusted in Codex /hooks" : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
   });
@@ -20297,7 +20309,9 @@ async function status(argv: string[]) {
   // Another program on the port is the foreign-process line above.
   if (runtimeState === "down") lines.push(agentRuntimeLine("down", wired));
   lines.push(...native.flatMap((integration) => integration.warnings));
-  const step = nextStep(modules, { degraded: degraded[0], fallback: next });
+  // `enable` refuses an agent on its own endpoint: it is no next step.
+  const leftAlone = native.filter((integration) => !integration.installed && integration.binary_present).map((integration) => integration.agent).filter((agent) => nativeOwnEndpoint(agent));
+  const step = nextStep(modules, { degraded: degraded[0], fallback: next, leftAlone });
   process.stdout.write(renderModuleGrid(modules, { notes, next: traffic.next && step !== "caveman setup --install" ? traffic.next : step, degraded, lines }));
 }
 

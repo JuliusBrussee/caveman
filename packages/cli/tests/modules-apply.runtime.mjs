@@ -484,7 +484,7 @@ test("an agent on its own endpoint is left as is, in the plan and in the run", a
     const plan = await runCli(["on", "--all", "--dry-run"], fx.env);
     assert.equal(plan.code, 0, plan.stderr);
     assert.doesNotMatch(plan.stdout, /claude settings|claude config/);
-    assert.match(plan.stdout, /^note: Claude Code sends its requests to its own endpoint https:\/\/llm-gw\.corp\.example\/anthropic /m);
+    assert.match(plan.stdout, /^note: Claude Code stays as is: it sends its requests to its own endpoint https:\/\/llm-gw\.corp\.example\/anthropic$/m);
     const on = await runCli(["on", "--all", "--yes"], fx.env);
     assert.equal(on.code, 0, on.stderr);
     assert.match(on.stdout, /^○ Claude Code sends its requests to its own endpoint .* so Claude Code was left as is\. To route it through Caveman anyway, remove ANTHROPIC_BASE_URL there and run `caveman enable claude`\.$/m);

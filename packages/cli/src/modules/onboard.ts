@@ -256,7 +256,9 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
   const auto = !selection.routing ? false
     : ask ? await signInStep({ ...deps, cmd }, input, out, c)
     : await routingStep(opts, { ...deps, cmd }, input, out, c);
-  const tryAgent = ["claude", "codex"].find((id) => agents.includes(id)) ?? agents[0] ?? "claude";
+  // Only an agent this setup wired: one left on its own endpoint is not.
+  const wiredNow = agents.filter((id) => moduleHost().nativeAgents().some((agent) => agent.id === id && agent.wired));
+  const tryAgent = ["claude", "codex"].find((id) => wiredNow.includes(id)) ?? wiredNow[0];
   let launch: string | undefined;
   // No agent set up means nothing to try: `caveman claude` would only fail.
   const noAgent = `No agent set up yet · install one (for example Claude Code), then ${cmd} setup`;
@@ -265,6 +267,7 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     out.write(!result.ok ? `\n${PAD}${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`
       : deps.launching ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(`starting ${deps.launching}`)}\n`
       : !agents.length ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.dim(noAgent)}\n`
+      : !tryAgent ? `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.cyan(`${cmd} status`)}\n`
       : `\n${PAD}${c.green("✓")} ${c.bold("Ready")}     ${c.cyan(`${cmd} ${tryAgent}`)} ${c.dim("·")} ${c.cyan(`${cmd} status`)}${hint}\n`);
   } else if (!result.ok) {
     out.write(`${c.red("✗")} Setup finished with problems. Fix them, then run ${cmd} setup again.\n`);
@@ -272,12 +275,14 @@ export async function onboard(opts: OnboardOptions, deps: OnboardDeps): Promise<
     out.write(`${c.green("✓")} Ready. Starting ${deps.launching}.\n`);
   } else if (!agents.length) {
     out.write(`${c.green("✓")} Ready. ${noAgent}\n`);
+  } else if (!tryAgent) {
+    out.write(`${c.green("✓")} Ready. See it:  ${c.cyan(`${cmd} status`)}\n`);
   } else {
     out.write(`${c.green("✓")} Ready. Try:  ${c.cyan(`${cmd} ${tryAgent}`)}      See it:  ${c.cyan(`${cmd} status`)}\n`);
   }
   if (ask) await deps.discloseTelemetry();
-  const startable = byId.get(tryAgent);
-  if (ask && result.ok && deps.offerLaunch && !deps.launching && startable?.installed && agents.includes(tryAgent)) {
+  const startable = tryAgent ? byId.get(tryAgent) : undefined;
+  if (ask && result.ok && deps.offerLaunch && !deps.launching && startable?.installed) {
     out.write("\n");
     if (await confirm(input, out, c, `Start ${startable.name} now?`)) launch = tryAgent;
   }

@@ -393,9 +393,11 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
         lines.push({ action: file.exists ? "UPDATE" : "CREATE", target: tilde(file.file), detail: file.kind.replace("-", " ") });
       }
     } catch (error) {
-      // An agent on its own endpoint is left as is, and the plan says so.
-      if ((error as { ownEndpoint?: boolean }).ownEndpoint) {
-        notes.push((error as Error).message);
+      // An agent on its own endpoint is left as is. The plan says so in short;
+      // the step's result says why and how to route it anyway, once.
+      const own = (error as { ownEndpoint?: string }).ownEndpoint;
+      if (own) {
+        notes.push(`${h.agentName(agent)} stays as is: it sends its requests to its own endpoint ${own}`);
         continue;
       }
       // The binaries the plan downloads first are what this needs; enable
