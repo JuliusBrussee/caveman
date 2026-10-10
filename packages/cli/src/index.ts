@@ -13134,19 +13134,21 @@ function anyMcpInstalled(): boolean {
 // missing while doctor reports it on.
 function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "pi"): boolean {
   const kind = { claude: "claude-mcp", codex: "codex-config", hermes: "hermes-config", gemini: "gemini-settings", pi: "pi-extension" }[agent];
-  const operation = readNativeJournal(agent)?.operations.find((item) => item.kind === kind);
-  const current = operation ? fileBytes(operation.file) : null;
-  if (!operation || !current) return false;
-  try {
-    if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
-    // A null block: the user's own caveman-native entry was already there.
-    if (agent === "hermes") return operation.owned?.mcp_block === null || (typeof operation.owned?.mcp_block === "string" && current.toString("utf8").includes(operation.owned.mcp_block));
-    if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
-    const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
-    return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
-  } catch {
-    return false;
-  }
+  // Claude journals one registration per profile; any one still there counts.
+  return (readNativeJournal(agent)?.operations ?? []).some((operation) => {
+    const current = operation.kind === kind ? fileBytes(operation.file) : null;
+    if (!current) return false;
+    try {
+      if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
+      // A null block: the user's own caveman-native entry was already there.
+      if (agent === "hermes") return operation.owned?.mcp_block === null || (typeof operation.owned?.mcp_block === "string" && current.toString("utf8").includes(operation.owned.mcp_block));
+      if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
+      const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
+      return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
+    } catch {
+      return false;
+    }
+  });
 }
 
 // resolveMcpCommand decides how to launch the caveman MCP server, in order:
