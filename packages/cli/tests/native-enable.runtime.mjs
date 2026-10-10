@@ -73,11 +73,8 @@ if (process.argv[2] === "shrink-hook") {
     NO_COLOR: "1",
     PATH: `${bin}:${process.env.PATH}`,
   };
-  // Whoever runs this suite may well have a real OPENAI_API_KEY exported in
-  // their own shell (that's normal, not a fixture bug) — but detectCodexWrapAuthMode
-  // reads it as a fallback, so an inherited one silently forces every codex
-  // fixture below into api-key mode regardless of what auth.json under `home`
-  // says. Strip it so auth-mode detection only ever sees the fixture's auth.json.
+  // Codex auth mode comes from auth.json alone; still keep the runner's own
+  // OPENAI_API_KEY out so no fixture depends on the shell it runs from.
   delete env.OPENAI_API_KEY;
   return { home, env };
 }
@@ -270,6 +267,22 @@ test("enable codex twice re-parses its own block instead of calling it corrupted
   assert.equal(second.split("# >>> caveman:native-tables").length, 2, "exactly one tables begin marker");
   assert.equal(second.split("# <<< caveman:native-tables").length, 2, "exactly one tables end marker");
   assert.equal(second, first, "a second enable is byte-idempotent");
+});
+
+// Codex never reads OPENAI_API_KEY while auth.json holds a ChatGPT login: its
+// stored auth_mode (or a key saved in auth.json) decides. A key exported in the
+// shell must not wire the api-key route, nor flip doctor from shell to shell.
+test("a codex ChatGPT login stays on the subscription route with OPENAI_API_KEY exported", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(join(fx.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { id_token: "z", access_token: "x", refresh_token: "y", account_id: "acc" } }));
+  const keyed = { ...fx.env, OPENAI_API_KEY: "sk-env" };
+  assert.equal((await run(["enable", "codex"], keyed)).code, 0);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/chatgpt"/);
+  for (const env of [keyed, fx.env]) {
+    assert.equal(JSON.parse((await run(["doctor", "codex"], env)).stdout).components.routing, true);
+  }
 });
 
 // An upgrade or a moved install changes the binary path inside the hook

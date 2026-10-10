@@ -7265,8 +7265,10 @@ function readCodexAuthJson(): JsonObject | undefined {
   }
 }
 
+// auth.json alone, as Codex reads it: Codex never uses an exported
+// OPENAI_API_KEY while auth.json holds a ChatGPT login.
 function codexAuthHasApiKey(auth: JsonObject): boolean {
-  return nonEmptyString(auth.OPENAI_API_KEY) || nonEmptyString(process.env.OPENAI_API_KEY);
+  return nonEmptyString(auth.OPENAI_API_KEY);
 }
 
 function codexAuthHasChatGptTokens(auth: JsonObject): boolean {
@@ -7281,6 +7283,9 @@ function codexAuthHasChatGptTokens(auth: JsonObject): boolean {
 function detectCodexWrapAuthMode(): CodexWrapAuthMode {
   const auth = readCodexAuthJson();
   if (!auth) return "api-key";
+  // Codex's stored login mode wins over whatever else the file holds.
+  if (auth.auth_mode === "apikey") return "api-key";
+  if (auth.auth_mode === "chatgpt" || auth.auth_mode === "chatgptAuthTokens") return "subscription";
   return codexAuthHasChatGptTokens(auth) && !codexAuthHasApiKey(auth) ? "subscription" : "api-key";
 }
 
