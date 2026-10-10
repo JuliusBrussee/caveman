@@ -89,11 +89,13 @@ test("doctor fails a broken module offline and passes a healthy one", async () =
   }
 });
 
-// An upgrader from before modules has no module state yet: routing and
-// scripts do nothing until setup records them, which is not a failure.
+// An upgrader from before modules (agents wired with `enable`) has no module
+// state yet: routing and scripts do nothing until setup records them, which
+// is not a failure.
 test("before setup, modules that wait on it say not set up and point at setup", async () => {
   const fx = modulesFixture();
   try {
+    for (const agent of ["claude", "codex"]) assert.equal((await runCli(["enable", agent], fx.env)).code, 0);
     const status = await runCli(["status"], fx.env);
     assert.equal(status.code, 0, status.stderr);
     assert.match(status.stdout, /^  on  routing .*not set up · caveman setup$/m);

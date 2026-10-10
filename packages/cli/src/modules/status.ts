@@ -27,7 +27,6 @@ export function moduleChoice(state: ModuleState): boolean {
 export function nextStep(states: ModuleState[], opts: { degraded?: string | undefined; fallback: string | null }): string | null {
   const inactive = states.filter((state) => state.on && !state.active && moduleFix(state));
   if (inactive.some((state) => moduleFix(state) === "caveman setup --install")) return "caveman setup --install";
-  if (inactive.some((state) => moduleFix(state) === "caveman setup")) return "caveman setup";
   const broken = inactive.find((state) => !moduleChoice(state));
   if (broken) return moduleFix(broken)!;
   if (opts.degraded) return `caveman doctor ${opts.degraded} --fix`;
