@@ -216,7 +216,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   `allowance` or `billing_limit` answer keeps the asked model (the held model above for a transient failure) and pauses new asks (1 min; 10 min
   for 401/403 and billing_limit; until the 1st for allowance). Refusals and limits land in
   `$CAVEMAN_HOME/route-state.json` (with Cloud's notice) for `caveman status`; a new login lifts
-  the pause. A provider 4xx on the routed model replays the original bytes on the asked model, and the decision is rejected for the rest of the ask only when that replay is served or is itself a 429 (so the agent's own retries send one request each); a
+  the pause. A provider 4xx on the routed model replays the original bytes on the asked model, and the decision is rejected for the rest of the ask only when that replay is served or is itself a 429 (so the agent's own retries send one request each); a rate-limit 429 (with Retry-After) or a 5xx on the routed model is returned as is, never replayed, and rejects the decision, so the agent's own retry runs the asked model; a
   429 on the asked model of a request whose bytes the route stage changed (effort, marks, strip,
   drop_block, a heal retry) is returned as is. When the model moved, the agent's copy of the
   answer names the model it asked for (Claude Code drops its thinking on another name): a JSON
