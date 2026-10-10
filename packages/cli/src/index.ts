@@ -6752,7 +6752,11 @@ function spawnLocalProxyProcess(mode: WrapRuntimeMode, mcpRecovery: boolean, too
   };
   // Same reason as `start`: the dead account variable never rides along inherited.
   delete env.CAVEMAN_WRAP_ENTITLED;
-  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true, windowsHide: true });
+  // The runtime outlives this command. Started in a project it would hold that
+  // directory until `caveman stop` (no eject; on Windows no delete or rename),
+  // so it runs from home, with the paths it is handed still meaning the same.
+  for (const key of ["CAVEMAN_HOME", "CAVEMAN_CONFIG", "CAVEMAN_DB"]) if (env[key]) env[key] = resolve(env[key]);
+  const child = spawn(resolved, [], { stdio: "ignore", env, detached: true, windowsHide: true, cwd: homedir() });
   // The caller wraps this in try/catch for fail-open startup, but a try/catch
   // cannot catch an EventEmitter 'error' — it arrives asynchronously and becomes
   // an uncaughtException that kills the CLI before the agent ever launches. A
