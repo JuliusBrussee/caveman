@@ -476,6 +476,40 @@ func TestChatGPTAutoReturnsRateLimitsAndAuthFailures(t *testing.T) {
 	}
 }
 
+// An overloaded or failing routed model (529, any 5xx) is that model's, not
+// the plan's limit: it is returned as is, never replayed, and the decision is
+// rejected, so the agent's own retry runs the fallback.
+func TestChatGPTAutoOverloadedRoutedModelGivesWay(t *testing.T) {
+	for _, status := range []int{529, http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		var mu sync.Mutex
+		models := []string{}
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var body struct {
+				Model string `json:"model"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			mu.Lock()
+			models = append(models, body.Model)
+			mu.Unlock()
+			w.Header().Set("content-type", "application/json")
+			if body.Model == "gpt-6-astra" {
+				w.WriteHeader(status)
+				_, _ = io.WriteString(w, `{"detail":"overloaded"}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"id":"r","object":"response","model":"gpt-6.1-sol","output":[]}`)
+		}))
+		srv, _, _ := chatgptTestServer(t, upstream.URL)
+		srv.cloud = rejectingCloud(RouteAnswer{Model: "gpt-6-astra", Outcome: "routed"})
+		first := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), nil).Code
+		second := sendChatGPTAuto(t, srv, "/chatgpt/responses", []byte(chatGPTAutoBodyText), nil).Code
+		upstream.Close()
+		if got := strings.Join(models, " "); first != status || second != http.StatusOK || got != "gpt-6-astra gpt-6.1-sol" {
+			t.Errorf("routed model answering %d: agent read %d then %d, upstream models %q", status, first, second, got)
+		}
+	}
+}
+
 // A refusal the fallback model's own bytes get too was not the route stage's:
 // the ask keeps its decision.
 func TestChatGPTAutoKeepsTheDecisionWhenTheReplayFailsToo(t *testing.T) {

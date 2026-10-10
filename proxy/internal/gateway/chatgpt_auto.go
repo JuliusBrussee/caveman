@@ -158,8 +158,9 @@ func chatGPTAutoBody(captured []byte, contentEncoding string) (body []byte, tooL
 // (/responses) runs the model and effort Cloud picks among AutoOpenAIModels,
 // anything else gpt-6.1-sol. A 4xx on bytes
 // the route stage changed replays the fallback model's own bytes, except a
-// rate-limit 429 and a 401 or 403, which are returned. The agent reads the
-// Auto id it sent as the model.
+// rate-limit 429 and a 401 or 403, which are returned. A 5xx on a moved model
+// is returned and rejects the decision. The agent reads the Auto id it sent
+// as the model.
 func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestContext, requestID, traceID, upstreamURL, suffix string, start time.Time, evidence requestEvidence, body []byte) {
 	fallback := autoFallback["openai"]
 	asked, ok := setModel(body, fallback)
@@ -260,6 +261,13 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 				}
 			}
 		}
+	}
+	// A moved model overloaded or failing (529, any 5xx) is per model: the
+	// answer goes back as is, never replayed, and the rest of this ask runs
+	// the fallback, so the agent's own retry reaches it. A 429 is the plan's
+	// limit, shared by every model, and keeps the decision.
+	if err == nil && resp.StatusCode >= 500 && model != fallback && route.Reject != nil {
+		route.Reject()
 	}
 	if err == nil && resp.StatusCode >= 400 && resp.StatusCode < 500 && !bytes.Equal(sent, asked) && !rateLimited(resp) &&
 		resp.StatusCode != http.StatusUnauthorized && resp.StatusCode != http.StatusForbidden {
