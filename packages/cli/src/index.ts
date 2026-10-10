@@ -3714,8 +3714,9 @@ function runnableCommand(): string {
 // records this CLI's own paths (hook commands, the native-hook adapter,
 // bundled plugins), which would then fail in every agent session. So setup
 // from a runner never wires: it installs this version for good when it is not
-// installed yet, and has that copy do the wiring.
-const EPHEMERAL_PATH = /\/_npx\/|\/pnpm\/dlx\/|\/dlx-\d+\/|\/bunx-/;
+// installed yet, and has that copy do the wiring. pnpm's cache is
+// %LOCALAPPDATA%\pnpm-cache (or ~\.pnpm-cache) on Windows.
+const EPHEMERAL_PATH = /\/_npx\/|\/\.?pnpm(?:-cache)?\/dlx\/|\/dlx-\d+\/|\/bunx-/;
 
 function isEphemeralPath(path: string): boolean {
   return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
@@ -3736,10 +3737,10 @@ function privateCliBin(): string {
 }
 
 // Every caveman command that outlives this process: the ones on PATH outside
-// a runner's cache, then the private install.
-function durableCavemen(): string[] {
+// a runner's cache, then (withPrivate) the private install.
+function durableCavemen(withPrivate = true): string[] {
   const found: string[] = [];
-  for (const dir of [...(process.env.PATH ?? "").split(delimiter), privateCliBin()]) {
+  for (const dir of [...(process.env.PATH ?? "").split(delimiter), ...(withPrivate ? [privateCliBin()] : [])]) {
     if (!dir || isEphemeralPath(dir)) continue;
     for (const candidate of executableCandidateNames("caveman")) {
       const full = join(dir, candidate);
@@ -3761,16 +3762,20 @@ function durableCaveman(): string | null {
 function currentDurableCaveman(): string | null {
   const version = cliVersion();
   for (const candidate of durableCavemen()) {
-    const invocation = portableInvocation(candidate, ["--version"]);
-    const run = spawnSync(invocation.command, invocation.args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, windowsHide: true });
-    try { if (run.status === 0 && (JSON.parse(run.stdout) as { version?: unknown }).version === version) return candidate; } catch { /* not this one */ }
+    try {
+      const invocation = portableInvocation(candidate, ["--version"]);
+      const run = spawnSync(invocation.command, invocation.args, { encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 10_000, windowsHide: true });
+      if (run.status === 0 && (JSON.parse(run.stdout) as { version?: unknown }).version === version) return candidate;
+    } catch { /* not this one */ }
   }
   return null;
 }
 
-// `caveman` when typing that reaches it, else its full path.
+// `caveman` when typing that reaches it in a new shell (which has no runner
+// .bin on PATH), else its full path, quoted to paste when it needs it.
 function durableCommandName(durable: string): string {
-  return which("caveman") === durable ? "caveman" : durable;
+  if (durableCavemen(false)[0] === durable) return "caveman";
+  return /[^\w@%+=:,./\\-]/.test(durable) ? hookExecutableInvocation(durable, undefined) : durable;
 }
 
 function durableCliInstallCommand(): string {
@@ -3822,19 +3827,28 @@ function applyWithDurableCli(selection: Record<string, boolean>, agents: string[
 async function installDurableCli(): Promise<string> {
   const npm = which("npm");
   if (!npm) throw new Error("npm not found: install the CLI yourself (npm install -g @caveman-ai/cli), then run caveman setup");
+  // npm's stderr, or an `npm error` line of ours when npm could not be
+  // started or did not finish (a registry that never answers).
+  const timedOut = "npm error npm did not finish: is the npm registry reachable?";
   const run = (extra: string[]) => new Promise<string>((resolve) => {
-    const invocation = portableInvocation(npm, ["install", "-g", ...extra, "--no-audit", "--no-fund", `@caveman-ai/cli@${cliVersion()}`]);
-    const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
-    let stderr = "";
-    const timer = setTimeout(() => child.kill(), 180_000);
-    child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
-    child.once("error", (error) => { clearTimeout(timer); resolve(error.message); });
-    child.once("close", () => { clearTimeout(timer); resolve(stderr); });
+    try {
+      const invocation = portableInvocation(npm, ["install", "-g", ...extra, "--no-audit", "--no-fund", `@caveman-ai/cli@${cliVersion()}`]);
+      const child = spawn(invocation.command, invocation.args, { stdio: ["ignore", "ignore", "pipe"], windowsHide: true });
+      let stderr = "";
+      let killed = false;
+      const timer = setTimeout(() => { killed = true; child.kill(); }, Number(process.env.CAVE_NPM_INSTALL_TIMEOUT_MS) || 180_000);
+      child.stderr.on("data", (chunk: Buffer) => { stderr += chunk.toString("utf8"); });
+      child.once("error", (error) => { clearTimeout(timer); resolve(`npm error ${error.message}`); });
+      child.once("close", () => { clearTimeout(timer); resolve(killed ? timedOut : stderr); });
+    } catch (error) {
+      resolve(`npm error ${error instanceof Error ? error.message : String(error)}`);
+    }
   });
   const global = await run([]);
   let found = currentDurableCaveman();
   if (found) return durableCommandName(found);
-  const local = await run(["--prefix", privateCliPrefix()]);
+  // A registry that did not answer will not answer a second try either.
+  const local = global === timedOut ? "" : await run(["--prefix", privateCliPrefix()]);
   found = currentDurableCaveman();
   if (found) return durableCommandName(found);
   const why = `${local}\n${global}`.split("\n").map((line) => line.trim()).find((line) => /^npm (?:error|ERR!)/.test(line)) ?? "npm install failed";
@@ -3850,6 +3864,7 @@ function runnerHandoff(): OnboardDeps["installCli"] {
     ...(installed ? {} : { command: durableCliInstallCommand() }),
     run: async () => installed ? durableCommandName(installed) : installDurableCli(),
     apply: applyWithDurableCli,
+    shadow: () => durableCavemen(false)[0],
   };
 }
 
@@ -16928,7 +16943,7 @@ export function generatedPluginInvocation(
 
 function cavemanInvocation(): { cmd: string; pre: string[] } {
   return generatedPluginInvocation(
-    which("caveman") ?? which("cave") ?? undefined,
+    durableCaveman() ?? which("caveman") ?? which("cave") ?? undefined,
     process.argv[1] ?? "",
   );
 }
