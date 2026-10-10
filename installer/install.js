@@ -516,6 +516,19 @@ function absoluteNodePath() {
   return process.execPath;
 }
 
+// writeSettings re-serializes plain JSON, so comments and trailing commas go.
+// When the file had them, keep the commented original once and say where.
+function writeSettingsKeepingComments(settingsPath, settings, meta, warn) {
+  if (meta.jsonc) {
+    const bak = settingsPath + '.bak';
+    if (!fs.existsSync(bak)) fs.copyFileSync(settingsPath, bak);
+    warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
+    warn(`        Your original (with comments) is preserved at ${bak}`);
+  }
+  SETTINGS.validateHookFields(settings);
+  SETTINGS.writeSettings(settingsPath, settings);
+}
+
 // ── Per-provider installers ────────────────────────────────────────────────
 // `claude plugin list` names each plugin by its full id. A bare /caveman/ also
 // matched caveman-browse@caveman-browse, so the install was skipped.
@@ -600,6 +613,23 @@ async function installClaude(ctx) {
       note('  hooks: plugin manifest handles SessionStart + SubagentStart + UserPromptSubmit + SessionEnd');
       note('  (pass --with-hooks to also wire standalone hooks in settings.json)');
       results.skipped.push(['claude-hooks', 'plugin manifest handles hooks']);
+      // An earlier run whose plugin install failed wired standalone hooks. The
+      // plugin runs the same scripts, so keeping them fires each hook twice.
+      // The statusline stays: the plugin has none.
+      const settingsPath = path.join(configDir, 'settings.json');
+      const settingsMeta = {};
+      const settings = SETTINGS.readSettings(settingsPath, settingsMeta);
+      const removed = settings ? SETTINGS.removeCavemanHooks(settings) : 0;
+      const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
+      try {
+        if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
+        else if (removed > 0) {
+          writeSettingsKeepingComments(settingsPath, settings, settingsMeta, warn);
+          note(`  removed ${what}`);
+        }
+      } catch (e) {
+        warn(`  could not update ${settingsPath}: ${e.message}`);
+      }
     } else {
       note('  hooks: plugin install did not succeed; falling back to standalone wiring');
     }
@@ -2010,9 +2040,8 @@ function uninstall(ctx) {
       warn('  Remove the caveman entries from it by hand, then re-run --uninstall.');
     }
     if (settings) {
-      // Rewriting re-serializes plain JSON, so comments and trailing commas
-      // go: write only when something of ours came out, and keep the
-      // commented original first, as install does.
+      // Rewriting drops comments, so write only when something of ours
+      // came out.
       const before = JSON.stringify(settings);
       const removed = SETTINGS.removeCavemanHooks(settings);
       // Drop our statusline if it points at our script
@@ -2026,13 +2055,7 @@ function uninstall(ctx) {
       try {
         if (changed && opts.dryRun) note(`  would remove ${entries}`);
         else if (changed) {
-          if (settingsMeta.jsonc) {
-            const bak = settingsPath + '.bak';
-            if (!fs.existsSync(bak)) fs.copyFileSync(settingsPath, bak);
-            warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
-            warn(`        Your original (with comments) is preserved at ${bak}`);
-          }
-          SETTINGS.writeSettings(settingsPath, settings);
+          writeSettingsKeepingComments(settingsPath, settings, settingsMeta, warn);
           ok(`  removed ${entries}`);
         }
       } catch (e) {

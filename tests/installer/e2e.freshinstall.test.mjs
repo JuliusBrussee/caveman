@@ -953,6 +953,30 @@ test('another caveman-named plugin does not count as the caveman plugin', () => 
   }
 });
 
+// A run whose plugin install failed wires standalone hooks. Once a later run
+// installs the plugin, its manifest runs the same scripts, so the standalone
+// entries must go or every hook fires twice (#392). The statusline stays: the
+// plugin has none.
+test('plugin install after a failed one drops the standalone hook entries', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude-config');
+  try {
+    const env = recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'));
+    const first = runInstaller(['--only', 'claude'], configDir, { ...env, FAKE_CLAUDE_FAIL_INSTALL: '1' });
+    assert.match(first.stdout, /falling back to standalone wiring/, first.stdout + first.stderr);
+    const settingsPath = path.join(configDir, 'settings.json');
+    assert.ok(SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate'));
+
+    const second = runInstaller(['--only', 'claude'], configDir, env);
+    assert.equal(second.status, 0, second.stdout + second.stderr);
+    const settings = SETTINGS.readSettings(settingsPath);
+    assert.equal(SETTINGS.removeCavemanHooks(structuredClone(settings)), 0, `standalone hooks left beside the plugin: ${JSON.stringify(settings.hooks)}`);
+    assert.match(getStatuslineCommand(settings), /caveman-statusline/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: --force migrates a mixed legacy AGENTS.md instead of wiping it (#594)
 // The old code replaced the whole file with the fenced block whenever the
 // legacy un-fenced sentinel was present — and the installer's own hint told
