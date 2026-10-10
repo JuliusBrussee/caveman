@@ -153,6 +153,9 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
+  if (opts.uninstall && opts.only.length) {
+    die('error: --uninstall removes caveman from every agent; it cannot be limited with --only.\n  run it without --only');
+  }
   // --all turns on per-repo init only. It deliberately does NOT force:
   //   • withHooks — left at 'auto' so installClaude() can skip standalone
   //     settings.json wiring when the plugin manifest already wires the hooks
@@ -1959,7 +1962,7 @@ function uninstall(ctx) {
     const r = bundled
       ? runSpawn(process.execPath, [bundled, 'disable', '--all'], null, opts.dryRun)
       : runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
-    if (spawnOk(r)) ok('  disabled native agent integrations');
+    if (spawnOk(r) && !opts.dryRun) ok('  disabled native agent integrations');
   }
 
   // ...and say so when one survived. `disable` removes the journal it restored
