@@ -64,9 +64,18 @@ func TestRestrictLeavesAPopulatedFolderAndAJunctionAlone(t *testing.T) {
 	}
 	target := t.TempDir()
 	setDACL(t, target, broad)
-	link := filepath.Join(t.TempDir(), "caveman")
+	// The DACL Restrict reads on a junction is the junction's own, and one that
+	// grants no one else is left alone before the junction is even looked at.
+	// Made under a broad folder, the junction inherits a broad DACL of its own,
+	// so the junction branch is the one that answers.
+	parent := t.TempDir()
+	setDACL(t, parent, broad)
+	link := filepath.Join(parent, "caveman")
 	if out, err := exec.Command("cmd", "/c", "mklink", "/J", link, target).CombinedOutput(); err != nil {
 		t.Fatalf("mklink /J: %v %s", err, out)
+	}
+	if !broadPath(t, link) {
+		t.Fatal("fixture: the junction must start out granting Authenticated Users")
 	}
 	for _, tt := range []struct{ home, check, why string }{{populated, populated, "it holds notes.txt"}, {link, target, "it is a junction or link"}} {
 		before := sddl(t, tt.check)
