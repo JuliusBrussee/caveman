@@ -631,7 +631,7 @@ async function installClaude(ctx) {
           note(`  removed ${what}`);
         }
       } catch (e) {
-        warn(`  could not update ${settingsPath}: ${e.message}`);
+        warn(`  could not update ${settingsPath}: ${e && e.message || e}`);
       }
     } else {
       note('  hooks: plugin install did not succeed; falling back to standalone wiring');
@@ -645,7 +645,7 @@ async function installClaude(ctx) {
     // written last and atomically, so it is unchanged.
     let r;
     try { r = await installHooks(ctx); }
-    catch (e) { r = `${e.message}; settings.json left untouched`; }
+    catch (e) { r = `${e && e.message || e}; settings.json left untouched`; }
     if (r === 'ok') results.installed.push('claude-hooks');
     else if (r === 'skip') results.skipped.push(['claude-hooks', 'already wired']);
     else results.failed.push(['claude-hooks', r]);
@@ -2117,10 +2117,9 @@ function uninstall(ctx) {
       note('  claude plugin not installed — skipping');
     }
 
-    // caveman-shrink MCP — only run if `claude mcp` subcommand exists. Tolerate
-    // non-zero exit (server may have never been registered).
-    // Captured: most machines never registered it, and the CLI says so on
-    // stderr every time.
+    // caveman-shrink MCP — only run if `claude mcp` subcommand exists. Output
+    // is captured: most machines never registered the server, and the CLI
+    // says so on stderr every time.
     const mcpHelp = captureSpawn('claude', ['mcp', '--help']);
     if (mcpHelp.status === 0) {
       const args = ['mcp', 'remove', 'caveman-shrink'];
