@@ -181,6 +181,34 @@ function portHeldByOther(port: number): boolean {
   return !version || (version.capabilities.includes("run_state") && !readProxyRuntimeState(port, version).pid);
 }
 
+// What answers where wired agents send their requests: "running" (a Caveman
+// runtime: its run state validates against its own listener), "down"
+// (nothing: a reboot, `caveman stop`) or "other". Undefined for a managed
+// gateway, or without caveman-proxy to tell (binary-missing says so). Wiring
+// cannot see any of this: an agent wired to a runtime that is down fails every
+// request, and Codex retries forever.
+async function agentRuntimeState(): Promise<"running" | "down" | "other" | undefined> {
+  const gw = gatewayURL();
+  const version = probeProxyVersion();
+  if (wrapMode(gw) !== "local" || !version) return undefined;
+  const { host, port } = gatewayHostPort(gw);
+  if (version.capabilities.includes("run_state") && readProxyRuntimeState(port, version).owner !== "unknown") return "running";
+  if (!(await portListening(host, port))) return "down";
+  return version.capabilities.includes("run_state") ? "other" : "running";
+}
+
+// What status and doctor say about it, with the fix. `doctor <agent> --fix`
+// starts the runtime in the background the way the agent's own hooks do;
+// aider's wiring starts none.
+function agentRuntimeLine(state: "down" | "other", agents: string[]): string {
+  const { host, port } = gatewayHostPort();
+  const agent = agents.find((id) => id !== "aider");
+  const fix = agent ? `caveman doctor ${agent} --fix` : "caveman start";
+  return state === "down"
+    ? `the local runtime is not running · start it: ${fix}`
+    : `another program holds ${host}:${port}, where your agents send their requests · stop it, then ${fix}`;
+}
+
 // Whether the runtime could bind the port. Nothing answers on a port inside a
 // Windows excluded range (Hyper-V, WSL, Docker), yet binding it fails.
 function portBindable(host: string, port: number): Promise<boolean> {
@@ -643,6 +671,10 @@ setModuleHost({
       const stale = pid && state.version && version && state.version !== version.version ? { running: state.version, installed: version.version } : undefined;
       return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(state.instance_token ? { token: state.instance_token } : {}), ...(stale ? { stale } : {}) };
     }));
+  },
+  runtimeDown: async () => {
+    const wired = (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).filter((agent) => readNativeJournal(agent));
+    return wired.length && await agentRuntimeState() === "down" ? agentRuntimeLine("down", wired) : undefined;
   },
   interactive,
   confirm: promptYesNo,
@@ -10991,7 +11023,7 @@ async function nativeDoctor(argv: string[]) {
     return;
   }
   const before = nativeIntegrationStatus(target);
-  let fixResult: "not_needed" | "enabled" | "repaired" | "recovered" | undefined;
+  let fixResult: "not_needed" | "enabled" | "repaired" | "recovered" | "started" | undefined;
   if (fix) {
     if (!before.available && before.transaction_pending) {
       withIntegrationLock(target, () => recoverPendingNativeInstallUnlocked(target));
@@ -11008,8 +11040,23 @@ async function nativeDoctor(argv: string[]) {
       repairNativeAgent(target);
       fixResult = "repaired";
     }
+    // The wiring holds and the runtime it points at is down: start it the way
+    // enable does (enable just did), and give it a moment to answer.
+    if (fixResult !== "recovered" && target !== "aider" && await agentRuntimeState() === "down") {
+      if (fixResult !== "enabled") ensureLocalProxyForNative(target, gatewayURL());
+      for (const deadline = Date.now() + 5000; Date.now() < deadline && await agentRuntimeState() === "down";) await sleep(200);
+      if (fixResult === "not_needed" && await agentRuntimeState() === "running") fixResult = "started";
+    }
   }
   const result = nativeIntegrationStatus(target);
+  const runtime = result.installed ? await agentRuntimeState() : undefined;
+  if (runtime === "down" || runtime === "other") {
+    if (result.state === "installed") result.state = "degraded";
+    result.components.routing = false;
+    result.components.shared_runtime = false;
+    result.capabilities = nativeCapabilityReport(target, result.components, result.version_status);
+    result.warnings.unshift(agentRuntimeLine(runtime, [target]));
+  }
   print({
     ...result,
     repair: result.installed ? `caveman doctor ${target} --fix` : `caveman enable ${target}`,
@@ -20194,8 +20241,11 @@ async function status(argv: string[]) {
   const integrations = [...native, { ...genericIntegrationStatus(listening), runtime_reachable: listening }];
   const modules = await moduleStates();
   const traffic = agentTraffic();
+  // Wired agents send every request to the runtime; while it is down each fails.
+  const wired = native.filter((integration) => integration.installed).map((integration) => integration.agent);
+  const runtimeState = wired.length ? await agentRuntimeState() : undefined;
   if (argv.includes("--json")) {
-    print({ ...view, agent_traffic: { target: traffic.target, line: traffic.line, ...(traffic.fix ? { fix: traffic.fix } : {}) }, native_integrations: integrations, modules });
+    print({ ...view, agent_traffic: { target: traffic.target, line: traffic.line, ...(traffic.fix ? { fix: traffic.fix } : {}), ...(runtimeState ? { runtime: runtimeState } : {}) }, native_integrations: integrations, modules });
     return;
   }
   const saved = view.mode === "compress" ? Number(today?.compression_tokens_saved ?? 0) : 0;
@@ -20205,8 +20255,11 @@ async function status(argv: string[]) {
     ...(routing.note ? { routing: routing.note } : {}),
   };
   const degraded = native.filter((integration) => integration.state === "degraded").map((integration) => integration.agent);
+  if (runtimeState === "down" || runtimeState === "other") degraded.push(...wired.filter((agent) => !degraded.includes(agent)));
   const lines = [...(routing.notice ? [routing.notice] : []), ...view.off_states.map((state) => state.fix ? `${state.line} · ${state.fix}` : state.line)];
   lines.push(traffic.fix ? `${traffic.line} · ${traffic.fix}` : traffic.line);
+  // Another program on the port is the foreign-process line above.
+  if (runtimeState === "down") lines.push(agentRuntimeLine("down", wired));
   lines.push(...native.flatMap((integration) => integration.warnings));
   const step = nextStep(modules, { degraded: degraded[0], fallback: next });
   process.stdout.write(renderModuleGrid(modules, { notes, next: traffic.next && step !== "caveman setup --install" ? traffic.next : step, degraded, lines }));

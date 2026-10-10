@@ -33,6 +33,8 @@ export async function modulesDoctor(): Promise<void> {
     // A runtime keeps the binary it started from until it restarts.
     else if (runtime.stale) failures.push(`${runtime.host}:${runtime.port} still runs caveman-proxy ${runtime.stale.running}; ${runtime.stale.installed} is installed · fix: caveman stop, then start your agent again`);
   }
+  const down = await h.runtimeDown();
+  if (down) failures.push(down);
   const wired = h.nativeAgents().filter((agent) => agent.wired);
   for (const agent of wired) {
     const state = h.agentState(agent.id);

@@ -82,6 +82,9 @@ export type ModuleHost = {
   signedIn(): boolean;
   cloudCheck(): Promise<void>;
   localRuntimes(): Promise<LocalRuntime[]>;
+  // What doctor says, with the fix, when wired agents send their requests to a
+  // local runtime that is not running; undefined otherwise.
+  runtimeDown(): Promise<string | undefined>;
   interactive(): boolean;
   confirm(question: string): Promise<boolean>;
   // Where new wiring sends agent traffic, and the line status prints; `fix`

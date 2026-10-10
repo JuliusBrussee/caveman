@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer } from "node:net";
 import { join } from "node:path";
@@ -118,6 +118,28 @@ test("before setup, modules that wait on it say not set up and point at setup", 
     assert.equal(doctor.code, 0, doctor.stdout);
     assert.match(doctor.stdout, /^· routing: not set up · caveman setup$/m);
     assert.match(doctor.stdout, /^· scripts: not set up · caveman setup$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// Wiring cannot tell that the runtime it points at stopped (a reboot, `caveman
+// stop`): every request then fails, and Codex retries forever. Status and
+// doctor say so, with the command that starts it again.
+test("status and doctor say when the runtime wired agents use is not running", async () => {
+  const fx = modulesFixture();
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    rmSync(join(fx.env.CAVEMAN_HOME, "run", "9.json"));
+    const status = await runCli(["status"], fx.env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.match(status.stdout, /^ {2}on {2}output {7}degraded {3}degraded$/m);
+    assert.match(status.stdout, /^the local runtime is not running · start it: caveman doctor claude --fix$/m);
+    assert.match(status.stdout, /\nnext: caveman doctor claude --fix\n$/);
+    assert.equal(JSON.parse((await runCli(["status", "--json"], fx.env)).stdout).agent_traffic.runtime, "down");
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.equal(doctor.code, 1, doctor.stdout);
+    assert.match(doctor.stdout, /^✗ the local runtime is not running · start it: caveman doctor claude --fix$/m);
   } finally {
     fx.cleanup();
   }

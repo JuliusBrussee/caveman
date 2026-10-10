@@ -33,6 +33,11 @@ fi
   writeFileSync(proxy, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
   printf '%s\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}'
+elif [ "$1" = "status" ]; then
+  # A Caveman runtime answers where agents are wired, unless the test stopped it.
+  if [ -f "$CAVEMAN_HOME/runtime-stopped" ]; then printf '%s\n' '{"owner":"unknown"}'; else printf '%s\n' '{"owner":"start"}'; fi
+elif [ $# -eq 0 ] && [ -f "$CAVEMAN_HOME/runtime-stopped" ]; then
+  rm -f "$CAVEMAN_HOME/runtime-stopped"
 elif [ -n "$CAVEMAN_PROXY_SPAWN_LOG" ]; then
   printf 'listen=%s recovery=%s owner=%s cwd=%s\n' "$CAVEMAN_LISTEN" "$CAVEMAN_RECOVERY" "$CAVEMAN_PROXY_OWNER" "$(pwd -P)" >> "$CAVEMAN_PROXY_SPAWN_LOG"
 fi
@@ -613,6 +618,32 @@ test("doctor does not claim a Codex tool rewrite that shrink-hook declines", asy
   // The rest of the integration is untouched: this is a claim fix, not a downgrade.
   assert.equal(result.components.lifecycle_hooks, true);
   assert.equal(result.components.routing, true);
+});
+
+// A reboot or `caveman stop` leaves Codex wired to a runtime that is down, and
+// `codex exec` retries forever. Doctor says so instead of "installed", and
+// --fix starts it the way enable does.
+test("doctor codex reads degraded while the runtime is down, and --fix starts it", async () => {
+  const fx = fixture();
+  // Port 9: nothing listens there, so the runtime is the stub's, never this machine's 8787.
+  const spawned = join(fx.home, "proxy-spawns.log");
+  const env = { ...fx.env, CAVE_GATEWAY_URL: "http://127.0.0.1:9", CAVEMAN_LISTEN: "127.0.0.1:9", CAVEMAN_PROXY_SPAWN_LOG: spawned };
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  assert.equal((await run(["enable", "codex"], env)).code, 0);
+  // Enable starts the runtime detached; it has to have run before it is stopped.
+  for (let i = 0; i < 100 && !existsSync(spawned); i++) await new Promise((resolve) => setTimeout(resolve, 50));
+  writeFileSync(join(fx.home, ".caveman", "runtime-stopped"), "");
+  const down = await run(["doctor", "codex"], env);
+  assert.notEqual(down.code, 0);
+  const result = JSON.parse(down.stdout);
+  assert.equal(result.state, "degraded");
+  assert.equal(result.components.routing, false);
+  assert.equal(result.components.shared_runtime, false);
+  assert.equal(result.warnings[0], "the local runtime is not running · start it: caveman doctor codex --fix");
+  const fixed = await run(["doctor", "codex", "--fix"], env);
+  assert.equal(fixed.code, 0, fixed.stdout + fixed.stderr);
+  assert.equal(JSON.parse(fixed.stdout).fix.result, "started");
+  assert.equal(JSON.parse(fixed.stdout).state, "installed");
 });
 
 // Everyone who ran `caveman enable codex` on an api key before #1045 has the

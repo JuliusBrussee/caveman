@@ -31,7 +31,8 @@ function fixture() {
   const proxy = nativeStub(bin, "caveman-proxy", `if (ARGV[0] === "version" && ARGV[1] === "--json") {
   process.stdout.write('{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr"]}\\n');
 } else if (ARGV[0] === "status") {
-  process.stdout.write('{"owner":"unknown"}\\n');
+  // A Caveman runtime answers where Pi is wired.
+  process.stdout.write('{"owner":"start"}\\n');
 } else if (ARGV[0] === "stats") {
   process.stdout.write('{}\\n');
 }
