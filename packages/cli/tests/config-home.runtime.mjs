@@ -109,3 +109,19 @@ test("a telemetry opt-out is mirrored into the old file for a rolled-back CLI", 
   }
 });
 
+test("an opt-out an older CLI writes to the old file after the copy still holds", async () => {
+  const box = env();
+  delete box.env.CI; // CI alone reads as off; the decision on disk has to say it
+  const legacy = join(box.home, ".caveman-cloud", "config.json");
+  mkdirSync(dirname(legacy), { recursive: true });
+  mkdirSync(box.caveHome, { recursive: true });
+  writeFileSync(join(box.caveHome, "cloud.json"), JSON.stringify({ telemetry: { enabled: true, anonymousId: "id-1", decidedAt: "2026-10-01T00:00:00.000Z", promptVersion: 5 } }), { mode: 0o600 });
+  writeFileSync(legacy, JSON.stringify({ telemetry: { enabled: false, decidedAt: "2026-10-02T00:00:00.000Z", promptVersion: 3 } }), { mode: 0o600 });
+  try {
+    const out = await cli_(["telemetry", "status"], box.env);
+    assert.equal(out.code, 0);
+    assert.equal(JSON.parse(out.stdout).enabled, false, "the older CLI's `telemetry off` is honored");
+  } finally {
+    rmSync(box.home, { recursive: true, force: true });
+  }
+});

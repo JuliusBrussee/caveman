@@ -846,12 +846,19 @@ function telemetryEnvForcesOff(): boolean {
 }
 
 function telemetryConfigFromDisk(): TelemetryConfig | undefined {
-  try {
-    const parsed = JSON.parse(readFileSync(configPath(), "utf8")) as { telemetry?: unknown };
-    return parseTelemetryConfig(parsed.telemetry);
-  } catch {
-    return undefined;
-  }
+  const read = (path: string) => {
+    try {
+      return parseTelemetryConfig((JSON.parse(readFileSync(path, "utf8")) as { telemetry?: unknown }).telemetry);
+    } catch {
+      return undefined;
+    }
+  };
+  const cfg = read(configPath());
+  if (cfg?.enabled === false) return cfg;
+  // An older CLI still on PATH writes `telemetry off` to the old file only (this
+  // CLI mirrors its own decisions there), so an opt-out found there holds too.
+  const legacy = read(join(legacyCloudDir(), "config.json"));
+  return legacy?.enabled === false ? legacy : cfg;
 }
 
 function parseTelemetryConfig(value: unknown): TelemetryConfig | undefined {

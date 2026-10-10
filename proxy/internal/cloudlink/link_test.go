@@ -29,6 +29,7 @@ const promptText = "PROMPT-TEXT-ONLY-THE-ROUTE-ASK-CARRIES"
 func cloudHome(t *testing.T, cloud string, routing bool, credentials string) string {
 	t.Helper()
 	home := t.TempDir()
+	t.Setenv("HOME", home) // the old ~/.caveman-cloud file is read too: never the developer's
 	doc := map[string]any{"baseURL": cloud, "gatewayUrl": cloud, "tokenStore": "file", "deviceId": "device-1", "modules": map[string]any{"routing": routing}}
 	raw, _ := json.Marshal(doc)
 	if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {
@@ -859,6 +860,13 @@ func TestEventsFollowMeAndTheOptOut(t *testing.T) {
 	_ = os.WriteFile(filepath.Join(optedOut, "cloud.json"), raw, 0o600)
 	if got := send(optedOut); len(got) != 0 {
 		t.Fatalf("telemetry off still sent %v", got)
+	}
+	// An older CLI on PATH writes `telemetry off` to ~/.caveman-cloud only.
+	oldCLI := cloudHome(t, cloud.URL, true, signedIn)
+	_ = os.MkdirAll(filepath.Join(oldCLI, ".caveman-cloud"), 0o700)
+	_ = os.WriteFile(filepath.Join(oldCLI, ".caveman-cloud", "config.json"), []byte(`{"telemetry":{"enabled":false}}`), 0o600)
+	if got := send(oldCLI); len(got) != 0 {
+		t.Fatalf("the old file's telemetry off still sent %v", got)
 	}
 	t.Setenv("DO_NOT_TRACK", "1")
 	if got := send(cloudHome(t, cloud.URL, true, signedIn)); len(got) != 0 {
