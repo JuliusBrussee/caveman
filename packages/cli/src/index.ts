@@ -166,7 +166,7 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if (!(await portListening(host, port)) || !portHeldByOther(port)) return undefined;
+  if ((await portListening(host, port)) ? !portHeldByOther(port) : await portBindable(host, port)) return undefined;
   const free = await nextFreePort(port);
   return free ? { held: `${host}:${port}`, free } : undefined;
 }
@@ -180,10 +180,20 @@ function portHeldByOther(port: number): boolean {
   return !version || (version.capabilities.includes("run_state") && !readProxyRuntimeState(port, version).pid);
 }
 
-// The first port after `port` that nothing answers on.
+// Whether the runtime could bind the port. Nothing answers on a port inside a
+// Windows excluded range (Hyper-V, WSL, Docker), yet binding it fails.
+function portBindable(host: string, port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const server = netCreateServer();
+    server.once("error", () => resolve(false));
+    server.listen({ host, port, exclusive: true }, () => server.close(() => resolve(true)));
+  });
+}
+
+// The first port after `port` that nothing answers on and the runtime can bind.
 async function nextFreePort(port: number): Promise<number | undefined> {
   for (let candidate = port + 1; candidate <= Math.min(port + 50, 65535); candidate++) {
-    if (!(await portListening("127.0.0.1", candidate))) return candidate;
+    if (!(await portListening("127.0.0.1", candidate)) && await portBindable("127.0.0.1", candidate)) return candidate;
   }
   return undefined;
 }

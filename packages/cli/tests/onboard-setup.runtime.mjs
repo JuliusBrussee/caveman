@@ -2,7 +2,7 @@ import { test } from "node:test";
 import { createServer } from "node:net";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedCliEnv, runCli as runIsolated } from "./_cli.mjs";
@@ -180,6 +180,32 @@ test("a first setup moves the runtime off a port another program holds, and late
     holder.close();
     fx.cleanup();
     fresh.cleanup();
+  }
+});
+
+// The runtime's port as setup recorded it (localPort), for a test to hold.
+function runtimeOn(fx, port) {
+  const env = { ...fx.env };
+  delete env.CAVE_GATEWAY_URL;
+  delete env.CAVEMAN_LISTEN;
+  mkdirSync(env.CAVEMAN_HOME, { recursive: true });
+  writeFileSync(join(env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ localPort: port }));
+  return env;
+}
+
+// Nothing answers on a port inside a Windows excluded range (Hyper-V, WSL,
+// Docker reserve them), yet the runtime cannot bind it. A socket bound without
+// listening is the same case on any OS.
+test("a first setup moves the runtime off a port it cannot bind even though nothing answers there", { skip }, async () => {
+  const python = spawn("python3", ["-c", "import socket, sys\ns = socket.socket()\ns.bind(('127.0.0.1', 0))\nprint(s.getsockname()[1], flush=True)\nsys.stdin.read()"], { stdio: ["pipe", "pipe", "inherit"] });
+  const held = Number(String(await new Promise((resolve, reject) => { python.stdout.once("data", resolve); python.once("error", reject); })).trim());
+  const fx = modulesFixture({ agents: ["claude"] });
+  try {
+    const dry = await runCli(["setup", "--dry-run"], runtimeOn(fx, held));
+    assert.match(dry.stdout, new RegExp(`RUN +local runtime on port \\d+ {2}127\\.0\\.0\\.1:${held} is in use by another program\\n`));
+  } finally {
+    python.kill();
+    fx.cleanup();
   }
 });
 
