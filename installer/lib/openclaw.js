@@ -363,10 +363,10 @@ function installOpenclaw({ workspace, repoRoot, dryRun = false, force = false, l
   // it did not write; this path has no journal, so a user who tuned their
   // SOUL-adjacent skill silently lost it. Back up once — a second install
   // would otherwise overwrite the only pre-caveman copy with our own output.
-  // An older caveman copy is not worth keeping: uninstall restores the backup.
+  // A caveman copy the user tuned looks like ours, so it is kept too; uninstall
+  // deletes a caveman-shaped backup rather than restore it.
   const skillBak = skillFile + '.bak';
-  if (priorSkill.content !== null && priorSkill.content !== merged &&
-      !isCavemanSkill(priorSkill.content) && !fs.existsSync(skillBak)) {
+  if (priorSkill.content !== null && priorSkill.content !== merged && !fs.existsSync(skillBak)) {
     try {
       fs.writeFileSync(skillBak, priorSkill.content, { mode: 0o600, flag: 'wx' });
       log.note(`  backed up your existing ${skillFile} to ${skillBak}`);

@@ -827,6 +827,25 @@ test('openclaw uninstall restores a pre-existing skill and keeps foreign files i
   }
 });
 
+// A caveman skill the user tuned by hand still looks like caveman's own, and
+// install overwrites it: the one copy of their edits is the backup.
+test('openclaw install backs up a hand-tuned caveman skill', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  const skillDir = path.join(ws, 'skills', 'caveman');
+  const tuned = '---\nname: caveman\nalways: true\n---\nRespond terse like smart caveman. MY OWN EXTRA RULE.\n';
+  try {
+    fs.mkdirSync(skillDir, { recursive: true });
+    fs.writeFileSync(path.join(skillDir, 'SKILL.md'), tuned);
+    helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT });
+    assert.doesNotMatch(fs.readFileSync(path.join(skillDir, 'SKILL.md'), 'utf8'), /MY OWN EXTRA RULE/);
+    assert.equal(fs.readFileSync(path.join(skillDir, 'SKILL.md.bak'), 'utf8'), tuned, 'hand-tuned skill overwritten with no backup');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw uninstall propagates skill deletion failure and restores SOUL + skill', () => {
   const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
   const dir = freshTmpDir();
