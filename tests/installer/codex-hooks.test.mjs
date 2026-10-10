@@ -12,6 +12,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { nodeStub } from '../../packages/cli/tests/harness/stub-bin.mjs';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const INSTALLER = path.join(ROOT, 'installer', 'install.js');
@@ -24,14 +25,15 @@ function sandbox(t, codexDir = 'codex home') {
   nodeStub(bin, 'npx', 'process.exit(0);');
   const codexHome = path.join(dir, codexDir);
   fs.mkdirSync(codexHome);
-  const env = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    key.toLowerCase() !== 'path' && !key.startsWith('CAVEMAN_') && key !== 'CLAUDE_PLUGIN_ROOT'));
+  // Node's own directory stays off the POSIX PATH: npm-global agent CLIs
+  // (codex, gemini, caveman) live beside it.
+  const env = Object.fromEntries(Object.entries(isolatedEnv(dir, [bin])).filter(([key]) =>
+    !key.startsWith('CAVEMAN_') && key !== 'CLAUDE_PLUGIN_ROOT'));
   Object.assign(env, {
-    HOME: dir, USERPROFILE: dir, APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir,
-    CODEX_HOME: codexHome, NO_COLOR: '1',
+    APPDATA: dir, LOCALAPPDATA: dir, XDG_CONFIG_HOME: dir, CODEX_HOME: codexHome,
     PATH: process.platform === 'win32'
       ? `${bin};${path.dirname(process.execPath)};${process.env.SystemRoot || 'C:\\Windows'}\\System32`
-      : `${bin}:${path.dirname(process.execPath)}:/usr/bin:/bin`,
+      : env.PATH,
   });
   const run = (...args) => spawnSync(process.execPath, [
     INSTALLER, ...args, '--config-dir', path.join(dir, 'claude'), '--non-interactive', '--no-mcp-shrink',

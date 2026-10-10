@@ -107,7 +107,7 @@ test('grok relative GROK_HOME resolves cwd-relative', () => {
     fs.mkdirSync(project);
     const r = spawnSync(process.execPath, [INSTALLER, '--only', 'grok', '--config-dir', path.join(home, '.claude-test'), '--non-interactive', '--no-mcp-shrink'], {
       cwd: project,
-      env: { ...process.env, GROK_HOME: 'custom grok', NO_COLOR: '1' },
+      env: { ...isolatedEnv(path.join(home, 'home')), GROK_HOME: 'custom grok' },
       encoding: 'utf8',
     });
     assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);

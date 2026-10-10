@@ -12,6 +12,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createRequire } from 'node:module';
 import { nodeStub, stubEnv } from '../../packages/cli/tests/harness/stub-bin.mjs';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const INSTALLER = path.join(ROOT, 'installer/install.js');
@@ -28,10 +29,9 @@ function fixture(t) {
   nodeStub(bin, 'npx', 'process.exit(0);');
   // Only the stub (and node, which Windows shims need by name) on PATH:
   // uninstall must not reach a real `claude`, `gemini` or `caveman`.
-  const base = Object.fromEntries(Object.entries(process.env).filter(([key]) =>
-    !['path', 'caveman_default_mode', 'cursor_project_dir'].includes(key.toLowerCase())));
-  base.PATH = process.platform === 'win32' ? path.dirname(process.execPath) : '/usr/bin:/bin';
-  const env = stubEnv({ ...base, HOME: home, USERPROFILE: home, NO_COLOR: '1' }, bin);
+  const base = Object.fromEntries(Object.entries(isolatedEnv(home)).filter(([key]) =>
+    !['caveman_default_mode', 'cursor_project_dir'].includes(key.toLowerCase())));
+  const env = stubEnv(base, bin);
   const run = (...args) => spawnSync(process.execPath, [INSTALLER, ...args, '--non-interactive'], {
     encoding: 'utf8', cwd: dir, env,
   });

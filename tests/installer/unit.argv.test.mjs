@@ -4,18 +4,20 @@
 // For deeper coverage of flag-resolution semantics, exec --dry-run --list and
 // check the rendered defaults.
 
-import { test } from 'node:test';
+import { test, after } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const INSTALLER = path.resolve(HERE, '..', '..', 'installer', 'install.js');
-const CLEAN_ENV = Object.fromEntries(
-  Object.entries(process.env).filter(([key]) => key.toUpperCase() !== 'PATH'),
-);
-CLEAN_ENV.PATH = path.join(HERE, '__no_commands__');
+const HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'cm-argv-'));
+after(() => fs.rmSync(HOME, { recursive: true, force: true }));
+const CLEAN_ENV = { ...isolatedEnv(HOME), PATH: path.join(HERE, '__no_commands__') };
 
 function run(...args) {
   return spawnSync(process.execPath, [INSTALLER, ...args], {
@@ -114,8 +116,7 @@ test('--config-dir expands ~ to home directory', async () => {
   // The plan only includes the hooks dir if claude is detected. Skip the
   // positive assertion when claude isn't on PATH on the runner.
   if (/Claude Code detected/.test(r.stdout)) {
-    const { homedir } = await import('node:os');
-    assert.match(r.stdout, new RegExp(homedir().replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\\\/]' + suffix));
+    assert.match(r.stdout, new RegExp(HOME.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '[\\\\/]' + suffix));
   }
 });
 

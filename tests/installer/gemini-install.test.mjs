@@ -133,8 +133,7 @@ function runInstaller(root, args, fakeBin, extraEnv = {}) {
   const home = path.join(root, 'home');
   fs.mkdirSync(home, { recursive: true });
   const record = path.join(root, 'record.txt');
-  const sep = IS_WIN ? ';' : ':';
-  const baseEnv = { ...process.env };
+  const baseEnv = isolatedEnv(home, [fakeBin]);
   delete baseEnv.GEMINI_CLI_TRUST_WORKSPACE;
   delete baseEnv.GEMINI_CLI_HOME; // the installer looks for the extension under it
   const r = spawnSync(process.execPath, [
@@ -144,12 +143,7 @@ function runInstaller(root, args, fakeBin, extraEnv = {}) {
   ], {
     env: {
       ...baseEnv,
-      HOME: home,
-      USERPROFILE: home,
-      XDG_CONFIG_HOME: path.join(home, '.config'),
-      NO_COLOR: '1',
       CAVEMAN_TEST_RECORD: record,
-      PATH: `${fakeBin}${sep}${process.env.PATH || ''}`,
       ...extraEnv,
     },
     input: '',

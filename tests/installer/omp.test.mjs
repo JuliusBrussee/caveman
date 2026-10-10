@@ -8,6 +8,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isolatedEnv } from './_isolated-env.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -56,7 +57,6 @@ if (args[1] === 'uninstall') {
 const OMP_SHIM_BODY = process.platform === 'win32'
   ? `@echo off\r\nendLocal & "%_prog%" "%dp0%\\${OMP_SHIM_SCRIPT_NAME}" %*\r\n`
   : `#!/bin/sh\nexec ${JSON.stringify(process.execPath)} "$(dirname "$0")/${OMP_SHIM_SCRIPT_NAME}" "$@"\n`;
-const PATH_SEPARATOR = process.platform === 'win32' ? ';' : ':';
 const OMP_SKILLS = ['caveman', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
 const OMP_COMMANDS = ['caveman.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
 const OMP_AGENTS = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
@@ -77,20 +77,12 @@ function shimOmp(home) {
 }
 
 function runInstaller(args, home, extraEnv = {}, withOmp = true) {
-  const bin = withOmp ? shimOmp(home) : path.dirname(process.execPath);
   return spawnSync(process.execPath, [INSTALLER, ...args, '--non-interactive', '--no-mcp-shrink'], {
     env: {
-      ...process.env,
+      ...isolatedEnv(home, withOmp ? [shimOmp(home)] : []),
       ...extraEnv,
-      HOME: home,
-      USERPROFILE: home,
-      XDG_CONFIG_HOME: path.join(home, '.config'),
-      XDG_DATA_HOME: path.join(home, '.local', 'share'),
       APPDATA: path.join(home, 'AppData', 'Roaming'),
       CLAUDE_CONFIG_DIR: path.join(home, '.claude'),
-      CAVEMAN_HOME: path.join(home, '.caveman'),
-      PATH: withOmp ? bin + PATH_SEPARATOR + (process.env.PATH || '') : bin,
-      NO_COLOR: '1',
     },
     encoding: 'utf8',
   });
