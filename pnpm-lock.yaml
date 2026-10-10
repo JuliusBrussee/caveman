@@ -9,8 +9,8 @@ importers:
   .:
     dependencies:
       '@caveman-ai/cli':
-        specifier: ^1.1.0
-        version: 1.2.1
+        specifier: ^2.1.0
+        version: 2.1.0
 
   browse: {}
 
@@ -315,8 +315,8 @@ packages:
     resolution: {integrity: sha512-Nq8OhGWiZIZGV6hLHoyAKLLcJihP/xFeBMGJoUrxTX2psI8dCifzLhZISFb+VWS3wFMRDmCGw5R+dOySCqPLhw==}
     engines: {node: '>=6.9.0'}
 
-  '@caveman-ai/cli@1.2.1':
-    resolution: {integrity: sha512-1V8jymxQvMBrjt3LlxP9AKxsjOsBqOOS2iBkeKtQtCzYeuAMSrOkv/7hho/iGXMjkkPvBw1ateh6C4BiBn+pUQ==}
+  '@caveman-ai/cli@2.1.0':
+    resolution: {integrity: sha512-G7NoJ6lgQUljgqeAX+7tEUvrtUy84C42VcUrTgavCj4/lkUEcL8cch9/Ut14DZjIfI8Sh6dzHzCacuavFfKqJw==}
     engines: {node: '>=22.13'}
     hasBin: true
 
@@ -2343,7 +2343,7 @@ snapshots:
 
   '@babel/runtime@7.29.7': {}
 
-  '@caveman-ai/cli@1.2.1': {}
+  '@caveman-ai/cli@2.1.0': {}
 
   '@cfworker/json-schema@4.1.1': {}
 

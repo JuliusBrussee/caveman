@@ -78,6 +78,23 @@ test("both shims pin the first-run CLI to packages/cli/package.json", () => {
   assert.doesNotMatch(shellShim + powershellShim, /@caveman-ai\/cli@latest/);
 });
 
+// `npx github:JuliusBrussee/caveman -- --uninstall` puts this package's own CLI
+// dependency first on PATH, so that CLI runs `caveman disable --all`. One from
+// an older major cannot undo what the release wrote: 1.x left Claude Code on
+// the caveman-auto model with its route gone. The floor may trail the CLI
+// version: the repo is tagged before the CLI is published, and a range nothing
+// satisfies yet would break the installer in between. So publish a new CLI
+// major before the tag that bumps this range to it.
+test("installer package depends on the CLI major this repo releases", () => {
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  const range = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).dependencies["@caveman-ai/cli"];
+  const floor = /^\^(\d+)\.(\d+)\.(\d+)$/.exec(range)?.slice(1).map(Number);
+  const want = cli.split(".").map(Number);
+  assert.ok(floor, `package.json @caveman-ai/cli must be a ^x.y.z range, got ${range}`);
+  assert.equal(floor[0], want[0], `package.json @caveman-ai/cli ${range} is not the packages/cli ${cli} major`);
+  assert.ok(floor[1] < want[1] || (floor[1] === want[1] && floor[2] <= want[2]), `package.json @caveman-ai/cli ${range} is above packages/cli ${cli}`);
+});
+
 // The install ends in the CLI's first run. Without a terminal (CI, a pipe) the
 // shim prints the one command instead of running it; flags like --help never
 // lead into it.

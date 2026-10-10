@@ -153,6 +153,9 @@ function parseArgs(argv) {
     }
   }
   if (opts.all && opts.minimal) die('error: --all and --minimal are mutually exclusive');
+  if (opts.uninstall && opts.only.length) {
+    die('error: --uninstall removes caveman from every agent; it cannot be limited with --only.\n  run it without --only');
+  }
   // --all turns on per-repo init only. It deliberately does NOT force:
   //   • withHooks — left at 'auto' so installClaude() can skip standalone
   //     settings.json wiring when the plugin manifest already wires the hooks
@@ -517,7 +520,28 @@ function absoluteNodePath() {
   return process.execPath;
 }
 
+// writeSettings re-serializes plain JSON, so comments and trailing commas go.
+// When the file had them, keep the commented original once and say where.
+function writeSettingsKeepingComments(settingsPath, settings, meta, warn) {
+  if (meta.jsonc) {
+    const bak = settingsPath + '.bak';
+    if (!fs.existsSync(bak)) fs.copyFileSync(settingsPath, bak);
+    warn(`  note: ${settingsPath} contains comments — rewriting it drops them.`);
+    warn(`        Your comments are kept in ${bak} (that copy may still list caveman's hooks).`);
+  }
+  SETTINGS.validateHookFields(settings);
+  SETTINGS.writeSettings(settingsPath, settings);
+}
+
 // ── Per-provider installers ────────────────────────────────────────────────
+// `claude plugin list` names each plugin by its full id. A bare /caveman/ also
+// matched caveman-browse@caveman-browse, so the install was skipped.
+function claudeHasCaveman() {
+  const r = captureSpawn('claude', ['plugin', 'list']);
+  const out = (r.stdout || '').replace(/\x1b\[[0-9;]*m/g, '');
+  return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(out);
+}
+
 async function installClaude(ctx) {
   const { say, note, warn, ok, opts, results, configDir } = ctx;
   results.detected++;
@@ -525,10 +549,7 @@ async function installClaude(ctx) {
 
   // Plugin install (idempotent unless --force)
   let alreadyInstalled = false;
-  if (!opts.force) {
-    const r = captureSpawn('claude', ['plugin', 'list']);
-    if (r.status === 0 && /caveman/i.test(r.stdout || '')) alreadyInstalled = true;
-  }
+  if (!opts.force) alreadyInstalled = claudeHasCaveman();
   let pluginInstallSucceeded = false;
   if (alreadyInstalled) {
     note('  caveman plugin already installed (use --force to reinstall)');
@@ -537,9 +558,12 @@ async function installClaude(ctx) {
   } else {
     // Use a temp dir on the same filesystem as configDir to avoid EXDEV errors
     // when Claude Code's plugin installer tries to rename across filesystems (#585).
-    const pluginEnv = sameFilesystemTmpEnv(configDir);
+    // A dry run makes none; a dir this run made goes again once it is empty.
+    const tmpExisted = fs.existsSync(path.join(configDir, 'tmp'));
+    const pluginEnv = opts.dryRun ? null : sameFilesystemTmpEnv(configDir);
     const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], { env: pluginEnv }, opts.dryRun);
     const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], { env: pluginEnv }, opts.dryRun);
+    if (pluginEnv && !tmpExisted) { try { fs.rmdirSync(pluginEnv.TMPDIR); } catch (_) {} }
     if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
       pluginInstallSucceeded = true;
@@ -597,6 +621,26 @@ async function installClaude(ctx) {
       note('  hooks: plugin manifest handles SessionStart + SubagentStart + UserPromptSubmit + SessionEnd');
       note('  (pass --with-hooks to also wire standalone hooks in settings.json)');
       results.skipped.push(['claude-hooks', 'plugin manifest handles hooks']);
+      // An earlier run whose plugin install failed wired standalone hooks. The
+      // plugin runs the same scripts, so keeping them fires each hook twice.
+      // The statusline stays: the plugin has none. `claude` reads the profile
+      // in CLAUDE_CONFIG_DIR, not --config-dir: another profile keeps its hooks.
+      const settingsPath = path.join(configDir, 'settings.json');
+      const settingsMeta = {};
+      const pluginProfile = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
+      const settings = path.resolve(configDir) === path.resolve(pluginProfile)
+        ? SETTINGS.readSettings(settingsPath, settingsMeta) : null;
+      const removed = settings ? SETTINGS.removeCavemanHooks(settings) : 0;
+      const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
+      try {
+        if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
+        else if (removed > 0) {
+          writeSettingsKeepingComments(settingsPath, settings, settingsMeta, warn);
+          note(`  removed ${what}`);
+        }
+      } catch (e) {
+        warn(`  could not update ${settingsPath}: ${e && e.message || e}`);
+      }
     } else {
       note('  hooks: plugin install did not succeed; falling back to standalone wiring');
     }
@@ -604,7 +648,12 @@ async function installClaude(ctx) {
 
   if (shouldWireHooks) {
     say('  → installing hooks');
-    const r = await installHooks(ctx);
+    // A throw (an event shape addCommandHook will not overwrite, a failed
+    // write) is a failed agent, not the end of the run. settings.json is
+    // written last and atomically, so it is unchanged.
+    let r;
+    try { r = await installHooks(ctx); }
+    catch (e) { r = `${e && e.message || e}; settings.json left untouched`; }
     if (r === 'ok') results.installed.push('claude-hooks');
     else if (r === 'skip') results.skipped.push(['claude-hooks', 'already wired']);
     else results.failed.push(['claude-hooks', r]);
@@ -621,14 +670,22 @@ async function installClaude(ctx) {
   process.stdout.write('\n');
 }
 
+// Gemini CLI writes `extensions list` to stderr, and 0.40 writes nothing
+// without --debug, so a stdout probe never saw caveman. Every version installs
+// to <GEMINI_CLI_HOME or ~>/.gemini/extensions/<name>; a linked extension
+// holds only the install record.
+function geminiHasCaveman() {
+  const dir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'caveman');
+  return ['gemini-extension.json', '.gemini-extension-install.json'].some((f) => fs.existsSync(path.join(dir, f)));
+}
+
 function installGemini(ctx) {
   const { say, note, opts, results } = ctx;
   results.detected++;
   say('→ Gemini CLI detected');
 
   if (!opts.force) {
-    const r = captureSpawn('gemini', ['extensions', 'list']);
-    if (r.status === 0 && /caveman/i.test(r.stdout || '')) {
+    if (geminiHasCaveman()) {
       note('  caveman extension already installed (use --force to reinstall)');
       results.skipped.push(['gemini', 'extension already installed']);
       process.stdout.write('\n');
@@ -1621,6 +1678,17 @@ async function installHooks(ctx) {
   const settingsPath = path.join(configDir, 'settings.json');
   const sourceDir = repoRoot ? path.join(repoRoot, 'src', 'hooks') : null;
 
+  // Node gives every .js in hooks/ the module type of hooks/package.json. If
+  // another plugin's manifest says "module", caveman's CommonJS hooks crash on
+  // every event, so wiring them would only add errors.
+  const manifest = path.join(hooksDir, HOOKS_MANIFEST);
+  let foreignType = null;
+  try { if (!hooksManifestIsOurs(manifest)) foreignType = JSON.parse(fs.readFileSync(manifest, 'utf8')).type; } catch (_) {}
+  if (foreignType === 'module') {
+    warn(`  ${manifest} belongs to another plugin and says "type":"module", so caveman's hooks cannot run there.`);
+    return `${manifest} says "type":"module"; nothing changed. Use the plugin install instead`;
+  }
+
   if (opts.dryRun) {
     note(`  would mkdir -p ${hooksDir}`);
     for (const f of HOOK_FILES) note(`  would install ${path.join(hooksDir, f)}`);
@@ -1641,7 +1709,6 @@ async function installHooks(ctx) {
     const dest = path.join(hooksDir, f);
     if (f === HOOKS_MANIFEST && fs.existsSync(dest) && !hooksManifestIsOurs(dest)) {
       warn(`  ${dest} belongs to another plugin — left untouched.`);
-      warn("  caveman's hooks are CommonJS; if that file declares \"type\":\"module\" they will not load.");
       continue;
     }
     const local = sourceDir && path.join(sourceDir, f);
@@ -1704,9 +1771,12 @@ async function installHooks(ctx) {
   }
   // Backup once, preserved across reinstalls. Without the !fs.existsSync(bak)
   // guard, the second install would overwrite the only known-good copy with
-  // the already-merged file, destroying recovery.
+  // the already-merged file, destroying recovery. A file already holding our
+  // hooks is our own earlier merge, not the user's original: restoring it
+  // would bring back hooks uninstall deleted. Comments still get kept.
   const bak = settingsPath + '.bak';
-  if (fs.existsSync(settingsPath) && !fs.existsSync(bak)) {
+  const ours = SETTINGS.removeCavemanHooks(structuredClone(settings)) > 0;
+  if (fs.existsSync(settingsPath) && !fs.existsSync(bak) && (settingsMeta.jsonc || !ours)) {
     try { fs.copyFileSync(settingsPath, bak); } catch (_) {}
   }
   // We re-serialize plain JSON, so // and /* */ comments do not survive. Say
@@ -1920,13 +1990,37 @@ function remainingNativeIntegrations() {
   const dir = path.join(process.env.CAVEMAN_HOME || path.join(os.homedir(), '.caveman'), 'integrations');
   try {
     return fs.readdirSync(dir)
-      // `.pending-<agent>.json` is an interrupted transaction, not an install.
-      .filter((name) => name.endsWith('.json') && !name.startsWith('.'))
+      // A journal is exactly `<agent>.json`. `.pending-<agent>.json` is an
+      // interrupted transaction; `<agent>.voice-skills.json`,
+      // `<agent>.agent-native-bundle*.json` and `claude-profiles.json` are
+      // records `disable` keeps on purpose, not routes.
+      .filter((name) => /^[^.]+\.json$/.test(name) && name !== 'claude-profiles.json')
       .map((name) => name.slice(0, -'.json'.length))
       .sort();
   } catch (_) {
     return [];
   }
+}
+
+// The CLI this package depends on, when it is newer than the `caveman` first on
+// PATH. An older CLI cannot undo state a newer one wrote: 1.x removed the route
+// but left Claude Code on the caveman-auto model it never knew. Under npx the
+// bundled CLI is already first on PATH; this covers a clone or global install.
+function newerBundledCli() {
+  try {
+    const manifest = require.resolve('@caveman-ai/cli/package.json');
+    const pkg = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!pkg.bin || typeof pkg.bin.caveman !== 'string') return null;
+    const bin = path.join(path.dirname(manifest), pkg.bin.caveman);
+    const want = /^(\d+)\.(\d+)\.(\d+)/.exec(pkg.version || '');
+    const probe = captureSpawn('caveman', ['--version']);
+    const have = /(\d+)\.(\d+)\.(\d+)/.exec(probe.stdout || '');
+    if (!want || !have || !spawnOk(probe) || !fs.existsSync(bin)) return null;
+    for (let i = 1; i <= 3; i++) {
+      if (Number(want[i]) !== Number(have[i])) return Number(want[i]) > Number(have[i]) ? bin : null;
+    }
+  } catch (_) { /* no bundled CLI: use the one on PATH */ }
+  return null;
 }
 
 function uninstall(ctx) {
@@ -1940,8 +2034,11 @@ function uninstall(ctx) {
   // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
   // `disable --all` rather than re-deriving that logic here.
   if (hasCmd('caveman')) {
-    const r = runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
-    if (spawnOk(r)) ok('  disabled native agent integrations');
+    const bundled = newerBundledCli();
+    const r = bundled
+      ? runSpawn(process.execPath, [bundled, 'disable', '--all'], null, opts.dryRun)
+      : runSpawn('caveman', ['disable', '--all'], null, opts.dryRun);
+    if (spawnOk(r) && !opts.dryRun) ok('  disabled native agent integrations');
   }
 
   // ...and say so when one survived. `disable` removes the journal it restored
@@ -1968,7 +2065,8 @@ function uninstall(ctx) {
   // write is a hard stop for the deletion, not a warning to continue past.
   let settingsClean = true;
   if (fs.existsSync(settingsPath)) {
-    const settings = SETTINGS.readSettings(settingsPath);
+    const settingsMeta = {};
+    const settings = SETTINGS.readSettings(settingsPath, settingsMeta);
     if (!settings) {
       settingsClean = false;
       cleanupFailed = true;
@@ -1976,16 +2074,26 @@ function uninstall(ctx) {
       warn('  Remove the caveman entries from it by hand, then re-run --uninstall.');
     }
     if (settings) {
+      // Rewriting drops comments, so write only when something of ours
+      // came out.
       const removed = SETTINGS.removeCavemanHooks(settings);
+      let statusRemoved = false;
       // Drop our statusline if it points at our script
       if (settings.statusLine) {
         const cmd = typeof settings.statusLine === 'string' ? settings.statusLine : (settings.statusLine.command || '');
-        if (cmd.includes('caveman-statusline')) delete settings.statusLine;
+        if (cmd.includes('caveman-statusline')) { delete settings.statusLine; statusRemoved = true; }
       }
       SETTINGS.validateHookFields(settings);
+      const changed = removed > 0 || statusRemoved;
+      const entries = removed > 0
+        ? `${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`
+        : 'the caveman statusline from settings.json';
       try {
-        if (!opts.dryRun) SETTINGS.writeSettings(settingsPath, settings);
-        ok(`  removed ${removed} caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json`);
+        if (changed && opts.dryRun) note(`  would remove ${entries}`);
+        else if (changed) {
+          writeSettingsKeepingComments(settingsPath, settings, settingsMeta, warn);
+          ok(`  removed ${entries}`);
+        }
       } catch (e) {
         settingsClean = false;
         cleanupFailed = true;
@@ -2017,26 +2125,31 @@ function uninstall(ctx) {
   // machine where caveman was never installed (or was already removed) doesn't
   // print "Plugin not installed" stderr noise.
   if (hasCmd('claude')) {
-    const probe = captureSpawn('claude', ['plugin', 'list']);
-    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+    if (claudeHasCaveman()) {
       const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
       if (spawnOk(r)) ok('  removed claude plugin');
     } else {
       note('  claude plugin not installed — skipping');
     }
 
-    // caveman-shrink MCP — only run if `claude mcp` subcommand exists. Tolerate
-    // non-zero exit (server may have never been registered).
+    // caveman-shrink MCP — only run if `claude mcp` subcommand exists. Output
+    // is captured: most machines never registered the server, and the CLI
+    // says so on stderr every time.
     const mcpHelp = captureSpawn('claude', ['mcp', '--help']);
     if (mcpHelp.status === 0) {
-      runSpawn('claude', ['mcp', 'remove', 'caveman-shrink'], null, opts.dryRun);
+      const args = ['mcp', 'remove', 'caveman-shrink'];
+      const r = opts.dryRun ? runSpawn('claude', args, null, true) : captureSpawn('claude', args);
+      const said = `${r.stdout || ''}${r.stderr || ''}`.trim();
+      if (!opts.dryRun && !/^No MCP server named/i.test(said)) {
+        if (spawnOk(r)) ok('  removed the caveman-shrink MCP server');
+        else warn(`  claude mcp remove caveman-shrink failed: ${said.split('\n')[0] || 'no output'}`);
+      }
     }
   }
 
   // Gemini extension. Same idempotency probe as claude.
   if (hasCmd('gemini')) {
-    const probe = captureSpawn('gemini', ['extensions', 'list']);
-    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+    if (geminiHasCaveman()) {
       runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], null, opts.dryRun);
     } else {
       note('  gemini extension not installed — skipping');

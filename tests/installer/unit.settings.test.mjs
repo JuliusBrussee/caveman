@@ -74,6 +74,17 @@ test('readSettings handles JSONC (comments + trailing commas)', () => {
   assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark', hooks: {} });
 });
 
+// Windows PowerShell 5.1 `Set-Content -Encoding UTF8` starts the file with a
+// UTF-8 BOM. JSON.parse rejects it, so the installer refused to merge.
+test('readSettings accepts a UTF-8 BOM and writeSettings keeps it', () => {
+  const p = tmpFile('s.json', '﻿{"theme":"dark"}\r\n');
+  assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark' });
+  SETTINGS.writeSettings(p, { theme: 'light' });
+  const bytes = fs.readFileSync(p);
+  assert.deepEqual([...bytes.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'BOM dropped on write');
+  assert.deepEqual(SETTINGS.readSettings(p), { theme: 'light' });
+});
+
 test('readSettings returns {} for missing file', () => {
   assert.deepEqual(SETTINGS.readSettings('/nonexistent/path/xyz.json'), {});
 });
@@ -134,6 +145,37 @@ test('addCommandHook is idempotent on substring marker', () => {
   assert.equal(a, true);
   assert.equal(b, false);
   assert.equal(s.hooks.SessionStart.length, 1);
+});
+
+// Re-running the installer is the obvious repair for a hook whose baked node
+// path died (brew upgrade, removed nvm version) or that still has the pre-#835
+// PowerShell form. addCommandHook used to stop at the marker and keep both.
+test('addCommandHook rewrites our stale hook command in place', () => {
+  const opts = (command) => ({ command, marker: 'caveman-activate' });
+  const fresh = '"/opt/homebrew/bin/node" "/h/hooks/caveman-activate.js"';
+  for (const [stale, now] of [
+    ['"/opt/homebrew/Cellar/node/26.5.0/bin/node" "/h/hooks/caveman-activate.js"', fresh],
+    ["& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\Users\\me\\.claude\\hooks\\caveman-activate.js'",
+      '"C:/Program Files/nodejs/node.exe" "C:/Users/me/.claude/hooks/caveman-activate.js"'],
+  ]) {
+    const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: stale, timeout: 30 }] }] } };
+    assert.ok(SETTINGS.addCommandHook(s, 'SessionStart', opts(now)), `not repaired: ${stale}`);
+    assert.deepEqual(s.hooks.SessionStart, [{ hooks: [{ type: 'command', command: now, timeout: 30 }] }]);
+    assert.equal(SETTINGS.addCommandHook(s, 'SessionStart', opts(now)), false);
+  }
+  // A hook pointed at another copy of the script (a dev clone) stays put.
+  const clone = '"/usr/bin/node" "/src/caveman/src/hooks/caveman-activate.js"';
+  const elsewhere = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: clone }] }] } };
+  assert.equal(SETTINGS.addCommandHook(elsewhere, 'SessionStart', opts(fresh)), false);
+  assert.equal(elsewhere.hooks.SessionStart[0].hooks[0].command, clone);
+  const record = { hooks: { SessionEnd: [{ hooks: [{ type: 'command', command: '"/gone/node" "/h/caveman-stats.js" --record' }] }] } };
+  SETTINGS.addCommandHook(record, 'SessionEnd', { command: '"/new/node" "/h/caveman-stats.js" --record', marker: 'caveman-stats' });
+  assert.equal(record.hooks.SessionEnd[0].hooks[0].command, '"/new/node" "/h/caveman-stats.js" --record');
+  // A hand-edited command (env prefix, wrapper) stays the user's.
+  const custom = 'CAVEMAN_DEFAULT_MODE=ultracave node /h/hooks/caveman-activate.js';
+  const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: custom }] }] } };
+  assert.equal(SETTINGS.addCommandHook(s, 'SessionStart', opts(fresh)), false);
+  assert.equal(s.hooks.SessionStart[0].hooks[0].command, custom);
 });
 
 test('hasCavemanHook detects via substring', () => {

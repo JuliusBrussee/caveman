@@ -83,6 +83,15 @@ test('--only with unknown agent id exits 2', () => {
   assert.match(r.stderr, /caveman --list/);
 });
 
+// Uninstall has no per-agent mode. Silently ignoring --only removed caveman
+// from every agent when the user asked for one. --dry-run keeps the pre-fix
+// run a plan.
+test('--uninstall with --only exits 2 instead of removing every agent', () => {
+  const r = run('--uninstall', '--only', 'codex', '--dry-run', '--non-interactive');
+  assert.equal(r.status, 2);
+  assert.match(r.stderr, /--uninstall.*--only/);
+});
+
 test('--only known id passes argv validation', () => {
   // Dry-run + --only claude exits 0 even if the claude binary isn't on PATH.
   const r = run('--dry-run', '--only', 'claude', '--non-interactive', '--config-dir', '/tmp/__cm_only_test');
