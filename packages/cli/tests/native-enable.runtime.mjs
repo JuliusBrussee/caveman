@@ -625,14 +625,25 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   assert.equal(after.PreToolUse.length, 1);
 });
 
+// The hash Codex records when /hooks trusts a hooks.json SessionStart group:
+// sha256 of the sorted-key compact JSON of the event, the matcher and the
+// handler, its timeout defaulted to 600 s.
+function codexHookHash(group) {
+  const hook = group.hooks[0];
+  const handler = { async: hook.async === true, command: hook.command, ...(hook.statusMessage ? { statusMessage: hook.statusMessage } : {}), timeout: hook.timeout ?? 600, type: "command" };
+  const identity = { event_name: "session_start", hooks: [handler], ...(group.matcher ? { matcher: group.matcher } : {}) };
+  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
+}
+
 // What Codex's /hooks records once the user trusts Caveman's SessionStart hook.
 // The key names CODEX_HOME canonicalized when it is set, ~/.codex as is otherwise.
 function trustCodexHooks(home, { canonical = true } = {}) {
   const hooksPath = join(home, ".codex", "hooks.json");
   const configPath = join(home, ".codex", "config.toml");
-  const group = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  const groups = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  const group = groups.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
   const key = `${canonical ? realpathSync(hooksPath) : hooksPath}:session_start:${group}:0`;
-  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "sha256:test"\n`);
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "${codexHookHash(groups[group])}"\n`);
 }
 
 // Codex runs a hook from hooks.json only once the user trusts it in /hooks.
@@ -654,6 +665,34 @@ test("doctor codex reports Caveman's hooks untrusted until /hooks trusts them", 
   assert.equal(trusted.components.lifecycle_hooks, true);
   assert.equal(trusted.core_active, true);
   assert.equal(trusted.capabilities.session_start.active, true);
+  assert.deepEqual(trusted.warnings, []);
+});
+
+// Codex keys trust by position and skips a hook whose hash differs from the
+// one recorded there. The installer's hook at SessionStart[0], trusted, makes
+// way for Caveman's at the same index: that hash is the installer's, so Codex
+// runs neither, and doctor must not read it as trusted.
+test("doctor codex reads a trust hash recorded for another hook at the same position as untrusted", async () => {
+  // What codex 0.161.0 recorded in /hooks for this command.
+  const recorded = { hooks: [{ type: "command", command: "'/tmp/cvx-codex-test.b7mQlW/gobin/caveman-proxy' native-hook codex --adapter '/Users/julb/Desktop/GitHub/caveman-v4-stability/packages/cli/dist/native-hook-fast.js' --node '/Users/julb/.local/share/fnm/node-versions/v22.22.2/installation/bin/node'" }] };
+  assert.equal(codexHookHash(recorded), "sha256:02d7c695f1ad13472c0bb36bf859bded8187e5976c06efe7cf4b6febdddc5de9");
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  const configPath = join(fx.home, ".codex", "config.toml");
+  const installer = { matcher: "startup|resume|clear|compact", hooks: [{ type: "command", command: `node "${join(fx.home, ".codex", "caveman", "hooks", "codex-sessionstart.js")}"`, timeout: 5 }] };
+  writeFileSync(hooksPath, JSON.stringify({ hooks: { SessionStart: [installer] } }, null, 2) + "\n");
+  writeFileSync(configPath, `[hooks.state.${JSON.stringify(`${hooksPath}:session_start:0:0`)}]\ntrusted_hash = "${codexHookHash(installer)}"\n`);
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const groups = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart;
+  assert.equal(groups.length, 1);
+  const stale = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(stale.components.lifecycle_hooks, false);
+  assert.deepEqual(stale.warnings, ["Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself"]);
+  // /hooks records this hook's hash at the same key.
+  writeFileSync(configPath, readFileSync(configPath, "utf8").replace(codexHookHash(installer), codexHookHash(groups[0])));
+  const trusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(trusted.components.lifecycle_hooks, true);
   assert.deepEqual(trusted.warnings, []);
 });
 

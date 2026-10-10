@@ -9678,15 +9678,18 @@ function withoutInstallerCodexHook(root: Record<string, unknown>): Record<string
 // trusted_hash in config.toml. Caveman never writes that itself. Read for the
 // SessionStart hook, the one that restarts the runtime. The path in the key is
 // CODEX_HOME canonicalized when set, ~/.codex as is otherwise, so it is
-// compared as a file. A hash recorded for an older command still reads as
-// trusted here; Codex then asks again in /hooks.
+// compared as a file. The key is a position, so the hash must be this hook's:
+// one recorded for whatever sat there before (the installer's hook enable
+// took out, an older command) is a hook Codex calls modified and skips.
 function codexHooksTrusted(): boolean {
   const hooksPath = codexHooksPath();
   let group = -1;
+  let hash = "";
   try {
     const hooks = parseJsonFileObject(hooksPath, fileBytes(hooksPath)).hooks as Record<string, unknown> | undefined;
     const list = hooks && Array.isArray(hooks.SessionStart) ? hooks.SessionStart as Array<Record<string, unknown>> : [];
     group = list.findIndex((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") === "native-hook:codex");
+    if (group !== -1) hash = codexSessionStartHash(list[group]!);
   } catch { return false; }
   if (group === -1) return false;
   const real = (path: string) => { try { return realpathSync(path.replace(/^\\\\\?\\/, "")); } catch { return undefined; } };
@@ -9700,9 +9703,29 @@ function codexHooksTrusted(): boolean {
       try { key = quoted === undefined ? undefined : quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted); } catch { key = undefined; }
       const at = typeof key === "string" ? key.match(/^(.*):session_start:(\d+):0$/) : null;
       trusting = Boolean(at && Number(at[2]) === group && target && real(at[1]!) === target);
-    } else if (trusting && /^\s*trusted_hash\s*=/.test(line)) return true;
+    } else if (trusting && line.match(/^\s*trusted_hash\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/)?.slice(1).includes(hash)) return true;
   }
   return false;
+}
+
+// The hash Codex trusts a hooks.json SessionStart hook by (codex-rs hooks
+// discovery, hook_hash): sha256 of the compact JSON, keys sorted, of the
+// event, the group's matcher and the one handler with its timeout defaulted
+// to 600 s. Checked against codex 0.161.0. Keys are written in sorted order.
+function codexSessionStartHash(group: Record<string, unknown>): string {
+  const handler = (group.hooks as Array<Record<string, unknown>>)[0]!;
+  const identity = {
+    event_name: "session_start",
+    hooks: [{
+      async: handler.async === true,
+      command: handler.command,
+      ...(typeof handler.statusMessage === "string" ? { statusMessage: handler.statusMessage } : {}),
+      timeout: Math.max(typeof handler.timeout === "number" ? handler.timeout : 600, 1),
+      type: "command",
+    }],
+    ...(typeof group.matcher === "string" ? { matcher: group.matcher } : {}),
+  };
+  return `sha256:${createHash("sha256").update(JSON.stringify(identity)).digest("hex")}`;
 }
 
 // What Codex still asks before Caveman's hooks run.
