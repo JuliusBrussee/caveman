@@ -607,11 +607,12 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
 });
 
 // What Codex's /hooks records once the user trusts Caveman's SessionStart hook.
-function trustCodexHooks(home) {
+// The key names CODEX_HOME canonicalized when it is set, ~/.codex as is otherwise.
+function trustCodexHooks(home, { canonical = true } = {}) {
   const hooksPath = join(home, ".codex", "hooks.json");
   const configPath = join(home, ".codex", "config.toml");
   const group = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
-  const key = `${realpathSync(hooksPath)}:session_start:${group}:0`;
+  const key = `${canonical ? realpathSync(hooksPath) : hooksPath}:session_start:${group}:0`;
   writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "sha256:test"\n`);
 }
 
@@ -629,7 +630,7 @@ test("doctor codex reports Caveman's hooks untrusted until /hooks trusts them", 
   assert.equal(untrusted.core_active, false);
   assert.equal(untrusted.capabilities.session_start.active, false);
   assert.deepEqual(untrusted.warnings, ["Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself"]);
-  trustCodexHooks(fx.home);
+  trustCodexHooks(fx.home, { canonical: false });
   const trusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
   assert.equal(trusted.components.lifecycle_hooks, true);
   assert.equal(trusted.core_active, true);

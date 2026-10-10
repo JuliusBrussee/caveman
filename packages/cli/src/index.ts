@@ -9391,8 +9391,10 @@ function withoutInstallerCodexHook(root: Record<string, unknown>): Record<string
 // Codex runs a hook from hooks.json only once the user trusts it in /hooks,
 // which records [hooks.state."<hooks.json>:session_start:<group>:<handler>"]
 // trusted_hash in config.toml. Caveman never writes that itself. Read for the
-// SessionStart hook, the one that restarts the runtime. A hash recorded for an
-// older command still reads as trusted here; Codex then asks again in /hooks.
+// SessionStart hook, the one that restarts the runtime. The path in the key is
+// CODEX_HOME canonicalized when set, ~/.codex as is otherwise, so it is
+// compared as a file. A hash recorded for an older command still reads as
+// trusted here; Codex then asks again in /hooks.
 function codexHooksTrusted(): boolean {
   const hooksPath = codexHooksPath();
   let group = -1;
@@ -9402,15 +9404,17 @@ function codexHooksTrusted(): boolean {
     group = list.findIndex((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") === "native-hook:codex");
   } catch { return false; }
   if (group === -1) return false;
-  let source = hooksPath;
-  try { source = realpathSync(hooksPath); } catch { /* the path as configured */ }
-  const key = `${source}:session_start:${group}:0`;
+  const real = (path: string) => { try { return realpathSync(path.replace(/^\\\\\?\\/, "")); } catch { return undefined; } };
+  const target = real(hooksPath);
   let trusting = false;
   for (const line of (fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "").split(/\r?\n/)) {
     const section = codexTomlSectionName(line);
     if (section !== undefined) {
       const quoted = section.match(/^hooks\.state\.("(?:[^"\\]|\\.)*"|'[^']*')$/)?.[1];
-      try { trusting = quoted !== undefined && (quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted)) === key; } catch { trusting = false; }
+      let key: unknown;
+      try { key = quoted === undefined ? undefined : quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted); } catch { key = undefined; }
+      const at = typeof key === "string" ? key.match(/^(.*):session_start:(\d+):0$/) : null;
+      trusting = Boolean(at && Number(at[2]) === group && target && real(at[1]!) === target);
     } else if (trusting && /^\s*trusted_hash\s*=/.test(line)) return true;
   }
   return false;
