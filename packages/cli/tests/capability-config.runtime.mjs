@@ -143,7 +143,7 @@ test("config set refuses to replace an unparseable cloud.json and keeps a BOM fi
     assert.ok(bad.stderr.includes(path), bad.stderr);
     assert.deepEqual(readFileSync(path), before);
     // PowerShell's UTF-8 writes a BOM; that alone is not a broken file.
-    writeFileSync(path, `﻿${JSON.stringify({ tokenStore: "file", deviceId: "device-stable" })}`);
+    writeFileSync(path, `\ufeff${JSON.stringify({ tokenStore: "file", deviceId: "device-stable" })}`);
     const bom = await runCli(["config", "set", "think.mode", "compress"], { env: isolated.env, prefix: "tools" });
     assert.equal(bom.code, 0, bom.stderr);
     const parsed = JSON.parse(readFileSync(path, "utf8"));

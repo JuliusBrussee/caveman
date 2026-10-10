@@ -4836,7 +4836,7 @@ function mutateRawConfig(fn: (out: Record<string, unknown>) => void) {
   let out: Record<string, unknown> = {};
   let raw = "";
   try {
-    raw = readFileSync(configPath(), "utf8").replace(/^﻿/, "");
+    raw = readFileSync(configPath(), "utf8").replace(/^\uFEFF/, "");
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; // only a missing file is a fresh config
   }
