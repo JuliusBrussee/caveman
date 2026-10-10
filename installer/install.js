@@ -2023,6 +2023,24 @@ function newerBundledCli() {
   return null;
 }
 
+// The `engines.node` floor of the CLI this package depends on, when this Node
+// is below it — `>=22.13` for 2.x, above the installer's own floor. Under npx
+// that CLI is also the `caveman` first on PATH. Null when there is no bundled
+// CLI or its floor is met.
+function bundledCliNodeFloorUnmet() {
+  try {
+    const pkg = JSON.parse(fs.readFileSync(require.resolve('@caveman-ai/cli/package.json'), 'utf8'));
+    const floor = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$/.exec((pkg.engines && pkg.engines.node) || '');
+    if (!floor) return null;
+    const have = process.versions.node.split('.').map(Number);
+    for (let i = 0; i < 3; i++) {
+      const want = Number(floor[i + 1] || 0);
+      if (have[i] !== want) return have[i] < want ? floor[0].replace(/^>=\s*/, '').trim() : null;
+    }
+  } catch (_) { /* no bundled CLI */ }
+  return null;
+}
+
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
   let cleanupFailed = false;
@@ -2032,8 +2050,11 @@ function uninstall(ctx) {
 
   // Native integrations (`caveman enable <agent>`) journal their prior state
   // at ~/.caveman/integrations/<agent>.json; restore it through the CLI's own
-  // `disable --all` rather than re-deriving that logic here.
-  if (hasCmd('caveman')) {
+  // `disable --all` rather than re-deriving that logic here. Never on a Node
+  // the bundled CLI does not support: it crashes or runs unsupported there,
+  // so the routes go to the guidance below instead.
+  const cliNodeFloor = bundledCliNodeFloorUnmet();
+  if (!cliNodeFloor && hasCmd('caveman')) {
     const bundled = newerBundledCli();
     const r = bundled
       ? runSpawn(process.execPath, [bundled, 'disable', '--all'], null, opts.dryRun)
@@ -2052,6 +2073,7 @@ function uninstall(ctx) {
   if (!opts.dryRun) {
     const stranded = remainingNativeIntegrations();
     for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
+    if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${process.version}. Upgrade Node first.`);
     if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
   }
 

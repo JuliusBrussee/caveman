@@ -179,6 +179,36 @@ test('uninstall runs the bundled CLI when the caveman on PATH is older', () => {
   }
 });
 
+// The bundled CLI needs a newer Node than the installer (engines >=22.13 vs
+// >=18); under npx it is also the `caveman` on PATH. On an older Node it
+// crashes or runs unsupported, so uninstall starts no CLI and says why.
+test('uninstall never starts the bundled CLI on a Node older than it needs', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const record = path.join(dir, 'caveman-record.txt');
+  try {
+    // A copy of the installer whose own node_modules holds a CLI no Node meets.
+    const pkg = path.join(dir, 'pkg');
+    fs.cpSync(path.dirname(INSTALLER), path.join(pkg, 'installer'), { recursive: true });
+    const cli = path.join(pkg, 'node_modules', '@caveman-ai', 'cli');
+    fs.mkdirSync(path.join(cli, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(cli, 'package.json'), JSON.stringify({ name: '@caveman-ai/cli', version: '999.0.0', engines: { node: '>=999' }, bin: { caveman: 'dist/index.js' } }));
+    fs.writeFileSync(path.join(cli, 'dist', 'index.js'), `require('fs').appendFileSync(${JSON.stringify(record)}, 'bundled\\n');\n`);
+    seedIntegrationJournal(dir, 'claude', 'http://127.0.0.1:8787/w/claude');
+    const env = isolatedEnv(dir, [fakeCavemanDir(dir, record, '0.0.1')]);
+    const removed = spawnSync(process.execPath, [path.join(pkg, 'installer', 'install.js'), '--uninstall', '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
+      env: { ...env, CLAUDE_CONFIG_DIR: configDir }, encoding: 'utf8',
+    });
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.equal(fs.existsSync(record), false, `a caveman CLI ran: ${fs.existsSync(record) && fs.readFileSync(record, 'utf8')}`);
+    assert.match(removed.stderr, /claude: native Caveman routing is still installed/);
+    assert.match(removed.stderr, /needs Node 999 or newer/);
+    assert.match(removed.stderr, /caveman disable --all/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // `~/.caveman/integrations/<agent>.json` is what `caveman enable <agent>` writes
 // and what `caveman disable` removes, so its presence AFTER uninstall is exact
 // evidence that a native route (ANTHROPIC_BASE_URL and friends) is still in the
