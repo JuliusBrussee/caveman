@@ -903,6 +903,11 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
   const doctor = await run(["doctor", "claude"], fx.env);
   assert.equal(doctor.code, 0, doctor.stderr);
   assert.equal(JSON.parse(doctor.stdout).state, "installed");
+  // node running npm's `caveman` link, the shape hooks take now, is the same hook.
+  writeFileSync(join(moved, "caveman", "bin", "caveman"), "");
+  writeFileSync(path, readFileSync(path, "utf8").replaceAll(`${moved}/caveman/index.js`, `${moved}/caveman/bin/caveman`));
+  const linked = await run(["doctor", "claude"], fx.env);
+  assert.equal(JSON.parse(linked.stdout).state, "installed", linked.stdout);
   const disabled = await run(["disable", "claude"], fx.env);
   assert.equal(disabled.code, 0, disabled.stderr);
   assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook|mem recall-hook/);

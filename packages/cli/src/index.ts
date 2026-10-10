@@ -7731,7 +7731,8 @@ function hookCommandBasename(token: string): string {
 function isCavemanCliInvocation(tokens: string[]): boolean {
   const executable = hookCommandBasename(tokens[0] ?? "");
   if (executable === "caveman" || executable === "cave") return true;
-  return executable === "node" && hookCommandBasename(tokens[1] ?? "") === "index.js";
+  // `node <npm's caveman link>` is what cavemanBinForHook writes now.
+  return executable === "node" && ["index.js", "caveman", "cave"].includes(hookCommandBasename(tokens[1] ?? ""));
 }
 
 function managedHookIdentity(command: string): string | undefined {
@@ -7747,7 +7748,7 @@ function managedHookIdentity(command: string): string | undefined {
   const supportedNative =
     (executable === "caveman-proxy" && (args.length === 4 || (args.length === 6 && args[4] === "--node")) && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
     || ((executable === "caveman" || executable === "cave") && args.length === 2 && args[0] === "native-hook" && nativeAgent)
-    || (nodeScript !== undefined && ["index.js", "native-hook-fast.js"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
+    || (nodeScript !== undefined && ["index.js", "native-hook-fast.js", "caveman", "cave"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
   if (supportedNative) return `native-hook:${agent}`;
 
   if (isCavemanCliInvocation(tokens)) {
@@ -15836,9 +15837,17 @@ function shouldShrink(command: string): boolean {
 function cavemanBinForHook(powershell: boolean = process.platform === "win32"): string {
   // Never a package runner's cached copy when a lasting one exists.
   const command = durableCaveman() ?? which("caveman") ?? which("cave");
-  return command
-    ? hookExecutableInvocation(command, undefined, process.platform, powershell)
-    : hookExecutableInvocation(process.execPath, process.argv[1]!, process.platform, powershell);
+  // npm links `caveman` to a `#!/usr/bin/env node` script, and a host started
+  // from a GUI or launchd often has no node on PATH (nvm, volta, Homebrew):
+  // run it with this node, as the lifecycle hooks name theirs (`--node`).
+  // Doctor flags that node once an upgrade removes it; --fix re-renders.
+  let viaNode = !command;
+  try {
+    viaNode ||= hookCommandBasename(process.execPath) === "node" && /\.[cm]?js$/.test(realpathSync(command!));
+  } catch { /* unresolvable: run it as found */ }
+  return !viaNode
+    ? hookExecutableInvocation(command!, undefined, process.platform, powershell)
+    : hookExecutableInvocation(process.execPath, command ?? process.argv[1]!, process.platform, powershell);
 }
 
 // shrinkHook is the settings-hook callback for the agents whose harness can
@@ -16697,6 +16706,14 @@ function installSettingsHookGeneric(
   const hooks = (root.hooks && typeof root.hooks === "object" && !Array.isArray(root.hooks))
     ? (root.hooks as Record<string, unknown>) : {};
   const list = Array.isArray(hooks[event]) ? (hooks[event] as Array<Record<string, unknown>>) : [];
+  // The same hook an older caveman wrote under another invocation (a bare
+  // `caveman`, before hooks named their node) takes this command in place.
+  const identity = managedHookIdentity(command);
+  for (const entry of list) {
+    for (const hook of Array.isArray(entry.hooks) ? entry.hooks as Array<Record<string, unknown>> : []) {
+      if (identity && typeof hook.command === "string" && managedHookIdentity(hook.command) === identity) hook.command = command;
+    }
+  }
   if (!list.some((e) => matches(e))) {
     list.push(matcher !== undefined
       ? { matcher, hooks: [{ type: "command", command }] }
