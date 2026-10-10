@@ -26,9 +26,12 @@ export async function modulesDoctor(): Promise<void> {
       if (invalid !== undefined) failures.push(`${effect.key} has an invalid value: ${invalid} · fix: caveman ${selection[m.id] ? "on" : "off"} ${m.id}`);
     }
   }
-  for (const name of h.staleBinaries()) failures.push(`${name} is out of date · fix: caveman setup --install`);
+  const stale = h.staleBinaries();
+  if (stale.length) failures.push(`${stale.join(", ")} ${stale.length > 1 ? "are" : "is"} out of date · fix: caveman setup --install`);
   for (const runtime of await h.localRuntimes()) {
     if (runtime.foreign) failures.push(`${runtime.host}:${runtime.port} is held by another program · fix: stop it, then caveman start`);
+    // A runtime keeps the binary it started from until it restarts.
+    else if (runtime.stale) failures.push(`${runtime.host}:${runtime.port} still runs caveman-proxy ${runtime.stale.running}; ${runtime.stale.installed} is installed · fix: caveman stop, then start your agent again`);
   }
   const wired = h.nativeAgents().filter((agent) => agent.wired);
   for (const agent of wired) {

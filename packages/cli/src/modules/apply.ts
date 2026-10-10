@@ -27,7 +27,9 @@ export type ModuleState = { id: ModuleId; on: boolean; active: boolean; reason?:
 
 // optedOut: the user ran `caveman disable <agent>` and has not enabled it since.
 export type NativeAgentInfo = { id: string; detected: boolean; wired: boolean; optedOut?: boolean };
-export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number };
+// token: the run state's instance token. stale: the runtime still runs an
+// older caveman-proxy than the one now installed.
+export type LocalRuntime = { host: string; port: number; listening: boolean; foreign: boolean; pid?: number; token?: string; stale?: { running: string; installed: string } };
 // A capability as every layer resolves it (defaults → global → project → env),
 // plus the global-file value alone, which is what module state is recorded in.
 export type Capability = { value: unknown; source: string; global: unknown; invalid?: string };
@@ -48,6 +50,8 @@ export type ModuleHost = {
   // Binaries the hub installed for a module, from modules.lock.json.
   lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
+  // Hub binaries in ~/.caveman/bin installed from another release than the pin.
+  binariesBehindPin(): string[];
   which(name: string): string | null;
   // Every agent the native wiring supports, detected on PATH or journaled.
   nativeAgents(): NativeAgentInfo[];
@@ -208,12 +212,14 @@ function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire:
 
 // Modules in scope that are on and miss a binary they need. An external
 // binary is missing when no usable copy resolves, unless an override names
-// one: a download would not be the copy used then.
+// one: a download would not be the copy used then. A hub binary an older
+// release installed counts as missing too: a CLI upgrade leaves it in place.
 function binaryNeeds(selection: ModuleSelection, only: ModuleId[] | undefined) {
   const h = moduleHost();
   const on = MODULES.filter((m) => selection[m.id] && inScope(m.id, only));
+  const behind = h.binariesBehindPin();
   const missingOf = (m: ModuleDef) => [
-    ...m.binaries.filter((name) => !h.resolveBinary(name)),
+    ...m.binaries.filter((name) => !h.resolveBinary(name) || behind.includes(name)),
     ...(m.external && !externalOverride(m) && !externalBin(m) ? [m.external.binary] : []),
   ];
   const missing = [...new Set(on.flatMap(missingOf))];
@@ -539,14 +545,14 @@ function inactiveReason(m: ModuleDef, selection: ModuleSelection, signedIn: bool
 export async function moduleStates(): Promise<ModuleState[]> {
   const h = moduleHost();
   const selection = currentSelection();
+  const stored = storedModules();
+  const setUp = setupRan();
   const agents = h.nativeAgents().filter((agent) => agent.detected || agent.wired);
   const signedIn = h.signedIn();
   const cloud = signedIn && MODULES.some((m) => m.needsSignIn && selection[m.id]) ? await cloudAnswer() : null;
   return MODULES.map((m) => {
     const on = selection[m.id];
     const bin = on && m.external ? externalBin(m) : null;
-  const stored = storedModules();
-  const setUp = setupRan();
     const status = m.external && bin ? externalStatus(m, bin) : undefined;
     const why = on ? inactiveReason(m, selection, signedIn, { bin, status }, cloud) : undefined;
     // Before the first setup, a module that acts only once setup records it

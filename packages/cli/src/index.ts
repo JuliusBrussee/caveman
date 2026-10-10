@@ -78,7 +78,7 @@ import { billingCommand, cloudMe, printSignInLines, signInLines, routingStatus, 
 import { modulesDoctor } from "./modules/doctor.js";
 import { AUTO_DESCRIPTION, AUTO_MODEL, AUTO_NAME, findModule, MODULES } from "./modules/registry.js";
 import { nextStep, renderModuleGrid } from "./modules/status.js";
-import { stopRuntime } from "./modules/stop.js";
+import { endRuntimes, stopRuntime } from "./modules/stop.js";
 import { foundKeys, providersAdd, providersCloud, providersLocal, providersLogin, providersRemove } from "./modules/provider-logins.js";
 
 type TokenStore = "keychain" | "file";
@@ -518,7 +518,11 @@ setModuleHost({
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
   installBinaries: async (modules, downloading) => {
     installDownloading = downloading;
+    // Hub binaries an older release installed are replaced together, with
+    // their manifest, by the full signed install; the index adds the rest.
+    const behind = binariesBehindPin().length > 0;
     try {
+      if (behind) await setupInstall(false, { continuing: true });
       const { problems } = await ensureModuleBinaries(modules, downloading);
       if (problems.length > 0) throw new Error(problems.join("; "));
     } catch (error) {
@@ -526,7 +530,7 @@ setModuleHost({
       // instead, unless only an external one (Blocks) was missing; that
       // release does not carry it.
       if (error instanceof NoModuleIndexError) {
-        if (modules.some((id) => findModule(id)?.binaries.length)) await setupInstall(false, { continuing: true });
+        if (!behind && modules.some((id) => findModule(id)?.binaries.length)) await setupInstall(false, { continuing: true });
         return;
       }
       throw error;
@@ -535,10 +539,12 @@ setModuleHost({
     }
   },
   lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
-  staleBinaries: () => [
+  staleBinaries: () => [...new Set([
     ...(probeProxyVersion()?.capabilities.includes("run_state") === false ? ["caveman-proxy"] : []),
     ...(probeMcpBinary()?.probe.current === false ? ["caveman-mcp"] : []),
-  ],
+    ...binariesBehindPin(),
+  ])],
+  binariesBehindPin,
   which,
   nativeAgents: () => (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).map((id) => ({
     id,
@@ -607,10 +613,12 @@ setModuleHost({
     const endpoints = [...(wrapMode(gw) === "local" ? [gatewayHostPort(gw)] : []), standaloneProxyEndpoint()]
       .filter((endpoint, index, all) => all.findIndex((other) => other.port === endpoint.port) === index);
     return Promise.all(endpoints.map(async ({ host, port }) => {
-      const pid = readProxyRuntimeState(port, version).pid;
+      const state = readProxyRuntimeState(port, version);
+      const pid = state.pid;
       const listening = await portListening(host, port);
       const foreign = listening && !pid && Boolean(version?.capabilities.includes("run_state"));
-      return { host, port, listening, foreign, ...(pid ? { pid } : {}) };
+      const stale = pid && state.version && version && state.version !== version.version ? { running: state.version, installed: version.version } : undefined;
+      return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(state.instance_token ? { token: state.instance_token } : {}), ...(stale ? { stale } : {}) };
     }));
   },
   interactive,
@@ -2813,6 +2821,19 @@ function verifiedLocalInstall(binDir: string): InstalledBinary[] | null {
   return installed;
 }
 
+// Hub binaries in ~/.caveman/bin from another release than this CLI pins. A
+// CLI upgrade leaves them in place, still answering every capability probe,
+// so only the install manifest tells. Copies on PATH or named by a *_BIN
+// override are the user's own and never counted.
+function binariesBehindPin(): string[] {
+  const manifest = readBinaryInstallManifest();
+  if (!manifest || manifest.release === BINARY_RELEASE) return [];
+  const binDir = join(cavemanHome(), "bin");
+  return GO_BINARIES.filter((binary) => !("external" in binary)
+    && resolveGoBin(binary.name, binary.env) === join(binDir, binaryInstallFilename(binary.name)))
+    .map((binary) => binary.name);
+}
+
 // A signed manifest names its release through a `RELEASE` entry: the sha256 of
 // the release asset `RELEASE`, whose content is "<tag>\n". Without it, anyone
 // able to edit a release page could serve an older, validly signed manifest
@@ -2933,27 +2954,6 @@ export function cleanupPartial(path: string) {
   }
 }
 
-// Set while onboarding installs: it draws its own one-line progress, so the
-// per-binary lines below stay quiet and each download is reported to it.
-let installDownloading: ((name: string) => void) | undefined;
-
-function installProgressStart(name: string, platform: { os: string; arch: string }) {
-  if (installDownloading) return installDownloading(name);
-  const line = `${name}  ${platform.os}/${platform.arch}  …`;
-  if (interactive()) process.stderr.write(line);
-  else console.error(line);
-}
-
-function installProgressComplete(
-  name: string,
-  platform: { os: string; arch: string },
-  bytes: number,
-) {
-  if (installDownloading) return;
-  const line = `${name}  ${platform.os}/${platform.arch}  ${(bytes / 1_000_000).toFixed(1)} MB  checksum verified`;
-  if (interactive()) process.stderr.write(`\r${line}\n`);
-  else console.error(line);
-}
 // Puts a verified download in place of an installed binary. Windows refuses
 // to replace an .exe that is running (the runtime, or caveman-mcp under an
 // open agent session) but lets it be renamed, so there the running copy moves
@@ -2994,6 +2994,27 @@ export function removeAsideBinaries(binDir: string): void {
   }
 }
 
+// Set while onboarding installs: it draws its own one-line progress, so the
+// per-binary lines below stay quiet and each download is reported to it.
+let installDownloading: ((name: string) => void) | undefined;
+
+function installProgressStart(name: string, platform: { os: string; arch: string }) {
+  if (installDownloading) return installDownloading(name);
+  const line = `${name}  ${platform.os}/${platform.arch}  …`;
+  if (interactive()) process.stderr.write(line);
+  else console.error(line);
+}
+
+function installProgressComplete(
+  name: string,
+  platform: { os: string; arch: string },
+  bytes: number,
+) {
+  if (installDownloading) return;
+  const line = `${name}  ${platform.os}/${platform.arch}  ${(bytes / 1_000_000).toFixed(1)} MB  checksum verified`;
+  if (interactive()) process.stderr.write(`\r${line}\n`);
+  else console.error(line);
+}
 
 function setupInstallFailure(error: unknown, timeoutSeconds: number): never {
   if (interactive()) process.stderr.write("\n");
@@ -3034,6 +3055,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   const timeoutSeconds = setupTimeoutSeconds();
   const binDir = join(ensureCavemanHome(), "bin");
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
+  removeAsideBinaries(binDir);
 
   const local = verifiedLocalInstall(binDir);
   if (local) {
@@ -3055,7 +3077,6 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
     setupInstallFailure(error, timeoutSeconds);
   }
 
-  removeAsideBinaries(binDir);
   if (!verifyChecksumSignature(checksumsRaw!, signatureRaw!)) {
     throw new Error("signature check failed for checksums.txt — refusing to install; partial download deleted");
   }
@@ -3112,7 +3133,37 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
   const manifest: BinaryInstallManifest = { release: BINARY_RELEASE, artifacts: artifactDigests };
   await writeFile(binaryInstallManifestPath(), `${JSON.stringify(manifest, null, 2)}\n`, { mode: 0o600 });
   await chmod(binaryInstallManifestPath(), 0o600);
+  if (installed.some((item) => item.name === "caveman-proxy" && item.status === "installed")) {
+    await restartOutdatedRuntime();
+    removeAsideBinaries(binDir);
+  }
   printInstallResult(installed, platform, binDir, json, options.continuing);
+}
+
+// A running runtime keeps the binary it started from. Once caveman-proxy is
+// replaced, the runtime agents route through restarts on the new one, at the
+// same address with the mode and recovery its run state names. One started
+// another way (`caveman start`, Codex's ChatGPT login) is left to the user.
+async function restartOutdatedRuntime(): Promise<void> {
+  const gw = gatewayURL();
+  if (wrapMode(gw) !== "local") return;
+  const { host, port } = gatewayHostPort(gw);
+  const installed = probeProxyVersion();
+  const runtime = readProxyRuntimeState(port, installed);
+  if (!runtime.pid || !runtime.version || !installed || runtime.version === installed.version) return;
+  const stillOld = `caveman-proxy ${runtime.version} still runs on ${host}:${port} — run \`caveman stop\`, then start your agent again to use ${installed.version}`;
+  if (runtime.owner !== "wrap") {
+    process.stderr.write(`${mark("warn")} ${stillOld}\n`);
+    return;
+  }
+  const token = runtime.instance_token;
+  if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, ...(token ? { token } : {}) }])).length) {
+    process.stderr.write(`${mark("warn")} ${stillOld}\n`);
+    return;
+  }
+  const opts = defaultWrapOptions();
+  const mode = (["compress", "record", "pixel"] as const).find((value) => value === runtime.mode) ?? opts.mode;
+  await startWrapProxy(mode, runtime.recovery_via_mcp === true, opts.toon, opts.pixelModels, opts.pixelDensity, gw);
 }
 
 // ── caveman update ───────────────────────────────────────────────────────────
@@ -4610,6 +4661,7 @@ type OffStateID =
   | "mem-missing"
   | "zdr"
   | "stale-binary"
+  | "stale-runtime"
   | "download-unreachable"
   | "download-stalled"
   | "unsupported-platform"
@@ -4697,6 +4749,18 @@ export const OFF_STATES = {
     line: `${binary} ${found} is older than ${expected} — update before compressing`,
     fix: "caveman setup --install",
   }),
+  // The binaries ~/.caveman/bin holds are another release's: a CLI upgrade
+  // does not replace them by itself.
+  staleRelease: (found: string, expected: string): OffState => ({
+    id: "stale-binary",
+    line: `Caveman binaries are from ${found}; this CLI needs ${expected} — update before compressing`,
+    fix: "caveman setup --install",
+  }),
+  staleRuntime: (running: string, installed: string): OffState => ({
+    id: "stale-runtime",
+    line: `the running caveman proxy is ${running}, but ${installed} is installed — it keeps the old one until it restarts`,
+    fix: "caveman stop, then start your agent again",
+  }),
   refreshOffline: {
     line: "account refresh offline — cloud sync and seat state may be stale; local compression is unaffected",
   },
@@ -4722,6 +4786,7 @@ const OFF_STATE_PRECEDENCE: OffStateID[] = [
   "mem-missing",
   "zdr",
   "stale-binary",
+  "stale-runtime",
   "cache-bust",
 ];
 
@@ -5865,6 +5930,8 @@ export function shouldBootstrapWrapRuntime(input: {
 }
 
 function localWrapRuntimeReady(): boolean {
+  // Binaries an older CLI installed answer every probe below.
+  if (binariesBehindPin().length) return false;
   const required = GO_BINARIES.filter((binary) => binary.required);
   const resolved = new Map(required.map((binary) => [binary.name, resolveGoBin(binary.name, binary.env)]));
   if ([...resolved.values()].some((binary) => !binary)) return false;
@@ -5898,7 +5965,7 @@ async function bootstrapLocalWrapRuntime(opts: WrapOptions): Promise<void> {
   })) {
     return;
   }
-  process.stderr.write(dim("→ first run: installing signed Caveman runtime\n"));
+  process.stderr.write(dim(binariesBehindPin().length ? `→ updating Caveman runtime to ${BINARY_RELEASE}\n` : "→ first run: installing signed Caveman runtime\n"));
   const startedAt = Date.now();
   try {
     await setupInstall(false, { continuing: true });
@@ -19699,6 +19766,11 @@ async function status(argv: string[]) {
   if (entitlement?.telemetry_level === "zdr") states.push(fixedOffState("zdr", OFF_STATES.zdr));
   if (versionInfo && !versionInfo.capabilities.includes("run_state")) {
     states.push(OFF_STATES.staleBinary("caveman-proxy", versionInfo.version, cliVersion()));
+  }
+  const installedRelease = readBinaryInstallManifest()?.release;
+  if (installedRelease && binariesBehindPin().length) states.push(OFF_STATES.staleRelease(installedRelease, BINARY_RELEASE));
+  if (runtime.owner !== "unknown" && runtime.version && versionInfo && runtime.version !== versionInfo.version) {
+    states.push(OFF_STATES.staleRuntime(runtime.version, versionInfo.version));
   }
   if (refreshOffline()) states.push(fixedOffState("refresh-offline", OFF_STATES.refreshOffline));
 

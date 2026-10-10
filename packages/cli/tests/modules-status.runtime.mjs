@@ -166,6 +166,63 @@ test("stop ends the runtime it started and is idempotent", async () => {
   }
 });
 
+// A runtime keeps the binary it started from; once that binary is replaced,
+// doctor and status say the running one is old instead of "healthy".
+test("doctor and status name a runtime still running an older proxy", async () => {
+  const fx = modulesFixture();
+  const port = await freePort();
+  const runFile = join(fx.env.CAVEMAN_HOME, "run", `${port}.json`);
+  mkdirSync(join(fx.env.CAVEMAN_HOME, "run"), { recursive: true });
+  const runtime = spawn(process.execPath, ["-e", `
+    const fs = require("node:fs");
+    require("node:net").createServer().listen(${port}, "127.0.0.1", () => {
+      fs.writeFileSync(${JSON.stringify(runFile)}, JSON.stringify({ schema: "caveman.proxy.run.v1", owner: "wrap", pid: process.pid, port: ${port}, version: "bin-v0.0.1", mode: "compress", instance_token: "t" }));
+      process.stdout.write("ready\\n");
+    });
+  `], { stdio: ["ignore", "pipe", "inherit"] });
+  try {
+    await new Promise((resolve) => runtime.stdout.once("data", resolve));
+    const env = { ...fx.env, CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`, CAVEMAN_LISTEN: `127.0.0.1:${port}` };
+    const doctor = await runCli(["doctor"], env);
+    assert.equal(doctor.code, 1, doctor.stdout);
+    assert.match(doctor.stdout, new RegExp(`^✗ 127\\.0\\.0\\.1:${port} still runs caveman-proxy bin-v0\\.0\\.1; 1\\.0\\.0 is installed · fix: caveman stop, then start your agent again$`, "m"));
+    const status = await runCli(["status"], env);
+    assert.match(status.stdout, /^the running caveman proxy is bin-v0\.0\.1, but 1\.0\.0 is installed — it keeps the old one until it restarts · caveman stop, then start your agent again$/m);
+  } finally {
+    runtime.kill("SIGKILL");
+    fx.cleanup();
+  }
+});
+
+// Windows has no SIGTERM: process.kill ends a process at once, so stop first
+// asks the proxy over its listener to drain, and kills only one that refuses.
+test("stop on Windows asks the runtime to drain before ending it", async () => {
+  const { endRuntimes } = await import("../dist/modules/stop.js");
+  const fake = async () => {
+    const child = spawn(process.execPath, ["-e", `
+      const server = require("node:http").createServer((req, res) => {
+        if (req.method === "POST" && req.url === "/caveman/shutdown" && req.headers["x-caveman-instance"] === "t") {
+          res.writeHead(202).end(() => { process.stdout.write("drained\\n"); process.exit(0); });
+        } else res.writeHead(404).end();
+      }).listen(0, "127.0.0.1", () => process.stdout.write(server.address().port + "\\n"));
+      process.on("SIGTERM", () => { process.stdout.write("killed\\n"); process.exit(0); });
+    `], { stdio: ["ignore", "pipe", "inherit"] });
+    let out = "";
+    child.stdout.on("data", (chunk) => (out += chunk));
+    const port = Number(await new Promise((resolve) => child.stdout.once("data", (chunk) => resolve(String(chunk).trim()))));
+    out = "";
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    return { child, port, out: async () => { await exited; return out; } };
+  };
+  const current = await fake();
+  assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: current.port, listening: true, foreign: false, pid: current.child.pid, token: "t" }], "win32"), []);
+  assert.equal(await current.out(), "drained\n");
+  // An older proxy has no such endpoint (404): ended the hard way.
+  const older = await fake();
+  assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: older.port, listening: true, foreign: false, pid: older.child.pid, token: "old" }], "win32"), []);
+  assert.equal(await older.out(), "killed\n");
+});
+
 test("status counts the MCP entry native wiring writes for Claude and Codex", async () => {
   const fx = modulesFixture({ blocks: true });
   try {

@@ -81,6 +81,43 @@ func TestInstanceIdentityIsPublishedOnlyOnHealth(t *testing.T) {
 	}
 }
 
+// Windows `caveman stop` asks over the listener because no signal reaches a
+// detached proxy there gracefully. Only this generation's token stops it, and
+// only on a loopback listener.
+func TestShutdownNeedsThisGenerationsTokenOnLoopback(t *testing.T) {
+	const token = "local-instance-token"
+	for _, tt := range []struct {
+		name, header string
+		loopback     bool
+		wantStatus   int
+		wantStop     bool
+	}{
+		{"matching token", token, true, http.StatusAccepted, true},
+		{"wrong token", "other", true, http.StatusForbidden, false},
+		{"no token", "", true, http.StatusForbidden, false},
+		{"shared listener", token, false, http.StatusTeapot, false},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			stopped := false
+			handler := withShutdown(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusTeapot)
+			}), token, tt.loopback, func() { stopped = true })
+			request := httptest.NewRequest(http.MethodPost, "/caveman/shutdown", nil)
+			if tt.header != "" {
+				request.Header.Set(runstate.InstanceHeader, tt.header)
+			}
+			response := httptest.NewRecorder()
+			handler.ServeHTTP(response, request)
+			if response.Code != tt.wantStatus || stopped != tt.wantStop {
+				t.Fatalf("status %d stopped %v, want %d %v", response.Code, stopped, tt.wantStatus, tt.wantStop)
+			}
+		})
+	}
+	response := httptest.NewRecorder()
+	withShutdown(http.NotFoundHandler(), token, true, func() { t.Fatal("GET stopped the proxy") }).
+		ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/caveman/shutdown", nil))
+}
+
 func TestRunStatusRequiresThisListenerGeneration(t *testing.T) {
 	for _, matching := range []bool{false, true} {
 		t.Run(strconv.FormatBool(matching), func(t *testing.T) {
