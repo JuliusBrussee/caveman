@@ -736,8 +736,25 @@ function installGemini(ctx) {
   // Gemini CLI refuses `extensions install` for an installed extension
   // ("Please uninstall it first"), and `extensions update` leaves one already at
   // the latest release alone. So --force reinstalls: uninstall, then install.
+  // A copy of the old one is kept aside first: when the install then fails
+  // (network, rate limit), it goes back instead of leaving no extension.
+  const extDir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'caveman');
+  let saved = null;
   const uninstallFirst = (spawnOpts) => {
-    if (!installed || spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
+    if (!installed) return true;
+    if (!opts.dryRun) {
+      let dir;
+      try {
+        dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-gemini-'));
+        fs.cpSync(extDir, path.join(dir, 'caveman'), { recursive: true, verbatimSymlinks: true });
+        saved = dir;
+      } catch (e) {
+        if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
+        results.failed.push(['gemini', `could not copy ${extDir} aside, so it was not reinstalled: ${e.message}`]);
+        return false;
+      }
+    }
+    if (spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
     results.failed.push(['gemini', 'gemini extensions uninstall failed']);
     return false;
   };
@@ -809,10 +826,16 @@ function installGemini(ctx) {
     }
   }
   if (spawnOk(r)) results.installed.push('gemini');
-  else if (r) {
-    results.failed.push(['gemini', 'gemini extensions install failed']);
-    if (installed) warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+  else if (r) results.failed.push(['gemini', 'gemini extensions install failed']);
+  if (!spawnOk(r) && saved && !fs.existsSync(extDir)) {
+    try {
+      fs.cpSync(path.join(saved, 'caveman'), extDir, { recursive: true, verbatimSymlinks: true });
+      note('  put the old caveman extension back');
+    } catch (_) {
+      warn(`  the old caveman extension is already removed. Install it again with: gemini extensions install ${url}`);
+    }
   }
+  if (saved) { try { fs.rmSync(saved, { recursive: true, force: true }); } catch (_) {} }
   process.stdout.write('\n');
 }
 
