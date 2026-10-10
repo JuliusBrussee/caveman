@@ -246,6 +246,28 @@ test("open gate: the gateway comes from $CAVEMAN_HOME/cloud.json, not the old co
   }
 });
 
+// Setup moves the local runtime off a busy 8787 and records localPort in
+// cloud.json; plain `pi` has to follow it, as the CLI does.
+test("open gate: the local runtime's port comes from cloud.json localPort", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    delete fx.env.CAVE_GATEWAY_URL;
+    writeFileSync(join(fx.env.CAVEMAN_HOME, "cloud.json"), JSON.stringify({ localPort: port }));
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "openai", "--model", "stub-model",
+      "-p", "say hi",
+    ]);
+    assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
+    assert.equal(requests.filter((r) => r.method === "POST")[0]?.path, "/w/pi/openai/v1/chat/completions");
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
 // Signing in stores the Cloud's gateway for Cloud calls only: without an
 // explicit choice (managedGateway) pi never sends traffic there.
 test("a gatewayUrl stored by login alone is not pi's gateway", { skip: !havePi && "pi devDependency missing" }, async () => {
