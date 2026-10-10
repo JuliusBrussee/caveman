@@ -7290,7 +7290,8 @@ function detectCodexWrapAuthMode(): CodexWrapAuthMode {
 }
 
 function codexTomlSectionName(line: string): string | undefined {
-  const match = line.match(/^\s*\[([^\]]+)\]\s*(?:#.*)?$/);
+  // `[[x]]` (an array of tables, e.g. Codex's [[skills.config]]) starts a section too.
+  const match = line.match(/^\s*\[\[?([^\]]+)\]\]?\s*(?:#.*)?$/);
   return match?.[1]?.trim();
 }
 
@@ -7961,6 +7962,8 @@ const CODEX_NATIVE_ROOT_BEGIN = "# >>> caveman:native-root";
 const CODEX_NATIVE_ROOT_END = "# <<< caveman:native-root";
 const CODEX_NATIVE_TABLES_BEGIN = "# >>> caveman:native-tables";
 const CODEX_NATIVE_TABLES_END = "# <<< caveman:native-tables";
+const CODEX_NATIVE_MARKERS = new Set([CODEX_NATIVE_ROOT_BEGIN, CODEX_NATIVE_ROOT_END, CODEX_NATIVE_TABLES_BEGIN, CODEX_NATIVE_TABLES_END]);
+const CODEX_NATIVE_TABLES = ["model_providers.caveman", "mcp_servers.caveman"];
 const HERMES_NATIVE_ROUTE_BEGIN = "# >>> caveman:native-hermes-routing";
 const HERMES_NATIVE_ROUTE_END = "# <<< caveman:native-hermes-routing";
 const HERMES_NATIVE_PLUGIN_BEGIN = "# >>> caveman:native-hermes-plugin";
@@ -8929,23 +8932,14 @@ function aiderNativeMutations(gw: string): NativeMutation[] {
 }
 
 function codexNativeConfig(source: string, gw: string, subscription: boolean, mcpBinary: string): { text: string; rootBlock: string; tablesBlock: string } {
-  // Remove caveman's own marker blocks FIRST. The legacy table strippers below
-  // skip every line after a caveman table until the next TOML header, and the
-  // tables block ends with [mcp_servers.caveman] followed by the end marker, so
-  // running them first ate "# <<< caveman:native-tables" and the block this
-  // function had itself written failed its own re-parse as "corrupted" on the
-  // next wrap (every `caveman codex` run fell back to session-only wrap and
-  // doctor reported drift). A UTF-8 BOM stays in front of the whole file, the
-  // only place Codex accepts one.
+  // Drop caveman's marker lines, never what sits between them: Codex rewrites
+  // config.toml itself and moves its own tables in there ([features],
+  // [mcp_servers.*], [[skills.config]]). The strippers then take Caveman's
+  // root key and tables by name. A UTF-8 BOM stays in front of the whole file,
+  // the only place Codex accepts one.
   const bom = source.startsWith("\uFEFF") ? "\uFEFF" : "";
-  let stripped = source.slice(bom.length);
-  for (const [begin, end] of [[CODEX_NATIVE_ROOT_BEGIN, CODEX_NATIVE_ROOT_END], [CODEX_NATIVE_TABLES_BEGIN, CODEX_NATIVE_TABLES_END]] as const) {
-    const start = stripped.indexOf(begin);
-    const finish = stripped.indexOf(end);
-    if ((start === -1) !== (finish === -1) || finish < start) throw new Error("existing Codex Caveman block is corrupted; run `caveman doctor codex`");
-    if (start !== -1) stripped = `${stripped.slice(0, start)}${stripped.slice(finish + end.length)}`.trim();
-  }
-  stripped = stripCodexCavemanMcpToml(stripCodexCavemanProviderToml(stripped));
+  let stripped = source.slice(bom.length).split("\n").filter((line) => !CODEX_NATIVE_MARKERS.has(line.trim())).join("\n");
+  stripped = stripCodexCavemanMcpToml(stripCodexCavemanProviderToml(stripped)).trim();
   const rootBlock = `${CODEX_NATIVE_ROOT_BEGIN}\nmodel_provider = "caveman"\n${CODEX_NATIVE_ROOT_END}`;
   const providerLines = codexCavemanProviderToml(gw, subscription).split("\n").slice(1).join("\n");
   const tablesBlock = [
@@ -8959,6 +8953,74 @@ function codexNativeConfig(source: string, gw: string, subscription: boolean, mc
   ].join("\n");
   const middle = stripped ? `\n\n${stripped}` : "";
   return { text: `${bom}${rootBlock}${middle}\n\n${tablesBlock}\n`, rootBlock, tablesBlock };
+}
+
+// config.toml line by line, with the table each line sits in and, for a
+// `key = value` line, the value as comparable text. Codex rewrites this file
+// itself (toml_edit): it regroups tables, appends new ones between Caveman's
+// markers and re-quotes a Windows path from "C:\\x" to 'C:\x'. So Caveman's
+// items are found by name and value, never by the bytes enable journaled.
+function codexTomlLines(text: string): Array<{ line: string; section: string; key?: string; value?: string }> {
+  let section = "";
+  return text.split("\n").map((line) => {
+    section = codexTomlSectionName(line) ?? section;
+    const match = line.match(/^\s*([A-Za-z0-9_-]+)\s*=(.*)$/);
+    if (!match) return { line, section };
+    let value = "";
+    for (const [token] of match[2]!.matchAll(/"(?:[^"\\]|\\.)*"|'[^']*'|#.*|[^\s"'#]+/g)) {
+      if (token.startsWith("#")) break;
+      if (token.startsWith("'")) value += JSON.stringify(token.slice(1, -1));
+      else if (token.startsWith('"')) { try { value += JSON.stringify(JSON.parse(token)); } catch { value += token; } }
+      else value += token;
+    }
+    return { line, section, key: match[1]!, value: value.replace(/,]/g, "]") };
+  });
+}
+
+function codexNativeTable(section: string): boolean {
+  return CODEX_NATIVE_TABLES.some((table) => section === table || section.startsWith(`${table}.`));
+}
+
+// Each Caveman table still in config.toml: true while it holds every value
+// enable wrote, false once one changed.
+function codexNativeTables(lines: ReturnType<typeof codexTomlLines>, tablesBlock: string): Map<string, boolean> {
+  const wrote = codexTomlLines(tablesBlock);
+  const tables = new Map<string, boolean>();
+  for (const table of CODEX_NATIVE_TABLES) {
+    if (!lines.some((line) => line.section === table)) continue;
+    tables.set(table, wrote.filter((w) => w.section === table && w.key)
+      .every((w) => lines.some((line) => line.section === table && line.key === w.key && line.value === w.value)));
+  }
+  return tables;
+}
+
+function codexNativeRouted(lines: ReturnType<typeof codexTomlLines>): boolean {
+  return lines.some((line) => line.section === "" && line.key === "model_provider" && line.value === '"caveman"');
+}
+
+// Disable once Codex has rewritten config.toml: take out exactly what enable
+// wrote, put back the root model_provider it replaced, keep everything else
+// where Codex put it. A Caveman table whose values the user changed is theirs
+// now: refuse rather than guess.
+function codexNativeRestoreText(file: string, text: string, tablesBlock: string, before: Buffer | null): string {
+  const bom = text.startsWith("\uFEFF") ? "\uFEFF" : "";
+  const lines = codexTomlLines(text.slice(bom.length));
+  for (const [table, owned] of codexNativeTables(lines, tablesBlock)) {
+    if (!owned) throw new Error(`Codex [${table}] in ${file} changed after enable; refusing destructive disable (undo that edit or delete the table, then run this again)`);
+  }
+  const previous = codexTomlLines((before?.toString("utf8") ?? "").replace(/^\uFEFF/, ""))
+    .filter((line) => line.section === "" && line.key === "model_provider" && line.value !== '"caveman"')
+    .map((line) => line.line);
+  const out: string[] = [];
+  for (const line of lines) {
+    if (CODEX_NATIVE_MARKERS.has(line.line.trim())) continue;
+    // A comment in a Caveman table is the user's note on whatever follows it.
+    if (codexNativeTable(line.section) && !/^\s*#/.test(line.line)) continue;
+    if (codexNativeRouted([line])) out.push(...previous);
+    else out.push(line.line);
+  }
+  const body = out.join("\n").trim();
+  return body ? `${bom}${body}\n` : bom;
 }
 
 function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
@@ -9964,12 +10026,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
   const rootBlock = operation.owned?.root_block;
   const tablesBlock = operation.owned?.tables_block;
   if (typeof rootBlock !== "string" || typeof tablesBlock !== "string") throw new Error("Codex integration journal lacks owned blocks");
-  let text = current.toString("utf8");
-  for (const [block, begin] of [[rootBlock, CODEX_NATIVE_ROOT_BEGIN], [tablesBlock, CODEX_NATIVE_TABLES_BEGIN]] as const) {
-    if (text.includes(begin) && !text.includes(block)) throw new Error("Codex Caveman config block changed after enable; refusing destructive disable");
-    text = text.replace(`${block}\n\n`, "").replace(`\n\n${block}\n`, "\n").replace(block, "");
-  }
-  return Buffer.from(text);
+  return Buffer.from(codexNativeRestoreText(operation.file, current.toString("utf8"), tablesBlock, before));
 }
 
 function writeNativeRestoration(file: string, bytes: Buffer | null): void {
@@ -10335,9 +10392,12 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
         } else if (operation.kind === "codex-hooks") {
           owned = nativeHookEntriesHealthy(parseJsonFileObject(operation.file, current), "codex");
         } else if (operation.kind === "codex-config") {
+          // By name and value, so Codex's own rewrites of the file are not drift.
+          // A BOM past offset 0 (left by an earlier enable) stops Codex starting.
           const text = current.toString("utf8");
-          owned = typeof operation.owned?.root_block === "string" && typeof operation.owned?.tables_block === "string"
-            && text.includes(operation.owned.root_block) && text.includes(operation.owned.tables_block);
+          const lines = codexTomlLines(text);
+          const tables = typeof operation.owned?.tables_block === "string" ? codexNativeTables(lines, operation.owned.tables_block) : new Map();
+          owned = CODEX_NATIVE_TABLES.every((table) => tables.get(table) === true) && codexNativeRouted(lines) && text.indexOf("\uFEFF", 1) === -1;
         } else if (operation.kind === "hermes-config") {
           const text = current.toString("utf8");
           owned = typeof operation.owned?.route_block === "string" && text.includes(operation.owned.route_block)
@@ -12703,7 +12763,7 @@ function nativeMcpRegistered(agent: "claude" | "codex"): boolean {
   const current = operation ? fileBytes(operation.file) : null;
   if (!operation || !current) return false;
   try {
-    if (agent === "codex") return typeof operation.owned?.tables_block === "string" && current.toString("utf8").includes(operation.owned.tables_block);
+    if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
     const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
     return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
   } catch {
