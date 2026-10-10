@@ -55,6 +55,19 @@ function parseWindowsNodeShim(source) {
   return npm ? npm[2] : null;
 }
 
+// A shim that forwards to a native executable beside it: what npm writes for a
+// package whose bin is an .exe (Claude Code ships one), and pnpm's
+// `@"<target>" %*` form, drive-absolute when the store is on another drive.
+// The executable is run directly, so no batch syntax is evaluated here either.
+// Same as parseWindowsExeShim in packages/cli/src/portable-command.ts.
+function parseWindowsExeShim(source) {
+  for (const line of source.split(/\r?\n/)) {
+    const match = line.match(/^[ \t]*@?"(?:%(?:dp0%|~dp0)\\?([^"\r\n]+\.exe)|([A-Za-z]:[\\/][^"\r\n]+\.exe))"[ \t]+%\*[ \t]*$/i);
+    if (match) return match[1] || match[2];
+  }
+  return null;
+}
+
 // Accept only a single shim-relative forwarding command, optionally preceded by
 // @echo off. Never evaluate batch syntax or interpolate caller-controlled argv.
 function parseWindowsNestedShim(source) {
@@ -76,7 +89,8 @@ function resolveWindowsNodeShim(executable, depth = 0, seen = new Set()) {
   const nested = parseWindowsNestedShim(source);
   const forwardsToBatch = /"[^"\r\n]+\.(?:cmd|bat)"[ \t]+%\*/i.test(source);
   const jsTarget = forwardsToBatch ? null : parseWindowsNodeShim(source);
-  const child = jsTarget || nested;
+  const exeTarget = forwardsToBatch || jsTarget ? null : parseWindowsExeShim(source);
+  const child = jsTarget || nested || exeTarget;
   if (!child) throw new Error(`cannot safely launch non-Node Windows command shim: ${normalized}`);
   const target = /^[A-Za-z]:[\\/]/.test(child)
     ? child
@@ -84,7 +98,7 @@ function resolveWindowsNodeShim(executable, depth = 0, seen = new Set()) {
   if (!fs.existsSync(target) || !fs.statSync(target).isFile()) {
     throw new Error(`Windows command shim target is missing: ${target}`);
   }
-  return jsTarget ? target : resolveWindowsNodeShim(target, depth + 1, seen);
+  return jsTarget || (!nested && exeTarget) ? target : resolveWindowsNodeShim(target, depth + 1, seen);
 }
 
 function portableInvocation(command, args, {
@@ -97,6 +111,8 @@ function portableInvocation(command, args, {
   const executable = resolveWindowsCommand(command, env) || command;
   if (!/\.(?:cmd|bat)$/i.test(executable)) return { command: executable, args: [...args] };
   const script = resolveWindowsNodeShim(executable);
+  // A shim's target is a Node script to run under this Node, or a native executable.
+  if (/\.exe$/i.test(script)) return { command: script, args: [...args] };
   if (allowBun) {
     // OMP's npm shim wraps a Bun CLI. Keep argv out of cmd.exe and use the
     // declared runtime instead of evaluating Bun-specific code with Node.
@@ -114,4 +130,4 @@ function portableInvocation(command, args, {
   return { command: execPath, args: [script, ...args] };
 }
 
-module.exports = { parseWindowsNodeShim, portableInvocation, resolveWindowsCommand };
+module.exports = { parseWindowsExeShim, parseWindowsNodeShim, portableInvocation, resolveWindowsCommand };
