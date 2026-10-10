@@ -1543,6 +1543,9 @@ function installOpencode(ctx) {
     const fencedBlock = `${OPENCODE_AGENTS_MD_BEGIN}\n${ruleBody}${OPENCODE_AGENTS_MD_END}\n`;
     if (fs.existsSync(agentsMd)) {
       const existing = fs.readFileSync(agentsMd, 'utf8');
+      // A CRLF file gets a CRLF block, so its line endings stay one style.
+      const eol = existing.includes('\r\n') ? '\r\n' : '\n';
+      const block = fencedBlock.replace(/\r?\n/g, eol);
       // Both markers present is not enough: they must be exactly one matched
       // pair, in order. An END above a BEGIN (or an orphan BEGIN) made the
       // slice arithmetic below run on end === -1, which re-appended the whole
@@ -1565,12 +1568,12 @@ function installOpencode(ctx) {
         // had already installed — the block went stale forever. Only the
         // bytes between our own markers are touched; user content around
         // them is preserved exactly.
-        const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length + 1);
-        if (currentBlock === fencedBlock) {
+        const currentBlock = existing.slice(begin, end + OPENCODE_AGENTS_MD_END.length);
+        if (currentBlock === block.slice(0, -eol.length)) {
           note(`  ${agentsMd} already contains the current caveman ruleset`);
         } else {
-          const next = existing.slice(0, begin) + fencedBlock
-            + existing.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n/, '');
+          const next = existing.slice(0, begin) + block.slice(0, -eol.length)
+            + existing.slice(end + OPENCODE_AGENTS_MD_END.length);
           fs.writeFileSync(agentsMd, next, { mode: 0o644 });
           process.stdout.write(`  refreshed caveman ruleset in ${agentsMd}\n`);
         }
@@ -1591,7 +1594,7 @@ function installOpencode(ctx) {
           if (!fs.existsSync(agentsBak)) {
             try { fs.copyFileSync(agentsMd, agentsBak); } catch (_) {}
           }
-          const bodyTrim = ruleBody.trimEnd();
+          const bodyTrim = ruleBody.trimEnd().replace(/\r?\n/g, eol);
           let userPart;
           const exact = existing.indexOf(bodyTrim);
           if (exact !== -1) {
@@ -1602,13 +1605,13 @@ function installOpencode(ctx) {
             userPart = cutAt === -1 ? '' : existing.slice(0, cutAt).trim();
             note(`  legacy block did not match the current ruleset — everything from the sentinel down was replaced; original kept at ${agentsBak}`);
           }
-          const next = (userPart ? userPart + '\n\n' : '') + fencedBlock;
+          const next = (userPart ? userPart + eol + eol : '') + block;
           fs.writeFileSync(agentsMd, next, { mode: 0o644 });
           process.stdout.write(`  migrated ${agentsMd} legacy block to fenced (backup: ${agentsBak})\n`);
         }
       } else {
-        const sep = existing.endsWith('\n\n') ? '' : (existing.endsWith('\n') ? '\n' : '\n\n');
-        fs.writeFileSync(agentsMd, existing + sep + fencedBlock, { mode: 0o644 });
+        const sep = existing.endsWith(eol + eol) ? '' : (existing.endsWith('\n') ? eol : eol + eol);
+        fs.writeFileSync(agentsMd, existing + sep + block, { mode: 0o644 });
         process.stdout.write(`  appended caveman ruleset to ${agentsMd}\n`);
       }
     } else {
@@ -2287,10 +2290,11 @@ function uninstall(ctx) {
       const begin = body.indexOf(OPENCODE_AGENTS_MD_BEGIN);
       const end = body.indexOf(OPENCODE_AGENTS_MD_END);
       if (begin !== -1 && end !== -1 && end > begin) {
-        const before = body.slice(0, begin).replace(/\n+$/, '\n');
-        const after = body.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^\n+/, '\n');
+        // One line ending kept on each side of the cut, LF or CRLF.
+        const before = body.slice(0, begin).replace(/(\r?\n)+$/, '$1');
+        const after = body.slice(end + OPENCODE_AGENTS_MD_END.length).replace(/^(\r?\n)+/, '$1');
         let next = (before + after).trimEnd();
-        next = next ? next + '\n' : '';
+        next = next ? next + (body.includes('\r\n') ? '\r\n' : '\n') : '';
         if (!opts.dryRun) {
           if (next === '') {
             try { fs.unlinkSync(ocAgentsMd); } catch (_) {}

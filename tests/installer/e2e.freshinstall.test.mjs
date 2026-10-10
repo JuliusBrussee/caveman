@@ -1125,6 +1125,33 @@ test('openclaw: append on a well-formed block stays a no-op', () => {
   }
 });
 
+// SOUL.md and Grok's AGENTS.md share these helpers. A CRLF file gets a CRLF
+// block and comes back byte for byte.
+test('openclaw: a CRLF file keeps CRLF through append and strip', () => {
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const soul = path.join(dir, 'SOUL.md');
+  const user = '# mine\r\n\r\nkeep this\r\n';
+  try {
+    const snippet = helper.loadBootstrapSnippet(REPO_ROOT);
+    fs.writeFileSync(soul, user);
+    helper.appendBootstrapToSoul(soul, snippet);
+    const installed = fs.readFileSync(soul, 'utf8');
+    assert.doesNotMatch(installed, /(^|[^\r])\n/, 'LF line ending in a CRLF file');
+    assert.ok(installed.startsWith(`${user}\r\n${helper.MARK_BEGIN}\r\n`), JSON.stringify(installed.slice(0, 80)));
+    assert.equal(helper.appendBootstrapToSoul(soul, snippet).changed, false, 'a second install rewrote the CRLF block');
+    helper.stripBootstrapFromSoul(soul);
+    assert.equal(fs.readFileSync(soul, 'utf8'), user);
+
+    // A block an older installer wrote with LF, between CRLF user lines.
+    fs.writeFileSync(soul, `${user}\r\n${snippet}\r\ntrailing\r\n`);
+    helper.stripBootstrapFromSoul(soul);
+    assert.equal(fs.readFileSync(soul, 'utf8'), '# mine\r\n\r\nkeep this\r\n\r\ntrailing\r\n');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // ── Test: missing `claude` CLI must be a FAILURE, not silent success (#592)
 // spawnSync reports ENOENT as { status: null, error }; the old
 // `(r.status || 0) === 0` coerced that to success, so the installer printed

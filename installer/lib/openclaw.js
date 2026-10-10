@@ -275,10 +275,11 @@ function stripAllBootstrapBlocks(text) {
       i = b + MARK_BEGIN.length; // orphan begin — drop only the marker itself
     }
     // Collapse the blank-line scar around the cut (same cosmetic rule the
-    // old single-cut code applied): keep at most one newline on each side.
-    result = result.replace(/\n+$/, '\n');
-    const lead = /^\n+/.exec(text.slice(i));
-    if (lead) i += lead[0].length - (result ? 1 : 0);
+    // old single-cut code applied): keep at most one line ending on each
+    // side, LF or CRLF.
+    result = result.replace(/(\r?\n)+$/, '$1');
+    const lead = /^(\r?\n)+/.exec(text.slice(i));
+    if (lead) i += lead[0].length - (result ? lead[1].length : 0);
   }
   // Orphan end markers (begin already gone or never written) — drop marker only.
   while (result.includes(MARK_END)) { found = true; result = result.replace(MARK_END, ''); }
@@ -289,6 +290,9 @@ function appendBootstrapToSoul(soulPath, snippet) {
   const opened = readRegularIfExists(soulPath);
   const existing = opened.content;
   const count = (s, sub) => s.split(sub).length - 1;
+  // A CRLF file gets a CRLF block, so its line endings stay one style.
+  const eol = existing && existing.includes('\r\n') ? '\r\n' : '\n';
+  snippet = snippet.replace(/\r?\n/g, eol);
   let base = existing;
   let repaired = false;
   if (existing) {
@@ -301,7 +305,7 @@ function appendBootstrapToSoul(soulPath, snippet) {
       // the bytes between our own markers move; user content is preserved.
       const b = existing.indexOf(MARK_BEGIN);
       const e = existing.indexOf(MARK_END) + MARK_END.length;
-      const wanted = snippet.replace(/\n+$/, '');
+      const wanted = snippet.replace(/(\r?\n)+$/, '');
       if (existing.slice(b, e) === wanted) {
         return { changed: false, reason: 'already present' };
       }
@@ -317,7 +321,7 @@ function appendBootstrapToSoul(soulPath, snippet) {
   }
   let next;
   if (base && base.length) {
-    const sep = base.endsWith('\n\n') ? '' : (base.endsWith('\n') ? '\n' : '\n\n');
+    const sep = base.endsWith(eol + eol) ? '' : (base.endsWith('\n') ? eol : eol + eol);
     next = base + sep + snippet;
   } else {
     next = snippet;
@@ -333,7 +337,7 @@ function stripBootstrapFromSoul(soulPath) {
   const { next: stripped, found } = stripAllBootstrapBlocks(existing);
   if (!found) return { changed: false, reason: 'no marker block' };
   let next = stripped.trimEnd();
-  next = next ? next + '\n' : '';
+  next = next ? next + (existing.includes('\r\n') ? '\r\n' : '\n') : '';
   if (next === '') {
     // SOUL.md only contained our block — remove the file so OpenClaw doesn't
     // bootstrap an empty section every turn.

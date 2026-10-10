@@ -279,6 +279,32 @@ test('opencode uninstall strips fenced AGENTS.md block, preserving user prefix a
   }
 });
 
+// ── 2d. A CRLF AGENTS.md gets a CRLF block and comes back byte for byte ──
+test('opencode AGENTS.md with CRLF line endings keeps them through install and uninstall', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  try {
+    const env = installEnv(xdg, shimDir);
+    const agentsMd = path.join(xdg, 'opencode', 'AGENTS.md');
+    const user = '# my project\r\n\r\nuse 2-space indent.\r\n';
+    fs.mkdirSync(path.dirname(agentsMd), { recursive: true });
+    fs.writeFileSync(agentsMd, user);
+
+    assert.notEqual(runInstaller(['--only', 'opencode'], env).status, 2);
+    const installed = fs.readFileSync(agentsMd, 'utf8');
+    assert.doesNotMatch(installed, /(^|[^\r])\n/, 'LF line ending in a CRLF file');
+    assert.ok(installed.startsWith(`${user}\r\n<!-- caveman-begin -->\r\n`), JSON.stringify(installed.slice(0, 80)));
+    assert.notEqual(runInstaller(['--only', 'opencode'], env).status, 2);
+    assert.equal(fs.readFileSync(agentsMd, 'utf8'), installed, 'a second install rewrote the CRLF block');
+
+    assert.notEqual(runInstaller(['--uninstall'], env).status, 2);
+    assert.equal(fs.readFileSync(agentsMd, 'utf8'), user);
+  } finally {
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
 // ── 3. Tolerates JSONC opencode.json (#249-class regression guard) ───────
 test('opencode install tolerates JSONC opencode.json (comments + trailing commas)', () => {
   const xdg = freshTmpDir();
