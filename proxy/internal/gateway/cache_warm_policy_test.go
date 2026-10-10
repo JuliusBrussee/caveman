@@ -7,6 +7,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -82,7 +83,7 @@ func TestCacheWarmLearnsAndPersistsGaps(t *testing.T) {
 		t.Fatalf("observing did not move the class toward the user's gaps: %v -> %v", before[bin], after[bin])
 	}
 	info, err := os.Stat(path)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("gaps not persisted 0600: %v %v", err, info)
 	}
 	raw, _ := os.ReadFile(path)
