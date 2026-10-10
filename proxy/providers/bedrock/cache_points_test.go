@@ -192,7 +192,7 @@ func TestCachePointsUnsupportedVendorAndSurfaceAreByteIdentical(t *testing.T) {
 		{
 			name: "cross-region-profile-not-proven",
 			body: `{"system":[{"text":"stable"}],"messages":[]}`,
-			meta: providers.RequestMetadata{Provider: "bedrock", Model: "us." + claudeModel, Endpoint: "converse"},
+			meta: providers.RequestMetadata{Provider: "bedrock", Model: "us.anthropic.claude-sonnet-4-6", Endpoint: "converse"},
 		},
 		{
 			// Review H2: the bare `anthropic.claude-` prefix admitted legacy

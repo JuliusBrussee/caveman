@@ -468,7 +468,7 @@ func TestOfficialRuntimeModelPricesAndTiers(t *testing.T) {
 		{"anthropic", "claude-sonnet-4-6", 3, .3, 15, 0, 0, 0},
 		{"gemini", "gemini-2.5-pro", 1.25, .125, 10, 200_000, 2, 1.5},
 		{"vertex", "claude-sonnet-4-6", 3, .3, 15, 0, 0, 0},
-		{"bedrock", "anthropic.claude-3-5-sonnet-20241022-v2:0", 6, .6, 30, 0, 0, 0},
+		{"bedrock", "global.anthropic.claude-sonnet-4-6", 3, .3, 15, 0, 0, 0},
 	}
 	for _, tc := range tests {
 		t.Run(tc.provider+"/"+tc.model, func(t *testing.T) {
@@ -492,7 +492,7 @@ func TestOfficialRuntimeModelPricesAndTiers(t *testing.T) {
 			t.Errorf("invented model %q remains priced: %q", invented, version)
 		}
 	}
-	if price, version := catalog.Price("bedrock", "anthropic.claude-3-5-sonnet-20241022-v2:0"); price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
+	if price, version := catalog.Price("bedrock", "global.anthropic.claude-sonnet-4-6"); price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
 		t.Fatalf("regionless Bedrock lookup borrowed a regional price: %+v %q", price, version)
 	}
 	if price, version := catalog.PriceForRegionOrAgnostic("vertex", "gemini-2.5-pro", "us-central1"); price.InputPerMillion != 1.25 || strings.HasPrefix(version, "unpriced:") {

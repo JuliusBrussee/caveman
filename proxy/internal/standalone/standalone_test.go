@@ -934,7 +934,7 @@ func TestBuildAdapters_RegistersBedrockFromResolvedRegion(t *testing.T) {
 	t.Setenv("AWS_DEFAULT_REGION", "us-east-2")
 	adapters := buildAdapters(config.Config{})
 
-	req := httptest.NewRequest(http.MethodPost, "/bedrock/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse", nil)
+	req := httptest.NewRequest(http.MethodPost, "/bedrock/model/global.anthropic.claude-sonnet-4-6/converse", nil)
 	for _, adapter := range adapters {
 		if adapter.Name() != "bedrock" {
 			continue
@@ -946,7 +946,7 @@ func TestBuildAdapters_RegistersBedrockFromResolvedRegion(t *testing.T) {
 		if err != nil {
 			t.Fatalf("resolve Bedrock route: %v", err)
 		}
-		want := "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-3-5-sonnet-20241022-v2:0/converse"
+		want := "https://bedrock-runtime.eu-west-1.amazonaws.com/model/global.anthropic.claude-sonnet-4-6/converse"
 		if got := upstream.String(); got != want {
 			t.Fatalf("Bedrock upstream = %q, want %q", got, want)
 		}
