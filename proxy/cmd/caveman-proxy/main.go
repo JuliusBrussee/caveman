@@ -105,6 +105,7 @@ func runNativeHookBridge(args []string) {
 	}
 	agent := args[0]
 	adapter := argFlag(args[1:], "--adapter", "")
+	node := argFlag(args[1:], "--node", "")
 	home := env.String("CAVEMAN_HOME", "")
 	if home == "" {
 		userHome, err := os.UserHomeDir()
@@ -117,7 +118,7 @@ func runNativeHookBridge(args []string) {
 	if err != nil || len(raw) > nativeHookMaxPayloadBytes {
 		return
 	}
-	_ = nativehook.Run(context.Background(), home, agent, adapter, raw, os.Stdout, os.Stderr)
+	_ = nativehook.Run(context.Background(), home, agent, adapter, node, raw, os.Stdout, os.Stderr)
 }
 
 func readNativeHookPayload(r io.Reader) ([]byte, error) {

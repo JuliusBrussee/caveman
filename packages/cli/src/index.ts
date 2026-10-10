@@ -7406,14 +7406,18 @@ export function nativeHookInvocation(
   agentId: string,
   executableIsProxy: boolean,
   platform: NodeJS.Platform = process.platform,
+  node: string = process.execPath,
 ): string {
   const executableInvocation = hookExecutableInvocation(
     executable,
     executableIsProxy ? undefined : fastHook,
     platform,
   );
+  // The bridge runs the adapter with node. Hosts started from a GUI or launchd
+  // often have none on PATH (nvm, volta, Homebrew), so name this one; the
+  // bridge falls back to PATH if it is later removed.
   const invocation = executableIsProxy
-    ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)}`
+    ? `${executableInvocation} native-hook ${agentId} --adapter ${quoteHookPath(fastHook, platform)} --node ${quoteHookPath(node, platform)}`
     : `${executableInvocation} native-hook ${agentId}`;
   return invocation;
 }
@@ -7535,7 +7539,7 @@ function managedHookIdentity(command: string): string | undefined {
   const agent = args[1];
   const nativeAgent = agent === "claude" || agent === "codex" || agent === "gemini";
   const supportedNative =
-    (executable === "caveman-proxy" && args.length === 4 && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
+    (executable === "caveman-proxy" && (args.length === 4 || (args.length === 6 && args[4] === "--node")) && args[0] === "native-hook" && nativeAgent && args[2] === "--adapter")
     || ((executable === "caveman" || executable === "cave") && args.length === 2 && args[0] === "native-hook" && nativeAgent)
     || (nodeScript !== undefined && ["index.js", "native-hook-fast.js"].includes(nodeScript) && args.length === 2 && args[0] === "native-hook" && nativeAgent);
   if (supportedNative) return `native-hook:${agent}`;
@@ -7668,6 +7672,9 @@ function invocationTargetsExist(tokens: string[]): boolean {
   const files = [hookCommandBasename(executable) === "node" ? tokens[1] : undefined];
   const adapter = tokens.indexOf("--adapter");
   if (adapter !== -1) files.push(tokens[adapter + 1]);
+  // The bridge's recorded `--node` dangles the same way after an nvm or Homebrew upgrade.
+  const node = tokens.indexOf("--node");
+  if (node !== -1) files.push(tokens[node + 1]);
   return !files.some((file) => file !== undefined && !existsSync(file));
 }
 

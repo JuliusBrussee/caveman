@@ -811,6 +811,7 @@ test("doctor and disable tolerate executable path drift with unchanged hook sema
 for (const [name, rewrite] of [
   ["adapter", (command, dead) => command.replace(/--adapter\s+.*$/, `--adapter '${dead}/native-hook-fast.js'`)],
   ["executable", (command, dead) => command.replace(/^.*?(?=native-hook claude|shrink-hook)/, `'${dead}/bin/${command.includes("shrink-hook") ? "caveman" : "caveman-proxy"}' `)],
+  ["node", (command, dead) => command.replace(/--node\s+.*$/, `--node '${dead}/bin/node'`)],
 ]) {
   test(`doctor flags a managed hook whose ${name} no longer exists and --fix re-renders it`, async () => {
     const fx = fixture();

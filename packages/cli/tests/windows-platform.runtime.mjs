@@ -63,8 +63,9 @@ test("CLI normalizes every path in Windows lifecycle hook commands", () => {
       "claude",
       true,
       "win32",
+      "C:\\Program Files\\nodejs\\node.exe",
     ),
-    "& 'C:/Users/Jane Doe/.caveman/bin/caveman-proxy.exe' native-hook claude --adapter 'C:/Program Files/Caveman/native-hook-fast.js'",
+    "& 'C:/Users/Jane Doe/.caveman/bin/caveman-proxy.exe' native-hook claude --adapter 'C:/Program Files/Caveman/native-hook-fast.js' --node 'C:/Program Files/nodejs/node.exe'",
   );
   assert.equal(
     nativeHookInvocation(

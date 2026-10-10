@@ -51,7 +51,7 @@ func TestRunPreToolUsesNativeBridgeAndIncludesFileCurrentness(t *testing.T) {
 	t.Setenv("CAVEMAN_NATIVE_MODE", "safe")
 	raw := []byte(`{"hook_event_name":"PreToolUse","session_id":"host-1","tool_name":"read_file","cwd":` + string(mustJSON(t, home)) + `,"tool_input":{"path":"generated.ts"}}`)
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), home, "claude", "", raw, &stdout, &stderr); err != nil {
+	if err := Run(context.Background(), home, "claude", "", "", raw, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if stderr.Len() != 0 || !strings.Contains(stdout.String(), "current observation available") {
@@ -93,7 +93,7 @@ func TestRunInvalidRuntimeResponseFailsOpenAndRecordsBoundedFallback(t *testing.
 	t.Setenv("CAVEMAN_NATIVE_MODE", "safe")
 	raw := []byte(`{"hook_event_name":"PreToolUse","session_id":"host-secret","tool_name":"read_file","tool_input":{"path":"secret.txt"}}`)
 	var stdout, stderr bytes.Buffer
-	if err := Run(context.Background(), home, "claude", "", raw, &stdout, &stderr); err != nil {
+	if err := Run(context.Background(), home, "claude", "", "", raw, &stdout, &stderr); err != nil {
 		t.Fatal(err)
 	}
 	if stdout.Len() != 0 || stderr.Len() != 0 {
@@ -105,6 +105,45 @@ func TestRunInvalidRuntimeResponseFailsOpenAndRecordsBoundedFallback(t *testing.
 	}
 	if bytes.Contains(fallback, []byte("secret.txt")) || !bytes.Contains(fallback, []byte(`"payload_sha256"`)) {
 		t.Fatalf("fallback must be bounded metadata only: %s", fallback)
+	}
+}
+
+// GUI- and launchd-started hosts often run hooks with no node on PATH. The
+// lifecycle adapter must still run, through the node recorded at setup, and
+// through PATH again once that recorded node is gone (an nvm switch).
+func TestRunDelegatesThroughRecordedNodeWhenPathHasNone(t *testing.T) {
+	dir := shortTempDir(t)
+	adapter := filepath.Join(dir, "native-hook-fast.js")
+	if err := os.WriteFile(adapter, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fakeNode := func(path, label string) {
+		t.Helper()
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nprintf '"+label+" %s' \"$3\"\n"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	recorded := filepath.Join(dir, "recorded-node")
+	fakeNode(recorded, "recorded")
+	t.Setenv("NODE", "")
+	t.Setenv("PATH", t.TempDir())
+	raw := []byte(`{"hook_event_name":"SessionStart","session_id":"host-1","source":"startup"}`)
+	var stdout, stderr bytes.Buffer
+	if err := Run(context.Background(), dir, "claude", adapter, recorded, raw, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "recorded claude" {
+		t.Fatalf("adapter did not run through the recorded node: stdout=%q stderr=%q", stdout.String(), stderr.String())
+	}
+	pathDir := t.TempDir()
+	fakeNode(filepath.Join(pathDir, "node"), "path")
+	t.Setenv("PATH", pathDir)
+	stdout.Reset()
+	if err := Run(context.Background(), dir, "claude", adapter, filepath.Join(dir, "removed-node"), raw, &stdout, &stderr); err != nil {
+		t.Fatal(err)
+	}
+	if stdout.String() != "path claude" {
+		t.Fatalf("a missing recorded node must fall back to PATH: stdout=%q stderr=%q", stdout.String(), stderr.String())
 	}
 }
 
