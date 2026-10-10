@@ -111,10 +111,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "2.1.295",
+    "tested_agent_version": "2.1.296",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-10-09",
-    "verified_by": "local pinned-binary probe (claude 2.1.295 on Node 22.22.0, agents/probe-installed.mjs); route probe: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true",
+    "last_verified_at": "2026-10-10",
+    "verified_by": "local pinned-binary probe (claude 2.1.296 on Node 22.22.0, agents/probe-installed.mjs); route probe: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true",
     "fallback": "generic-env",
     "maintainer": null
   },
@@ -148,10 +148,10 @@ export const PROFILES: AgentProfile[] = [
     "attribution": {
       "header": "x-cave-agent"
     },
-    "tested_agent_version": "0.162.0",
+    "tested_agent_version": "0.162.1",
     "injection_completeness": "code-only",
-    "last_verified_at": "2026-10-09",
-    "verified_by": "local pinned-binary probe (codex 0.162.0 on Node 22.22.0, agents/probe-installed.mjs)",
+    "last_verified_at": "2026-10-10",
+    "verified_by": "local pinned-binary probe (codex 0.162.1 on Node 22.22.0, agents/probe-installed.mjs)",
     "fallback": "generic-env",
     "maintainer": null
   },
