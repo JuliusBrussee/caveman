@@ -8311,6 +8311,28 @@ function geminiNativeEnv(source: string, route: string): { text: string; block: 
   return { text: `${stripped}${stripped ? "\n\n" : ""}${block}\n`, block };
 }
 
+// Gemini CLI loads one .env: the first .gemini/.env or .env walking up from
+// the working directory, the global one only when there is none, and never
+// over a variable the shell exports. The route in the global file then does
+// not apply, while the install reads healthy.
+function geminiRouteShadow(): string | null {
+  for (const key of ["GOOGLE_GEMINI_BASE_URL", "GEMINI_BASE_URL"]) {
+    const value = process.env[key];
+    if (value && !isCavemanRoute(value)) return `Gemini CLI takes ${key} from your shell, so its requests go direct and are not compressed or counted; unset it to use Caveman's route`;
+  }
+  const global = join(geminiConfigDir(), ".env");
+  for (let dir = resolve(process.cwd()); ; dir = dirname(dir)) {
+    for (const file of [join(dir, ".gemini", ".env"), join(dir, ".env")]) {
+      if (!existsSync(file)) continue;
+      if (nativeRealPath(file) === nativeRealPath(global)) return null;
+      const routed = (fileBytes(file)?.toString("utf8") ?? "").split(/\r?\n/)
+        .some((line) => /^\s*(?:export\s+)?GOOGLE_GEMINI_BASE_URL\s*=/.test(line) && isCavemanRoute(configValue(line.slice(line.indexOf("=") + 1)) ?? ""));
+      return routed ? null : `Gemini CLI reads ${file} here instead of ${global}, so its requests from this folder go direct and are not compressed or counted; copy the Caveman lines from ${global} into it`;
+    }
+    if (dirname(dir) === dir) return null;
+  }
+}
+
 function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   if (wrapMode(gw) === "managed") {
     throw new Error("managed Gemini CLI routing is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials");
@@ -9787,6 +9809,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman enabled; run ${agent} normally\n`);
     if (agent !== "aider") process.stderr.write(dim(`→ host trust remains authoritative; approve Caveman hooks/plugin when ${profile.display_name} asks\n`));
     if (agent === "codex") process.stderr.write(dim("→ review/approve hook hashes through Codex /hooks; Caveman does not bypass native trust\n"));
+    if (agent === "gemini") process.stderr.write(dim(`→ Gemini CLI skips ${join(geminiConfigDir(), ".env")} in a folder with its own .env; copy the Caveman lines into that one\n`));
     if (agent === "aider") {
       process.stderr.write(dim(`→ coding policy: Core ${NATIVE_PACK.version} static on; Aider cannot apply think.core live; \`caveman disable aider\` removes it\n`));
     } else {
@@ -10522,6 +10545,10 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
 	  ? ownedHealthy
 	  : coreSupported && nativeCoreRuntimeState().active;
   const warnings: string[] = [];
+  if (agent === "gemini" && installed) {
+    const shadow = geminiRouteShadow();
+    if (shadow) warnings.push(shadow);
+  }
   if (agent === "opencode" && installed) {
     const routed = Object.keys((routeOperation?.owned?.routes as Record<string, unknown> | undefined) ?? {});
     const unrouted = opencodeUnroutedActiveProvider(routed);

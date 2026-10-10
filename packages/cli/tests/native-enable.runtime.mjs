@@ -2251,3 +2251,19 @@ test("enable leaves an agent on its own endpoint as is and says how to opt in", 
   const wrapped = await run(["enable", "codex"], { ...fx.env, OPENAI_BASE_URL: "http://127.0.0.1:8787/w/codex" });
   assert.equal(wrapped.code, 0, wrapped.stderr);
 });
+
+// Gemini CLI reads the first .env walking up from where it runs; the global
+// one holding Caveman's route is skipped in a folder that has its own.
+test("doctor gemini warns where a project .env or the shell overrides Caveman's route", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "gemini"], fx.env)).code, 0);
+  const project = join(fx.home, "project");
+  mkdirSync(project);
+  const doctor = (env, cwd) => JSON.parse(spawnSync(process.execPath, [cli, "doctor", "gemini"], { env, cwd, encoding: "utf8" }).stdout);
+  assert.deepEqual(doctor(fx.env, project).warnings, []);
+  writeFileSync(join(project, ".env"), "FOO=bar\n");
+  assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here instead of \S+\.gemini\/\.env/);
+  writeFileSync(join(project, ".env"), "FOO=bar\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787/w/gemini\n");
+  assert.deepEqual(doctor(fx.env, project).warnings, []);
+  assert.match(doctor({ ...fx.env, GOOGLE_GEMINI_BASE_URL: "https://llm-gw.corp.example" }, fx.home).warnings.join("\n"), /takes GOOGLE_GEMINI_BASE_URL from your shell/);
+});
