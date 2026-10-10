@@ -542,6 +542,15 @@ function claudeHasCaveman() {
   return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(out);
 }
 
+// `plugin list` also names a turned-off plugin, which runs no hooks. Only
+// `--json` saying it is on at user scope counts; a claude without it says no.
+function claudeCavemanEnabled() {
+  const r = captureSpawn('claude', ['plugin', 'list', '--json']);
+  try {
+    return spawnOk(r) && JSON.parse(r.stdout).some((p) => p && p.id === 'caveman@caveman' && p.scope === 'user' && p.enabled === true);
+  } catch (_) { return false; }
+}
+
 async function installClaude(ctx) {
   const { say, note, warn, ok, opts, results, configDir } = ctx;
   results.detected++;
@@ -633,7 +642,11 @@ async function installClaude(ctx) {
       const removed = settings ? SETTINGS.removeCavemanHooks(settings) : 0;
       const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
       try {
-        if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
+        // A plugin that was already there may be turned off: then these hooks
+        // are the only caveman left. One just installed is on.
+        if (removed > 0 && alreadyInstalled && !claudeCavemanEnabled()) {
+          note(`  kept ${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} in settings.json: Claude Code does not report the caveman plugin as turned on`);
+        } else if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
         else if (removed > 0) {
           writeSettingsKeepingComments(settingsPath, settings, settingsMeta, warn);
           note(`  removed ${what}`);

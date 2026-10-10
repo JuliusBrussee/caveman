@@ -942,17 +942,17 @@ test('claude plugin install success reports SessionEnd manifest coverage', {
 });
 
 // A Node `claude` that appends each call's argv to `record`, answers
-// `plugin list` with `list`, fails `plugin install` while
-// FAKE_CLAUDE_FAIL_INSTALL=1, and has no caveman-shrink MCP server. Windows
-// gets the .cmd shape portableInvocation launches. Returns env with it first
-// on PATH.
-function recordingClaudeEnv(root, record, list = '') {
+// `plugin list` with `list` (`plugin list --json` with `json`, when given),
+// fails `plugin install` while FAKE_CLAUDE_FAIL_INSTALL=1, and has no
+// caveman-shrink MCP server. Windows gets the .cmd shape portableInvocation
+// launches. Returns env with it first on PATH.
+function recordingClaudeEnv(root, record, list = '', json = list) {
   const dir = path.join(root, 'recording-bin');
   fs.mkdirSync(dir, { recursive: true });
   const body = "const fs = require('fs');\n"
     + 'const args = process.argv.slice(2);\n'
     + `fs.appendFileSync(${JSON.stringify(record)}, args.join(' ') + '\\n');\n`
-    + `if (args[0] === 'plugin' && args[1] === 'list') process.stdout.write(${JSON.stringify(list)});\n`
+    + `if (args[0] === 'plugin' && args[1] === 'list') process.stdout.write(args.includes('--json') ? ${JSON.stringify(json)} : ${JSON.stringify(list)});\n`
     + "if (args[1] === 'install' && process.env.FAKE_CLAUDE_FAIL_INSTALL === '1') process.exit(1);\n"
     + "if (args[0] === 'mcp' && args[1] === 'remove') { process.stderr.write('No MCP server named caveman-shrink\\n'); process.exit(1); }\n";
   if (process.platform === 'win32') {
@@ -1010,6 +1010,38 @@ test('plugin install after a failed one drops the standalone hook entries', () =
     const settings = SETTINGS.readSettings(settingsPath);
     assert.equal(SETTINGS.removeCavemanHooks(structuredClone(settings)), 0, `standalone hooks left beside the plugin: ${JSON.stringify(settings.hooks)}`);
     assert.match(getStatuslineCommand(settings), /caveman-statusline/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// `plugin list` names a turned-off plugin too, and that one runs no hooks: the
+// standalone ones are then the only caveman left. Only `plugin list --json`
+// saying it is on at user scope lets a re-run drop them.
+test('a turned-off caveman plugin keeps the standalone hooks', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude-config');
+  const settingsPath = path.join(configDir, 'settings.json');
+  const listed = 'Installed plugins:\n\n  ❯ caveman@caveman\n    Version: 3.2.0\n    Scope: user\n    Status: ✘ disabled\n';
+  const claude = (enabled) => recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), listed,
+    JSON.stringify([{ id: 'caveman@caveman', version: '3.2.0', scope: 'user', enabled }]));
+  const wired = () => SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate');
+  try {
+    const first = runInstaller(['--only', 'claude', '--with-hooks'], configDir, claude(false));
+    assert.equal(first.status, 0, first.stdout + first.stderr);
+    assert.ok(wired(), 'setup: --with-hooks wired no hooks');
+
+    const again = runInstaller(['--only', 'claude'], configDir, claude(false));
+    assert.equal(again.status, 0, again.stdout + again.stderr);
+    assert.ok(wired(), 'a re-run removed the only caveman hooks that run');
+    assert.match(again.stdout, /kept \d+ standalone caveman hook entries/);
+
+    // A claude without --json says nothing either way: the hooks stay.
+    runInstaller(['--only', 'claude'], configDir, recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), listed, 'error: unknown option \'--json\''));
+    assert.ok(wired(), 'an unreadable plugin list removed the hooks');
+
+    runInstaller(['--only', 'claude'], configDir, claude(true));
+    assert.equal(wired(), false, 'standalone hooks left beside a plugin that runs them');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
