@@ -606,12 +606,44 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   assert.equal(after.PreToolUse.length, 1);
 });
 
+// What Codex's /hooks records once the user trusts Caveman's SessionStart hook.
+function trustCodexHooks(home) {
+  const hooksPath = join(home, ".codex", "hooks.json");
+  const configPath = join(home, ".codex", "config.toml");
+  const group = JSON.parse(readFileSync(hooksPath, "utf8")).hooks.SessionStart.findIndex((entry) => /native-hook codex/.test(entry.hooks[0].command));
+  const key = `${realpathSync(hooksPath)}:session_start:${group}:0`;
+  writeFileSync(configPath, `${readFileSync(configPath, "utf8")}\n[hooks.state.${JSON.stringify(key)}]\ntrusted_hash = "sha256:test"\n`);
+}
+
+// Codex runs a hook from hooks.json only once the user trusts it in /hooks.
+// Until then no Caveman hook runs: no Core, and nothing restarts the runtime
+// after a reboot. Untrusted is the default (Caveman never trusts for the user),
+// so it is not a broken install; doctor says it and how to trust them.
+test("doctor codex reports Caveman's hooks untrusted until /hooks trusts them", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const untrusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(untrusted.state, "installed");
+  assert.equal(untrusted.components.lifecycle_hooks, false);
+  assert.equal(untrusted.core_active, false);
+  assert.equal(untrusted.capabilities.session_start.active, false);
+  assert.deepEqual(untrusted.warnings, ["Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself"]);
+  trustCodexHooks(fx.home);
+  const trusted = JSON.parse((await run(["doctor", "codex"], fx.env)).stdout);
+  assert.equal(trusted.components.lifecycle_hooks, true);
+  assert.equal(trusted.core_active, true);
+  assert.equal(trusted.capabilities.session_start.active, true);
+  assert.deepEqual(trusted.warnings, []);
+});
+
 // Codex declines command-output rewrite since #1037, so doctor never claims one.
 test("doctor does not claim a Codex tool rewrite that shrink-hook declines", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
   writeFileSync(join(fx.home, ".codex", "config.toml"), 'approval_policy = "never"\n');
   assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  trustCodexHooks(fx.home);
   const out = await run(["doctor", "codex"], fx.env);
   const result = JSON.parse(out.stdout);
   assert.equal(result.components.tool_rewrite, false, "Codex commands are no longer rewritten");

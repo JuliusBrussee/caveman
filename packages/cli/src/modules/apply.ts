@@ -85,6 +85,9 @@ export type ModuleHost = {
   // What doctor says, with the fix, when wired agents send their requests to a
   // local runtime that is not running; undefined otherwise.
   runtimeDown(): Promise<string | undefined>;
+  // What a wired agent still asks of the user before Caveman's hooks run
+  // (Codex: trust them in /hooks); undefined when nothing.
+  agentAsk(agent: string): string | undefined;
   interactive(): boolean;
   confirm(question: string): Promise<boolean>;
   // Where new wiring sends agent traffic, and the line status prints; `fix`
@@ -512,6 +515,10 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
     if (out.status !== 0) problems.push(`${name} ${run.args.join(" ")} failed${out.error ? `: ${out.error.message}` : ""}${output ? `\n${output}` : ""}`);
     else if (run.install) for (const line of externalReady(run.def, run.bin, run.flags, run.before)) say(line);
     else say(`✓ ${run.def.id}: ${name} ${run.args.join(" ")}`);
+  }
+  for (const agent of wire) {
+    const ask = h.agentAsk(agent);
+    if (ask) say(`○ ${ask}`);
   }
   return { ok: problems.length === 0, problems };
 }

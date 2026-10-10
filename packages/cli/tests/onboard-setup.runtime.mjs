@@ -38,6 +38,23 @@ test("setup --yes on a fresh home turns every module on for the detected agents"
   }
 });
 
+// Codex runs none of Caveman's hooks until the user trusts them in /hooks, and
+// Caveman never trusts them itself: without them nothing restarts the runtime
+// after a reboot. Setup says so once; bare doctor keeps it as a note.
+test("setup --yes tells a Codex user once to trust Caveman's hooks in /hooks", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["codex"] });
+  const ask = "○ Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself\n";
+  try {
+    const out = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(out.stdout.split(ask).length, 2, out.stdout);
+    const doctor = await runCli(["doctor"], fx.env);
+    assert.match(doctor.stdout, /^· codex: Caveman's hooks do not run until Codex trusts them · open \/hooks in Codex once and trust them, so the local runtime restarts by itself$/m);
+  } finally {
+    fx.cleanup();
+  }
+});
+
 // With no agent on PATH there is nothing to try: never suggest `caveman claude`.
 test("setup --yes with no agent installed says to install one instead of naming an agent", { skip }, async () => {
   const fx = modulesFixture({ agents: [] });

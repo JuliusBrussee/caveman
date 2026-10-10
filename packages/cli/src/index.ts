@@ -672,6 +672,7 @@ setModuleHost({
       return { host, port, listening, foreign, ...(pid ? { pid } : {}), ...(state.instance_token ? { token: state.instance_token } : {}), ...(stale ? { stale } : {}) };
     }));
   },
+  agentAsk: (agent) => agent === "codex" && readNativeJournal("codex") && !codexHooksTrusted() ? CODEX_TRUST_ASK : undefined,
   runtimeDown: async () => {
     const wired = (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).filter((agent) => readNativeJournal(agent));
     return wired.length && await agentRuntimeState() === "down" ? agentRuntimeLine("down", wired) : undefined;
@@ -9378,6 +9379,37 @@ function withoutInstallerCodexHook(root: Record<string, unknown>): Record<string
   return out;
 }
 
+// Codex runs a hook from hooks.json only once the user trusts it in /hooks,
+// which records [hooks.state."<hooks.json>:session_start:<group>:<handler>"]
+// trusted_hash in config.toml. Caveman never writes that itself. Read for the
+// SessionStart hook, the one that restarts the runtime. A hash recorded for an
+// older command still reads as trusted here; Codex then asks again in /hooks.
+function codexHooksTrusted(): boolean {
+  const hooksPath = codexHooksPath();
+  let group = -1;
+  try {
+    const hooks = parseJsonFileObject(hooksPath, fileBytes(hooksPath)).hooks as Record<string, unknown> | undefined;
+    const list = hooks && Array.isArray(hooks.SessionStart) ? hooks.SessionStart as Array<Record<string, unknown>> : [];
+    group = list.findIndex((entry) => managedHookIdentity(hookEntryCommand(entry) ?? "") === "native-hook:codex");
+  } catch { return false; }
+  if (group === -1) return false;
+  let source = hooksPath;
+  try { source = realpathSync(hooksPath); } catch { /* the path as configured */ }
+  const key = `${source}:session_start:${group}:0`;
+  let trusting = false;
+  for (const line of (fileBytes(join(codexHomeDir(), "config.toml"))?.toString("utf8") ?? "").split(/\r?\n/)) {
+    const section = codexTomlSectionName(line);
+    if (section !== undefined) {
+      const quoted = section.match(/^hooks\.state\.("(?:[^"\\]|\\.)*"|'[^']*')$/)?.[1];
+      try { trusting = quoted !== undefined && (quoted.startsWith("'") ? quoted.slice(1, -1) : JSON.parse(quoted)) === key; } catch { trusting = false; }
+    } else if (trusting && /^\s*trusted_hash\s*=/.test(line)) return true;
+  }
+  return false;
+}
+
+// What Codex still asks before Caveman's hooks run.
+const CODEX_TRUST_ASK = "Caveman's hooks do not run until Codex trusts them · open /hooks in Codex once and trust them, so the local runtime restarts by itself";
+
 function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooksPath = codexHooksPath();
   const hooksBefore = fileBytes(hooksPath);
@@ -10904,9 +10936,11 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const recoveryHealthy = agent === "aider" || Boolean(mcp?.probe.current);
   const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent || unwiredProfiles.length > 0 ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
+  // Codex runs none of the hooks until the user trusts them; Core rides on them.
+  const hooksTrusted = agent !== "codex" || !installed || codexHooksTrusted();
 	const coreActive = agent === "aider"
 	  ? ownedHealthy
-	  : coreSupported && nativeCoreRuntimeState().active;
+	  : coreSupported && hooksTrusted && nativeCoreRuntimeState().active;
   const warnings: string[] = [];
   if (agent === "gemini" && installed) {
     const shadow = geminiRouteShadow();
@@ -10922,7 +10956,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
-    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent,
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
     core: coreActive,
     mcp_recovery: agent !== "aider" && ownedHealthy && Boolean(mcp?.probe.current),
     // Codex is false for the same reason hermes is: no command rewrite happens.
@@ -11057,10 +11091,12 @@ async function nativeDoctor(argv: string[]) {
     result.capabilities = nativeCapabilityReport(target, result.components, result.version_status);
     result.warnings.unshift(agentRuntimeLine(runtime, [target]));
   }
+  const untrusted = target === "codex" && result.installed && !codexHooksTrusted();
+  if (untrusted) result.warnings.push(CODEX_TRUST_ASK);
   print({
     ...result,
     repair: result.installed ? `caveman doctor ${target} --fix` : `caveman enable ${target}`,
-    trust: target === "codex" && result.installed ? "review through Codex /hooks" : "native host policy",
+    trust: target === "codex" && result.installed ? untrusted ? "not trusted yet · open /hooks in Codex" : "trusted in Codex /hooks" : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
   });
   if (result.state === "degraded" || result.state === "unavailable") process.exitCode = 1;
