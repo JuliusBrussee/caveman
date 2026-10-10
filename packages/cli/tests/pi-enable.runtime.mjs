@@ -158,7 +158,9 @@ test("doctor flags a pi extension whose baked invocation no longer exists and --
     const versioned = join(fx.root, "nvm", "v26.9.0", "bin");
     mkdirSync(versioned, { recursive: true });
     nodeStub(versioned, "caveman", "");
-    const env = { ...fx.env, PATH: `${versioned}${delimiter}${fx.env.PATH}` };
+    // Windows spells the inherited key `Path`; `fx.env.PATH` would be undefined.
+    const pathKey = Object.keys(fx.env).find((key) => key.toLowerCase() === "path") ?? "PATH";
+    const env = { ...fx.env, [pathKey]: `${versioned}${delimiter}${fx.env[pathKey]}` };
 
     const enabled = await run(["enable", "pi"], env);
     assert.equal(enabled.code, 0, `enable pi: ${enabled.stderr}${enabled.stdout}`);
