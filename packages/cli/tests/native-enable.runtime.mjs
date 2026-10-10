@@ -1745,6 +1745,28 @@ test("enable opencode with an unreadable version writes a plugin both majors loa
   assert.equal(plugin.default.server, plugin.CavemanNative, "OpenCode 1.4+ loads default.server, the V1 hook map");
   assert.equal(typeof plugin.default.setup, "function", "OpenCode 2 loads default.setup");
   assert.equal(await plugin.default.setup({}), undefined, "OpenCode 1.x calls setup with no session API; it must do nothing");
+  // On OpenCode 2 setup runs on the V1 helpers it shares, regex escapes included.
+  const hooks = new Map();
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    await plugin.default.setup({
+      location: { directory: fx.home },
+      event: { async *subscribe() {} },
+      session: { hook: async (name, cb) => { hooks.set(name, cb); } },
+      tool: { hook: async () => {} },
+    });
+    await hooks.get("prompt")({ sessionID: "dual-1", prompt: { text: "please continue" } });
+    const [profile] = readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+    assert.equal(profile.task_continuation, true);
+    const system = { sessionID: "dual-1", system: [] };
+    await hooks.get("context")(system);
+    assert.equal(system.system[0]?.text, "Caveman Core fixture");
+  } finally {
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
 
   const doctor = await run(["doctor", "opencode"], env);
   assert.equal(doctor.code, 0, doctor.stdout);

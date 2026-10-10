@@ -8338,16 +8338,27 @@ function nativeProxyBinaryRequired(gw: string): void {
   if (!probe.current) throw new Error(`caveman-proxy ${probe.version} lacks current native_runtime_v1 capability; run \`caveman setup --install\``);
 }
 
-function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchable: boolean; version: string | null; error: string | null } {
+type NativeHostProbe = { binary: string | null; launchable: boolean; version: string | null; error: string | null };
+// One `--version` per binary per process: enable, doctor and status each ask
+// several times, and a hung host would cost the full timeout every time.
+const nativeHostProbes = new Map<string, NativeHostProbe>();
+
+function nativeHostProbe(agent: AgentProfile): NativeHostProbe {
   const binary = which(binOf(agent));
   if (!binary) return { binary: null, launchable: false, version: null, error: "binary_not_found" };
+  let probe = nativeHostProbes.get(binary);
+  if (!probe) nativeHostProbes.set(binary, probe = probeNativeHost(binary));
+  return probe;
+}
+
+function probeNativeHost(binary: string): NativeHostProbe {
   try {
     const invocation = portableInvocation(binary, ["--version"]);
     // Node and Bun CLIs take seconds to start on a loaded machine (Gemini CLI
     // 0.53 took 6s), so 10s by default; CAVE_BINARY_PROBE_TIMEOUT_MS sets 3s-30s.
     const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.max(3000, process.env.CAVE_BINARY_PROBE_TIMEOUT_MS ? versionedBinaryProbeTimeoutMs() : 10_000) });
-    // It started and is only slow: the host is there, its version unknown.
-    if ((out.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return { binary, launchable: true, version: null, error: "version_probe_timeout" };
+    // It started and is only slow: the host is there; keep any version it printed.
+    if ((out.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return { binary, launchable: true, version: (out.stdout ?? "").trim().slice(0, 160) || null, error: "version_probe_timeout" };
     if (out.error) return { binary, launchable: false, version: null, error: boundedHookString(out.error.message, 240) ?? "version_probe_failed" };
     const value = `${out.stdout ?? ""} ${out.stderr ?? ""}`.trim();
     if (out.status !== 0) return { binary, launchable: false, version: value ? value.slice(0, 160) : null, error: `version_probe_exit_${out.status ?? "unknown"}` };
@@ -8625,7 +8636,9 @@ function opencodeNativePluginPath(): string {
 
 function opencodePluginMajor(): number | null {
   const profile = AGENTS.find((agent) => agent.id === "opencode");
-  const semver = parsedSemver(profile ? detectedAgentVersion(profile) : null);
+  const host = profile ? nativeHostProbe(profile) : null;
+  // A failed probe's text is its error output, not a version.
+  const semver = host?.launchable ? parsedSemver(host.version) : undefined;
   return semver ? semver[0]! : null;
 }
 
@@ -8725,8 +8738,8 @@ function taskContinuation(value) {
     return visit(item.text ?? item.content ?? item.message ?? "");
   };
   const prompt = visit(value).trim().toLowerCase();
-  if (!prompt || prompt.length > 160 || prompt.split(/\s+/).length > 14) return false;
-  return /^(?:please\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\??|how\??)[.!?\s]*$/.test(prompt);
+  if (!prompt || prompt.length > 160 || prompt.split(/\\s+/).length > 14) return false;
+  return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
 }
 
 function sessionContext(sessionID) {
@@ -10825,8 +10838,9 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   // enableNative whenever a journal exists (status probes spawn subprocesses),
   // which is exactly why that skip's own comment names doctor as the repair door
   // for drifted installs — so the drift has to be visible here to be repairable.
-  // An unreadable version yields no judgement, matching opencodeNativePluginSource:
-  // "unknown" is not evidence of a new host, so it must not degrade a good install.
+  // An unreadable version cannot vouch for a single-API file (an old V1 install
+  // on a 2.x host whose probe times out); repair rewrites it as the file both
+  // majors load, which reads current whatever the version.
   const opencodePluginApiCurrent = agent !== "opencode" || (() => {
     const operation = journal?.operations.find((item) => item.kind === "opencode-plugin");
     const current = operation ? fileBytes(operation.file)?.toString("utf8") : null;
@@ -10834,8 +10848,8 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     const installedV2 = current.includes("async setup(ctx)");
     const installedV1 = current.includes("export const CavemanNative");
     if (installedV1 === installedV2) return true;
-    const semver = parsedSemver(host.version);
-    if (!semver) return true;
+    const semver = host.launchable ? parsedSemver(host.version) : undefined;
+    if (!semver) return false;
     return (semver[0]! >= 2) === installedV2;
   })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
