@@ -136,6 +136,31 @@ test('addCommandHook is idempotent on substring marker', () => {
   assert.equal(s.hooks.SessionStart.length, 1);
 });
 
+// Re-running the installer is the obvious repair for a hook whose baked node
+// path died (brew upgrade, removed nvm version) or that still has the pre-#835
+// PowerShell form. addCommandHook used to stop at the marker and keep both.
+test('addCommandHook rewrites our stale hook command in place', () => {
+  const opts = (command) => ({ command, marker: 'caveman-activate' });
+  const fresh = '"/opt/homebrew/bin/node" "/h/hooks/caveman-activate.js"';
+  for (const stale of [
+    '"/opt/homebrew/Cellar/node/26.5.0/bin/node" "/h/hooks/caveman-activate.js"',
+    "& 'C:\\Program Files\\nodejs\\node.exe' 'C:\\h\\hooks\\caveman-activate.js'",
+  ]) {
+    const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: stale, timeout: 30 }] }] } };
+    assert.ok(SETTINGS.addCommandHook(s, 'SessionStart', opts(fresh)), `not repaired: ${stale}`);
+    assert.deepEqual(s.hooks.SessionStart, [{ hooks: [{ type: 'command', command: fresh, timeout: 30 }] }]);
+    assert.equal(SETTINGS.addCommandHook(s, 'SessionStart', opts(fresh)), false);
+  }
+  const record = { hooks: { SessionEnd: [{ hooks: [{ type: 'command', command: '"/gone/node" "/h/caveman-stats.js" --record' }] }] } };
+  SETTINGS.addCommandHook(record, 'SessionEnd', { command: '"/new/node" "/h/caveman-stats.js" --record', marker: 'caveman-stats' });
+  assert.equal(record.hooks.SessionEnd[0].hooks[0].command, '"/new/node" "/h/caveman-stats.js" --record');
+  // A hand-edited command (env prefix, wrapper) stays the user's.
+  const custom = 'CAVEMAN_DEFAULT_MODE=ultracave node /h/hooks/caveman-activate.js';
+  const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: custom }] }] } };
+  assert.equal(SETTINGS.addCommandHook(s, 'SessionStart', opts(fresh)), false);
+  assert.equal(s.hooks.SessionStart[0].hooks[0].command, custom);
+});
+
 test('hasCavemanHook detects via substring', () => {
   const s = { hooks: { SessionStart: [{ hooks: [{ type: 'command', command: 'node /x/caveman-activate.js' }] }] } };
   assert.equal(SETTINGS.hasCavemanHook(s, 'SessionStart', 'caveman-activate'), true);

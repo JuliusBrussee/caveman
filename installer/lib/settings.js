@@ -10,7 +10,7 @@
 //   stripJsonComments(src)         → string with // and /* */ stripped (string-aware)
 //   validateHookFields(settings)   → validates only Caveman-managed handlers
 //   hasCavemanHook(settings, ev)   → idempotency probe
-//   addCommandHook(settings, ev, opts) → no-op if substring marker already present
+//   addCommandHook(settings, ev, opts) → refreshes our stale entry; else no-op if marker present
 //   removeCavemanHooks(settings)   → uninstall helper
 //
 // Pure stdlib, CommonJS, Node ≥14.
@@ -171,7 +171,10 @@ function hasCavemanHook(settings, event, marker = 'caveman') {
 // ── addCommandHook ────────────────────────────────────────────────────────
 // Idempotent push. `marker` defaults to opts.command — pass an explicit
 // shorter substring (e.g. the script basename) when the full command path
-// might rotate across reinstalls.
+// might rotate across reinstalls. An entry this installer wrote for the same
+// script and flags is brought up to opts.command instead: a re-install is the
+// repair for a node path that died (brew/nvm upgrade, #805) or the pre-#835
+// PowerShell form, so stopping at the marker left both broken.
 function addCommandHook(settings, event, opts) {
   if (!settings.hooks) settings.hooks = {};
   if (settings.hooks[event] !== undefined && !Array.isArray(settings.hooks[event])) {
@@ -179,6 +182,18 @@ function addCommandHook(settings, event, opts) {
   }
   if (settings.hooks[event] === undefined) settings.hooks[event] = [];
   const marker = opts.marker || opts.command;
+  const shape = installerHookShape(opts.command);
+  let updated = false;
+  for (const entry of settings.hooks[event]) {
+    for (const h of (entry && Array.isArray(entry.hooks)) ? entry.hooks : []) {
+      if (shape && h && typeof h.command === 'string' && h.command !== opts.command
+          && installerHookShape(h.command) === shape) {
+        h.command = opts.command;
+        updated = true;
+      }
+    }
+  }
+  if (updated) return 'updated';
   if (hasCavemanHook(settings, event, marker)) return false;
   const hook = { type: 'command', command: opts.command };
   if (typeof opts.timeout === 'number') hook.timeout = opts.timeout;
@@ -224,6 +239,18 @@ function referencesManagedScript(command) {
     }
   } catch (_) { /* malformed command — treat as not ours */ }
   return false;
+}
+
+// `[&] <node> <managed script> [--flags]` is every shape this installer has
+// written; returns `<script> <flags>` for it, null for anything else (an env
+// prefix or a wrapper means the user edited it).
+function installerHookShape(command) {
+  const t = tokenizeCommand(command);
+  if (t[0] === '&') t.shift();
+  if (t.length < 2 || !/^node(\.exe)?$/i.test(path.win32.basename(t[0]))) return null;
+  const script = path.win32.basename(t[1]);
+  if (!MANAGED_HOOK_BASENAMES.has(script) || !t.slice(2).every((a) => a.startsWith('--'))) return null;
+  return [script, ...t.slice(2)].join(' ');
 }
 
 // ── removeCavemanHooks ────────────────────────────────────────────────────
