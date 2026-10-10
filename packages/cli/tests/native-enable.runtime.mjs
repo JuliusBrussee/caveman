@@ -1674,6 +1674,25 @@ test("status reports native OpenCode MCP recovery missing when its registration 
   assert.match(status.stdout, /^ {2}on {2}output .* degraded /m);
 });
 
+test("status agrees with doctor on MCP recovery when only Gemini or only Pi is wired", async () => {
+  for (const agent of ["gemini", "pi"]) {
+    const fx = fixture();
+    const env = { ...fx.env };
+    if (agent === "pi") {
+      writeFileSync(join(fx.home, "bin", "pi"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then echo 'pi 1.0.0'; fi\n", { mode: 0o755 });
+      env.CAVEMAN_PI_EXTENSION = join(fx.home, "pi-extension.mjs");
+      writeFileSync(env.CAVEMAN_PI_EXTENSION, "export default function cavemanPiFixture() {}\n");
+    }
+    const enabled = await run(["enable", agent], env);
+    assert.equal(enabled.code, 0, enabled.stderr);
+    const doctor = JSON.parse((await run(["doctor", agent], env)).stdout);
+    assert.equal(doctor.components.mcp_recovery, true, `${agent}: doctor reports MCP recovery on`);
+    const status = await run(["status", "--json"], env);
+    assert.equal(status.code, 0, status.stderr);
+    assert.deepEqual(JSON.parse(status.stdout).off_states.map((state) => state.id).filter((id) => id === "mcp-missing"), [], `${agent}: status must not call recovery missing`);
+  }
+});
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");
@@ -1784,25 +1803,58 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
   }
 });
 
-test("enable opencode with an unreadable version keeps the V1 plugin", async () => {
-  // nativeHostProbe reports version: null whenever `opencode --version` yields
-  // nothing, exits non-zero, or cannot be spawned ("version_probe_failed").
-  // #1081 records that state on a live OpenCode 1.18.31 host, so "unknown" is
-  // not a proxy for "new": defaulting it to V2 would hand a 1.x user whose
-  // probe merely flaked a plugin their host cannot load, breaking an install
-  // that works today. Unknown therefore keeps the status quo (V1); only a
-  // version that positively reads as major >= 2 opts into the V2 API.
-  const fx = fixture({ opencodeVersion: "" });
+test("enable opencode with an unreadable version writes a plugin both majors load, and doctor names it", async () => {
+  // On a loaded machine `opencode --version` missed the probe timeout: doctor
+  // called the host "unavailable", and enable fell back to the V1 hook map,
+  // which OpenCode 2 refuses to load ("must export a default definition with
+  // an id"). Guessing V2 instead is no better: #1081 saw a live 1.18.31 host
+  // read as unknown too. So an unknown version gets the one file both load.
+  const fx = fixture();
+  writeFileSync(join(fx.home, "bin", "opencode"), "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then sleep 5; echo 'opencode 2.0.22'; fi\n", { mode: 0o755 });
+  const env = { ...fx.env, CAVE_BINARY_PROBE_TIMEOUT_MS: "3000" };
   const configDir = join(fx.home, ".config", "opencode");
   mkdirSync(configDir, { recursive: true });
   writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
 
-  const enabled = await run(["enable", "opencode"], fx.env);
+  const enabled = await run(["enable", "opencode"], env);
   assert.equal(enabled.code, 0, enabled.stderr);
-  const plugin = readFileSync(join(configDir, "plugins", "caveman-native.js"), "utf8");
-  assert.match(plugin, /export const CavemanNative/,
-    "an unreadable version must not silently upgrade a V1 host to the V2 API (#1083, #1081)");
-  assert.doesNotMatch(plugin, /async setup\(ctx\)/);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+  const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+  assert.equal(plugin.default.id, "caveman-native");
+  assert.equal(plugin.default.server, plugin.CavemanNative, "OpenCode 1.4+ loads default.server, the V1 hook map");
+  assert.equal(typeof plugin.default.setup, "function", "OpenCode 2 loads default.setup");
+  assert.equal(await plugin.default.setup({}), undefined, "OpenCode 1.x calls setup with no session API; it must do nothing");
+  // On OpenCode 2 setup runs on the V1 helpers it shares, regex escapes included.
+  const hooks = new Map();
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    await plugin.default.setup({
+      location: { directory: fx.home },
+      event: { async *subscribe() {} },
+      session: { hook: async (name, cb) => { hooks.set(name, cb); } },
+      tool: { hook: async () => {} },
+    });
+    await hooks.get("prompt")({ sessionID: "dual-1", prompt: { text: "please continue" } });
+    const [profile] = readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+    assert.equal(profile.task_continuation, true);
+    const system = { sessionID: "dual-1", system: [] };
+    await hooks.get("context")(system);
+    assert.equal(system.system[0]?.text, "Caveman Core fixture");
+  } finally {
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+
+  const doctor = await run(["doctor", "opencode"], env);
+  assert.equal(doctor.code, 0, doctor.stdout);
+  const result = JSON.parse(doctor.stdout);
+  assert.equal(result.state, "installed", "a slow host is not an unavailable one");
+  assert.equal(result.version_probe_error, "version_probe_timeout");
+  assert.match(result.warnings.join("\n"), /could not read the opencode version/);
 });
 
 test("doctor reports opencode degraded after the host upgrades past the installed plugin API", async () => {
@@ -2517,6 +2569,8 @@ test("doctor gemini warns where a project .env or the shell overrides Caveman's 
   mkdirSync(project);
   const doctor = (env, cwd) => JSON.parse(spawnSync(process.execPath, [cli, "doctor", "gemini"], { env, cwd, encoding: "utf8" }).stdout);
   assert.deepEqual(doctor(fx.env, project).warnings, []);
+  // An untrusted folder skips the global .env too; doctor says how to trust it.
+  assert.match(doctor(fx.env, project).trust, /folder you have not trusted.*\/permissions/);
   writeFileSync(join(project, ".env"), "FOO=bar\n");
   assert.match(doctor(fx.env, project).warnings.join("\n"), /Gemini CLI reads \S+project\/\.env here instead of \S+\.gemini\/\.env/);
   writeFileSync(join(project, ".env"), "FOO=bar\nGOOGLE_GEMINI_BASE_URL=http://127.0.0.1:8787/w/gemini\n");

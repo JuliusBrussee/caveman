@@ -1219,7 +1219,11 @@ function installAntigravityCli(ctx) {
 const OPENCODE_SKILL_DIRS  = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
 const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
 const OPENCODE_COMMAND_FILES = ['caveman.md', 'ultracave.md', 'megacave.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
-const OPENCODE_PLUGIN_REL = './plugins/caveman/plugin.js';
+// The directory: opencode 1.x imports it through its package.json main
+// (plugin.js), opencode 2.x loads its server.js. A plugin.js entry worked on
+// 1.x only and made 2.x warn "configured plugin path must be a directory".
+const OPENCODE_PLUGIN_REL = './plugins/caveman';
+const OPENCODE_PLUGIN_LEGACY_REL = './plugins/caveman/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 // Marker fence for the opencode AGENTS.md ruleset block. Same convention as
 // installer/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
@@ -1501,8 +1505,8 @@ function installOpencode(ctx) {
       write: (stage) => {
         fs.mkdirSync(stage, { recursive: true });
         fs.copyFileSync(path.join(pluginSrc, 'plugin.js'), path.join(stage, 'plugin.js'));
-        // opencode 2.x ignores the plugin.js config entry and loads this dir's
-        // server.js; 1.x never scans inside plugin directories.
+        // opencode 2.x loads this dir's server.js; 1.x imports plugin.js
+        // through package.json main and never loads server.js.
         fs.copyFileSync(path.join(pluginSrc, 'server.js'), path.join(stage, 'server.js'));
         fs.copyFileSync(path.join(pluginSrc, 'package.json'), path.join(stage, 'package.json'));
         // Plugin dir is ESM; the CommonJS config bridge needs .cjs.
@@ -1664,6 +1668,7 @@ function installOpencode(ctx) {
       warn(`        Your original (with comments) is preserved at ${opencodeBak}`);
     }
     if (!Array.isArray(cfg.plugin)) cfg.plugin = [];
+    cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_LEGACY_REL);
     if (!cfg.plugin.includes(OPENCODE_PLUGIN_REL)) {
       cfg.plugin.push(OPENCODE_PLUGIN_REL);
     }
@@ -2303,7 +2308,7 @@ function uninstall(ctx) {
       const cfg = SETTINGS.readSettings(ocJson);
       if (cfg) {
         if (Array.isArray(cfg.plugin)) {
-          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL);
+          cfg.plugin = cfg.plugin.filter(p => p !== OPENCODE_PLUGIN_REL && p !== OPENCODE_PLUGIN_LEGACY_REL);
           if (cfg.plugin.length === 0) delete cfg.plugin;
         }
         if (cfg.mcp && typeof cfg.mcp === 'object' && cfg.mcp['caveman-shrink']) {
@@ -2318,6 +2323,27 @@ function uninstall(ctx) {
           else SETTINGS.writeSettings(ocJson, cfg);
         }
         ok(`  pruned caveman entries from ${ocJson}`);
+      }
+    }
+    // Install rewrote the config as plain JSON and kept the original in .bak.
+    // When nothing but caveman's entries changed since, the original goes
+    // back, comments and all; otherwise the backup stays for the user.
+    const ocBak = ocJson + '.bak';
+    if (fs.existsSync(ocJson) && fs.existsSync(ocBak)) {
+      const original = SETTINGS.readSettings(ocBak);
+      const current = SETTINGS.readSettings(ocJson);
+      if (opts.dryRun) {
+        note(`  would restore ${ocJson} from ${ocBak} if only caveman's entries changed`);
+      } else if (original && current && JSON.stringify(original) === JSON.stringify(current)) {
+        try {
+          fs.copyFileSync(ocBak, ocJson);
+          fs.unlinkSync(ocBak);
+          note(`  restored ${ocJson} as it was before install`);
+        } catch (error) {
+          warn(`  could not restore ${ocJson} from ${ocBak}: ${error.message}`);
+        }
+      } else {
+        note(`  kept ${ocBak}: ${ocJson} changed since install, so its pre-install copy (with any comments) stays there`);
       }
     }
     // AGENTS.md — strip the fenced caveman block (preserves user content
@@ -2353,11 +2379,11 @@ function uninstall(ctx) {
         }
       }
     }
-    // opencode mode state. Both files, matching the Claude-side stateFiles
-    // sweep below: the plugin writes `.prev` for the one-shot restore, and a
-    // stale one is not inert — a reinstall's first /caveman-commit would read
-    // it as that session's return target.
-    for (const name of ['.caveman-active', '.caveman-active.prev']) {
+    // opencode mode state, matching the Claude-side stateFiles sweep below:
+    // the plugin writes `.prev` for the one-shot restore, and a stale one is
+    // not inert — a reinstall's first /caveman-commit would read it as that
+    // session's return target. The mode log is the plugin's too.
+    for (const name of ['.caveman-active', '.caveman-active.prev', '.caveman-mode-log.jsonl']) {
       const ocFlag = path.join(ocDir, name);
       if (fs.existsSync(ocFlag) && !opts.dryRun) { try { fs.unlinkSync(ocFlag); } catch (_) {} }
     }

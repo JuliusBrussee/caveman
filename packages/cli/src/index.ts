@@ -8458,13 +8458,27 @@ function nativeProxyBinaryRequired(gw: string): void {
   if (!probe.current) throw new Error(`caveman-proxy ${probe.version} lacks current native_runtime_v1 capability; run \`caveman setup --install\``);
 }
 
-function nativeHostProbe(agent: AgentProfile): { binary: string | null; launchable: boolean; version: string | null; error: string | null } {
+type NativeHostProbe = { binary: string | null; launchable: boolean; version: string | null; error: string | null };
+// One `--version` per binary per process: enable, doctor and status each ask
+// several times, and a hung host would cost the full timeout every time.
+const nativeHostProbes = new Map<string, NativeHostProbe>();
+
+function nativeHostProbe(agent: AgentProfile): NativeHostProbe {
   const binary = which(binOf(agent));
   if (!binary) return { binary: null, launchable: false, version: null, error: "binary_not_found" };
+  let probe = nativeHostProbes.get(binary);
+  if (!probe) nativeHostProbes.set(binary, probe = probeNativeHost(binary));
+  return probe;
+}
+
+function probeNativeHost(binary: string): NativeHostProbe {
   try {
     const invocation = portableInvocation(binary, ["--version"]);
-    // CAVE_BINARY_PROBE_TIMEOUT_MS may only lengthen the 3s default, to 10s at most (a loaded test box).
-    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.min(10_000, Math.max(3000, versionedBinaryProbeTimeoutMs())) });
+    // Node and Bun CLIs take seconds to start on a loaded machine (Gemini CLI
+    // 0.53 took 6s), so 10s by default; CAVE_BINARY_PROBE_TIMEOUT_MS sets 3s-30s.
+    const out = spawnSync(invocation.command, invocation.args, { encoding: "utf8", timeout: Math.max(3000, process.env.CAVE_BINARY_PROBE_TIMEOUT_MS ? versionedBinaryProbeTimeoutMs() : 10_000) });
+    // It started and is only slow: the host is there; keep any version it printed.
+    if ((out.error as NodeJS.ErrnoException | undefined)?.code === "ETIMEDOUT") return { binary, launchable: true, version: (out.stdout ?? "").trim().slice(0, 160) || null, error: "version_probe_timeout" };
     if (out.error) return { binary, launchable: false, version: null, error: boundedHookString(out.error.message, 240) ?? "version_probe_failed" };
     const value = `${out.stdout ?? ""} ${out.stderr ?? ""}`.trim();
     if (out.status !== 0) return { binary, launchable: false, version: value ? value.slice(0, 160) : null, error: `version_probe_exit_${out.status ?? "unknown"}` };
@@ -8848,7 +8862,9 @@ function opencodeNativePluginPath(): string {
 
 function opencodePluginMajor(): number | null {
   const profile = AGENTS.find((agent) => agent.id === "opencode");
-  const semver = parsedSemver(profile ? detectedAgentVersion(profile) : null);
+  const host = profile ? nativeHostProbe(profile) : null;
+  // A failed probe's text is its error output, not a version.
+  const semver = host?.launchable ? parsedSemver(host.version) : undefined;
   return semver ? semver[0]! : null;
 }
 
@@ -8857,17 +8873,24 @@ function opencodeNativePluginSource(): string {
   // (PluginModule.LoadError, missing "default"). Emit the implementation
   // matching the detected host major. See #1083.
   //
-  // An unreadable version keeps V1, the status quo. nativeHostProbe returns
-  // version: null for an empty/non-zero/unspawnable `opencode --version`
-  // ("version_probe_failed"), and #1081 records exactly that state on a live
-  // OpenCode 1.18.31 host — so "unknown" is not evidence of "new". Defaulting
-  // it to V2 would break a 1.x user whose probe merely flaked, turning a
-  // working install into one whose plugin the host refuses to load; a 2.x user
-  // in the same state is no worse off than before this gate existed. Only a
-  // version that positively reads as major >= 2 opts into the V2 API.
+  // An unreadable version (#1081: a live 1.18.31 host; a slow `--version` on a
+  // loaded machine) is evidence of neither major, so it gets the one file both
+  // load: V1's hook map behind a default { server } for OpenCode 1.4+, and the
+  // V2 { id, setup } beside it. 1.x also calls setup, with a context that has
+  // no session or event API, so setup returns there. Checked against real
+  // OpenCode 1.18.35 and 2.0.22; 1.0-1.3 call every export and cannot load it.
   const major = opencodePluginMajor();
-  if (major === null || major < 2) return opencodeNativePluginSourceV1();
+  if (major === null) return opencodeNativePluginSourceBoth();
+  if (major < 2) return opencodeNativePluginSourceV1();
   return opencodeNativePluginSourceV2();
+}
+
+function opencodeNativePluginSourceBoth(): string {
+  const v2 = opencodeNativePluginSourceV2();
+  const definition = v2.slice(v2.indexOf("export default {"))
+    .replace('  id: "caveman-native",\n', '  id: "caveman-native",\n  server: CavemanNative,\n')
+    .replace("  async setup(ctx) {\n", "  async setup(ctx) {\n    if (!ctx?.session?.hook || !ctx?.event?.subscribe) return;\n");
+  return `${opencodeNativePluginSourceV1()}\n${definition}`;
 }
 
 function opencodeNativePluginSourceV1(): string {
@@ -8941,8 +8964,8 @@ function taskContinuation(value) {
     return visit(item.text ?? item.content ?? item.message ?? "");
   };
   const prompt = visit(value).trim().toLowerCase();
-  if (!prompt || prompt.length > 160 || prompt.split(/\s+/).length > 14) return false;
-  return /^(?:please\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\??|how\??)[.!?\s]*$/.test(prompt);
+  if (!prompt || prompt.length > 160 || prompt.split(/\\s+/).length > 14) return false;
+  return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
 }
 
 function sessionContext(sessionID) {
@@ -11059,8 +11082,9 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   // enableNative whenever a journal exists (status probes spawn subprocesses),
   // which is exactly why that skip's own comment names doctor as the repair door
   // for drifted installs — so the drift has to be visible here to be repairable.
-  // An unreadable version yields no judgement, matching opencodeNativePluginSource:
-  // "unknown" is not evidence of a new host, so it must not degrade a good install.
+  // An unreadable version cannot vouch for a single-API file (an old V1 install
+  // on a 2.x host whose probe times out); repair rewrites it as the file both
+  // majors load, which reads current whatever the version.
   const opencodePluginApiCurrent = agent !== "opencode" || (() => {
     const operation = journal?.operations.find((item) => item.kind === "opencode-plugin");
     const current = operation ? fileBytes(operation.file)?.toString("utf8") : null;
@@ -11068,8 +11092,8 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     const installedV2 = current.includes("async setup(ctx)");
     const installedV1 = current.includes("export const CavemanNative");
     if (installedV1 === installedV2) return true;
-    const semver = parsedSemver(host.version);
-    if (!semver) return true;
+    const semver = host.launchable ? parsedSemver(host.version) : undefined;
+    if (!semver) return false;
     return (semver[0]! >= 2) === installedV2;
   })();
   const routeHealthy = ownedHealthy && (agent === "opencode"
@@ -11084,6 +11108,7 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
 	  ? ownedHealthy
 	  : coreSupported && nativeCoreRuntimeState().active;
   const warnings: string[] = [];
+  if (host.error === "version_probe_timeout") warnings.push(`could not read the ${profile.display_name} version: \`${binOf(profile)} --version\` did not answer in time`);
   if (agent === "gemini" && installed) {
     const shadow = geminiRouteShadow();
     if (shadow) warnings.push(shadow);
@@ -11225,8 +11250,10 @@ async function nativeDoctor(argv: string[]) {
   const result = nativeIntegrationStatus(target);
   print({
     ...result,
-    repair: result.installed ? nativeRepairFix(target) : `caveman enable ${target}`,
-    trust: target === "codex" && result.installed ? "review through Codex /hooks" : "native host policy",
+      repair: result.installed ? nativeRepairFix(target) : `caveman enable ${target}`,
+      trust: target === "codex" && result.installed ? "review through Codex /hooks"
+        : target === "gemini" && result.installed ? `with folder trust on, Gemini CLI skips ${join(geminiConfigDir(), ".env")} in a folder you have not trusted, so its requests there go direct; trust the folder with /permissions`
+        : "native host policy",
     ...(fixResult ? { fix: { attempted: true, result: fixResult } } : {}),
   });
   if (result.state === "degraded" || result.state === "unavailable") process.exitCode = 1;
@@ -13356,23 +13383,34 @@ function startMcpRecoveryAvailable(): boolean {
 }
 
 function anyMcpInstalled(): boolean {
-  return AGENTS.some((agent) => mcpInstalled(agent.id)) || nativeMcpRegistered("claude") || nativeMcpRegistered("codex");
+  return AGENTS.some((agent) => mcpInstalled(agent.id))
+    || (["claude", "codex", "hermes", "gemini", "pi"] as const).some((agent) => nativeMcpRegistered(agent));
 }
 
-// Native Claude/Codex wiring registers the caveman MCP server in the host's own
-// config (journaled, no `mcp install` marker). It counts while that journaled
-// registration is still in the file.
-function nativeMcpRegistered(agent: "claude" | "codex"): boolean {
-  const operation = readNativeJournal(agent)?.operations.find((item) => item.kind === `${agent}-${agent === "claude" ? "mcp" : "config"}`);
-  const current = operation ? fileBytes(operation.file) : null;
-  if (!operation || !current) return false;
-  try {
-    if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
-    const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
-    return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
-  } catch {
-    return false;
-  }
+// Native wiring registers the caveman MCP server in the host's own files
+// (journaled, no `mcp install` marker): Claude's and Gemini's mcpServers entry,
+// Codex's TOML table, Hermes's mcp_servers block, and Pi's extension, which
+// carries caveman_retrieve itself (OpenCode's entry is read by mcpInstalled).
+// It counts while that journaled registration is still in the file — the same
+// file and entry doctor's ownership check reads, so status never calls recovery
+// missing while doctor reports it on.
+function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "pi"): boolean {
+  const kind = { claude: "claude-mcp", codex: "codex-config", hermes: "hermes-config", gemini: "gemini-settings", pi: "pi-extension" }[agent];
+  // Claude journals one registration per profile; any one still there counts.
+  return (readNativeJournal(agent)?.operations ?? []).some((operation) => {
+    const current = operation.kind === kind ? fileBytes(operation.file) : null;
+    if (!current) return false;
+    try {
+      if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
+      // A null block: the user's own caveman-native entry was already there.
+      if (agent === "hermes") return operation.owned?.mcp_block === null || (typeof operation.owned?.mcp_block === "string" && current.toString("utf8").includes(operation.owned.mcp_block));
+      if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
+      const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
+      return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
+    } catch {
+      return false;
+    }
+  });
 }
 
 // resolveMcpCommand decides how to launch the caveman MCP server, in order:

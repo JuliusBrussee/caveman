@@ -1,10 +1,9 @@
 // caveman — opencode 2.x entry point.
 //
-// opencode 2 dropped the 1.x plugin API: it ignores the opencode.json file
-// entry for plugin.js ("configured plugin path must be a directory"), finds
-// this directory on its own and loads `server.js`, and wants a default export
-// `{ id, setup(ctx) }`. opencode 1.x never loads this file: it only scans the
-// top level of plugins/ and loads plugin.js from the config entry.
+// opencode 2 dropped the 1.x plugin API: it loads this directory's
+// `server.js` and wants a default export `{ id, setup(ctx) }`. opencode 1.x
+// never loads this file: the opencode.json entry names this directory, which
+// 1.x imports through package.json `main` (plugin.js).
 //
 // No second implementation: this adapts plugin.js's 1.x hooks to the 2.x API
 // (https://opencode.ai/v2/docs/build/plugins/migrate-v1):
