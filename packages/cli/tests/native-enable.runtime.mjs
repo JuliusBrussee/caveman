@@ -602,6 +602,23 @@ test("enable codex takes over from the installer's always-on hook, and disable l
   assert.deepEqual(JSON.parse(readFileSync(hooksPath, "utf8")), { hooks: { SessionStart: [foreign] } });
 });
 
+// Windows PowerShell 5.1 saves hooks.json with a BOM; disable keeps it when it
+// leaves the installer's hook out.
+test("disable codex keeps a hooks.json BOM when it leaves the installer's hook out", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const hooksPath = join(fx.home, ".codex", "hooks.json");
+  const foreign = { hooks: [{ type: "command", command: "echo foreign" }] };
+  const installer = { hooks: [{ type: "command", command: `node "${join(fx.home, ".codex", "caveman", "hooks", "codex-sessionstart.js")}"` }] };
+  writeFileSync(hooksPath, `\uFEFF${JSON.stringify({ hooks: { SessionStart: [foreign, installer] } }, null, 2)}\n`);
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const after = readFileSync(hooksPath, "utf8");
+  assert.ok(after.startsWith("\uFEFF"), JSON.stringify(after.slice(0, 8)));
+  assert.deepEqual(JSON.parse(after.slice(1)), { hooks: { SessionStart: [foreign] } });
+});
+
 // An install from before carries a shrink-hook entry (a second PreToolUse hook
 // on every Codex tool call that declines it) and a PostToolUseFailure entry
 // Codex never runs. Doctor sends it to --fix, which takes both out.

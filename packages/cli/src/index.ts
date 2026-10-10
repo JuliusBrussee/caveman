@@ -10611,7 +10611,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     if (operation.kind !== "codex-hooks" || !before) return before;
     const root = parseJsonFileObject(operation.file, before);
     const stripped = withoutInstallerCodexHook(root);
-    return JSON.stringify(stripped) === JSON.stringify(root) ? before : Object.keys(stripped).length ? jsonBytes(stripped) : null;
+    return JSON.stringify(stripped) === JSON.stringify(root) ? before : Object.keys(stripped).length ? jsonBytes(stripped, before) : null;
   }
 
   if (operation.kind === "claude-settings") {
