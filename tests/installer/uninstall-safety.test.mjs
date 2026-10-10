@@ -48,8 +48,9 @@ function isolatedEnv(root, extraBinDirs = []) {
 // A fake `caveman` CLI that records each invocation (one argument per line,
 // invocations separated by a blank line) into `record` and exits 0, the same
 // shape `disableNativeAgent`'s real command uses for `caveman disable --all`.
-// With `version` it answers `--version` the way the real CLI does.
-function fakeCavemanDir(root, record, version) {
+// With `version` it answers `--version` the way the real CLI does; `disable`
+// exits `disableExit`.
+function fakeCavemanDir(root, record, version, disableExit = 0) {
   const reply = version ? JSON.stringify({ version }) : '';
   const dir = path.join(root, 'fake-caveman-bin');
   fs.mkdirSync(dir, { recursive: true });
@@ -62,7 +63,8 @@ function fakeCavemanDir(root, record, version) {
     fs.writeFileSync(path.join(dir, 'caveman.js'),
       "const fs = require('node:fs');\n"
       + `fs.appendFileSync(${JSON.stringify(record)}, process.argv.slice(2).join('\\n') + '\\n\\n');\n`
-      + `if (process.argv[2] === '--version') console.log(${JSON.stringify(reply)});\n`);
+      + `if (process.argv[2] === '--version') console.log(${JSON.stringify(reply)});\n`
+      + `if (process.argv[2] === 'disable') process.exit(${disableExit});\n`);
     fs.writeFileSync(path.join(dir, 'caveman.cmd'),
       '@echo off\r\n'
       + '"%~dp0\\node.exe" "%~dp0\\caveman.js" %*\r\n');
@@ -72,6 +74,7 @@ function fakeCavemanDir(root, record, version) {
       '#!/bin/sh\n'
       + `{ for a in "$@"; do echo "$a"; done; echo; } >> "${record}"\n`
       + `[ "$1" = --version ] && echo '${reply}'\n`
+      + `[ "$1" = disable ] && exit ${disableExit}\n`
       + 'exit 0\n');
     fs.chmodSync(file, 0o755);
   }
@@ -272,10 +275,52 @@ test('uninstall says so when a native route survives it', () => {
     seedIntegrationJournal(dir, 'claude', 'http://127.0.0.1:8787/w/claude');
 
     const removed = runInstaller(['--uninstall'], configDir, env);
-    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    // A route still in place is an unfinished uninstall, not "uninstall done".
+    assert.equal(removed.status, 1, removed.stderr || removed.stdout);
+    assert.match(removed.stderr, /uninstall incomplete/);
     const output = `${removed.stdout}${removed.stderr}`;
     assert.match(output, /claude/);
     assert.match(output, /caveman disable --all/, 'name the command that withdraws the route');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a failed `caveman disable --all` leaves uninstall incomplete', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const record = path.join(dir, 'caveman-record.txt');
+  try {
+    const removed = runInstaller(['--uninstall'], configDir, isolatedEnv(dir, [fakeCavemanDir(dir, record, undefined, 3)]));
+    assert.match(fs.readFileSync(record, 'utf8'), /^disable\n--all$/m);
+    assert.equal(removed.status, 1, removed.stderr || removed.stdout);
+    assert.match(removed.stderr, /uninstall incomplete/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The bundled CLI may not start at all (a Node below its floor, a broken
+// install). The caveman on PATH, even an older one, then takes the turn.
+test('uninstall falls back to the PATH caveman when the bundled CLI fails', (t) => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const record = path.join(dir, 'caveman-record.txt');
+  try {
+    const nodePath = path.join(dir, 'node-path');
+    const standIn = path.join(nodePath, '@caveman-ai', 'cli');
+    fs.mkdirSync(path.join(standIn, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(standIn, 'package.json'), JSON.stringify({ name: '@caveman-ai/cli', version: '2.1.0', bin: { caveman: 'dist/index.js' } }));
+    fs.writeFileSync(path.join(standIn, 'dist', 'index.js'), 'process.exit(1);\n');
+    const seen = spawnSync(process.execPath, ['-e', "process.stdout.write(require.resolve('@caveman-ai/cli/package.json'))"], {
+      cwd: path.dirname(INSTALLER), env: { ...process.env, NODE_PATH: nodePath }, encoding: 'utf8',
+    }).stdout;
+    if (seen !== fs.realpathSync(path.join(standIn, 'package.json'))) return t.skip('a real @caveman-ai/cli is installed beside the installer');
+    const env = { ...isolatedEnv(dir, [fakeCavemanDir(dir, record, '0.0.1')]), NODE_PATH: nodePath };
+    const removed = runInstaller(['--uninstall'], configDir, env);
+    assert.equal(removed.status, 0, removed.stderr || removed.stdout);
+    assert.match(removed.stdout, /dist[\\/]index\.js'? disable --all/, 'the bundled CLI did not go first');
+    assert.match(fs.readFileSync(record, 'utf8'), /^disable\n--all$/m, 'the PATH caveman did not get the turn');
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }
@@ -311,6 +356,32 @@ test('uninstall stays quiet when no native integration is journaled', () => {
     const removed = runInstaller(['--uninstall'], configDir, env);
     assert.equal(removed.status, 0, removed.stderr || removed.stdout);
     assert.doesNotMatch(`${removed.stdout}${removed.stderr}`, /caveman disable --all/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// A foreign `caveman` whose --version never answers must not stall uninstall:
+// the probe gives up after 10s and the PATH caveman keeps its turn.
+test('uninstall gives up on a caveman --version that hangs', { skip: process.platform === 'win32' && 'POSIX fake CLI' }, () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  try {
+    // A bundled CLI to compare against, or the probe never runs (see above).
+    const nodePath = path.join(dir, 'node-path');
+    const standIn = path.join(nodePath, '@caveman-ai', 'cli');
+    fs.mkdirSync(path.join(standIn, 'dist'), { recursive: true });
+    fs.writeFileSync(path.join(standIn, 'package.json'), JSON.stringify({ name: '@caveman-ai/cli', version: '2.1.0', bin: { caveman: 'dist/index.js' } }));
+    fs.writeFileSync(path.join(standIn, 'dist', 'index.js'), '');
+    const bin = path.join(dir, 'hung-bin');
+    fs.mkdirSync(bin);
+    fs.writeFileSync(path.join(bin, 'caveman'), '#!/bin/sh\n[ "$1" = --version ] && exec sleep 120\nexit 0\n', { mode: 0o755 });
+    const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
+      env: { ...isolatedEnv(dir, [bin]), CLAUDE_CONFIG_DIR: configDir, NODE_PATH: nodePath, NO_COLOR: '1' },
+      encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(r.status, 0, r.error?.message || r.stderr || r.stdout);
+    assert.match(r.stdout, /would run: caveman disable --all/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

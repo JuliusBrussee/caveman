@@ -100,8 +100,9 @@ test('install.ps1 under pwsh: iex keeps the session, the first run follows the r
   const bin = path.join(cwd, 'bin');
   fs.mkdirSync(bin);
   const cli = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', 'cli', 'package.json'), 'utf8')).version;
-  // node answers the version questions and is the local installer; npx is the remote one.
-  fs.writeFileSync(path.join(bin, 'node'), '#!/bin/sh\ncase "$2" in *split*) echo 24 ;; *versions*) echo 24.0.0 ;; *) exit $STUB_EXIT ;; esac\n', { mode: 0o755 });
+  // node answers the version questions, runs the PATH CLI probe and is the
+  // local installer; npx is the remote one.
+  fs.writeFileSync(path.join(bin, 'node'), `#!/bin/sh\n[ "$1" = -e ] && exec '${process.execPath}' "$@"\ncase "$2" in *split*) echo 24 ;; *versions*) echo 24.0.0 ;; *) exit $STUB_EXIT ;; esac\n`, { mode: 0o755 });
   fs.writeFileSync(path.join(bin, 'npx'), `#!/bin/sh\necho "$*" >> '${path.join(cwd, 'npx.log')}'\n[ "$1" = --version ] && echo 10.0.0\nexit $STUB_EXIT\n`, { mode: 0o755 });
   const caveman = (version) => fs.writeFileSync(path.join(bin, 'caveman'), `#!/bin/sh\nprintf '{\\n  "version": "%s"\\n}\\n' ${version}\n`, { mode: 0o755 });
   const env = (exit) => ({ HOME: cwd, PATH: `${bin}:/usr/bin:/bin`, TERM: 'xterm', STUB_EXIT: String(exit), POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off' });
@@ -115,11 +116,14 @@ test('install.ps1 under pwsh: iex keeps the session, the first run follows the r
   const file = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-File', path.join(REPO_ROOT, 'install.ps1')], { cwd, input: '', env: env(3), encoding: 'utf8', timeout: 60_000 });
   assert.equal(file.status, 3, 'a file run still exits with the result');
 
-  // The caveman on PATH runs the first run only when it is this release.
-  caveman(cli);
-  assert.match(piped(0).stdout, /Next: caveman setup\n/);
-  caveman('0.0.1');
-  assert.match(piped(0).stdout, /Next: npx -y @caveman-ai\/cli@/);
+  // The caveman on PATH runs the first run when it is this release or newer:
+  // npx would put this release over a newer one.
+  const [major, minor, patch] = cli.split('.').map(Number);
+  for (const [version, viaPath] of [[cli, true], [`${major}.${minor}.${patch + 1}`, true], [`${major + 1}.0.0`, true],
+    [`${cli}-rc.1`, false], ['0.0.1', false], ['banana', false]]) {
+    caveman(version);
+    assert.match(piped(0).stdout, viaPath ? /Next: caveman setup\n/ : /Next: npx -y @caveman-ai\/cli@/, version);
+  }
 
   // In a terminal the first run starts, unless --non-interactive.
   const script = path.join(cwd, 'install.ps1');

@@ -109,13 +109,19 @@ caveman: Node.js (>=18) required. Install:
     Write-Host "  Upgrade Node (winget install OpenJS.NodeJS.LTS), then run: npx -y @caveman-ai/cli@$CliVersion"
     return
   }
-  # The caveman on PATH only when it is this release: an older CLI has an
-  # older setup. npx runs this one, and its setup installs it for good.
-  $onPath = $null
+  # The caveman on PATH when it is this release or newer: an older CLI has an
+  # older setup, so npx runs this one and its setup installs it for good, but
+  # over a newer CLI that would be a downgrade. A prerelease ranks below its
+  # own release; a version that cannot be read counts as older. The probe
+  # gives up after 10s. Same probe as install.sh, with no double quotes in it:
+  # Windows PowerShell drops those from a native command's arguments (#249).
+  $setup = @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup")
   if (Get-Command caveman -ErrorAction SilentlyContinue) {
-    try { $onPath = ((& caveman --version 2>$null) -join "`n" | ConvertFrom-Json).version } catch { }
+    try {
+      & node -e 'const r=require(`child_process`).spawnSync(`caveman --version`,{shell:true,encoding:`utf8`,timeout:1e4,killSignal:`SIGKILL`,stdio:[`ignore`,`pipe`,`ignore`],windowsHide:true});const v=s=>(s=/^(\d+)\.(\d+)\.(\d+)(-?)/.exec(s))&&[+s[1],+s[2],+s[3],+!s[4]];let h;try{h=v(JSON.parse(r.stdout).version)}catch{}const w=v(process.argv[1]),d=h&&w&&h.map((x,i)=>x-w[i]).find(x=>x);process.exitCode=h&&w&&!(d<0)?0:1' $CliVersion 2>$null
+      if ($LASTEXITCODE -eq 0) { $setup = @("caveman", "setup") }
+    } catch { }
   }
-  $setup = if ($onPath -eq $CliVersion) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup") }
   # --non-interactive never prompts: name the first run instead of starting it.
   if ($InstallerArgs -notcontains "--non-interactive" -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
     & $setup[0] $setup[1..($setup.Length - 1)]

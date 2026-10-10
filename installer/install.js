@@ -278,7 +278,7 @@ const PROVIDERS = [
   { id: 'devin',      label: 'Devin (terminal)',    mech: 'npx skills add (devin)',        detect: 'command:devin', profile: 'devin' },
   { id: 'droid',      label: 'Droid (Factory)',     mech: 'npx skills add (droid)',        detect: 'command:droid', profile: 'droid' },
   { id: 'forgecode',  label: 'ForgeCode',           mech: 'npx skills add (forgecode)',    detect: 'command:forge&&dir:$HOME/.forge', profile: 'forgecode' },
-  { id: 'goose',      label: 'Block Goose',         mech: 'npx skills add (goose)',        detect: 'command:goose&&dir:$HOME/.config/goose', profile: 'goose' },
+  { id: 'goose',      label: 'Block Goose',         mech: 'npx skills add (goose)',        detect: 'command:goose&&dir:$XDG_CONFIG_HOME/goose||command:goose&&dir:$APPDATA/Block/goose', profile: 'goose' },
   { id: 'grok',       label: 'Grok Build',          mech: 'native skills copy',     detect: 'command:grok' },
   { id: 'iflow',      label: 'iFlow CLI',           mech: 'npx skills add (iflow-cli)',    detect: 'command:iflow', profile: 'iflow-cli' },
   { id: 'kiro',       label: 'Kiro CLI',            mech: 'npx skills add (kiro-cli)',     detect: 'command:kiro-cli||command:kiro', profile: 'kiro-cli' },
@@ -318,6 +318,16 @@ function hasCmd(cmd) {
 function shellEscape(s) { return `'${String(s).replace(/'/g, `'\\''`)}'`; }
 
 function expandHome(p) { return p.replace(/^\$HOME/, os.homedir()).replace(/^~/, os.homedir()); }
+
+// A detect path may also start with $XDG_CONFIG_HOME (unset or relative:
+// ~/.config, as XDG says) or $APPDATA (Windows; unset, it names nothing: null).
+function expandDetectPath(p) {
+  const xdg = process.env.XDG_CONFIG_HOME;
+  const roots = { XDG_CONFIG_HOME: xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), '.config'), APPDATA: process.env.APPDATA };
+  const m = /^\$(XDG_CONFIG_HOME|APPDATA)(?=\/|$)/.exec(p);
+  if (!m) return expandHome(p);
+  return roots[m[1]] ? roots[m[1]] + p.slice(m[0].length) : null;
+}
 
 function vscodeExtPresent(needle) {
   const home = os.homedir();
@@ -393,7 +403,8 @@ function detectMatch(spec) {
 function detectTerm(c) {
   const colon = c.indexOf(':');
   const kind = colon === -1 ? c : c.slice(0, colon);
-  const val  = colon === -1 ? '' : expandHome(c.slice(colon + 1));
+  const val  = colon === -1 ? '' : expandDetectPath(c.slice(colon + 1));
+  if (val === null) return false;
   switch (kind) {
     case 'command':           return hasCmd(val);
     case 'dir':               return safeStat(val, 'isDirectory');
@@ -472,8 +483,8 @@ function sameFilesystemTmpEnv(configDir) {
   });
 }
 
-function captureSpawn(cmd, args) {
-  try { return spawnXplat(cmd, args, { encoding: 'utf8' }); }
+function captureSpawn(cmd, args, opts) {
+  try { return spawnXplat(cmd, args, Object.assign({ encoding: 'utf8' }, opts)); }
   catch (_) { return { status: 1, stdout: '', stderr: '' }; }
 }
 
@@ -540,6 +551,15 @@ function claudeHasCaveman() {
   const r = captureSpawn('claude', ['plugin', 'list']);
   const out = (r.stdout || '').replace(/\x1b\[[0-9;]*m/g, '');
   return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(out);
+}
+
+// `plugin list` also names a turned-off plugin, which runs no hooks. Only
+// `--json` saying it is on at user scope counts; a claude without it says no.
+function claudeCavemanEnabled() {
+  const r = captureSpawn('claude', ['plugin', 'list', '--json']);
+  try {
+    return spawnOk(r) && JSON.parse(r.stdout).some((p) => p && p.id === 'caveman@caveman' && p.scope === 'user' && p.enabled === true);
+  } catch (_) { return false; }
 }
 
 async function installClaude(ctx) {
@@ -633,7 +653,11 @@ async function installClaude(ctx) {
       const removed = settings ? SETTINGS.removeCavemanHooks(settings) : 0;
       const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
       try {
-        if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
+        // A plugin that was already there may be turned off: then these hooks
+        // are the only caveman left. One just installed is on.
+        if (removed > 0 && alreadyInstalled && !claudeCavemanEnabled()) {
+          note(`  kept ${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} in settings.json: Claude Code does not report the caveman plugin as turned on`);
+        } else if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
         else if (removed > 0) {
           writeSettingsKeepingComments(settingsPath, settings, settingsMeta, warn);
           note(`  removed ${what}`);
@@ -2043,7 +2067,8 @@ function newerBundledCli() {
     if (!pkg.bin || typeof pkg.bin.caveman !== 'string') return null;
     const bin = path.join(path.dirname(manifest), pkg.bin.caveman);
     const want = /^(\d+)\.(\d+)\.(\d+)/.exec(pkg.version || '');
-    const probe = captureSpawn('caveman', ['--version']);
+    // A foreign `caveman` that never answers must not stall uninstall.
+    const probe = captureSpawn('caveman', ['--version'], { timeout: 10000, killSignal: 'SIGKILL' });
     const have = /(\d+)\.(\d+)\.(\d+)/.exec(probe.stdout || '');
     if (!want || !have || !spawnOk(probe) || !fs.existsSync(bin)) return null;
     for (let i = 1; i <= 3; i++) {
@@ -2094,9 +2119,15 @@ function uninstall(ctx) {
   if (!cliNodeFloor && fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
   if (!cliNodeFloor && hasCmd('caveman')) {
     const bundled = newerBundledCli();
-    disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all']] : ['caveman', ['disable', '--all']]);
+    // The bundled CLI may not start at all: then the PATH caveman takes its turn.
+    disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all'], 'caveman'] : ['caveman', ['disable', '--all']]);
   }
-  if (disables.map(([cmd, args]) => spawnOk(runSpawn(cmd, args, null, opts.dryRun))).some(Boolean) && !opts.dryRun) {
+  const failedDisables = disables.filter(([cmd, args, fallback]) => !spawnOk(runSpawn(cmd, args, null, opts.dryRun))
+    && !(fallback && spawnOk(runSpawn(fallback, ['disable', '--all'], null, opts.dryRun))));
+  if (failedDisables.length > 0) {
+    cleanupFailed = true;
+    warn('  `caveman disable --all` failed (see above); native Caveman routing may still be installed.');
+  } else if (disables.length > 0 && !opts.dryRun) {
     ok('  disabled native agent integrations');
   }
 
@@ -2110,6 +2141,7 @@ function uninstall(ctx) {
   // directory is not re-deriving the restore logic: it never writes.
   if (!opts.dryRun) {
     const stranded = remainingNativeIntegrations();
+    if (stranded.length > 0) cleanupFailed = true;
     for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
     if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${process.version}. Upgrade Node first.`);
     if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
