@@ -185,7 +185,7 @@ var errDocumentURL = errors.New("a document by URL or file id cannot go to this 
 // messagesChatBody is a Messages body translated for a chat upstream.
 func messagesChatBody(top map[string]json.RawMessage, opts Options) (map[string]json.RawMessage, error) {
 	m := readMessagesTop(top)
-	messages, err := messagesToChat(top, opts.replay())
+	messages, err := messagesToChat(top, opts)
 	if err != nil {
 		return nil, err
 	}
@@ -377,9 +377,12 @@ func chatToolChoice(choice obj) json.RawMessage {
 }
 
 // messagesToChat renders the system prompt and messages as chat messages,
-// sending the thinking blocks signed `replay` back as reasoning_content (""
-// sends none).
-func messagesToChat(top map[string]json.RawMessage, replay string) (json.RawMessage, error) {
+// sending the thinking blocks signed for the route back as reasoning_content
+// (Options.replay) and the thought signatures of its tool calls back on them
+// (Options.thoughts).
+func messagesToChat(top map[string]json.RawMessage, opts Options) (json.RawMessage, error) {
+	replay := opts.replay()
+	thoughts, standIn := opts.thoughts()
 	dst := make([]byte, 0, capHint(len(top["messages"]), capHint(len(top["system"]), 1024)))
 	dst = append(dst, '[')
 	if system := systemTokens(top["system"]); system != nil {
@@ -389,7 +392,7 @@ func messagesToChat(top map[string]json.RawMessage, replay string) (json.RawMess
 	var err error
 	ok := eachItem(top["messages"], func(_ []byte, message obj) {
 		if err == nil && message != nil {
-			dst, err = appendChatMessage(dst, message.str("role"), message.get("content"), replay)
+			dst, err = appendChatMessage(dst, message.str("role"), message.get("content"), replay, thoughts, standIn)
 		}
 	})
 	if err != nil {
@@ -403,9 +406,10 @@ func messagesToChat(top map[string]json.RawMessage, replay string) (json.RawMess
 
 // appendChatMessage renders one Anthropic message: one `tool` message per
 // tool result, then the message itself (text, images and files as parts,
-// tool calls, replayed reasoning). Images and files inside tool results,
-// which a tool message cannot carry, open that message.
-func appendChatMessage(dst []byte, role string, content []byte, replay string) ([]byte, error) {
+// tool calls with the thought signatures carried for them, replayed
+// reasoning). Images and files inside tool results, which a tool message
+// cannot carry, open that message.
+func appendChatMessage(dst []byte, role string, content []byte, replay, thoughts, standIn string) ([]byte, error) {
 	// segments are the message's parts in order: a text token, or a rendered
 	// image or file part. Texts are rendered as parts only when the message
 	// carries media; otherwise they join into one string, copied once.
@@ -420,6 +424,15 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 		segments = append(segments, segment{text: token})
 	}
 	addPart := func(part []byte) { media, segments = true, append(segments, segment{part: part}) }
+	var signatures map[string]string // call id -> the thought signature carried for it
+	if thoughts != "" && bytes.Contains(content, []byte(thoughts)) {
+		signatures = map[string]string{}
+		eachBlock(content, func(kind string, block obj) {
+			if call, signature, ok := thoughtOf(block.str("data"), thoughts); kind == "redacted_thinking" && ok {
+				signatures[call] = signature
+			}
+		})
+	}
 	eachBlock(content, func(kind string, block obj) {
 		if err != nil {
 			return
@@ -448,6 +461,7 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 				}
 			}
 		case "tool_use":
+			first := calls == nil
 			calls = append(append(openElem(calls), `{"id":`...), tok(block.get("id"))...)
 			calls = append(append(calls, `,"type":"function","function":{"name":`...), tok(block.get("name"))...)
 			calls = append(calls, `,"arguments":`...)
@@ -456,7 +470,7 @@ func appendChatMessage(dst []byte, role string, content []byte, replay string) (
 			} else {
 				calls = append(calls, `"{}"`...)
 			}
-			calls = append(calls, "}}"...)
+			calls = append(appendThought(append(calls, '}'), signatures[block.str("id")], standIn, first), '}')
 		case "tool_result":
 			var attached []byte
 			dst, attached, err = appendToolMessage(dst, block)

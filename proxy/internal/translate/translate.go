@@ -526,7 +526,7 @@ func (r *Reply) serve(w http.ResponseWriter, upstream *http.Response) (Usage, er
 			if r.to == Messages {
 				streamAnthropicToResponses(out, body, r.tools)
 			} else {
-				streamChatToResponses(out, body, r.tools, r.opts.replay())
+				streamChatToResponses(out, body, r.tools, r.opts.replay(), thoughtTag(r.opts.chatSignature()))
 			}
 		})
 		switch {

@@ -394,6 +394,11 @@ func (m *messageStream) toolCall(call openAIToolCall) {
 		id := wireCallID(call.ID, m.id, key) // the id Claude Code gets is fixed when the block opens
 		m.current[call.Index], m.upstream[key] = key, call.ID
 		m.order = append(m.order, key)
+		if thought := call.thought(); thought != "" {
+			// The host refuses the next request without it (Gemini 3): it
+			// rides in the agent's history back to this route and model.
+			m.openBlock("redacted_thinking", map[string]any{"type": "redacted_thinking", "data": thoughtTag(m.signature) + id + ":" + thought})
+		}
 		// Arguments always stream into the block that is open. Providers emit
 		// tool calls one after another; an interleaved pair would need its own
 		// block bookkeeping, and none observed does that.

@@ -634,6 +634,7 @@ type chatStreamCall struct {
 	id, name  string
 	upstream  bool // id is the upstream's own, not minted
 	arguments strings.Builder
+	thought   string // the thought signature the upstream put on it (Gemini)
 }
 
 func (c *chatStreamCall) open(out *responsesStream, bridge toolBridge) {
@@ -651,7 +652,9 @@ func (c *chatStreamCall) open(out *responsesStream, bridge toolBridge) {
 // reasoning back: then an envelope signed `replay`, which responsesToChat
 // returns as reasoning_content), content opens a message, and each tool call
 // index opens a call whose complete arguments are sent when the stream ends.
-func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge, replay string) {
+// The calls' thought signatures follow them in a reasoning item, each
+// carried under `thoughts` (thoughtTag), which responsesChatBody puts back.
+func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge toolBridge, replay, thoughts string) {
 	out.start()
 	lines, _, stop, endBy := sseLines(upstream)
 	defer stop()
@@ -755,6 +758,9 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 					open.id, open.upstream = call.ID, true
 				}
 				open.name += call.Function.Name
+				if thought := call.thought(); thought != "" {
+					open.thought = thought
+				}
 				if open.name != "" {
 					open.open(out, bridge)
 				}
@@ -781,9 +787,17 @@ func streamChatToResponses(out *responsesStream, upstream io.Reader, bridge tool
 	}
 	closeReasoning()
 	closeText()
+	var carried []json.RawMessage
 	for _, index := range order {
 		calls[index].open(out, bridge)
 		out.endTool(calls[index].item, calls[index].arguments.String())
+		if thought := calls[index].thought; thought != "" {
+			carried = append(carried, mustJSON(map[string]string{"type": "redacted_thinking", "data": thoughts + calls[index].id + ":" + thought}))
+		}
+	}
+	if carried != nil {
+		// The host refuses the next request without them (Gemini 3).
+		out.endReasoning(out.beginReasoning(), encodeThinking(carried))
 	}
 	out.complete()
 }
