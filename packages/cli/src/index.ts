@@ -8207,6 +8207,7 @@ function bytesHash(bytes: Buffer): string {
 function atomicWriteFile(path: string, bytes: Buffer, mode = 0o600): void {
   // A linked config (a dotfiles repo) is written at its target, or the rename
   // would replace the link with a copy. An existing file keeps its permissions.
+  const link = path;
   path = throughLink(path);
   try { mode = statSync(path).mode & 0o777; } catch { /* new file */ }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
@@ -8217,8 +8218,15 @@ function atomicWriteFile(path: string, bytes: Buffer, mode = 0o600): void {
     chmodSync(path, mode);
   } catch (error) {
     try { unlinkSync(temp); } catch { /* no partial */ }
+    if (path !== link && ["EACCES", "EPERM", "EROFS"].includes((error as NodeJS.ErrnoException).code ?? "")) throw linkReadOnlyError(link, path);
     throw error;
   }
+}
+
+// A link into a read-only place (home-manager into /nix/store) cannot be
+// written through: name both, not a raw EACCES on a temp file.
+function linkReadOnlyError(link: string, target: string): Error {
+  return new Error(`${link} links to ${target}, which is read-only, so Caveman cannot change it. Make ${link} a regular file, or make the change where that file comes from, then try again.`);
 }
 
 function fsyncParentDirectory(path: string): void {
@@ -8583,11 +8591,15 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
 
   // As claudeGlobalConfigPath: the default profile keeps this file beside
   // ~/.claude, every other profile keeps it inside its own directory.
-  const mcpPath = throughLink(other
+  const mcpLink = other
     ? join(nativeRealPath(root) === nativeRealPath(join(homedir(), ".claude")) ? homedir() : root, ".claude.json")
-    : claudeGlobalConfigPath());
+    : claudeGlobalConfigPath();
+  const mcpPath = throughLink(mcpLink);
   // Found out here, before anything is written: a login that cannot be
   // written is skipped whole, not left half wired or failing the others.
+  for (const [link, file] of [[join(root, "settings.json"), settingsPath], [mcpLink, mcpPath]] as const) {
+    if (link !== file) try { accessSync(dirname(file), constants.W_OK); } catch { throw linkReadOnlyError(link, file); }
+  }
   if (other) {
     for (const file of [settingsPath, mcpPath]) {
       accessSync(dirname(file), constants.W_OK);

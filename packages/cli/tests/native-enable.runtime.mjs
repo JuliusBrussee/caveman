@@ -2493,3 +2493,32 @@ test("enable reads and keeps a UTF-8 BOM in each agent's JSON config", async () 
   }
 });
 
+// A config linked into a read-only place (home-manager into /nix/store) cannot
+// be written through: say which link and where, not a raw EACCES on a temp file.
+test("enable names a linked config whose target is read-only", { skip: process.platform === "win32" || process.getuid?.() === 0 }, async () => {
+  const fx = fixture();
+  const store = join(fx.home, "store");
+  mkdirSync(store);
+  writeFileSync(join(store, "settings.json"), "{}\n");
+  mkdirSync(join(fx.home, ".claude"));
+  symlinkSync(join(store, "settings.json"), join(fx.home, ".claude", "settings.json"));
+  chmodSync(store, 0o555);
+  try {
+    const out = await run(["enable", "claude"], fx.env);
+    assert.notEqual(out.code, 0);
+    assert.match(out.stderr, /\S+\/\.claude\/settings\.json links to \S+\/store\/settings\.json, which is read-only/);
+    assert.doesNotMatch(out.stderr, /EACCES|\.tmp/);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")), false);
+    assert.equal(readFileSync(join(store, "settings.json"), "utf8"), "{}\n");
+    // Every other agent's config is written through the link the same way.
+    mkdirSync(join(fx.home, ".codex"));
+    symlinkSync(join(store, "settings.json"), join(fx.home, ".codex", "hooks.json"));
+    const codex = await run(["enable", "codex"], fx.env);
+    assert.notEqual(codex.code, 0);
+    assert.match(codex.stderr, /\S+\/\.codex\/hooks\.json links to \S+\/store\/settings\.json, which is read-only/);
+    assert.doesNotMatch(codex.stderr, /EACCES|\.tmp/);
+    assert.equal(existsSync(join(fx.home, ".codex", "config.toml")), false, "the other write is rolled back");
+  } finally {
+    chmodSync(store, 0o755);
+  }
+});
