@@ -20,6 +20,8 @@ import {
   ensureCavemanHome,
   fetchReleaseAsset,
   parseSignedChecksums,
+  removeAsideBinaries,
+  replaceBinary,
   setupPlatform,
   setupTimeoutSeconds,
   sha256File,
@@ -130,6 +132,7 @@ export async function ensureModuleBinaries(ids: ModuleId[], downloading?: (name:
   const timeout = setupTimeoutSeconds();
   const binDir = join(ensureCavemanHome(), "bin");
   mkdirSync(binDir, { recursive: true, mode: 0o700 });
+  removeAsideBinaries(binDir);
   const lock = readLock();
   const problems: string[] = [];
   for (const id of ids) {
@@ -167,7 +170,7 @@ export async function ensureModuleBinaries(ids: ModuleId[], downloading?: (name:
         }
         if (got !== sha256) throw new Error(`signature check failed for ${name} — refusing to install the ${id} module; partial download deleted`);
         chmodSync(part, 0o755);
-        renameSync(part, target);
+        replaceBinary(part, target);
       } catch (error) {
         cleanupPartial(part);
         throw error;

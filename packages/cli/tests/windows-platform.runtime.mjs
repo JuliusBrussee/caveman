@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -16,6 +16,8 @@ import {
   nativeHookInvocation,
   normalizeHookPath,
   quoteHookPath,
+  removeAsideBinaries,
+  replaceBinary,
   setupPlatform,
 } from "../dist/index.js";
 import { nativePipePath } from "../dist/native-pipe.js";
@@ -24,6 +26,36 @@ test("CLI setup accepts Windows x64 and arm64", () => {
   assert.deepEqual(setupPlatform("win32", "x64"), { os: "win32", arch: "amd64" });
   assert.deepEqual(setupPlatform("win32", "arm64"), { os: "win32", arch: "arm64" });
   assert.equal(binaryInstallFilename("caveman-proxy", "win32"), "caveman-proxy.exe");
+});
+
+// Windows refuses to replace a running .exe (EPERM) but lets it be renamed.
+test("an update moves a running Windows binary aside instead of failing with EPERM", () => {
+  const dir = mkdtempSync(join(tmpdir(), "cave-replace-"));
+  const target = join(dir, "caveman-proxy.exe");
+  const part = `${target}.part`;
+  const windows = (from, to) => {
+    if (to === target && existsSync(target)) throw Object.assign(new Error(`EPERM: operation not permitted, rename '${from}' -> '${to}'`), { code: "EPERM" });
+    renameSync(from, to);
+  };
+  writeFileSync(target, "old");
+  writeFileSync(part, "new");
+  replaceBinary(part, target, "win32", windows);
+  assert.equal(readFileSync(target, "utf8"), "new");
+  const aside = readdirSync(dir).filter((name) => name !== "caveman-proxy.exe");
+  assert.equal(aside.length, 1);
+  assert.match(aside[0], /^caveman-proxy\.exe\.old-\d+-\d+$/);
+  assert.equal(readFileSync(join(dir, aside[0]), "utf8"), "old");
+  // A later install removes the aside copy once nothing runs it.
+  removeAsideBinaries(dir);
+  assert.deepEqual(readdirSync(dir), ["caveman-proxy.exe"]);
+
+  // Locked so hard it cannot even move: a plain message, not a raw EPERM.
+  writeFileSync(part, "newer");
+  const locked = () => { throw Object.assign(new Error("EPERM: operation not permitted"), { code: "EPERM" }); };
+  assert.throws(() => replaceBinary(part, target, "win32", locked), /^Error: caveman-proxy\.exe is in use and could not be replaced — run `caveman stop`/);
+  assert.equal(readFileSync(target, "utf8"), "new");
+  // Elsewhere an EPERM is not this and stays as it was.
+  assert.throws(() => replaceBinary(part, target, "linux", windows), /EPERM/);
 });
 
 test("CLI recognizes Windows paths and PATHEXT without double extensions", () => {

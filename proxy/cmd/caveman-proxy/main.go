@@ -19,6 +19,7 @@ package main
 import (
 	"cmp"
 	"context"
+	"crypto/subtle"
 	"crypto/tls"
 	"encoding/json"
 	"errors"
@@ -370,7 +371,7 @@ func runServe(logger *slog.Logger) {
 	for name, mount := range cfg.CompatUpstreams() {
 		state.CompatForwardHeaders[name] = append([]string(nil), mount.ForwardHeaders...)
 	}
-	srv.Handler = withInstanceIdentity(handler, state.InstanceToken, loopbackListen(cfg.Listen))
+	srv.Handler = withShutdown(withInstanceIdentity(handler, state.InstanceToken, loopbackListen(cfg.Listen)), state.InstanceToken, loopbackListen(cfg.Listen), cancel)
 	if err := runstate.Write(home, state); err != nil {
 		_ = listener.Close()
 		logger.Error("cannot write proxy run state", "error", err)
@@ -482,6 +483,25 @@ func withInstanceIdentity(next http.Handler, token string, loopback bool) http.H
 		if loopback && r.Method == http.MethodGet && r.URL.Path == "/health/live" {
 			w.Header().Set(runstate.InstanceHeader, token)
 			w.Header().Set("Cache-Control", "no-store")
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// withShutdown is `caveman stop` on Windows, where no signal reaches a
+// detached process gracefully: POST /caveman/shutdown runs the same drain as
+// SIGTERM. Loopback only, and only for the caller holding this generation's
+// run-state token; it sits outside the inbound token gate like the keepalive.
+func withShutdown(next http.Handler, token string, loopback bool, stop func()) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if loopback && token != "" && r.Method == http.MethodPost && r.URL.Path == "/caveman/shutdown" {
+			if subtle.ConstantTimeCompare([]byte(r.Header.Get(runstate.InstanceHeader)), []byte(token)) != 1 {
+				w.WriteHeader(http.StatusForbidden)
+				return
+			}
+			w.WriteHeader(http.StatusAccepted)
+			stop()
+			return
 		}
 		next.ServeHTTP(w, r)
 	})
