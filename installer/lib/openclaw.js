@@ -26,6 +26,7 @@ const fs = require('fs');
 const crypto = require('crypto');
 const os = require('os');
 const path = require('path');
+const { removeEmptyDirs } = require('./owned-install');
 
 const SKILL_NAME = 'caveman';
 const SKILL_VERSION = '1.0.0';
@@ -480,9 +481,8 @@ function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) 
         if (bak.content !== null) unlinkRegular(skillBak, bak.stat);
         log.note(`  removed ${skillFile}`);
       }
-      for (const dir of [skillDir, ...takeCreatedDirs(ws, skillDir)]) {
-        try { fs.rmdirSync(dir); } catch (_) { /* holds the user's own files */ }
-      }
+      // Each one goes only when empty and not a link the user put there.
+      removeEmptyDirs([skillDir, ...takeCreatedDirs(ws, skillDir)]);
       touched = true;
     }
   } catch (error) {
