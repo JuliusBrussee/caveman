@@ -166,15 +166,24 @@ async function runtimePortTaken(): Promise<{ held: string; free: number } | unde
   const gw = gatewayURL();
   if (wrapMode(gw) !== "local" || moduleHost().nativeAgents().some((agent) => agent.wired && !agentStaleRoute(agent.id))) return undefined;
   const { host, port } = gatewayHostPort(gw);
-  if (!(await portListening(host, port))) return undefined;
-  // Ours when the runtime's own record names a live process on that port. A
-  // runtime too old to keep that record cannot be told apart, so it stays.
-  if (resolveGoBin("caveman-proxy", "CAVEMAN_PROXY_BIN")) {
-    const version = probeProxyVersion();
-    if (!version?.capabilities.includes("run_state") || readProxyRuntimeState(port, version).pid) return undefined;
-  }
+  if (!(await portListening(host, port)) || !portHeldByOther(port)) return undefined;
+  const free = await nextFreePort(port);
+  return free ? { held: `${host}:${port}`, free } : undefined;
+}
+
+// Whether the program answering on a port is not a Caveman runtime: ours when
+// caveman-proxy's record names a live process there that the listener's own
+// /health/live confirms. Without caveman-proxy nothing here can be ours; a
+// runtime too old to keep that record cannot be told apart, so it counts as ours.
+function portHeldByOther(port: number): boolean {
+  const version = probeProxyVersion();
+  return !version || (version.capabilities.includes("run_state") && !readProxyRuntimeState(port, version).pid);
+}
+
+// The first port after `port` that nothing answers on.
+async function nextFreePort(port: number): Promise<number | undefined> {
   for (let candidate = port + 1; candidate <= Math.min(port + 50, 65535); candidate++) {
-    if (!(await portListening("127.0.0.1", candidate))) return { held: `${host}:${port}`, free: candidate };
+    if (!(await portListening("127.0.0.1", candidate))) return candidate;
   }
   return undefined;
 }
@@ -2544,6 +2553,16 @@ async function start(argv: string[] = []) {
   const { host, port, listen } = options;
 
   if (await portListening(host, port)) {
+    // Routing an agent to someone else's listener hands them every request.
+    if (portHeldByOther(port)) {
+      const free = await nextFreePort(port);
+      panel("Port in use", [
+        `${mark("bad")} ${host}:${port} is held by another program.`,
+        ...(free ? ["", `Start Caveman on a free port:  ${cyan(`caveman start --port ${free}`)}`] : []),
+      ]);
+      process.exitCode = 1;
+      return;
+    }
     panel("Caveman proxy already running", [
       `${mark("ok")} Something is already listening on ${host}:${port}.`,
       "",
