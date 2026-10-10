@@ -654,8 +654,9 @@ async function installClaude(ctx) {
       const what = `${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} from settings.json; the plugin runs them now`;
       try {
         // A plugin that was already there may be turned off: then these hooks
-        // are the only caveman left. One just installed is on.
-        if (removed > 0 && alreadyInstalled && !claudeCavemanEnabled()) {
+        // are the only caveman left. --force skips the "already installed"
+        // check and `plugin install` leaves a turned-off plugin off, so ask.
+        if (removed > 0 && !claudeCavemanEnabled()) {
           note(`  kept ${removed} standalone caveman hook entr${removed === 1 ? 'y' : 'ies'} in settings.json: Claude Code does not report the caveman plugin as turned on`);
         } else if (removed > 0 && opts.dryRun) note(`  would remove ${what}`);
         else if (removed > 0) {
