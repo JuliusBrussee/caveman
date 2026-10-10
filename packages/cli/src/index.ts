@@ -6206,8 +6206,9 @@ async function agentShortcut(rest: string[]) {
   if (shortcutRouteOverride) {
     // A native install already owns the host's base URL from its own config
     // file, which launching directly cannot undo — say so rather than let the
-    // surface fail with the host's own opaque refusal.
-    if (readNativeJournal(native)) {
+    // surface fail with the host's own opaque refusal. (The user's own
+    // endpoint the wrap door handles itself.)
+    if (readNativeJournal(native) && !shortcutRouteOverride.own) {
       process.stderr.write(`${mark("warn")} ${routeOverrideLabel(agent)} ${shortcutRouteOverride.surface} ${shortcutRouteOverride.reason}, and the native integration still routes ${binOf(agent)} from its own config — run \`caveman disable ${native}\` first, then \`caveman enable ${native}\` afterwards\n`);
     }
     return wrap(rest);
@@ -6440,6 +6441,11 @@ async function spawnWrapped(
   let direct = managedGeminiUnsupported || routeOverride !== null;
   if (managedGeminiUnsupported) {
     process.stderr.write("caveman: managed Gemini CLI wrap is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials; launching directly\n");
+  }
+  // A route Caveman wrote into the agent's own config outranks that endpoint,
+  // so a direct launch would still send its key to the provider's public API.
+  if (routeOverride?.own?.routed && agent) {
+    throw new Error(`${ownEndpointRoutedMessage(agent.id, routeOverride.own)} ${agent.display_name} was not started.`);
   }
   if (routeOverride && agent) {
     process.stderr.write(`caveman: ${routeOverrideLabel(agent)} ${routeOverride.surface} ${routeOverride.reason}; launching directly\n`);
@@ -8395,6 +8401,110 @@ function configValue(raw: string | undefined): string | undefined {
   return raw?.replace(/\s+#.*$/, "").trim().replace(/^(["'])(.*)\1$/, "$2");
 }
 
+type OwnEndpointSource = { key: string; endpoint: string; file?: string; routed: boolean };
+
+// The user's own endpoint among an agent's settings layers, lowest precedence
+// first: the value in effect once Caveman's routes are set aside. `routed`
+// when such a route above it already replaces it (an endpoint exported, or
+// set in an earlier file, after the agent was wired).
+function ownEndpointIn(layers: Array<{ key: string; value: unknown; file?: string }>): OwnEndpointSource | null {
+  let found: { key: string; value: unknown; file?: string } | undefined;
+  let routed = false;
+  for (const layer of layers) {
+    if (layer.value === undefined || layer.value === null || layer.value === "") continue;
+    if (typeof layer.value === "string" && isCavemanRoute(layer.value)) routed = true;
+    else [found, routed] = [layer, false];
+  }
+  const endpoint = found ? ownEndpoint(found.value) : null;
+  return found && endpoint ? { key: found.key, endpoint, ...(found.file ? { file: found.file } : {}), routed } : null;
+}
+
+// What a route Caveman already wrote does to an endpoint of the user's own it
+// outranks, and the two ways out. A direct launch is no way out: the agent
+// reads the route from its own config.
+function ownEndpointRoutedMessage(agent: string, own: OwnEndpointSource): string {
+  const name = findAgent(agent)?.display_name ?? agent;
+  return `${name} goes through Caveman, which overrides your own endpoint ${own.endpoint} (${own.key} in ${own.file ?? "your shell"}), so its requests and their key go to the provider's public API. ${own.file ? `Remove ${own.key} from ${own.file}` : `Unset ${own.key}`} to keep Caveman, or run \`caveman disable ${agent}\` to use your endpoint.`;
+}
+
+// Claude Code's settings env outranks the shell's.
+function claudeOwnEndpoint(settingsPath: string, env: Record<string, unknown>): OwnEndpointSource | null {
+  return ownEndpointIn([{ key: "ANTHROPIC_BASE_URL", value: process.env.ANTHROPIC_BASE_URL }, { key: "ANTHROPIC_BASE_URL", value: env.ANTHROPIC_BASE_URL, file: settingsPath }]);
+}
+
+// A provider of the user's own (Ollama, Azure, a gateway) is replaced by
+// Caveman's, and so is the endpoint the built-in openai one takes from the shell.
+function codexOwnEndpoint(text: string, configPath: string): OwnEndpointSource | null {
+  let section = "";
+  const provider = text.split(/\r?\n/).map((line) => {
+    section = codexTomlSectionName(line) ?? section;
+    return section === "" ? line.match(/^\s*model_provider\s*=\s*["']?([^"'#\s]*)/)?.[1] : undefined;
+  }).find(Boolean);
+  if (provider && provider !== "openai" && provider !== "caveman") return { key: "model_provider", endpoint: provider, file: configPath, routed: false };
+  const endpoint = ownEndpoint(process.env.OPENAI_BASE_URL);
+  return endpoint ? { key: "OPENAI_BASE_URL", endpoint, routed: provider === "caveman" } : null;
+}
+
+// OpenCode merges config.json, opencode.json and opencode.jsonc from its config
+// dir, later over earlier, over the base URL a provider SDK takes from the
+// shell. Caveman's route goes in after every one of them.
+function opencodeOwnEndpoint(): OwnEndpointSource | null {
+  const roots = ["config.json", "opencode.json", "opencode.jsonc"].map((name) => {
+    const file = join(opencodeConfigDir(), name);
+    try { return { file, root: parseJsonFileObject(file, fileBytes(file)) }; } catch { return { file, root: {} }; }
+  });
+  for (const providerID of ["openai", "anthropic", "opencode-go"]) {
+    const shellKey = providerID === "openai" ? "OPENAI_BASE_URL" : providerID === "anthropic" ? "ANTHROPIC_BASE_URL" : undefined;
+    const own = ownEndpointIn([
+      ...(shellKey ? [{ key: shellKey, value: process.env[shellKey] }] : []),
+      ...roots.map(({ file, root }) => ({ key: `provider.${providerID}.options.baseURL`, value: objectValue(objectValue(objectValue(root.provider)[providerID]).options).baseURL, file })),
+    ]);
+    if (own) return own;
+  }
+  return null;
+}
+
+// Gemini CLI's base URLs in ~/.gemini/.env, where Caveman's block goes last,
+// then the shell's, which outrank that file: natively they only bypass the
+// route (doctor says so), while a wrap's own env would replace them.
+function geminiOwnEndpoint(text: string, envPath: string, shell: boolean): OwnEndpointSource | null {
+  for (const key of ["GEMINI_BASE_URL", "GOOGLE_GEMINI_BASE_URL", "GOOGLE_VERTEX_BASE_URL"]) {
+    const own = ownEndpointIn([
+      ...text.split(/\r?\n/).flatMap((line) => {
+        const match = line.match(/^\s*(?:export\s+)?([A-Z_]+)\s*=(.*)$/);
+        return match?.[1] === key ? [{ key, value: configValue(match[2]), file: envPath }] : [];
+      }),
+      ...(shell ? [{ key, value: process.env[key] }] : []),
+    ]);
+    if (own) return own;
+  }
+  return null;
+}
+
+// The user's own endpoint an agent reaches, as the native door and the wrap
+// door both see it: what an enable refuses, a wrap launches directly.
+function agentOwnEndpoint(agent: string): OwnEndpointSource | null {
+  const text = (path: string) => { try { return readFileSync(path, "utf8"); } catch { return ""; } };
+  try {
+    if (agent === "claude") {
+      const path = throughLink(join(claudeConfigDir(), "settings.json"));
+      let env: Record<string, unknown> = {};
+      try { env = objectValue(parseJsonFileObject(path, fileBytes(path)).env); } catch { /* unreadable: the shell decides */ }
+      return claudeOwnEndpoint(path, env);
+    }
+    if (agent === "codex") {
+      const path = join(codexHomeDir(), "config.toml");
+      return codexOwnEndpoint(text(path), path);
+    }
+    if (agent === "opencode") return opencodeOwnEndpoint();
+    if (agent === "gemini") {
+      const path = join(geminiConfigDir(), ".env");
+      return geminiOwnEndpoint(text(path), path, true);
+    }
+  } catch { /* a home the agent refuses itself (CODEX_HOME not a directory) */ }
+  return null;
+}
+
 // One wiring per Claude Code profile: people keep several logins as sibling
 // config dirs and pick one with CLAUDE_CONFIG_DIR, and a profile left out
 // would silently bypass Caveman. A profile that cannot be wired is skipped
@@ -8433,8 +8543,8 @@ function claudeProfileMutations(root: string, gw: string, mcpBinary: string): Na
   // doing so, the active one too. Settings env outranks the shell's, so an
   // exported endpoint would be replaced as well. Another login on a cloud
   // provider lane keeps it.
-  refuseOwnEndpoint("claude", "ANTHROPIC_BASE_URL", env.ANTHROPIC_BASE_URL, settingsPath);
-  if (!env.ANTHROPIC_BASE_URL) refuseOwnEndpoint("claude", "ANTHROPIC_BASE_URL", process.env.ANTHROPIC_BASE_URL);
+  const own = claudeOwnEndpoint(settingsPath, env);
+  if (own) refuseOwnEndpoint("claude", own.key, own.endpoint, own.file);
   if (other && claudeOffProxyLane(env)) throw new Error("it uses a provider lane that bypasses ANTHROPIC_BASE_URL");
   const route = appendUrlPath(gw, "/w/claude");
   const previousRoute = env.ANTHROPIC_BASE_URL;
@@ -8581,10 +8691,8 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const route = appendUrlPath(gw, "/w/gemini");
   const nativeEnv = geminiNativeEnv(envBefore?.toString("utf8") ?? "", route);
   // The block goes last in the file, so it would win over the user's own.
-  for (const line of nativeEnv.text.replace(nativeEnv.block, "").split(/\r?\n/)) {
-    const own = line.match(/^\s*(?:export\s+)?(GEMINI_BASE_URL|GOOGLE_GEMINI_BASE_URL|GOOGLE_VERTEX_BASE_URL)\s*=(.*)$/);
-    if (own) refuseOwnEndpoint("gemini", own[1]!, configValue(own[2]), envPath);
-  }
+  const own = geminiOwnEndpoint(envBefore?.toString("utf8") ?? "", envPath, false);
+  if (own) refuseOwnEndpoint("gemini", own.key, own.endpoint, own.file);
   return [
     {
       file: settingsPath,
@@ -9071,13 +9179,11 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
   const previousRoutes: Record<string, unknown> = {};
   const autoModels: string[] = [];
   const routes = opencodeNativeRoutes(gw);
+  const own = opencodeOwnEndpoint();
+  if (own) refuseOwnEndpoint("opencode", own.key, own.endpoint, own.file);
   for (const [providerID, route] of Object.entries(routes)) {
     const provider = providers[providerID] && typeof providers[providerID] === "object" && !Array.isArray(providers[providerID]) ? providers[providerID] as Record<string, unknown> : {};
     const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options) ? provider.options as Record<string, unknown> : {};
-    // The provider SDKs read these when the config names no baseURL.
-    const shellKey = providerID === "openai" ? "OPENAI_BASE_URL" : providerID === "anthropic" ? "ANTHROPIC_BASE_URL" : undefined;
-    refuseOwnEndpoint("opencode", `provider.${providerID}.options.baseURL`, options.baseURL, configPath);
-    if (options.baseURL === undefined && shellKey) refuseOwnEndpoint("opencode", shellKey, process.env[shellKey]);
     previousRoutes[providerID] = options.baseURL ?? null;
     options.baseURL = route;
     provider.options = options;
@@ -9324,15 +9430,8 @@ function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const hooks = nativeHooksDocument("codex", nativeShrinkEnabled(), hooksRoot);
   const configPath = join(codexHomeDir(), "config.toml");
   const configBefore = fileBytes(configPath);
-  // A provider of the user's own (Ollama, Azure, a gateway) is replaced by
-  // Caveman's, and so is the endpoint the built-in openai one takes from the shell.
-  let section = "";
-  const provider = (configBefore?.toString("utf8") ?? "").split(/\r?\n/).map((line) => {
-    section = codexTomlSectionName(line) ?? section;
-    return section === "" ? line.match(/^\s*model_provider\s*=\s*["']?([^"'#\s]*)/)?.[1] : undefined;
-  }).find(Boolean);
-  if (provider !== "openai" && provider !== "caveman") refuseOwnEndpoint("codex", "model_provider", provider, configPath);
-  if (provider !== "caveman") refuseOwnEndpoint("codex", "OPENAI_BASE_URL", process.env.OPENAI_BASE_URL);
+  const own = codexOwnEndpoint(configBefore?.toString("utf8") ?? "", configPath);
+  if (own) refuseOwnEndpoint("codex", own.key, own.endpoint, own.file);
   const subscription = detectCodexWrapAuthMode() === "subscription";
   const native = codexNativeConfig(configBefore?.toString("utf8") ?? "", gw, subscription, mcpBinary);
   const route = codexGatewayBase(gw, subscription);
@@ -10095,6 +10194,8 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     if (quiet || outcome === "stale") continue;
     if (outcome === "already") {
       process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman already enabled\n`);
+      const own = agentOwnEndpoint(agent);
+      if (own?.routed) process.stderr.write(`${mark("warn")} ${ownEndpointRoutedMessage(agent, own)}\n`);
       continue;
     }
     process.stderr.write(`${mark("ok")} ${profile.display_name}: ${agent === "aider" ? "shallow" : "native"} Caveman enabled; run ${agent} normally\n`);
@@ -10848,6 +10949,8 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
     if (unrouted) warnings.push(`OpenCode's active provider "${unrouted}" is not routed through Caveman; its requests go direct and are not compressed or counted (routed: ${routed.join(", ")})`);
   }
   for (const root of unwiredProfiles) warnings.push(`Claude profile ${root} is not routed through Caveman; run \`caveman enable claude\``);
+  const own = installed ? agentOwnEndpoint(agent) : null;
+  if (own?.routed) warnings.push(ownEndpointRoutedMessage(agent, own));
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
@@ -13434,7 +13537,8 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
     case "codex":
       return removeMcpCodexToml(serverName);
     case "opencode":
-      return removeMcpJson(join(opencodeConfigDir(), "opencode.json"), ["mcp", serverName]);
+      // An earlier install wrote opencode.json even beside an opencode.jsonc.
+      return [opencodeConfigPath(), join(opencodeConfigDir(), "opencode.json")].every((path) => removeMcpJson(path, ["mcp", serverName]));
     case "kilo":
     case "qwen":
       throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
@@ -14372,7 +14476,7 @@ function qwenEffectiveOpenAIKeyAvailable(): boolean | null {
   return qwenOpenAIKeyAvailability(typeof inherited === "string" ? inherited : fallback.OPENAI_API_KEY);
 }
 
-type AgentRouteOverride = { surface: string; reason: string };
+type AgentRouteOverride = { surface: string; reason: string; own?: OwnEndpointSource };
 type QwenMatchedOption = { inline: boolean; value?: string };
 
 function qwenMatchedOption(arg: string, names: readonly string[]): QwenMatchedOption | null {
@@ -14861,17 +14965,8 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   }
   // The wrap would replace an endpoint of the user's own with the proxy, which
   // cannot forward to it, and send its key to the provider's public API.
-  // Claude Code's settings env outranks the shell's.
-  const key = agent.id === "claude" ? "ANTHROPIC_BASE_URL" : agent.id === "codex" ? "OPENAI_BASE_URL" : undefined;
-  let settingsUrl: unknown;
-  if (agent.id === "claude") {
-    try {
-      const path = throughLink(join(claudeConfigDir(), "settings.json"));
-      settingsUrl = objectValue(parseJsonFileObject(path, fileBytes(path)).env).ANTHROPIC_BASE_URL;
-    } catch { /* unreadable: the shell decides */ }
-  }
-  const own = key ? ownEndpoint(settingsUrl || process.env[key]) : null;
-  if (key && own) return { surface: key, reason: `points at your own endpoint ${own}, which the proxy cannot forward to` };
+  const own = agentOwnEndpoint(agent.id);
+  if (own) return { surface: own.file ? `${own.key} in ${own.file}` : own.key, reason: `points at your own endpoint ${own.endpoint}, which the proxy cannot forward to`, own };
   return null;
 }
 
@@ -15507,7 +15602,7 @@ function installMcpForAgent(a: AgentProfile, mcp: { command: string; args: strin
     case "codex":
       return installMcpCodexToml(mcp, serverName);
     case "opencode":
-      return installMcpJson(join(opencodeConfigDir(), "opencode.json"), ["mcp", serverName], {
+      return installMcpJson(opencodeConfigPath(), ["mcp", serverName], {
         type: "local",
         command: [mcp.command, ...mcp.args],
         enabled: true,

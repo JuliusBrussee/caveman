@@ -300,6 +300,26 @@ test("caveman claude on its own endpoint launches directly and writes nothing", 
   assert.equal(existsSync(join(home, "integrations", "claude.json")), false);
 });
 
+// An endpoint exported after Claude Code was wired: the route in settings.json
+// outranks the shell, so any launch, direct or wrapped, would send its token to
+// Anthropic. Nothing starts; the message says how to choose.
+test("caveman claude does not start when the native route overrides the shell's own endpoint", async () => {
+  const { env } = nativeShortcutEnv();
+  assert.equal((await runWithEnv(env, ["enable", "claude"])).code, 0);
+  const corp = { ...env, ANTHROPIC_BASE_URL: "https://litellm.corp.example", ANTHROPIC_AUTH_TOKEN: "corp-token" };
+  for (const argv of [["claude", "-p", "hi"], ["wrap", "claude", "-p", "hi"]]) {
+    const out = await runWithEnv(corp, argv);
+    assert.notEqual(out.code, 0, argv.join(" "));
+    assert.equal(out.stdout, "", `${argv.join(" ")} must not start the agent`);
+    assert.match(out.stderr, /own endpoint https:\/\/litellm\.corp\.example \(ANTHROPIC_BASE_URL in your shell\).* Unset ANTHROPIC_BASE_URL to keep Caveman, or run `caveman disable claude` to use your endpoint/);
+  }
+  const doctor = JSON.parse((await runWithEnv(corp, ["doctor", "claude"])).stdout);
+  assert.match(doctor.warnings.join("\n"), /Unset ANTHROPIC_BASE_URL to keep Caveman/);
+  const routed = await runWithEnv(env, ["claude", "-p", "hi"]);
+  assert.equal(routed.code, 0, routed.stderr);
+  assert.equal(routed.stdout, "-p hi|");
+});
+
 test("caveman claude --help never installs persistent integration", async () => {
   const { env, home } = nativeShortcutEnv();
   const out = await runWithEnv(env, ["claude", "--help"]);
