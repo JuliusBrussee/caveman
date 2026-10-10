@@ -750,6 +750,22 @@ test('openclaw uninstall removes skill folder + strips SOUL.md block, preserving
   }
 });
 
+test('openclaw uninstall dry run promises a SOUL.md strip only when the block is there', () => {
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  fs.writeFileSync(path.join(ws, 'SOUL.md'), '# my workspace\n');
+  try {
+    const env = { ...isolatedEnv(path.join(dir, 'home')), OPENCLAW_WORKSPACE: ws };
+    const dry = () => spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], { env, encoding: 'utf8' }).stdout;
+    assert.doesNotMatch(dry(), /would strip caveman block/);
+    spawnSync(process.execPath, [INSTALLER, '--only', 'openclaw', '--non-interactive', '--no-mcp-shrink', '--config-dir', dir], { env, encoding: 'utf8' });
+    assert.match(dry(), /would strip caveman block from .*SOUL\.md/);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw uninstall restores a pre-existing skill and keeps foreign files in its folder', () => {
   const dir = freshTmpDir();
   const env = isolatedInstallEnv(dir);

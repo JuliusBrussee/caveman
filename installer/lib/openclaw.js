@@ -421,7 +421,10 @@ function uninstallOpenclaw({ workspace, dryRun = false, log = noopLog() } = {}) 
   const ours = isCavemanSkill(skill.content);
   const restore = ours && bak.content !== null && !isCavemanSkill(bak.content);
   if (dryRun) {
-    if (hasSoul) { log.note(`  would strip caveman block from ${soulFile}`); touched = true; }
+    if (hasSoul && stripAllBootstrapBlocks(readIfExists(soulFile) || '').found) {
+      log.note(`  would strip caveman block from ${soulFile}`);
+      touched = true;
+    }
     if (ours) { log.note(`  would ${restore ? 'restore your backup over' : 'remove'} ${skillFile}`); touched = true; }
     return { ok: true, touched };
   }
