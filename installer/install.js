@@ -2165,7 +2165,8 @@ function uninstall(ctx) {
   if (!cliNodeFloor && fs.existsSync(privateCli)) disables.push([privateCli, ['disable', '--all']]);
   if (!cliNodeFloor && hasCmd('caveman')) {
     const bundled = newerBundledCli();
-    // The bundled CLI may not start at all: then the PATH caveman takes its turn.
+    // The PATH caveman takes its turn only when the bundled CLI could not be
+    // spawned or was killed by a signal, never when it ran and failed.
     disables.push(bundled ? [process.execPath, [bundled, 'disable', '--all'], 'caveman'] : ['caveman', ['disable', '--all']]);
   }
   // Only a CLI that did not run (spawn error, killed) hands over: one that ran
