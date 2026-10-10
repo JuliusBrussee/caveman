@@ -73,11 +73,8 @@ if (process.argv[2] === "shrink-hook") {
     NO_COLOR: "1",
     PATH: `${bin}:${process.env.PATH}`,
   };
-  // Whoever runs this suite may well have a real OPENAI_API_KEY exported in
-  // their own shell (that's normal, not a fixture bug) — but detectCodexWrapAuthMode
-  // reads it as a fallback, so an inherited one silently forces every codex
-  // fixture below into api-key mode regardless of what auth.json under `home`
-  // says. Strip it so auth-mode detection only ever sees the fixture's auth.json.
+  // Codex auth mode comes from auth.json alone; still keep the runner's own
+  // OPENAI_API_KEY out so no fixture depends on the shell it runs from.
   delete env.OPENAI_API_KEY;
   return { home, env };
 }
@@ -270,6 +267,87 @@ test("enable codex twice re-parses its own block instead of calling it corrupted
   assert.equal(second.split("# >>> caveman:native-tables").length, 2, "exactly one tables begin marker");
   assert.equal(second.split("# <<< caveman:native-tables").length, 2, "exactly one tables end marker");
   assert.equal(second, first, "a second enable is byte-idempotent");
+});
+
+// Codex rewrites config.toml itself (toml_edit): `codex mcp add` regroups the
+// mcp_servers tables around Caveman's, `codex features enable` appends a table
+// between Caveman's markers, and a Windows path comes back 'literal'-quoted.
+// None of that changes what Caveman wrote, so doctor must stay installed and
+// disable must take out Caveman's items alone instead of refusing.
+test("codex rewriting config.toml around Caveman's tables keeps doctor and disable working", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(configPath, 'approval_policy = "never"\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  writeFileSync(configPath, readFileSync(configPath, "utf8")
+    .replace(/^command = "([^"]+)"$/m, "command = '$1'")
+    .replace("[mcp_servers.caveman]", '[mcp_servers.github]\ncommand = "npx"\n\n[mcp_servers.caveman]')
+    .replace("# <<< caveman:native-tables", '\n[features]\nartifact = true\n\n[[skills.config]]\npath = "/x/SKILL.md"\nenabled = false\n# <<< caveman:native-tables'));
+  assert.equal(JSON.parse((await run(["doctor", "codex"], fx.env)).stdout).state, "installed");
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const after = readFileSync(configPath, "utf8");
+  assert.doesNotMatch(after, /caveman/);
+  assert.match(after, /^approval_policy = "never"$/m);
+  assert.match(after, /^\[mcp_servers\.github\]\ncommand = "npx"$/m);
+  assert.match(after, /^\[features\]\nartifact = true$/m);
+  assert.match(after, /^\[\[skills\.config\]\]\npath = "\/x\/SKILL\.md"\nenabled = false$/m);
+});
+
+// Enable takes the user's own root model_provider out to route through
+// Caveman. Disable has to put it back even after Codex saved something else
+// in the file (a /model choice, a trusted folder), or Codex silently falls
+// back to OpenAI instead of their Azure/Ollama provider.
+test("disable codex restores the user's own model_provider after Codex edited config.toml", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(configPath, 'model = "gpt-5.5"\nmodel_provider = "azure"  # use corp azure\n\n[model_providers.azure]\nname = "Azure"\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  assert.doesNotMatch(readFileSync(configPath, "utf8"), /"azure"/);
+  writeFileSync(configPath, readFileSync(configPath, "utf8").replace('model = "gpt-5.5"', 'model = "gpt-5.6"'));
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const after = readFileSync(configPath, "utf8");
+  assert.match(after, /^model_provider = "azure"  # use corp azure$/m);
+  assert.match(after, /^model = "gpt-5\.6"$/m);
+  assert.doesNotMatch(after, /caveman/);
+});
+
+// PowerShell 5.1 and older Notepad save UTF-8 with a BOM. Codex accepts one at
+// the start of config.toml, but not in the middle, where prepending Caveman's
+// root block used to leave it: Codex then refused to start at all.
+test("enable and disable codex keep a UTF-8 BOM at the start of config.toml", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(configPath, '\uFEFFmodel = "gpt-5.5"\r\n\r\n[mcp_servers.github]\r\ncommand = "npx"\r\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const installed = readFileSync(configPath, "utf8");
+  assert.ok(installed.startsWith("\uFEFF# >>> caveman:native-root\n"), JSON.stringify(installed.slice(0, 40)));
+  assert.equal(installed.indexOf("\uFEFF", 1), -1, "no BOM after offset 0");
+  writeFileSync(configPath, `${installed}# later\n`);
+  assert.equal((await run(["disable", "codex"], fx.env)).code, 0);
+  const after = readFileSync(configPath, "utf8");
+  assert.ok(after.startsWith('\uFEFFmodel = "gpt-5.5"'), JSON.stringify(after.slice(0, 40)));
+  assert.equal(after.indexOf("\uFEFF", 1), -1, "no BOM after offset 0");
+});
+
+// Codex never reads OPENAI_API_KEY while auth.json holds a ChatGPT login: its
+// stored auth_mode (or a key saved in auth.json) decides. A key exported in the
+// shell must not wire the api-key route, nor flip doctor from shell to shell.
+test("a codex ChatGPT login stays on the subscription route with OPENAI_API_KEY exported", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(join(fx.home, ".codex", "auth.json"), JSON.stringify({ auth_mode: "chatgpt", OPENAI_API_KEY: null, tokens: { id_token: "z", access_token: "x", refresh_token: "y", account_id: "acc" } }));
+  const keyed = { ...fx.env, OPENAI_API_KEY: "sk-env" };
+  assert.equal((await run(["enable", "codex"], keyed)).code, 0);
+  assert.match(readFileSync(configPath, "utf8"), /base_url = "http:\/\/127\.0\.0\.1:8787\/chatgpt"/);
+  for (const env of [keyed, fx.env]) {
+    assert.equal(JSON.parse((await run(["doctor", "codex"], env)).stdout).components.routing, true);
+  }
 });
 
 // An upgrade or a moved install changes the binary path inside the hook
