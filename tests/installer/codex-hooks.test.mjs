@@ -157,3 +157,23 @@ test('uninstall keeps the payload when our hooks.json turns unparseable', (t) =>
   assert.match(r.stdout + r.stderr, /could not parse/);
   assert.ok(fs.existsSync(path.join(codexHome, ...HOOK_REL.split('/'))), 'payload must stay while hooks.json may point at it');
 });
+
+// The native codex binary does not run a login shell: with PATH=/usr/bin:/bin a
+// bare `node` is not found and the hook silently injects nothing. POSIX gets the
+// absolute node, as the Claude hooks do; Windows keeps bare `node`, since a
+// quoted leading path is a string, not a command, in PowerShell. An entry an
+// older installer wrote with bare `node` is still ours to replace and remove.
+test('the hook runs node by its absolute path, and replaces an older bare-node entry', (t) => {
+  const { codexHome, hooksPath, readHooks, run } = sandbox(t);
+  const script = path.join(codexHome, ...HOOK_REL.split('/'));
+  const older = { matcher: 'startup|resume|clear|compact', hooks: [{ type: 'command', command: `node "${script.replace(/\\/g, '/')}"`, timeout: 5 }] };
+  fs.writeFileSync(hooksPath, JSON.stringify({ hooks: { SessionStart: [older] } }, null, 2) + '\n');
+  assert.equal(run('--only', 'codex').status, 0);
+  const ours = readHooks().hooks.SessionStart.filter(isOurs);
+  assert.equal(ours.length, 1, JSON.stringify(readHooks()));
+  const command = ours[0].hooks[0].command;
+  if (process.platform === 'win32') assert.match(command, /^node "/);
+  else assert.ok(command.startsWith(`"${path.dirname(process.execPath)}/node" "`), command);
+  assert.equal(run('--uninstall').status, 0);
+  assert.equal(fs.existsSync(hooksPath), false);
+});
