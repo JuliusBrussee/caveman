@@ -966,7 +966,8 @@ test('opencode uninstall reports a failed config restore, but not a backup it co
           + "fs[name] = function (p, ...rest) {\n"
           + "  if (String(p).endsWith('opencode.jsonc.bak')) throw Object.assign(new Error(`EACCES: ${name}`), { code: 'EACCES' });\n"
           + '  return orig.call(this, p, ...rest);\n};\n');
-        const removed = runInstaller(['--uninstall'], { ...env, NODE_OPTIONS: `--require "${preload}"` });
+        // NODE_OPTIONS reads a backslash as an escape: give Windows forward slashes.
+        const removed = runInstaller(['--uninstall'], { ...env, NODE_OPTIONS: `--require "${preload.replaceAll('\\', '/')}"` });
         assert.equal(removed.status, status, `${broken}: ${removed.stdout}${removed.stderr}`);
         if (broken === 'copyFileSync') {
           assert.match(removed.stderr, /could not restore/);
