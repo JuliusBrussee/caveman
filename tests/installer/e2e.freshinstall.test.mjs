@@ -688,6 +688,43 @@ test('openclaw atomic SOUL failure preserves user bytes and rolls back partial i
   }
 });
 
+// Windows reports a junction as a link, and rmdir removes one like a folder.
+// The rollback's rmdir goes through the link check uninstall uses, so a skill
+// folder swapped for a link is left alone.
+test('openclaw install rollback never rmdirs a skill folder swapped for a link', () => {
+  if (process.platform === 'win32') return;
+  const helper = requireCjs(path.join(REPO_ROOT, 'installer', 'lib', 'openclaw.js'));
+  const dir = freshTmpDir();
+  const ws = path.join(dir, 'ws');
+  fs.mkdirSync(ws);
+  const soul = path.join(ws, 'SOUL.md');
+  fs.writeFileSync(soul, '# user soul\n');
+  const skillDir = path.join(ws, 'skills', 'caveman');
+  const elsewhere = path.join(dir, 'elsewhere');
+  fs.mkdirSync(elsewhere);
+  const rename = fs.renameSync;
+  const rmdir = fs.rmdirSync;
+  let swapped = false;
+  const removed = [];
+  fs.renameSync = (from, to) => {
+    if (to !== soul) return rename(from, to);
+    fs.rmSync(skillDir, { recursive: true });
+    fs.symlinkSync(elsewhere, skillDir);
+    swapped = true;
+    throw Object.assign(new Error('injected rename failure'), { code: 'EIO' });
+  };
+  fs.rmdirSync = (p, ...rest) => { if (swapped) removed.push(p); return rmdir(p, ...rest); };
+  try {
+    assert.throws(() => helper.installOpenclaw({ workspace: ws, repoRoot: REPO_ROOT }), /injected rename failure/);
+    assert.deepEqual(removed, [], 'rollback called rmdir on a link');
+    assert.ok(fs.lstatSync(skillDir).isSymbolicLink());
+  } finally {
+    fs.renameSync = rename;
+    fs.rmdirSync = rmdir;
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 test('openclaw install refuses a concurrent same-inode SOUL edit', () => {
   const dir = freshTmpDir();
   const ws = path.join(dir, 'workspace');
