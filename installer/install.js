@@ -1454,8 +1454,8 @@ function installOpencode(ctx) {
       write: (stage) => {
         fs.mkdirSync(stage, { recursive: true });
         fs.copyFileSync(path.join(pluginSrc, 'plugin.js'), path.join(stage, 'plugin.js'));
-        // opencode 2.x ignores the plugin.js config entry and loads this dir's
-        // server.js; 1.x never scans inside plugin directories.
+        // opencode 2.x loads this dir's server.js; 1.x imports plugin.js
+        // through package.json main and never loads server.js.
         fs.copyFileSync(path.join(pluginSrc, 'server.js'), path.join(stage, 'server.js'));
         fs.copyFileSync(path.join(pluginSrc, 'package.json'), path.join(stage, 'package.json'));
         // Plugin dir is ESM; the CommonJS config bridge needs .cjs.
@@ -2239,13 +2239,19 @@ function uninstall(ctx) {
     // When nothing but caveman's entries changed since, the original goes
     // back, comments and all; otherwise the backup stays for the user.
     const ocBak = ocJson + '.bak';
-    if (!opts.dryRun && fs.existsSync(ocJson) && fs.existsSync(ocBak)) {
+    if (fs.existsSync(ocJson) && fs.existsSync(ocBak)) {
       const original = SETTINGS.readSettings(ocBak);
       const current = SETTINGS.readSettings(ocJson);
-      if (original && current && JSON.stringify(original) === JSON.stringify(current)) {
-        fs.copyFileSync(ocBak, ocJson);
-        fs.unlinkSync(ocBak);
-        note(`  restored ${ocJson} as it was before install`);
+      if (opts.dryRun) {
+        note(`  would restore ${ocJson} from ${ocBak} if only caveman's entries changed`);
+      } else if (original && current && JSON.stringify(original) === JSON.stringify(current)) {
+        try {
+          fs.copyFileSync(ocBak, ocJson);
+          fs.unlinkSync(ocBak);
+          note(`  restored ${ocJson} as it was before install`);
+        } catch (error) {
+          warn(`  could not restore ${ocJson} from ${ocBak}: ${error.message}`);
+        }
       } else {
         note(`  kept ${ocBak}: ${ocJson} changed since install, so its pre-install copy (with any comments) stays there`);
       }

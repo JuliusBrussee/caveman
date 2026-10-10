@@ -909,6 +909,14 @@ test('opencode uninstall restores a commented opencode.jsonc and removes its bac
     assert.equal(fs.readFileSync(cfgPath, 'utf8'), original, 'the original config, comments included, must come back');
     assert.equal(fs.existsSync(cfgPath + '.bak'), false, 'the install backup must go');
     assert.equal(fs.existsSync(path.join(ocDir, MODE_LOG_BASENAME)), false, 'the mode log must go');
+
+    // A config the user changed after install keeps its backup: nothing is lost.
+    assert.equal(runInstaller(['--only', 'opencode'], env).status, 0);
+    const changed = SETTINGS.readSettings(cfgPath);
+    SETTINGS.writeSettings(cfgPath, { ...changed, model: 'anthropic/claude-sonnet-4-5' });
+    assert.equal(runInstaller(['--uninstall'], env).status, 0);
+    assert.equal(fs.readFileSync(cfgPath + '.bak', 'utf8'), original, 'a changed config must keep the pre-install backup');
+    assert.deepEqual(SETTINGS.readSettings(cfgPath), { theme: 'tokyonight', plugin: ['my-plugin'], model: 'anthropic/claude-sonnet-4-5' });
   } finally {
     fs.rmSync(xdg, { recursive: true, force: true });
     fs.rmSync(shimDir, { recursive: true, force: true });
