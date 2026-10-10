@@ -517,6 +517,13 @@ function absoluteNodePath() {
 }
 
 // ── Per-provider installers ────────────────────────────────────────────────
+// `claude plugin list` names each plugin by its full id. A bare /caveman/ also
+// matched caveman-browse@caveman-browse, so the install was skipped.
+function claudeHasCaveman() {
+  const r = captureSpawn('claude', ['plugin', 'list']);
+  return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(r.stdout || '');
+}
+
 async function installClaude(ctx) {
   const { say, note, warn, ok, opts, results, configDir } = ctx;
   results.detected++;
@@ -524,10 +531,7 @@ async function installClaude(ctx) {
 
   // Plugin install (idempotent unless --force)
   let alreadyInstalled = false;
-  if (!opts.force) {
-    const r = captureSpawn('claude', ['plugin', 'list']);
-    if (r.status === 0 && /caveman/i.test(r.stdout || '')) alreadyInstalled = true;
-  }
+  if (!opts.force) alreadyInstalled = claudeHasCaveman();
   let pluginInstallSucceeded = false;
   if (alreadyInstalled) {
     note('  caveman plugin already installed (use --force to reinstall)');
@@ -2054,8 +2058,7 @@ function uninstall(ctx) {
   // machine where caveman was never installed (or was already removed) doesn't
   // print "Plugin not installed" stderr noise.
   if (hasCmd('claude')) {
-    const probe = captureSpawn('claude', ['plugin', 'list']);
-    if (probe.status === 0 && /caveman/i.test(probe.stdout || '')) {
+    if (claudeHasCaveman()) {
       const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
       if (spawnOk(r)) ok('  removed claude plugin');
     } else {
