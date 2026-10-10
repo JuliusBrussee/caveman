@@ -371,7 +371,7 @@ func runServe(logger *slog.Logger) {
 	for name, mount := range cfg.CompatUpstreams() {
 		state.CompatForwardHeaders[name] = append([]string(nil), mount.ForwardHeaders...)
 	}
-	srv.Handler = withShutdown(withInstanceIdentity(handler, state.InstanceToken, loopbackListen(cfg.Listen)), state.InstanceToken, loopbackListen(cfg.Listen), cancel)
+	srv.Handler = withRunState(handler, state, loopbackListen(cfg.Listen), cancel)
 	if err := runstate.Write(home, state); err != nil {
 		_ = listener.Close()
 		logger.Error("cannot write proxy run state", "error", err)
@@ -488,14 +488,25 @@ func withInstanceIdentity(next http.Handler, token string, loopback bool) http.H
 	})
 }
 
+// withRunState serves the two run-state endpoints: the instance identity any
+// local caller may read, and the shutdown only the run-state file's reader may
+// send.
+func withRunState(next http.Handler, state runstate.State, loopback bool, stop func()) http.Handler {
+	return withShutdown(withInstanceIdentity(next, state.InstanceToken, loopback), state.ShutdownToken, loopback, stop)
+}
+
 // withShutdown is `caveman stop` on Windows, where no signal reaches a
 // detached process gracefully: POST /caveman/shutdown runs the same drain as
 // SIGTERM. Loopback only, and only for the caller holding this generation's
-// run-state token; it sits outside the inbound token gate like the keepalive.
+// run-state shutdown token; it sits outside the inbound token gate like the
+// keepalive. The CLI sends no Origin or Sec-Fetch-Site and names a loopback
+// Host, so a request carrying either header or another Host (a browser page,
+// a DNS-rebound name) is refused before the token is compared.
 func withShutdown(next http.Handler, token string, loopback bool, stop func()) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if loopback && token != "" && r.Method == http.MethodPost && r.URL.Path == "/caveman/shutdown" {
-			if subtle.ConstantTimeCompare([]byte(r.Header.Get(runstate.InstanceHeader)), []byte(token)) != 1 {
+			if len(r.Header.Values("Origin")) > 0 || len(r.Header.Values("Sec-Fetch-Site")) > 0 || !loopbackListen(r.Host) ||
+				subtle.ConstantTimeCompare([]byte(r.Header.Get(runstate.ShutdownHeader)), []byte(token)) != 1 {
 				w.WriteHeader(http.StatusForbidden)
 				return
 			}

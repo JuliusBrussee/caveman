@@ -216,7 +216,7 @@ test("stop on Windows asks the runtime to drain before ending it", async () => {
   const fake = async () => {
     const child = spawn(process.execPath, ["-e", `
       const server = require("node:http").createServer((req, res) => {
-        if (req.method === "POST" && req.url === "/caveman/shutdown" && req.headers["x-caveman-instance"] === "t") {
+        if (req.method === "POST" && req.url === "/caveman/shutdown" && req.headers["x-caveman-shutdown"] === "t") {
           res.writeHead(202).end(() => { process.stdout.write("drained\\n"); process.exit(0); });
         } else res.writeHead(404).end();
       }).listen(0, "127.0.0.1", () => process.stdout.write(server.address().port + "\\n"));
@@ -236,6 +236,27 @@ test("stop on Windows asks the runtime to drain before ending it", async () => {
   const older = await fake();
   assert.deepEqual(await endRuntimes([{ host: "127.0.0.1", port: older.port, listening: true, foreign: false, pid: older.child.pid, token: "old" }], "win32"), []);
   assert.equal(await older.out(), "killed\n");
+
+  // The token stop sends is the run-state file's shutdown token. The instance
+  // token is no secret: /health/live hands it to any local caller.
+  const fx = modulesFixture();
+  const viaRunState = await fake();
+  mkdirSync(join(fx.env.CAVEMAN_HOME, "run"), { recursive: true });
+  writeFileSync(join(fx.env.CAVEMAN_HOME, "run", `${viaRunState.port}.json`), JSON.stringify({ schema: "caveman.proxy.run.v1", owner: "start", pid: viaRunState.child.pid, port: viaRunState.port, instance_token: "public", shutdown_token: "t" }));
+  const env = { ...fx.env, CAVE_GATEWAY_URL: `http://127.0.0.1:${viaRunState.port}`, CAVEMAN_LISTEN: `127.0.0.1:${viaRunState.port}` };
+  const saved = Object.fromEntries(Object.keys(env).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, env);
+  try {
+    await import("../dist/index.js");
+    const { moduleHost } = await import("../dist/modules/apply.js");
+    const runtimes = await moduleHost().localRuntimes();
+    assert.deepEqual(runtimes.map((runtime) => runtime.token), ["t"]);
+    assert.deepEqual(await endRuntimes(runtimes, "win32"), []);
+  } finally {
+    for (const [key, value] of Object.entries(saved)) value === undefined ? delete process.env[key] : process.env[key] = value;
+    fx.cleanup();
+  }
+  assert.equal(await viaRunState.out(), "drained\n");
 });
 
 test("status counts the MCP entry native wiring writes for Claude and Codex", async () => {

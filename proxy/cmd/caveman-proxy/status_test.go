@@ -82,20 +82,28 @@ func TestInstanceIdentityIsPublishedOnlyOnHealth(t *testing.T) {
 }
 
 // Windows `caveman stop` asks over the listener because no signal reaches a
-// detached proxy there gracefully. Only this generation's token stops it, and
-// only on a loopback listener.
+// detached proxy there gracefully. Only the run-state file's shutdown token
+// stops it, only on a loopback listener, and never from a browser page or a
+// name that resolves to loopback (DNS rebinding).
 func TestShutdownNeedsThisGenerationsTokenOnLoopback(t *testing.T) {
-	const token = "local-instance-token"
+	const token = "local-shutdown-token"
 	for _, tt := range []struct {
-		name, header string
-		loopback     bool
-		wantStatus   int
-		wantStop     bool
+		name, header, host string
+		browser            map[string]string
+		loopback           bool
+		wantStatus         int
+		wantStop           bool
 	}{
-		{"matching token", token, true, http.StatusAccepted, true},
-		{"wrong token", "other", true, http.StatusForbidden, false},
-		{"no token", "", true, http.StatusForbidden, false},
-		{"shared listener", token, false, http.StatusTeapot, false},
+		{"matching token", token, "127.0.0.1:8787", nil, true, http.StatusAccepted, true},
+		{"localhost", token, "localhost:8787", nil, true, http.StatusAccepted, true},
+		{"ipv6 loopback", token, "[::1]:8787", nil, true, http.StatusAccepted, true},
+		{"wrong token", "other", "127.0.0.1:8787", nil, true, http.StatusForbidden, false},
+		{"no token", "", "127.0.0.1:8787", nil, true, http.StatusForbidden, false},
+		{"rebound host", token, "attacker.example:8787", nil, true, http.StatusForbidden, false},
+		{"host without port", token, "127.0.0.1", nil, true, http.StatusForbidden, false},
+		{"origin", token, "127.0.0.1:8787", map[string]string{"Origin": "http://127.0.0.1:8787"}, true, http.StatusForbidden, false},
+		{"fetch metadata", token, "127.0.0.1:8787", map[string]string{"Sec-Fetch-Site": "same-origin"}, true, http.StatusForbidden, false},
+		{"shared listener", token, "127.0.0.1:8787", nil, false, http.StatusTeapot, false},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			stopped := false
@@ -103,8 +111,12 @@ func TestShutdownNeedsThisGenerationsTokenOnLoopback(t *testing.T) {
 				w.WriteHeader(http.StatusTeapot)
 			}), token, tt.loopback, func() { stopped = true })
 			request := httptest.NewRequest(http.MethodPost, "/caveman/shutdown", nil)
+			request.Host = tt.host
 			if tt.header != "" {
-				request.Header.Set(runstate.InstanceHeader, tt.header)
+				request.Header.Set(runstate.ShutdownHeader, tt.header)
+			}
+			for name, value := range tt.browser {
+				request.Header.Set(name, value)
 			}
 			response := httptest.NewRecorder()
 			handler.ServeHTTP(response, request)
@@ -116,6 +128,53 @@ func TestShutdownNeedsThisGenerationsTokenOnLoopback(t *testing.T) {
 	response := httptest.NewRecorder()
 	withShutdown(http.NotFoundHandler(), token, true, func() { t.Fatal("GET stopped the proxy") }).
 		ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/caveman/shutdown", nil))
+}
+
+// /health/live hands its caller the instance token on loopback, even when the
+// gate behind it answers 401 and whatever Host the caller names. That token
+// must not stop the proxy, and the one that does never leaves the run state.
+func TestShutdownTokenIsNotTheIdentityHealthPublishes(t *testing.T) {
+	state, err := runstate.New("127.0.0.1:8787", "record", "start", "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stopped := false
+	handler := withRunState(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "gated", http.StatusUnauthorized)
+	}), state, true, func() { stopped = true })
+	health := httptest.NewRecorder()
+	probe := httptest.NewRequest(http.MethodGet, "/health/live", nil)
+	probe.Host = "attacker.example"
+	handler.ServeHTTP(health, probe)
+	leaked := health.Header().Get(runstate.InstanceHeader)
+	if leaked != state.InstanceToken {
+		t.Fatalf("fixture: health published %q, want the instance token", leaked)
+	}
+	for name, values := range health.Header() {
+		for _, value := range values {
+			if strings.Contains(value, state.ShutdownToken) {
+				t.Fatalf("health header %s carries the shutdown token", name)
+			}
+		}
+	}
+	for _, header := range []string{runstate.ShutdownHeader, runstate.InstanceHeader} {
+		request := httptest.NewRequest(http.MethodPost, "/caveman/shutdown", nil)
+		request.Host = "127.0.0.1:8787"
+		request.Header.Set(header, leaked)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusForbidden || stopped {
+			t.Fatalf("the published identity in %s: status %d stopped %v, want 403", header, response.Code, stopped)
+		}
+	}
+	request := httptest.NewRequest(http.MethodPost, "/caveman/shutdown", nil)
+	request.Host = "127.0.0.1:8787"
+	request.Header.Set(runstate.ShutdownHeader, state.ShutdownToken)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusAccepted || !stopped {
+		t.Fatalf("the run state's shutdown token: status %d stopped %v, want 202", response.Code, stopped)
+	}
 }
 
 func TestRunStatusRequiresThisListenerGeneration(t *testing.T) {

@@ -26,13 +26,14 @@ async function exited(pids: number[], ms: number): Promise<void> {
   while (pids.some(alive) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
-// POST /caveman/shutdown with the run state's instance token: the proxy drains
-// and exits as it does on SIGTERM. Plain loopback HTTP, never the CLI's
-// proxy-aware fetch. False when the proxy does not take it (older ones 404).
+// POST /caveman/shutdown with the run state's shutdown token (runtime.token;
+// never the instance token /health/live publishes): the proxy drains and exits
+// as it does on SIGTERM. Plain loopback HTTP, never the CLI's proxy-aware
+// fetch. False when the proxy does not take it (older ones 404 or 403).
 function askToStop(runtime: LocalRuntime): Promise<boolean> {
   return new Promise((resolve) => {
     if (!runtime.token) return resolve(false);
-    const req = request({ host: runtime.host, port: runtime.port, path: "/caveman/shutdown", method: "POST", headers: { "x-caveman-instance": runtime.token }, timeout: 2000 }, (res) => {
+    const req = request({ host: runtime.host, port: runtime.port, path: "/caveman/shutdown", method: "POST", headers: { "x-caveman-shutdown": runtime.token }, timeout: 2000 }, (res) => {
       res.resume();
       resolve(res.statusCode === 202);
     });
