@@ -2646,6 +2646,35 @@ test("enable opencode finds the user's own endpoint in every global config file"
   assert.deepEqual(JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")), { theme: "system", mcp: {} });
 });
 
+// OpenCode reads JSONC, so a commented opencode.jsonc is parsed, not skipped:
+// install writes the registration (BOM kept), and uninstall takes out its entry
+// and an earlier install's one in opencode.json. Comments cannot be kept; the
+// original is saved and the warning says where.
+test("mcp install and uninstall opencode work on a commented opencode.jsonc", async () => {
+  const fx = fixture();
+  const dir = join(fx.home, ".config", "opencode");
+  mkdirSync(dir, { recursive: true });
+  const jsonc = join(dir, "opencode.jsonc");
+  const commented = '﻿{\n  // mine\n  "theme": "system",\n}\n';
+  writeFileSync(jsonc, commented);
+  const installed = await run(["mcp", "install", "opencode"], fx.env);
+  assert.equal(installed.code, 0, installed.stderr);
+  const after = readFileSync(jsonc, "utf8");
+  assert.ok(after.startsWith("﻿"));
+  assert.equal(JSON.parse(after.slice(1)).theme, "system");
+  assert.ok(JSON.parse(after.slice(1)).mcp.caveman);
+  const saved = installed.stderr.match(/comments in \S+opencode\.jsonc were not kept; the original is saved at (\S+)/)?.[1];
+  assert.ok(saved, installed.stderr);
+  assert.equal(readFileSync(saved, "utf8"), commented);
+
+  writeFileSync(jsonc, '{\n  // mine\n  "mcp": { "caveman": { "type": "local", "command": ["caveman-mcp"] } }\n}\n');
+  writeFileSync(join(dir, "opencode.json"), JSON.stringify({ mcp: { caveman: { type: "local", command: ["caveman-mcp"] } } }));
+  const removed = await run(["mcp", "uninstall", "opencode"], fx.env);
+  assert.equal(removed.code, 0, removed.stderr);
+  assert.deepEqual(JSON.parse(readFileSync(jsonc, "utf8")), { mcp: {} });
+  assert.deepEqual(JSON.parse(readFileSync(join(dir, "opencode.json"), "utf8")), { mcp: {} });
+});
+
 // An endpoint of the user's own (a gateway, LiteLLM, a local model) is never
 // swapped for the proxy, whose upstream is the provider's public API: the
 // agent's requests and key would go there. Enable names it and writes nothing.

@@ -13903,7 +13903,7 @@ function uninstallMcpForAgent(a: AgentProfile, serverName = "caveman"): boolean 
       return removeMcpCodexToml(serverName);
     case "opencode":
       // An earlier install wrote opencode.json even beside an opencode.jsonc.
-      return [opencodeConfigPath(), join(opencodeConfigDir(), "opencode.json")].every((path) => removeMcpJson(path, ["mcp", serverName]));
+      return [opencodeConfigPath(), join(opencodeConfigDir(), "opencode.json")].map((path) => removeMcpJson(path, ["mcp", serverName])).every(Boolean);
     case "kilo":
     case "qwen":
       throw new Error(`${a.display_name} MCP changes require the ownership transaction`);
@@ -13953,11 +13953,12 @@ function removeMcpCodexToml(serverName = "caveman"): boolean {
 function removeMcpJson(path: string, keyPath: string[]): boolean {
   let root: Record<string, unknown>;
   let bom = "";
+  let text = "";
   try {
-    const text = readFileSync(path, "utf8");
+    text = readFileSync(path, "utf8");
     // A UTF-8 BOM (Windows PowerShell 5.1) is kept.
     if (text.startsWith("\uFEFF")) bom = "\uFEFF";
-    const parsed = JSON.parse(text.slice(bom.length));
+    const parsed = parseJsonc(text);
     if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return true;
     root = parsed as Record<string, unknown>;
   } catch (e) {
@@ -13974,6 +13975,7 @@ function removeMcpJson(path: string, keyPath: string[]): boolean {
   if (!(keyPath[keyPath.length - 1]! in cur)) return true;
   delete cur[keyPath[keyPath.length - 1]!];
   try {
+    keepJsoncOriginal(path, text);
     writeFileSync(path, bom + JSON.stringify(root, null, 2) + "\n");
     return true;
   } catch (e) {
@@ -16139,13 +16141,14 @@ function codexMcpRegistrationMatches(serverName: string, mcp: { command: string;
 function installMcpJson(path: string, keyPath: string[], value: unknown): boolean {
   let root: Record<string, unknown> = {};
   let bom = "";
+  let text = "";
   try {
-    const text = readFileSync(path, "utf8");
+    text = readFileSync(path, "utf8");
     // A UTF-8 BOM (Windows PowerShell 5.1) is kept.
     if (text.startsWith("\uFEFF")) bom = "\uFEFF";
     const raw = text.trim();
     if (raw) {
-      const parsed = JSON.parse(raw);
+      const parsed = parseJsonc(raw);
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         root = parsed as Record<string, unknown>;
       } else {
@@ -16168,12 +16171,22 @@ function installMcpJson(path: string, keyPath: string[], value: unknown): boolea
   cur[keyPath[keyPath.length - 1]!] = value;
   try {
     mkdirSync(dirname(path), { recursive: true });
+    keepJsoncOriginal(path, text);
     writeFileSync(path, bom + JSON.stringify(root, null, 2) + "\n");
     return true;
   } catch (e) {
     console.error(`${mark("warn")} cannot write ${path}: ${(e as Error).message}`);
     return false;
   }
+}
+
+// A JSONC config is rewritten as plain JSON, so its comments go: keep the
+// original and say where, as enable does.
+function keepJsoncOriginal(path: string, text: string): void {
+  try { JSON.parse(text.replace(/^\uFEFF/, "").trim() || "{}"); return; } catch { /* comments */ }
+  const backup = join(cavemanHome(), "integrations", "backups", `mcp-${randomUUID()}`, basename(path));
+  atomicWriteFile(backup, Buffer.from(text));
+  console.error(`${mark("warn")} comments in ${path} were not kept; the original is saved at ${backup}`);
 }
 
 function writeMcpMarker(agentId: string, mcp: { command: string; args: string[] }): void {
