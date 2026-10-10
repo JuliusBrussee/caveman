@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -283,10 +283,18 @@ test("every copy of the Windows shim launcher agrees", async () => {
 
 // `caveman mcp install` writes this into every agent's MCP config. On Windows
 // `npx` is Node's npx.cmd, which a host that spawns without a shell cannot start.
+// The node is this one under PATH's name for it, which outlives an upgrade, as
+// is the node a generated plugin falls back to.
 test("MCP configs get node and npx's script on Windows, not npx.cmd", async () => {
-  const { mcpServerLaunch } = await import("../dist/index.js");
+  const { generatedPluginInvocation, mcpServerLaunch } = await import("../dist/index.js");
   const root = mkdtempSync(join(tmpdir(), "cave mcp launch "));
+  const path = process.env.PATH;
   try {
+    const node = join(root, "bin", process.platform === "win32" ? "node.exe" : "node");
+    mkdirSync(dirname(node));
+    symlinkSync(process.execPath, node);
+    process.env.PATH = dirname(node);
+    assert.deepEqual(generatedPluginInvocation(undefined, "cli.js"), { cmd: node, pre: ["cli.js"] });
     const script = join(root, "node_modules", "npm", "bin", "npx-cli.js");
     mkdirSync(dirname(script), { recursive: true });
     writeFileSync(script, "");
@@ -294,7 +302,7 @@ test("MCP configs get node and npx's script on Windows, not npx.cmd", async () =
     writeFileSync(npx, NPM_SHIM("npx"));
     const env = { PATH: root, PATHEXT: ".COM;.EXE;.BAT;.CMD" };
     assert.deepEqual(mcpServerLaunch(npx, ["-y", "caveman-mcp"], "win32", env), {
-      command: process.execPath, args: [script, "-y", "caveman-mcp"],
+      command: node, args: [script, "-y", "caveman-mcp"],
     });
     // A caveman-mcp.exe stays as it is; a shim we cannot read is written as before.
     const exe = join(root, "caveman-mcp.exe");
@@ -307,6 +315,7 @@ test("MCP configs get node and npx's script on Windows, not npx.cmd", async () =
       command: "/usr/bin/npx", args: ["-y", "caveman-mcp"],
     });
   } finally {
+    process.env.PATH = path;
     rmSync(root, { recursive: true, force: true });
   }
 });

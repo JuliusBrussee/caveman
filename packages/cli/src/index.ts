@@ -7835,7 +7835,7 @@ function nativeHookCommand(agentId: string): string {
     return nativeHookInvocation(proxy, fastHook, agentId, true);
   }
   if (existsSync(fastHook)) {
-    return nativeHookInvocation(process.execPath, fastHook, agentId, false);
+    return nativeHookInvocation(stableNodePath(), fastHook, agentId, false);
   }
   return `${cavemanBinForHook()} native-hook ${agentId}`;
 }
@@ -13628,13 +13628,17 @@ function resolveMcpCommand(): { command: string; args: string[] } {
 // every host can start an .exe, while starting a .cmd depends on how the host
 // spawns (Node refuses one without a shell since CVE-2024-27980, and Claude Code
 // documents no Windows form for it). A shim we cannot read is written as before.
+// The node is this one under the name that outlives an upgrade (stableNodePath).
 export function mcpServerLaunch(
   command: string,
   args: string[],
   platform: NodeJS.Platform = process.platform,
   env: NodeJS.ProcessEnv = process.env,
 ): { command: string; args: string[] } {
-  try { return portableInvocation(command, args, platform, env); } catch { return { command, args }; }
+  try {
+    const launch = portableInvocation(command, args, platform, env);
+    return launch.command === process.execPath ? { ...launch, command: stableNodePath() } : launch;
+  } catch { return { command, args }; }
 }
 
 function resolveCloudMcpCommand(): { command: string; args: string[] } {
@@ -13643,7 +13647,7 @@ function resolveCloudMcpCommand(): { command: string; args: string[] } {
     console.error("caveman mcp: cannot resolve CLI entrypoint for caveman-cloud server");
     process.exit(1);
   }
-  return { command: process.execPath, args: [realpathSync(entry), "cloud", "mcp-serve"] };
+  return { command: stableNodePath(), args: [realpathSync(entry), "cloud", "mcp-serve"] };
 }
 
 // resolveDelegateMcpCommand locates the dependency-free caveman-delegate stdio
@@ -13655,7 +13659,7 @@ function resolveDelegateMcpCommand(): { command: string; args: string[] } | null
     join(dirname(fileURLToPath(import.meta.url)), "caveman-delegate-mcp.mjs"),
   ].filter(Boolean);
   const script = candidates.find((c) => existsSync(c));
-  return script ? { command: process.execPath, args: [script] } : null;
+  return script ? { command: stableNodePath(), args: [script] } : null;
 }
 
 function resolvePiExtension(): string {
@@ -17890,7 +17894,7 @@ export function generatedPluginInvocation(
     const invocation = portableInvocation(onPath, [], platform);
     return { cmd: invocation.command, pre: invocation.args };
   }
-  return { cmd: process.execPath, pre: [currentScript] };
+  return { cmd: stableNodePath(), pre: [currentScript] };
 }
 
 function cavemanInvocation(): { cmd: string; pre: string[] } {

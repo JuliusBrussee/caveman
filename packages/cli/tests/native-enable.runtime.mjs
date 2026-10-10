@@ -1207,6 +1207,28 @@ test("the bridge hook names PATH's node when it is this node, never an fnm multi
   assert.equal(nodeArg(fnm), process.execPath);
 });
 
+// Without a caveman-proxy that bridges hooks, the hook runs its adapter with
+// node directly; that node, like the MCP servers' and generated plugins', is
+// the same stable name.
+test("a hook without the bridge and the MCP servers name PATH's node when it is this node", async () => {
+  const fx = fixture();
+  const node = join(fx.home, "bin", "node");
+  symlinkSync(process.execPath, node);
+  writeFileSync(fx.env.CAVEMAN_PROXY_BIN, readFileSync(fx.env.CAVEMAN_PROXY_BIN, "utf8").replace(',"native_hook_bridge_v1"', ""));
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const command = JSON.parse(readFileSync(join(fx.home, ".claude", "settings.json"), "utf8")).hooks.SessionStart
+    .map((entry) => entry.hooks[0].command).find((command) => command.includes("native-hook claude"));
+  assert.ok(command.startsWith(`'${node}' '`), command);
+  for (const server of ["caveman-cloud", "caveman-delegate"]) {
+    const installed = await run(["mcp", "install", "codex", "--server", server], fx.env);
+    assert.equal(installed.code, 0, installed.stderr);
+  }
+  const config = readFileSync(join(fx.home, ".codex", "config.toml"), "utf8");
+  for (const server of ["caveman-cloud", "caveman-delegate"]) {
+    assert.ok(config.includes(`[mcp_servers.${server}]\ncommand = ${JSON.stringify(node)}\n`), config);
+  }
+});
+
 test("doctor --fix transactionally repairs missing owned hooks and preserves unrelated edits", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
