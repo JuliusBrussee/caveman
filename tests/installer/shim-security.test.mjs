@@ -87,7 +87,10 @@ test("shell install ends by naming the first-run command when no terminal is att
   mkdirSync(fakeBin);
   writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
   writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
-  writeFileSync(join(fakeBin, "caveman"), "#!/bin/sh\necho caveman-ran \"$@\"\n", { mode: 0o755 });
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  // `caveman --version` prints JSON, as the CLI does.
+  const caveman = (version) => writeFileSync(join(fakeBin, "caveman"), `#!/bin/sh\nprintf '{\\n  "version": "%s"\\n}\\n' ${version}\n`, { mode: 0o755 });
+  caveman(cli);
   const run = (args) => spawnSync("bash", ["-s", "--", ...args], {
     cwd,
     input: shellShim,
@@ -99,6 +102,9 @@ test("shell install ends by naming the first-run command when no terminal is att
   assert.equal(plain.stdout, "installer-ran\nNext: caveman setup\n");
   const help = run(["--help"]);
   assert.equal(help.stdout, "installer-ran\n");
+  // An older CLI on PATH has an older setup: the pinned one runs instead.
+  caveman("0.0.1");
+  assert.equal(run([]).stdout, `installer-ran\nNext: npx -y @caveman-ai/cli@${cli} setup\n`);
   // No caveman on PATH (and nothing from the host's PATH): the pinned CLI through npx.
   rmSync(join(fakeBin, "caveman"));
   writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
@@ -108,8 +114,34 @@ test("shell install ends by naming the first-run command when no terminal is att
     encoding: "utf8",
     env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` },
   });
-  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
   assert.equal(viaNpx.stdout, `installer-ran\nNext: npx -y @caveman-ai/cli@${cli} setup\n`);
+});
+
+// With a terminal the shim starts the first run, unless --non-interactive
+// ("never prompt") asked it not to: then it names the command.
+const python = spawnSync("sh", ["-c", "command -v python3"], { encoding: "utf8" }).stdout.trim();
+test("shell install with --non-interactive names the first run instead of starting it, even in a terminal", { skip: process.platform === "win32" || !python }, () => {
+  const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-tty-"));
+  const fakeBin = join(cwd, "fake-bin");
+  mkdirSync(fakeBin);
+  writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
+  writeFileSync(join(fakeBin, "npx"), `#!/bin/sh\necho "$*" >> '${join(cwd, "npx.log")}'\n`, { mode: 0o755 });
+  // Outside a clone, so the shim takes the npx path.
+  writeFileSync(join(cwd, "install.sh"), shellShim);
+  const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
+  // Under a pseudo-terminal, the way a person runs it.
+  const run = (args) => {
+    rmSync(join(cwd, "npx.log"), { force: true });
+    const out = spawnSync(python, ["-c", "import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)", "bash", join(cwd, "install.sh"), ...args], {
+      cwd, input: "", encoding: "utf8", env: { HOME: cwd, PATH: `${fakeBin}:/usr/bin:/bin`, TERM: "xterm" },
+    });
+    return { ...out, npx: readFileSync(join(cwd, "npx.log"), "utf8") };
+  };
+  assert.match(run([]).npx, new RegExp(`^-y @caveman-ai/cli@${cli.replaceAll(".", "\\.")} setup$`, "m"), "a terminal starts the first run");
+  const quiet = run(["--non-interactive"]);
+  assert.equal(quiet.status, 0, quiet.stdout);
+  assert.doesNotMatch(quiet.npx, /setup/);
+  assert.match(quiet.stdout, new RegExp(`Next: npx -y @caveman-ai/cli@${cli.replaceAll(".", "\\.")} setup`));
 });
 
 // The skills installer runs on Node 18, the CLI needs 22.13: on a Node in

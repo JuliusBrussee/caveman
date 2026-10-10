@@ -45,13 +45,13 @@ caveman: Node.js (>=18) required. Install:
   - winget install OpenJS.NodeJS.LTS
   - or download from https://nodejs.org
 "@
-    exit 1
+    $global:LASTEXITCODE = 1; return
   }
 
   $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
   if ($nodeMajor -lt 18) {
     Write-Error "caveman: Node $nodeMajor too old. Need Node >=18. Upgrade: https://nodejs.org"
-    exit 1
+    $global:LASTEXITCODE = 1; return
   }
 
   # If we're inside the repo clone, run the local installer directly.
@@ -72,7 +72,7 @@ caveman: Node.js (>=18) required. Install:
     $npx = Get-Command npx -ErrorAction SilentlyContinue
     if (-not $npx) {
       Write-Error "caveman: npx required (ships with Node >=18). Reinstall Node.js."
-      exit 1
+      $global:LASTEXITCODE = 1; return
     }
 
     # Do NOT pass `--` here — npm 7+ npx already forwards trailing args to the
@@ -95,11 +95,11 @@ caveman: Node.js (>=18) required. Install:
       & npx -y "github:$Repo#$PinnedRef" @InstallerArgs
     }
   }
-  if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+  if ($LASTEXITCODE -ne 0) { return }
 
   # End in the CLI's first run: modules, agents, one Continue.
   $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
-  if ($skip.Count -gt 0) { exit 0 }
+  if ($skip.Count -gt 0) { return }
   # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
   # A prerelease Node ("25.0.0-nightly…") is not a [version] until its suffix goes.
   $nodeVersion = [version](([string](& node -p "process.versions.node")) -replace '[-+].*$', '')
@@ -107,17 +107,27 @@ caveman: Node.js (>=18) required. Install:
     Write-Host ""
     Write-Host "caveman: skills installed. The runtime (smaller inputs, Auto routing) needs Node 22.13+; this is v$nodeVersion."
     Write-Host "  Upgrade Node (winget install OpenJS.NodeJS.LTS), then run: npx -y @caveman-ai/cli@$CliVersion"
-    exit 0
+    return
   }
-  $setup = if (Get-Command caveman -ErrorAction SilentlyContinue) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup") }
-  if ([Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
+  # The caveman on PATH only when it is this release: an older CLI has an
+  # older setup. npx runs this one, and its setup installs it for good.
+  $onPath = $null
+  if (Get-Command caveman -ErrorAction SilentlyContinue) {
+    try { $onPath = ((& caveman --version 2>$null) -join "`n" | ConvertFrom-Json).version } catch { }
+  }
+  $setup = if ($onPath -eq $CliVersion) { @("caveman", "setup") } else { @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup") }
+  # --non-interactive never prompts: name the first run instead of starting it.
+  if ($InstallerArgs -notcontains "--non-interactive" -and [Environment]::UserInteractive -and -not [Console]::IsInputRedirected -and -not [Console]::IsOutputRedirected) {
     & $setup[0] $setup[1..($setup.Length - 1)]
-    exit $LASTEXITCODE
+    return
   }
   Write-Host "Next: $($setup -join ' ')"
-  exit 0
+  $global:LASTEXITCODE = 0
 }
 
 # $args is the automatic variable: populated when run as a file
 # (`pwsh install.ps1 --force`), empty under `irm | iex`.
 Install-Caveman -InstallerArgs $args
+# Under `irm | iex` this runs in the user's own session, where `exit` would
+# close their window over the output above; only a script file exits.
+if ($PSCommandPath) { exit $LASTEXITCODE }
