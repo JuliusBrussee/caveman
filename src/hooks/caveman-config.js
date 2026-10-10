@@ -839,6 +839,7 @@ function rulesetBanner(mode) {
 
 module.exports = {
   getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
+  parseConfigFile,
   canonicalMode,
   safeWriteFlag, safeDeleteFlag, readFlag, appendFlag, readHistory,
   recordModeChange, MODE_LOG_BASENAME,

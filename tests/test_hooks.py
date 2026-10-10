@@ -211,6 +211,30 @@ class HookScriptTests(unittest.TestCase):
                 self.assertNotIn("STATUSLINE REPAIR NEEDED", result.stdout, command)
                 self.assertNotIn("STATUSLINE SETUP NEEDED", result.stdout, command)
 
+    def test_activate_reads_a_commented_settings_json(self):
+        # settings.json may hold comments and trailing commas. A statusLine that
+        # is only commented out is not configured, and a live one whose script
+        # is gone still needs the repair offer.
+        gone = "/nonexistent/caveman/hooks/caveman-statusline.sh"
+        for settings, marker in (
+            '{\n  // "statusLine": {"type": "command", "command": "bash /tmp/old.sh"},\n  "theme": "dark",\n}\n',
+            False,
+        ), (
+            '{\n  /* badge */\n  "statusLine": {"type": "command", "command": "bash \\"' + gone + '\\""},\n}\n',
+            True,
+        ):
+            with tempfile.TemporaryDirectory(prefix="caveman-hooks-jsonc-") as tmp:
+                home = Path(tmp)
+                claude_dir = home / ".claude"
+                claude_dir.mkdir(parents=True)
+                if marker:
+                    (claude_dir / ".caveman-nudge-shown").write_text("1", encoding="utf-8")
+                (claude_dir / "settings.json").write_text(settings, encoding="utf-8")
+
+                result = self.run_cmd(["node", "src/hooks/caveman-activate.js"], home)
+
+                self.assertIn("STATUSLINE SETUP NEEDED", result.stdout, settings)
+
     # --- #1147: the statusline nudge must not pin a versioned plugin-cache path ---
     #
     # A plugin install runs the hook out of
