@@ -1,3 +1,4 @@
+// packages/pi-extension bundles this file as its own: keep it to node: builtins.
 import { existsSync, readFileSync, statSync } from "node:fs";
 import { dirname, extname, isAbsolute, join, resolve } from "node:path";
 
