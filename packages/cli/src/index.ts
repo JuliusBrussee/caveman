@@ -13125,10 +13125,24 @@ function nativeMcpRegistered(agent: "claude" | "codex"): boolean {
 // caveman-mcp`. The returned argv is what gets written into each agent's MCP config.
 function resolveMcpCommand(): { command: string; args: string[] } {
   const bin = cavemanBin("caveman-mcp", "CAVEMAN_MCP_BIN");
-  if (bin !== "caveman-mcp" || which(bin)) return { command: bin, args: [] };
+  if (bin !== "caveman-mcp" || which(bin)) return mcpServerLaunch(bin, []);
   const npx = which("npx");
-  if (npx) return { command: npx, args: ["-y", "caveman-mcp"] };
+  if (npx) return mcpServerLaunch(npx, ["-y", "caveman-mcp"]);
   return { command: "caveman-mcp", args: [] };
+}
+
+// On Windows, `npx` and an npm-installed caveman-mcp are .cmd shims. Write what
+// the shim runs (node.exe + its script, or its .exe) into the agent's config:
+// every host can start an .exe, while starting a .cmd depends on how the host
+// spawns (Node refuses one without a shell since CVE-2024-27980, and Claude Code
+// documents no Windows form for it). A shim we cannot read is written as before.
+export function mcpServerLaunch(
+  command: string,
+  args: string[],
+  platform: NodeJS.Platform = process.platform,
+  env: NodeJS.ProcessEnv = process.env,
+): { command: string; args: string[] } {
+  try { return portableInvocation(command, args, platform, env); } catch { return { command, args }; }
 }
 
 function resolveCloudMcpCommand(): { command: string; args: string[] } {
