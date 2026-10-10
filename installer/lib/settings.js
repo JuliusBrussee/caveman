@@ -124,6 +124,9 @@ function readSettings(p, meta) {
 // ── writeSettings ──────────────────────────────────────────────────────────
 // Atomic write: temp file + rename. mode 0600 (settings often contains tokens).
 function writeSettings(p, obj) {
+  // A linked settings file (a dotfiles repo) is written at its target, or the
+  // rename would replace the link with a copy.
+  try { if (fs.lstatSync(p).isSymbolicLink()) p = fs.realpathSync(p); } catch (_) { /* new file */ }
   const dir = path.dirname(p);
   fs.mkdirSync(dir, { recursive: true });
   const tmp = path.join(dir, `.${path.basename(p)}.${process.pid}.${crypto.randomBytes(4).toString('hex')}.tmp`);

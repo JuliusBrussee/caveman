@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer as createHttpServer } from "node:http";
-import { existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createServer } from "node:net";
 import { dirname, join } from "node:path";
@@ -2163,4 +2163,29 @@ test("logout clears a saved choice of Auto made in a session-only caveman claude
   writeFileSync(settingsPath, '// mine\n{"model":"opus"}\n');
   assert.equal((await syncAuto(fx.env)).code, 0);
   assert.equal(readFileSync(settingsPath, "utf8"), '// mine\n{"model":"opus"}\n', "any other choice is left alone");
+});
+
+// A config kept in a dotfiles repo stays a link, and a 0644 file stays 0644.
+test("a linked or 0644 agent config keeps its link and mode through enable and disable", async () => {
+  const fx = fixture();
+  const dotfiles = join(fx.home, "dotfiles");
+  mkdirSync(dotfiles);
+  const target = join(dotfiles, "config.toml");
+  writeFileSync(target, 'model = "gpt-5.5"\n');
+  const link = join(fx.home, ".codex", "config.toml");
+  mkdirSync(dirname(link), { recursive: true });
+  symlinkSync(target, link);
+  const hooks = join(fx.home, ".codex", "hooks.json");
+  writeFileSync(hooks, "{}\n");
+  chmodSync(hooks, 0o644);
+  const enabled = await run(["enable", "codex"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  assert.ok(lstatSync(link).isSymbolicLink(), "enable replaced the link with a copy");
+  assert.match(readFileSync(target, "utf8"), /caveman:native-root/);
+  assert.equal(statSync(hooks).mode & 0o777, 0o644);
+  const disabled = await run(["disable", "codex"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.ok(lstatSync(link).isSymbolicLink(), "disable replaced the link with a copy");
+  assert.equal(readFileSync(target, "utf8"), 'model = "gpt-5.5"\n');
+  assert.equal(statSync(hooks).mode & 0o777, 0o644);
 });

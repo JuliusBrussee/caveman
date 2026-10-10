@@ -7990,6 +7990,10 @@ function bytesHash(bytes: Buffer): string {
 }
 
 function atomicWriteFile(path: string, bytes: Buffer, mode = 0o600): void {
+  // A linked config (a dotfiles repo) is written at its target, or the rename
+  // would replace the link with a copy. An existing file keeps its permissions.
+  path = throughLink(path);
+  try { mode = statSync(path).mode & 0o777; } catch { /* new file */ }
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const temp = join(dirname(path), `.${basename(path)}.caveman-${process.pid}-${randomUUID()}.tmp`);
   try {
