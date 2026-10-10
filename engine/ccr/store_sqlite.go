@@ -198,7 +198,12 @@ func openWithBudgetHooks(path string, maxBytes int64, afterPrepare, afterOpen fu
 	db.SetMaxIdleConns(1)
 	walJournal := false
 	if canonicalPath != ":memory:" {
-		if err := persistSQLiteWAL(db); err != nil {
+		// This first connection runs the DSN pragmas, busy_timeout first (the
+		// driver always applies it before the rest). Switching a fresh file to
+		// WAL still returns SQLITE_BUSY without waiting when another process is
+		// mid-switch — SQLite skips the busy handler where waiting could
+		// deadlock — so a fan-out of fresh processes lost opens. Retry it.
+		if err := RetryOnBusy(func() error { return persistSQLiteWAL(db) }); err != nil {
 			closeSQLiteAfterOpenFailure(db, canonicalPath)
 			return nil, fmt.Errorf("configure sqlite journal: %w", err)
 		}
