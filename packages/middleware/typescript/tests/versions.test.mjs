@@ -8,7 +8,7 @@ import { runtimeFixture } from './runtime-fixture.mjs';
 import { execFile } from 'node:child_process';
 import { cp, mkdir, mkdtemp, readdir, readFile, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { MIDDLEWARE_VERSION } from '../dist/common.js';
@@ -105,7 +105,8 @@ test('a missing or unparseable version is never in range', () => {
 test('TS-2: in an npm workspace the version gate reads the copy the adapter uses, whatever the working directory', async t => {
   if (!requirePeers(t, 'ai-sdk') || !requirePeers(t, 'openai')) return;
   const root = await mkdtemp(join(tmpdir(), 'caveman-workspace-')), here = fileURLToPath(new URL('../', import.meta.url));
-  const packageDir = url => { let directory = dirname(fileURLToPath(url)); while (!(directory.endsWith('/ai') || directory.endsWith('/openai'))) directory = dirname(directory); return directory; };
+  // basename, not endsWith('/ai'): Windows paths use backslashes, and the old test spun forever at C:\ (engine-ci windows timeout).
+  const packageDir = url => { let directory = dirname(fileURLToPath(url)); while (!['ai', 'openai'].includes(basename(directory)) && dirname(directory) !== directory) directory = dirname(directory); return directory; };
   const write = async (path, text) => { await mkdir(dirname(join(root, path)), { recursive: true }); await writeFile(join(root, path), text); };
   await write('package.json', JSON.stringify({ private: true, workspaces: ['apps/*'] }));
   await write('apps/web/package.json', JSON.stringify({ name: 'web', private: true, type: 'module' }));
