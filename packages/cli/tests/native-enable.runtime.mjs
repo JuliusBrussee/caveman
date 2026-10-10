@@ -299,22 +299,23 @@ test("codex rewriting config.toml around Caveman's tables keeps doctor and disab
   assert.match(after, /^\[\[skills\.config\]\]\npath = "\/x\/SKILL\.md"\nenabled = false$/m);
 });
 
-// Enable takes the user's own root model_provider out to route through
-// Caveman. Disable has to put it back even after Codex saved something else
-// in the file (a /model choice, a trusted folder), or Codex silently falls
-// back to OpenAI instead of their Azure/Ollama provider.
+// Enable takes the root model_provider line out to route through Caveman.
+// Disable has to put it back even after Codex saved something else in the file
+// (a /model choice, a trusted folder). Enable now leaves a provider of the
+// user's own (Azure, Ollama) alone, but installs from earlier CLIs replaced it,
+// and disable restores through the same backup either way.
 test("disable codex restores the user's own model_provider after Codex edited config.toml", async () => {
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
   const configPath = join(fx.home, ".codex", "config.toml");
-  writeFileSync(configPath, 'model = "gpt-5.5"\nmodel_provider = "azure"  # use corp azure\n\n[model_providers.azure]\nname = "Azure"\n');
+  writeFileSync(configPath, 'model = "gpt-5.5"\nmodel_provider = "openai"  # pinned on purpose\n');
   assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
-  assert.doesNotMatch(readFileSync(configPath, "utf8"), /"azure"/);
+  assert.doesNotMatch(readFileSync(configPath, "utf8"), /"openai"/);
   writeFileSync(configPath, readFileSync(configPath, "utf8").replace('model = "gpt-5.5"', 'model = "gpt-5.6"'));
   const disabled = await run(["disable", "codex"], fx.env);
   assert.equal(disabled.code, 0, disabled.stderr);
   const after = readFileSync(configPath, "utf8");
-  assert.match(after, /^model_provider = "azure"  # use corp azure$/m);
+  assert.match(after, /^model_provider = "openai"  # pinned on purpose$/m);
   assert.match(after, /^model = "gpt-5\.6"$/m);
   assert.doesNotMatch(after, /caveman/);
 });
