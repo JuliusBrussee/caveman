@@ -5427,13 +5427,8 @@ export function formatSessionSavings(
         `your agent never reached the compression layer this session — routing may not have applied; run \`caveman doctor ${doctorTarget}\``,
       ];
     }
-    if (cut <= 0) {
-      // Compression ran but the net cut was zero — a broken or ineffective setup,
-      // not a byte-safe win. Point at the doctor instead of claiming success.
-      return [
-        `compression ran on ${eligible} request${eligible === 1 ? "" : "s"} this session but saved nothing — run \`caveman doctor ${doctorTarget}\` to check the setup`,
-      ];
-    }
+    // Eligible counts candidates, not wins: requests that reached the layer with
+    // nothing to cut are a healthy, byte-safe session (emptyLine below).
   }
 
   if (spans <= 0 || tokensIn <= 0) return [emptyLine];
