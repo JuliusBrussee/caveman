@@ -2954,6 +2954,46 @@ function installProgressComplete(
   if (interactive()) process.stderr.write(`\r${line}\n`);
   else console.error(line);
 }
+// Puts a verified download in place of an installed binary. Windows refuses
+// to replace an .exe that is running (the runtime, or caveman-mcp under an
+// open agent session) but lets it be renamed, so there the running copy moves
+// aside and keeps running until removeAsideBinaries deletes it on a later
+// install. `os` and `rename` are for tests.
+export function replaceBinary(part: string, target: string, os: string = process.platform, rename: (from: string, to: string) => void = renameSync): void {
+  try {
+    rename(part, target);
+    return;
+  } catch (error) {
+    if (os !== "win32" || !existsSync(target) || !["EPERM", "EACCES", "EBUSY"].includes((error as NodeJS.ErrnoException).code ?? "")) throw error;
+  }
+  const aside = `${target}.old-${process.pid}-${Date.now()}`;
+  try {
+    rename(target, aside);
+  } catch {
+    throw new Error(`${basename(target)} is in use and could not be replaced — run \`caveman stop\`, close agent sessions that use Caveman, then try again`);
+  }
+  try {
+    rename(part, target);
+  } catch (error) {
+    try { rename(aside, target); } catch { /* the next install downloads it again */ }
+    throw error;
+  }
+}
+
+export function removeAsideBinaries(binDir: string): void {
+  let names: string[];
+  try {
+    names = readdirSync(binDir);
+  } catch {
+    return;
+  }
+  for (const name of names) {
+    if (!/\.old-\d+-\d+$/.test(name)) continue;
+    // Still running: Windows refuses, and a later install tries again.
+    try { unlinkSync(join(binDir, name)); } catch { /* still in use */ }
+  }
+}
+
 
 function setupInstallFailure(error: unknown, timeoutSeconds: number): never {
   if (interactive()) process.stderr.write("\n");
@@ -3015,6 +3055,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
     setupInstallFailure(error, timeoutSeconds);
   }
 
+  removeAsideBinaries(binDir);
   if (!verifyChecksumSignature(checksumsRaw!, signatureRaw!)) {
     throw new Error("signature check failed for checksums.txt — refusing to install; partial download deleted");
   }
@@ -3057,7 +3098,13 @@ async function setupInstall(json: boolean, options: { continuing?: boolean } = {
       throw new Error(`signature check failed for ${artifact} — refusing to install; partial download deleted`);
     }
     await chmod(partial, 0o755);
-    await rename(partial, target);
+    try {
+      replaceBinary(partial, target);
+    } catch (error) {
+      cleanupPartial(partial);
+      if (interactive()) process.stderr.write("\n");
+      throw error;
+    }
     installProgressComplete(name, platform, result!.bytes);
     installed.push({ name, path: target, sha256: expected, status: "installed" });
   }
