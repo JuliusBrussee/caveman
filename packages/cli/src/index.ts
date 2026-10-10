@@ -600,6 +600,7 @@ setModuleHost({
   resolveBinary: (name) => resolveGoBin(name, GO_BINARIES.find((binary) => binary.name === name)?.env ?? ""),
   installBinaries: async (modules, downloading) => {
     installDownloading = downloading;
+    installNotes = [];
     // Hub binaries an older release installed are replaced together, with
     // their manifest, by the full signed install; the index adds the rest.
     const behind = binariesBehindPin().length > 0;
@@ -613,12 +614,13 @@ setModuleHost({
       // release does not carry it.
       if (error instanceof NoModuleIndexError) {
         if (!behind && modules.some((id) => findModule(id)?.binaries.length)) await setupInstall(false, { continuing: true });
-        return;
+        return installNotes;
       }
       throw error;
     } finally {
       installDownloading = undefined;
     }
+    return installNotes;
   },
   lockedBinaries: (module) => Object.keys(readLock().modules[module]?.binaries ?? {}),
   staleBinaries: () => [...new Set([
@@ -3129,8 +3131,11 @@ export function removeAsideBinaries(binDir: string): void {
 }
 
 // Set while onboarding installs: it draws its own one-line progress, so the
-// per-binary lines below stay quiet and each download is reported to it.
+// per-binary lines below stay quiet and each download is reported to it. What
+// the install would have warned meanwhile goes to installNotes, which
+// onboarding shows with its steps.
 let installDownloading: ((name: string) => void) | undefined;
+let installNotes: string[] = [];
 
 function installProgressStart(name: string, platform: { os: string; arch: string }) {
   if (installDownloading) return installDownloading(name);
@@ -3206,7 +3211,7 @@ async function setupInstall(json: boolean, options: { continuing?: boolean; expl
     // A holder that just released it is tried again.
     if (token === undefined) return setupInstallLocked(json, options);
     if (Date.now() >= deadline) throw new Error("another Caveman is still installing the runtime — try again once it finishes");
-    if (!told) process.stderr.write(dim("→ another Caveman is installing the runtime; waiting for it\n"));
+    if (!told && !installDownloading) process.stderr.write(dim("→ another Caveman is installing the runtime; waiting for it\n"));
     told = true;
   }
 }
@@ -3320,13 +3325,14 @@ async function restartOutdatedRuntime(explicit = false): Promise<void> {
   const runtime = readProxyRuntimeState(port, installed);
   if (!runtime.pid || !runtime.version || !installed || runtime.version === installed.version) return;
   const stillOld = `caveman-proxy ${runtime.version} still runs on ${host}:${port} — run \`caveman stop\`, then start your agent again to use ${installed.version}`;
+  const warn = () => installDownloading ? installNotes.push(stillOld) : process.stderr.write(`${mark("warn")} ${stillOld}\n`);
   if (runtime.owner !== "wrap" || (!explicit && runtimeInUse(port))) {
-    process.stderr.write(`${mark("warn")} ${stillOld}\n`);
+    warn();
     return;
   }
   const token = proxyShutdownToken(port, runtime.instance_token);
   if ((await endRuntimes([{ host, port, listening: true, foreign: false, pid: runtime.pid, ...(token ? { token } : {}) }])).length) {
-    process.stderr.write(`${mark("warn")} ${stillOld}\n`);
+    warn();
     return;
   }
   const opts = defaultWrapOptions();

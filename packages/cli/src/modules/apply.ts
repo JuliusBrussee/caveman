@@ -45,8 +45,8 @@ export type ModuleHost = {
   binaryRelease: string;
   resolveBinary(name: string): string | null;
   // `downloading` is told each binary as its download starts; with it the
-  // install prints nothing itself.
-  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<void>;
+  // install prints nothing itself and returns what it would have warned.
+  installBinaries(modules: ModuleId[], downloading?: (name: string) => void): Promise<string[]>;
   // Binaries the hub installed for a module, from modules.lock.json.
   lockedBinaries(module: ModuleId): string[];
   staleBinaries(): string[];
@@ -472,7 +472,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const needs = binaryNeeds(plan.selection, plan.only);
   if (needs.missing.length) {
     try {
-      await h.installBinaries(needs.modules, opts.downloading);
+      for (const note of await h.installBinaries(needs.modules, opts.downloading)) say(`○ ${note}`);
       // A release from before modules.json brings no external binary.
       const still = binaryNeeds(plan.selection, plan.only).missing;
       const got = needs.missing.filter((name) => !still.includes(name));
