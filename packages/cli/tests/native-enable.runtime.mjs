@@ -269,6 +269,25 @@ test("enable codex twice re-parses its own block instead of calling it corrupted
   assert.equal(second, first, "a second enable is byte-idempotent");
 });
 
+// PowerShell 5.1 and older Notepad save UTF-8 with a BOM. Codex accepts one at
+// the start of config.toml, but not in the middle, where prepending Caveman's
+// root block used to leave it: Codex then refused to start at all.
+test("enable and disable codex keep a UTF-8 BOM at the start of config.toml", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".codex"), { recursive: true });
+  const configPath = join(fx.home, ".codex", "config.toml");
+  writeFileSync(configPath, '\uFEFFmodel = "gpt-5.5"\r\n\r\n[mcp_servers.github]\r\ncommand = "npx"\r\n');
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const installed = readFileSync(configPath, "utf8");
+  assert.ok(installed.startsWith("\uFEFF# >>> caveman:native-root\n"), JSON.stringify(installed.slice(0, 40)));
+  assert.equal(installed.indexOf("\uFEFF", 1), -1, "no BOM after offset 0");
+  writeFileSync(configPath, `${installed}# later\n`);
+  assert.equal((await run(["disable", "codex"], fx.env)).code, 0);
+  const after = readFileSync(configPath, "utf8");
+  assert.ok(after.startsWith('\uFEFFmodel = "gpt-5.5"'), JSON.stringify(after.slice(0, 40)));
+  assert.equal(after.indexOf("\uFEFF", 1), -1, "no BOM after offset 0");
+});
+
 // Codex never reads OPENAI_API_KEY while auth.json holds a ChatGPT login: its
 // stored auth_mode (or a key saved in auth.json) decides. A key exported in the
 // shell must not wire the api-key route, nor flip doctor from shell to shell.

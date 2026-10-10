@@ -7786,7 +7786,8 @@ function buildCodexEphemeralHome(
 
   let sourceConfig = "";
   try {
-    sourceConfig = readFileSync(join(sourceHome, "config.toml"), "utf8");
+    // A BOM is valid only at offset 0; the provider root key goes in front.
+    sourceConfig = readFileSync(join(sourceHome, "config.toml"), "utf8").replace(/^\uFEFF/, "");
   } catch {
     sourceConfig = "";
   }
@@ -8934,8 +8935,10 @@ function codexNativeConfig(source: string, gw: string, subscription: boolean, mc
   // running them first ate "# <<< caveman:native-tables" and the block this
   // function had itself written failed its own re-parse as "corrupted" on the
   // next wrap (every `caveman codex` run fell back to session-only wrap and
-  // doctor reported drift).
-  let stripped = source;
+  // doctor reported drift). A UTF-8 BOM stays in front of the whole file, the
+  // only place Codex accepts one.
+  const bom = source.startsWith("\uFEFF") ? "\uFEFF" : "";
+  let stripped = source.slice(bom.length);
   for (const [begin, end] of [[CODEX_NATIVE_ROOT_BEGIN, CODEX_NATIVE_ROOT_END], [CODEX_NATIVE_TABLES_BEGIN, CODEX_NATIVE_TABLES_END]] as const) {
     const start = stripped.indexOf(begin);
     const finish = stripped.indexOf(end);
@@ -8955,7 +8958,7 @@ function codexNativeConfig(source: string, gw: string, subscription: boolean, mc
     CODEX_NATIVE_TABLES_END,
   ].join("\n");
   const middle = stripped ? `\n\n${stripped}` : "";
-  return { text: `${rootBlock}${middle}\n\n${tablesBlock}\n`, rootBlock, tablesBlock };
+  return { text: `${bom}${rootBlock}${middle}\n\n${tablesBlock}\n`, rootBlock, tablesBlock };
 }
 
 function codexNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
