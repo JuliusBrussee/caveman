@@ -47,11 +47,16 @@ function harness(t, hook = async (event, payload) => event === "SessionStart" ? 
   const host = {
     async setModel(model) { selected = model; return true; },
   };
-  // `extra.agent` is OMP's ctx.agent (absent on older OMP and on Pi);
-  // `extra.getHeader` is the session manager's header accessor.
+  // `extra.agent` is OMP's ctx.agent (absent on older OMP and on Pi); `getSessionFile`
+  // and `getHeader` are the session manager's accessors; `model` overrides the shared
+  // selection; `notify` receives ctx.ui notices.
   const context = (id, extra = {}) => ({
-    get model() { return selected; }, hasUI: true, ui: { notify() {} },
-    sessionManager: { getSessionId: () => id, ...(extra.getHeader && { getHeader: extra.getHeader }) },
+    get model() { return extra.model ?? selected; }, hasUI: true, ui: { notify: extra.notify ?? (() => {}) },
+    sessionManager: {
+      getSessionId: () => id,
+      ...(extra.getSessionFile && { getSessionFile: extra.getSessionFile }),
+      ...(extra.getHeader && { getHeader: extra.getHeader }),
+    },
     ...(extra.agent && { agent: extra.agent }),
     modelRegistry: { isUsingOAuth: () => false, getApiKeyAndHeaders: async () => ({ ok: true, headers: {} }) },
   });
@@ -173,20 +178,29 @@ test("compression delegates eligibility to the native runtime for every non-reco
   assert.ok(seenEvents.includes("PostToolUse") && seenEvents.includes("PostToolUseFailure"), "isError must select PostToolUseFailure, not PostToolUse");
 });
 
-// OMP's ctx.agent for a subagent. A session file's first line is its header.
+// OMP's ctx.agent for a subagent. OMP names a top-level session file
+// `<timestamp>_<session id>.jsonl` and writes every session it spawns to
+// `<that file minus .jsonl>/<agentId>.jsonl`; a session file's first line is its header.
 const SUBAGENT = { kind: "sub", id: "0-Explore", name: "explore", depth: 1 };
-const sessionFile = (path, header) => {
+const stem = (id) => `2026-10-11T12-00-00-000Z_${id}`;
+const writeSession = (path, header = { type: "session" }) => {
   mkdirSync(dirname(path), { recursive: true });
-  writeFileSync(path, `${JSON.stringify({ type: "session", ...header })}\n{"type":"message"}\n`);
+  writeFileSync(path, `${JSON.stringify(header)}\n{"type":"message"}\n`);
   return path;
 };
-const subagentContext = (h, id, header) => h.context(id, { agent: SUBAGENT, getHeader: header && (() => header) });
+// The top-level session file and a spawned session's file under it.
+const layout = (h, id = "root-id", agent = "0-Explore") => ({
+  main: join(h.root, "sessions", `${stem(id)}.jsonl`),
+  child: join(h.root, "sessions", stem(id), `${agent}.jsonl`),
+});
+const subagentContext = (h, id, file, extra = {}) => h.context(id, { agent: SUBAGENT, getSessionFile: () => file, ...extra });
 
-test("a subagent runs under its parent's session id with agent fields, never opens or ends a session, and still routes through the live proxy", async (t) => {
+test("a subagent runs under the main session's id with agent fields, never opens or ends a session, and still routes through the live proxy", async (t) => {
   // The CLI prints nothing for SubagentStart; an empty response is not "runtime unreachable".
-  const h = harness(t, async (event) => event === "SubagentStart" ? undefined : event === "PostCompact" ? { context: "RECOMPACTED" } : {});
-  const parent = sessionFile(join(h.root, "parent.jsonl"), { id: "parent-id" });
-  const ctx = subagentContext(h, "child-id", { parentSession: parent });
+  const h = harness(t, async (event) => event === "SubagentStart" ? undefined : {});
+  const { main, child } = layout(h);
+  writeSession(main, { type: "session", id: "root-id" });
+  const ctx = subagentContext(h, "child-id", child);
   await h.runtime.start(ctx);
   assert.equal(h.selected().baseUrl, "http://127.0.0.1:8787/w/pi/openai/v1", "a live run-state must open the gate for a subagent");
   assert.equal(await h.runtime.beforeAgentStart("hello", ctx), undefined, "Core is not injected into a subagent");
@@ -194,17 +208,12 @@ test("a subagent runs under its parent's session id with agent fields, never ope
   await h.runtime.toolCall({ toolName: "read", input: {} });
   await h.runtime.toolResult({ toolName: "read", input: {}, content: [{ type: "text", text: "out" }], isError: false });
   await h.runtime.turnEnd();
-  await h.runtime.beforeCompact();
-  await h.runtime.compact();
-  assert.equal(await h.runtime.beforeAgentStart("again", ctx), undefined, "PostCompact context must not install Core into a subagent");
   await h.runtime.shutdown();
-  assert.deepEqual(h.calls.map(({ event }) => event), [
-    "SubagentStart", "ModelBefore", "PreToolUse", "PostToolUse", "ModelAfter", "PreCompact", "PostCompact", "SubagentStop",
-  ]);
+  assert.deepEqual(h.calls.map(({ event }) => event), ["SubagentStart", "ModelBefore", "PreToolUse", "PostToolUse", "ModelAfter", "SubagentStop"]);
   for (const { event, payload } of h.calls) {
     assert.deepEqual(
       { session_id: payload.session_id, agent_id: payload.agent_id, agent_type: payload.agent_type },
-      { session_id: "parent-id", agent_id: "0-Explore", agent_type: "explore" },
+      { session_id: "root-id", agent_id: "0-Explore", agent_type: "explore" },
       event,
     );
   }
@@ -222,14 +231,36 @@ test("a subagent receives only the context SubagentStart returns, plus tool nudg
   assert.deepEqual(await h.runtime.beforeAgentStart("again", ctx), ["SUBAGENT_CONTEXT", "NUDGE"]);
 });
 
+test("a subagent sends neither PreCompact nor PostCompact, and its compaction never installs Core", async (t) => {
+  // The runtime keys compaction state by session id; under the main session's id a
+  // subagent's compaction would demote the main session's evidence.
+  const h = harness(t, async (event) => event === "PostCompact" ? { context: "RECOMPACTED" } : {});
+  const ctx = subagentContext(h, "child-id");
+  await h.runtime.start(ctx);
+  await h.runtime.beforeCompact();
+  await h.runtime.compact();
+  assert.equal(await h.runtime.beforeAgentStart("hello", ctx), undefined);
+  assert.deepEqual(h.calls.map(({ event }) => event), ["SubagentStart"]);
+  // A main session still reports compaction and takes the context PostCompact returns.
+  await h.runtime.shutdown();
+  h.calls.length = 0;
+  const main = h.context("main-id");
+  await h.runtime.start(main);
+  await h.runtime.beforeCompact();
+  await h.runtime.compact();
+  assert.deepEqual(h.calls.map(({ event }) => event), ["SessionStart", "PreCompact", "PostCompact"]);
+  assert.deepEqual(await h.runtime.beforeAgentStart("hello", main), ["RECOMPACTED"]);
+});
+
 test("a main session, with or without ctx.agent, keeps the full session lifecycle and sends no agent fields", async (t) => {
   const h = harness(t);
   // A forked main session names its source in parentSession; that is not a subagent parent.
-  const source = sessionFile(join(h.root, "source.jsonl"), { id: "source-id" });
-  const getHeader = () => ({ parentSession: source });
+  const { main } = layout(h, "main-id");
+  writeSession(main, { type: "session", id: "main-id" });
+  const getHeader = () => ({ parentSession: "source-id" });
   for (const agent of [undefined, { kind: "main", id: "0-Main", name: "main", depth: 0 }]) {
     h.calls.length = 0;
-    const ctx = h.context("main-id", { agent, getHeader });
+    const ctx = h.context("main-id", { agent, getHeader, getSessionFile: () => main });
     await h.runtime.start(ctx);
     assert.deepEqual(await h.runtime.beforeAgentStart("hello", ctx), ["CORE_main-id"]);
     await h.runtime.turnEnd();
@@ -249,34 +280,127 @@ test("navigating away from a subagent ends it with SubagentStop, not SessionEnd"
   assert.deepEqual(h.calls.map(({ event }) => event), ["SubagentStart", "SubagentStop", "SessionStart"]);
 });
 
-test("a subagent whose parent id cannot be resolved falls back to its own session id", async (t) => {
+test("a /tan clone reports under its main session although its parentSession is a session id, not a path", async (t) => {
   const h = harness(t);
-  const noId = sessionFile(join(h.root, "no-id.jsonl"), {});
-  writeFileSync(join(h.root, "garbage.jsonl"), "not json\n");
-  const getHeaders = {
-    "no getHeader": undefined,
-    "null header": () => null,
-    "header without parentSession": () => ({}),
-    "parent file is missing": () => ({ parentSession: join(h.root, "gone.jsonl") }),
-    "parent file is not JSON": () => ({ parentSession: join(h.root, "garbage.jsonl") }),
-    "parent header has no id": () => ({ parentSession: noId }),
-    "getHeader throws": () => { throw new Error("session closed"); },
+  const { main, child: clone } = layout(h, "root-id", "Tan-1");
+  writeSession(main, { type: "session", id: "root-id" });
+  writeSession(clone, { type: "session", id: "tan-id", parentSession: "root-id" });
+  await h.runtime.start(h.context("tan-id", {
+    agent: { kind: "sub", id: "Tan-1", name: "sub", depth: 0 },
+    getSessionFile: () => clone,
+    getHeader: () => ({ parentSession: "root-id" }),
+  }));
+  assert.equal(h.calls[0].event, "SubagentStart");
+  assert.deepEqual(
+    { session_id: h.calls[0].payload.session_id, agent_id: h.calls[0].payload.agent_id, agent_type: h.calls[0].payload.agent_type },
+    { session_id: "root-id", agent_id: "Tan-1", agent_type: "sub" },
+  );
+});
+
+test("the main session's id comes from its header, else from its file name, however deep the subagent and whatever is on disk", async (t) => {
+  const h = harness(t);
+  // Each case builds its own sessions directory and returns [subagent file, expected session_id].
+  const cases = {
+    "the root header's id wins over its file name": (dir) => {
+      writeSession(join(dir, `${stem("file-id")}.jsonl`), { type: "session", id: "header-id" });
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "header-id"];
+    },
+    "two levels deep, never the intermediate subagent's id": (dir) => {
+      writeSession(join(dir, `${stem("file-id")}.jsonl`), { type: "session", id: "header-id" });
+      writeSession(join(dir, stem("file-id"), "0-Plan.jsonl"), { type: "session", id: "planner-id" });
+      return [join(dir, stem("file-id"), "0-Plan", "1-Explore.jsonl"), "header-id"];
+    },
+    "two levels deep with the intermediate and root files not yet on disk": (dir) =>
+      [join(dir, stem("file-id"), "0-Plan", "1-Explore.jsonl"), "file-id"],
+    "root file missing": (dir) => [join(dir, stem("file-id"), "0-Explore.jsonl"), "file-id"],
+    "root file is not JSON": (dir) => {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, `${stem("file-id")}.jsonl`), "not json\n");
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "file-id"];
+    },
+    "root header is not a session header": (dir) => {
+      writeSession(join(dir, `${stem("file-id")}.jsonl`), { type: "message", id: "header-id" });
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "file-id"];
+    },
+    "root header has no id": (dir) => {
+      writeSession(join(dir, `${stem("file-id")}.jsonl`), { type: "session" });
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "file-id"];
+    },
+    "root header line just under the 64 KiB read cap": (dir) => {
+      writeSession(join(dir, `${stem("file-id")}.jsonl`), { type: "session", id: "header-id", padding: "x".repeat(60 * 1024) });
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "header-id"];
+    },
+    "root header line over the 64 KiB read cap": (dir) => {
+      writeSession(join(dir, `${stem("file-id")}.jsonl`), { type: "session", id: "header-id", padding: "x".repeat(70 * 1024) });
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "file-id"];
+    },
+    "root path is a directory, not a file": (dir) => {
+      mkdirSync(join(dir, `${stem("file-id")}.jsonl`), { recursive: true });
+      return [join(dir, stem("file-id"), "0-Explore.jsonl"), "file-id"];
+    },
   };
-  for (const [name, getHeader] of Object.entries(getHeaders)) {
+  let n = 0;
+  for (const [name, build] of Object.entries(cases)) {
+    const [file, expected] = build(join(h.root, "sessions", String(n++)));
     await h.runtime.shutdown();
     h.calls.length = 0;
-    await h.runtime.start(h.context("child-id", { agent: SUBAGENT, getHeader }));
+    await h.runtime.start(h.context("own-id", { agent: SUBAGENT, getSessionFile: () => file }));
+    assert.equal(h.calls[0].event, "SubagentStart", name);
+    assert.equal(h.calls[0].payload.session_id, expected, name);
+  }
+});
+
+test("a subagent whose main session cannot be found by file layout keeps its own session id", async (t) => {
+  const h = harness(t);
+  const getSessionFiles = {
+    "no getSessionFile": undefined,
+    "in-memory session": () => undefined,
+    "getSessionFile throws": () => { throw new Error("session closed"); },
+    "a path outside OMP's layout": () => join(h.root, "elsewhere", "0-Explore.jsonl"),
+    "a relative path outside OMP's layout": () => "0-Explore.jsonl",
+  };
+  for (const [name, getSessionFile] of Object.entries(getSessionFiles)) {
+    await h.runtime.shutdown();
+    h.calls.length = 0;
+    await h.runtime.start(h.context("child-id", { agent: SUBAGENT, getSessionFile }));
     assert.equal(h.calls[0].event, "SubagentStart", name);
     assert.equal(h.calls[0].payload.session_id, "child-id", name);
   }
 });
 
-test("a nested subagent reports under the root session id, not its parent subagent's", async (t) => {
+test("a subagent prints no direct-mode notice and does not wait for a proxy that nothing is starting", async (t) => {
   const h = harness(t);
-  const main = sessionFile(join(h.root, "main.jsonl"), { id: "root-id" });
-  // OMP stores a subagent at <parent session minus .jsonl>/<agentId>.jsonl.
-  const planner = sessionFile(join(h.root, "main", "0-Plan.jsonl"), { id: "planner-id", parentSession: main });
-  await h.runtime.start(h.context("grandchild-id", { agent: { ...SUBAGENT, id: "1-Explore", depth: 2 }, getHeader: () => ({ parentSession: planner }) }));
-  assert.equal(h.calls[0].payload.session_id, "root-id");
-  assert.equal(h.calls[0].payload.agent_id, "1-Explore");
+  rmSync(join(h.root, "run", "8787.json"));
+  // Count the run-state retry sleeps, but do not wait them out.
+  const realSetTimeout = globalThis.setTimeout;
+  let retrySleeps = 0;
+  t.mock.method(globalThis, "setTimeout", (fn, ms, ...args) => {
+    if (ms === 300) { retrySleeps++; ms = 0; }
+    return realSetTimeout(fn, ms, ...args);
+  });
+  const notices = [];
+  const notify = (message) => notices.push(message);
+  // Control: a main session waits for the proxy its SessionStart may have just started, then says so.
+  await h.runtime.start(h.context("main-id", { notify }));
+  assert.deepEqual(notices.map((message) => message.match(/\(([^)]*)\)/)[1]), ["local proxy not running"]);
+  assert.equal(retrySleeps, 3);
+  notices.length = 0;
+  retrySleeps = 0;
+  await h.runtime.start(subagentContext(h, "child-id", undefined, { notify }));
+  assert.deepEqual(notices, []);
+  assert.equal(retrySleeps, 0, "SubagentStart starts no proxy, so a missing run-state is final");
+});
+
+test("a subagent prints no pass-through notice for a model the proxy cannot route", async (t) => {
+  const h = harness(t);
+  const foreign = { provider: "unlisted", id: "foreign", api: "openai-responses", baseUrl: "http://127.0.0.1:1" };
+  const notices = [];
+  const notify = (message) => notices.push(message);
+  // Control: the main session announces the pass-through once.
+  await h.runtime.start(h.context("main-id", { notify, model: foreign }));
+  assert.equal(notices.length, 1);
+  assert.match(notices[0], /pass-through for unlisted\/foreign/);
+  notices.length = 0;
+  await h.runtime.start(subagentContext(h, "child-id", undefined, { notify, model: foreign }));
+  assert.deepEqual(notices, []);
 });

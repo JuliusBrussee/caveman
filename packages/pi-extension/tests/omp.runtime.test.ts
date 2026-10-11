@@ -65,10 +65,10 @@ process.stdin.on("end", () => {
   const tools: RecoveryTool[] = [];
   const original = { provider: "openai", id: "test", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
   let selected = original;
-  // `sub` mimics what OMP gives a subagent session: ctx.agent plus a header naming the parent session file.
-  const ctx = (id: string, sub?: { agent: object; parentSession: string }) => ({
+  // `sub` mimics what OMP gives a subagent session: ctx.agent plus the session file it writes.
+  const ctx = (id: string, sub?: { agent: object; file: string }) => ({
     get model() { return selected; }, hasUI: true, ui: { notify() {} },
-    sessionManager: { getSessionId: () => id, ...(sub && { getHeader: () => ({ parentSession: sub.parentSession }) }) },
+    sessionManager: { getSessionId: () => id, ...(sub && { getSessionFile: () => sub.file }) },
     ...(sub && { agent: sub.agent }),
     modelRegistry: { isUsingOAuth: () => false, getApiKeyAndHeaders: async () => ({ ok: true, headers: {} }) },
   });
@@ -119,20 +119,24 @@ process.stdin.on("end", () => {
       "session_start", "session_switch", "session_tree", "session_branch",
     ]);
     // OMP rebinds the extension into every subagent session: a fresh instance whose
-    // context carries ctx.agent. It reports under the parent's session id.
-    const parentFile = join(root, "parent-session.jsonl");
-    writeFileSync(parentFile, `${JSON.stringify({ type: "session", id: "parent-main" })}\n`);
+    // context carries ctx.agent. It reports under the main session's id, which it finds
+    // from its own file: <timestamp>_<id>.jsonl for the main session, <stem>/<agentId>.jsonl below it.
+    const stem = "2026-10-11T12-00-00-000Z_parent-main";
+    mkdirSync(join(root, "sessions", stem), { recursive: true });
+    writeFileSync(join(root, "sessions", `${stem}.jsonl`), `${JSON.stringify({ type: "session", id: "parent-main" })}\n`);
     const subHandlers = new Map<string, Function>();
     factory({
       on(name: string, handler: Function) { subHandlers.set(name, handler); },
       registerTool() {},
       async setModel(value: typeof original) { selected = value; return true; },
     });
-    const sub = ctx("sub-own", { agent: { kind: "sub", id: "0-Explore", name: "explore", depth: 1 }, parentSession: parentFile });
+    const sub = ctx("sub-own", { agent: { kind: "sub", id: "0-Explore", name: "explore", depth: 1 }, file: join(root, "sessions", stem, "0-Explore.jsonl") });
     await subHandlers.get("session_start")!({ type: "session_start" }, sub);
     assert.equal(selected.baseUrl, `http://127.0.0.1:${port}/w/pi/openai/v1`, "a subagent routes through the live proxy like its parent");
     assert.equal(await subHandlers.get("before_agent_start")!({ prompt: "hello", systemPrompt: prefix }, sub), undefined, "no Core or prompt context reaches a subagent");
     await subHandlers.get("turn_end")!();
+    await subHandlers.get("session_before_compact")!();
+    await subHandlers.get("session_compact")!();
     await subHandlers.get("session_shutdown")!();
     assert.equal(selected.baseUrl, original.baseUrl);
     const subEvents = readFileSync(hookLog, "utf8").trim().split("\n").map((line) => JSON.parse(line)).slice(events.length);

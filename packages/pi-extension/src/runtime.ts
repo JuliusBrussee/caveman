@@ -1,9 +1,9 @@
 // Shared Caveman session runtime. Pi and OMP own event/schema registration in
 // their separate entries; the native hook protocol and recovery client are shared.
 
-import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
+import { closeSync, openSync, readFileSync, readSync, statSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
 import { publishedForwardHeadersOf, publishedUpstreamsOf } from "../../cli/src/provider-routing.ts";
 import type { RoutingContext, RoutingHost, RoutingModel } from "./provider.ts";
 import { HookBridge, promptDigest, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
@@ -77,11 +77,14 @@ async function proxyAliveOnce(gateway: string, instanceToken: string): Promise<b
 }
 
 // A proxy the SessionStart hook just autostarted may be a few hundred ms behind
-// the first probe; retry briefly before declaring the session direct.
-async function readLiveRunState(gateway: string): Promise<RunState | undefined> {
+// the first probe; retry briefly before declaring the session direct. SubagentStart
+// autostarts nothing, so for a subagent a missing run-state file is final: the
+// parent already ran the retry loop and warned.
+async function readLiveRunState(gateway: string, mayBeStarting: boolean): Promise<RunState | undefined> {
   for (let attempt = 0; attempt < 3; attempt++) {
     const state = readRunState(gateway);
     if (state && await proxyAliveOnce(gateway, state.instanceToken)) return state;
+    if (!state && !mayBeStarting) return undefined;
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
   return undefined;
@@ -90,7 +93,7 @@ async function readLiveRunState(gateway: string): Promise<RunState | undefined> 
 export type CavemanContext<M extends RoutingModel> = RoutingContext<M> & {
   // OMP >= 18.5.1 sets `agent` on every extension context; Pi and older OMP leave it unset.
   agent?: { kind: string; id: string; name: string };
-  sessionManager: { getSessionId(): string; getHeader?(): { parentSession?: string } | null | undefined };
+  sessionManager: { getSessionId(): string; getSessionFile?(): string | undefined };
   hasUI: boolean;
   ui: { notify(message: string, kind: "warning" | "info"): void };
 };
@@ -98,10 +101,11 @@ export type CavemanContext<M extends RoutingModel> = RoutingContext<M> & {
 const HEADER_BYTES = 64 * 1024;
 
 // The first line of an OMP session file is its header: {"type":"session","id":…}.
-// shortcut: a header line over HEADER_BYTES reads as unparseable and the subagent
-// keeps its own id; raise the cap if OMP session headers ever grow that large.
+// shortcut: a header line over HEADER_BYTES reads as unreadable and the id comes from
+// the file name instead; raise the cap if OMP session headers ever grow that large.
 function sessionFileId(file: string): string | undefined {
   try {
+    if (!statSync(file).isFile()) return undefined;
     const fd = openSync(file, "r");
     try {
       const buffer = Buffer.alloc(HEADER_BYTES);
@@ -116,30 +120,43 @@ function sessionFileId(file: string): string | undefined {
   }
 }
 
-// OMP stores a subagent at <parent session minus .jsonl>/<agentId>.jsonl. Climb to
-// the interactive session (the walk OMP itself uses to resume) so a nested subagent
-// shares the main session's id. A forked main session's own parentSession is never
-// followed: only this directory layout marks a file as a subagent's.
-function rootSessionFile(file: string): string {
-  let current = resolve(file);
-  for (let depth = 0; depth < 8 && existsSync(`${dirname(current)}.jsonl`); depth++) current = `${dirname(current)}.jsonl`;
-  return current;
+// OMP names a top-level session file `<timestamp>_<session id>.jsonl` and writes every
+// session that session spawns (task subagents, /tan clones, advisors) to
+// `<that file minus .jsonl>/<agentId>.jsonl`, one directory deeper per generation.
+const TOP_LEVEL_STEM = /^\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z_(.+)$/;
+
+// rootSessionId climbs a spawned session's file path to the top-level session's stem,
+// by layout alone: OMP persists lazily, so an intermediate or root file may not exist
+// yet. The root's header id wins; its file name carries the same id when the file is
+// missing or unreadable. A path outside this layout resolves to nothing.
+function rootSessionId(file: string): string | undefined {
+  let stem = dirname(resolve(file));
+  for (let depth = 0; depth < 8; depth++) {
+    const top = TOP_LEVEL_STEM.exec(basename(stem));
+    if (top) return sessionFileId(`${stem}.jsonl`) ?? top[1];
+    const parent = dirname(stem);
+    if (parent === stem) return undefined;
+    stem = parent;
+  }
+  return undefined;
 }
 
 // A subagent reports under the main session's id, so Caveman mode, telemetry and the
-// proxy treat it as part of that session, plus its own agent identity. With no
-// resolvable parent (in-memory parent session, header unavailable) it keeps its own id.
+// proxy see one session, plus its own agent_id/agent_type. The main session's id comes
+// from the subagent's own file path, never from its header: for a /tan clone,
+// parentSession is a session id, for a task subagent a path. With no resolvable file
+// (in-memory session, unknown layout) the subagent keeps its own id.
 function hookIdsOf(ctx: Pick<CavemanContext<RoutingModel>, "agent" | "sessionManager">): HookIds {
   let own = "default";
   try { own = ctx.sessionManager.getSessionId() || "default"; } catch { /* unsaved session */ }
   const agent = ctx.agent;
   if (agent?.kind !== "sub") return { session_id: own };
-  let parent: string | undefined;
+  let root: string | undefined;
   try {
-    const file = ctx.sessionManager.getHeader?.()?.parentSession;
-    if (file) parent = sessionFileId(rootSessionFile(file));
-  } catch { /* header unavailable */ }
-  return { session_id: parent ?? own, agent_id: agent.id, agent_type: agent.name };
+    const file = ctx.sessionManager.getSessionFile?.();
+    if (file) root = rootSessionId(file);
+  } catch { /* session file unavailable */ }
+  return { session_id: root ?? own, agent_id: agent.id, agent_type: agent.name };
 }
 
 export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M>) {
@@ -159,7 +176,10 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
   let generation = 0;
   let transition = Promise.resolve();
 
+  // The parent session already told the user about direct mode and pass-through; a
+  // subagent repeating it would print the same notice once per spawned agent.
   const notify = (ctx: CavemanContext<M>, message: string, kind: "warning" | "info") => {
+    if (ctx.agent?.kind === "sub") return;
     if (ctx.hasUI) ctx.ui.notify(message, kind);
     else process.stderr.write(`${message}\n`);
   };
@@ -214,7 +234,7 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
         return;
       }
       const gateway = gatewayUrl();
-      const published = await readLiveRunState(gateway);
+      const published = await readLiveRunState(gateway, !state.sub);
       if (current !== state) return;
       const recoveryReady = published ? await state.recovery.ensure() : false;
       if (current !== state) return;
@@ -303,16 +323,18 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
       const result = await shrinkToolResult(state.bridge, state.ids, event, state.recovery);
       return current === state ? result : undefined;
     }),
+    // A subagent's compaction is its own: the runtime keys compaction state by
+    // session id, and under the parent's id it would demote the parent's evidence.
     beforeCompact: guard("session_before_compact", () => {
-      if (current) void current.bridge.call("PreCompact", current.ids);
+      if (current && !current.sub) void current.bridge.call("PreCompact", current.ids);
     }),
     compact: guard("session_compact", async () => {
       const state = current;
-      if (!state) return;
+      if (!state || state.sub) return;
       const response = await state.bridge.call("PostCompact", state.ids);
       if (current !== state) return;
       const context = additionalContextOf(response);
-      if (context && !state.sub) state.core = context;
+      if (context) state.core = context;
     }),
   };
 }

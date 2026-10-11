@@ -85,20 +85,32 @@ OMP loads the extension into every subagent session too. With OMP 18.5.1 or newe
 (the first release whose extension context carries `ctx.agent`), a subagent is
 not a Caveman session of its own:
 
-- Every native-hook call from a subagent uses its parent session's id plus
-  `agent_id` and `agent_type`, so the runtime, telemetry and the proxy see one
-  session. A nested subagent reports under the main session. If the parent
-  session has no file on disk, or OMP does not expose it, the subagent keeps
-  its own session id.
+- Every native-hook call from a subagent (a `task` subagent, a `/tan` clone)
+  uses the main session's id as `session_id`, so the runtime sees one session.
+  The id comes from the subagent's own session file: OMP writes it to
+  `<main session file minus .jsonl>/<agentId>.jsonl`, one directory deeper per
+  nesting level, and the main file is named `<timestamp>_<id>.jsonl`. If that
+  file is missing or unreadable, the id in its name is used; if OMP exposes no
+  file for the subagent (an in-memory session), it keeps its own session id.
+  Hook input also carries `agent_id` and `agent_type`; the Caveman CLI does not
+  read them yet.
 - It starts with `SubagentStart` and ends with `SubagentStop`, never
-  `SessionStart` or `SessionEnd`, and never sends `UserPromptSubmit` or `Stop`.
-  Model, tool, tool-result and compaction events keep working.
+  `SessionStart` or `SessionEnd`, and never sends `UserPromptSubmit`, `Stop`,
+  `PreCompact` or `PostCompact`: compaction state is keyed by session id, so a
+  subagent compacting its own context would demote the main session's
+  evidence. Model, tool and tool-result events keep working.
 - Core is not injected into a subagent. Only context returned by
   `SubagentStart` reaches it (the CLI returns none today), matching how Claude
   Code treats subagents.
 - `SubagentStart` prints nothing, so an empty reply does not mean the runtime is
   unreachable. The subagent goes straight to the proxy and recovery check and
-  routes through a live proxy exactly like its parent.
+  routes through a live proxy exactly like its parent. It prints no direct-mode
+  or pass-through notice (the main session already did) and does not wait for a
+  proxy that is not running.
+
+OMP also routes an advisor's tool calls through the advising session's
+`tool_call` and `tool_result` handlers; those stay attributed to the advising
+session, without `agent_id`.
 
 Older OMP does not set `ctx.agent`; every session there keeps the full session
 lifecycle.
