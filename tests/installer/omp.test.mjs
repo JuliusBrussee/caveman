@@ -93,15 +93,15 @@ function argLog(home) {
   return fs.readFileSync(path.join(home, OMP_ARGS_LOG), 'utf8').trim().split('\n').filter(Boolean);
 }
 
-// A standalone copy of bin/ with no src/hooks, agents/, or skills/ siblings —
+// A standalone copy of installer/ with no src/hooks, agents/, or skills/ siblings —
 // detectRepoRoot() finds nothing. Not a real distribution path (see file
 // header) but exercises the same "requires a local clone" guard opencode and
 // hermes already rely on.
 function installerWithoutRepoRoot() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-noclone-'));
-  const binDir = path.join(dir, 'bin');
-  fs.cpSync(path.join(REPO_ROOT, 'bin'), binDir, { recursive: true });
-  return path.join(binDir, 'install.js');
+  const installerDir = path.join(dir, 'installer');
+  fs.cpSync(path.join(REPO_ROOT, 'installer'), installerDir, { recursive: true });
+  return path.join(installerDir, 'install.js');
 }
 
 // A repoRoot with the marker dirs detectRepoRoot() requires but no `.git` —
@@ -110,12 +110,12 @@ function installerWithoutRepoRoot() {
 // a real packages/pi-extension; the non-clone branch never reads it.
 function installerWithoutGitCheckout() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-nogit-'));
-  const binDir = path.join(dir, 'bin');
-  fs.cpSync(path.join(REPO_ROOT, 'bin'), binDir, { recursive: true });
+  const installerDir = path.join(dir, 'installer');
+  fs.cpSync(path.join(REPO_ROOT, 'installer'), installerDir, { recursive: true });
   fs.mkdirSync(path.join(dir, 'src', 'hooks'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'agents'), { recursive: true });
   fs.mkdirSync(path.join(dir, 'skills'), { recursive: true });
-  return path.join(binDir, 'install.js');
+  return path.join(installerDir, 'install.js');
 }
 
 // A fake installed-package directory for the registry-install branch's
@@ -142,8 +142,8 @@ function fixtureOmpPackage(home, { valid }) {
 // already happens to be built.
 function fixtureLocalRepo() {
   const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-localbuild-'));
-  const binDir = path.join(repoRoot, 'bin');
-  fs.cpSync(path.join(REPO_ROOT, 'bin'), binDir, { recursive: true });
+  const installerDir = path.join(repoRoot, 'installer');
+  fs.cpSync(path.join(REPO_ROOT, 'installer'), installerDir, { recursive: true });
   fs.mkdirSync(path.join(repoRoot, 'src', 'hooks'), { recursive: true });
   fs.mkdirSync(path.join(repoRoot, 'agents'), { recursive: true });
   fs.mkdirSync(path.join(repoRoot, 'skills'), { recursive: true });
@@ -160,7 +160,7 @@ function fixtureLocalRepo() {
     omp: { extensions: ['./dist/omp.mjs'] },
     scripts: { build: `node -e ${JSON.stringify(buildScript)}` },
   }));
-  return path.join(binDir, 'install.js');
+  return path.join(installerDir, 'install.js');
 }
 
 function fixtureBuildCount(installer) {
