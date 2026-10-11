@@ -23,7 +23,13 @@ export type HookEvent =
   | "PostToolUseFailure"
   | "PreCompact"
   | "PostCompact"
+  | "SubagentStart"
+  | "SubagentStop"
   | "SessionEnd";
+
+// Identity stamped on every hook call. A subagent reports under its parent's
+// session_id and adds agent_id/agent_type, as Claude Code does.
+export type HookIds = { session_id: string; agent_id?: string; agent_type?: string };
 
 export type HookResponse = {
   action?: string;

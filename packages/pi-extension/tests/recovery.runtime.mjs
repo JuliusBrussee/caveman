@@ -211,7 +211,7 @@ const outputEvent = (text = KNOWN_BYTES) => ({
   content: [{ type: "text", text }, { type: "image", data: "cGl4ZWxz", mimeType: "image/png" }],
 });
 const shrink = (recovery, response, event = outputEvent()) =>
-  shrinkToolResult({ call: async () => response }, "publication-test", event, recovery);
+  shrinkToolResult({ call: async () => response }, { session_id: "publication-test" }, event, recovery);
 
 test("publication accepts only one exact recoverable identity across every advertised reference", async () => {
   const { path, cleanup } = shim();
@@ -300,7 +300,7 @@ test("unavailable recovery and thrown failures leave tool results untouched", as
   try {
     assert.equal(await shrink(recovery, response, event), undefined);
     assert.equal(await shrink({ verify: async () => { throw new Error("transport broke"); } }, response, event), undefined);
-    assert.equal(await shrinkToolResult({ call: async () => { throw new Error("hook broke"); } }, "test", event, recovery), undefined);
+    assert.equal(await shrinkToolResult({ call: async () => { throw new Error("hook broke"); } }, { session_id: "test" }, event, recovery), undefined);
     assert.deepEqual(event, original);
   } finally { cleanup(); }
 });
