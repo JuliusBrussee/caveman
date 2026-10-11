@@ -28,11 +28,12 @@ process.stdin.setEncoding("utf8");
 process.stdin.on("data", (chunk) => { input += chunk; });
 process.stdin.on("end", () => {
   const payload = JSON.parse(input);
-  appendFileSync(${JSON.stringify(hookLog)}, JSON.stringify({ event, id: payload.session_id }) + "\\n");
+  appendFileSync(${JSON.stringify(hookLog)}, JSON.stringify({ event, id: payload.session_id, agent: payload.agent_id, type: payload.agent_type }) + "\\n");
   const result = event === "SessionStart" ? { context: "CORE_" + payload.session_id }
     : event === "UserPromptSubmit" ? { context: "DYNAMIC" }
     : event === "PostToolUse" ? { output_replacement: "SHRUNK <<ccr:ccr_obj_handle>>" } : {};
-  process.stdout.write(JSON.stringify(result));
+  // The real CLI prints nothing for SubagentStart.
+  if (event !== "SubagentStart") process.stdout.write(JSON.stringify(result));
 });
 `);
   const fixture = fileURLToPath(new URL("./fixtures/stub-caveman-mcp.mjs", import.meta.url));
@@ -64,9 +65,11 @@ process.stdin.on("end", () => {
   const tools: RecoveryTool[] = [];
   const original = { provider: "openai", id: "test", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
   let selected = original;
-  const ctx = (id: string) => ({
+  // `sub` mimics what OMP gives a subagent session: ctx.agent plus a header naming the parent session file.
+  const ctx = (id: string, sub?: { agent: object; parentSession: string }) => ({
     get model() { return selected; }, hasUI: true, ui: { notify() {} },
-    sessionManager: { getSessionId: () => id },
+    sessionManager: { getSessionId: () => id, ...(sub && { getHeader: () => ({ parentSession: sub.parentSession }) }) },
+    ...(sub && { agent: sub.agent }),
     modelRegistry: { isUsingOAuth: () => false, getApiKeyAndHeaders: async () => ({ ok: true, headers: {} }) },
   });
   try {
@@ -115,8 +118,28 @@ process.stdin.on("end", () => {
     assert.deepEqual(events.filter(({ event }) => event === "SessionEnd").map(({ id }) => id), [
       "session_start", "session_switch", "session_tree", "session_branch",
     ]);
+    // OMP rebinds the extension into every subagent session: a fresh instance whose
+    // context carries ctx.agent. It reports under the parent's session id.
+    const parentFile = join(root, "parent-session.jsonl");
+    writeFileSync(parentFile, `${JSON.stringify({ type: "session", id: "parent-main" })}\n`);
+    const subHandlers = new Map<string, Function>();
+    factory({
+      on(name: string, handler: Function) { subHandlers.set(name, handler); },
+      registerTool() {},
+      async setModel(value: typeof original) { selected = value; return true; },
+    });
+    const sub = ctx("sub-own", { agent: { kind: "sub", id: "0-Explore", name: "explore", depth: 1 }, parentSession: parentFile });
+    await subHandlers.get("session_start")!({ type: "session_start" }, sub);
+    assert.equal(selected.baseUrl, `http://127.0.0.1:${port}/w/pi/openai/v1`, "a subagent routes through the live proxy like its parent");
+    assert.equal(await subHandlers.get("before_agent_start")!({ prompt: "hello", systemPrompt: prefix }, sub), undefined, "no Core or prompt context reaches a subagent");
+    await subHandlers.get("turn_end")!();
+    await subHandlers.get("session_shutdown")!();
+    assert.equal(selected.baseUrl, original.baseUrl);
+    const subEvents = readFileSync(hookLog, "utf8").trim().split("\n").map((line) => JSON.parse(line)).slice(events.length);
+    const as = (event: string) => ({ event, id: "parent-main", agent: "0-Explore", type: "explore" });
+    assert.deepEqual(subEvents, [as("SubagentStart"), as("ModelAfter"), as("SubagentStop")], "no SessionStart, UserPromptSubmit, Stop or SessionEnd from a subagent");
     const pids = readFileSync(spawnLog, "utf8").trim().split("\n").map(Number);
-    assert.equal(new Set(pids).size, 4, "each navigation needs a fresh per-session recovery process");
+    assert.equal(new Set(pids).size, 5, "each navigation and each subagent needs a fresh per-session recovery process");
     const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catch { return false; } };
     // Real child-process shutdown is the contract here; fake timers cannot
     // advance a subprocess's stdin/exit lifecycle.

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import test from "node:test";
 import { createCavemanRuntime, HookBridge, RecoveryClient, shrinkToolResult } from "../dist/testable.mjs";
 
@@ -23,8 +23,10 @@ function harness(t, hook = async (event, payload) => event === "SessionStart" ? 
   }));
   t.mock.method(globalThis, "fetch", async () => new Response("{}", { headers: { "x-caveman-instance": "test" } }));
   const events = [];
+  const calls = [];
   t.mock.method(HookBridge.prototype, "call", async (event, payload) => {
     events.push([event, payload.session_id]);
+    calls.push({ event, payload });
     return hook(event, payload);
   });
   const disposed = new WeakSet();
@@ -45,9 +47,12 @@ function harness(t, hook = async (event, payload) => event === "SessionStart" ? 
   const host = {
     async setModel(model) { selected = model; return true; },
   };
-  const context = (id) => ({
+  // `extra.agent` is OMP's ctx.agent (absent on older OMP and on Pi);
+  // `extra.getHeader` is the session manager's header accessor.
+  const context = (id, extra = {}) => ({
     get model() { return selected; }, hasUI: true, ui: { notify() {} },
-    sessionManager: { getSessionId: () => id },
+    sessionManager: { getSessionId: () => id, ...(extra.getHeader && { getHeader: extra.getHeader }) },
+    ...(extra.agent && { agent: extra.agent }),
     modelRegistry: { isUsingOAuth: () => false, getApiKeyAndHeaders: async () => ({ ok: true, headers: {} }) },
   });
   const runtime = createCavemanRuntime(host);
@@ -58,7 +63,7 @@ function harness(t, hook = async (event, payload) => event === "SessionStart" ? 
     }
     rmSync(root, { recursive: true, force: true });
   });
-  return { runtime, context, events, selected: () => selected };
+  return { runtime, context, events, calls, root, selected: () => selected };
 }
 
 test("navigation supersedes an in-flight startup before it can route or install Core", async (t) => {
@@ -156,7 +161,7 @@ test("compression delegates eligibility to the native runtime for every non-reco
   const seenEvents = [];
   const bridge = { async call(event, payload) { calls++; seenEvents.push(event); return { output_replacement: `summary <<ccr:ccr_obj_handle>> [${payload.tool_name}]` }; } };
   const image = { type: "image", data: "aGVsbG8=", mimeType: "image/png" };
-  const result = (toolName, isError = false) => shrinkToolResult(bridge, "session", {
+  const result = (toolName, isError = false) => shrinkToolResult(bridge, { session_id: "session" }, {
     toolName, isError, input: {}, content: [{ type: "text", text: "original" }, image],
   }, { verify: async () => true });
   for (const tool of ["read", "bash", "write", "edit", "grep", "read_file", "custom"]) {
@@ -166,4 +171,112 @@ test("compression delegates eligibility to the native runtime for every non-reco
   assert.equal(await result("caveman_retrieve"), undefined, "caveman_retrieve's own output must never be re-shrunk (recovery loop hazard)");
   assert.equal(calls, 14, "every non-recovery tool result must reach the native runtime's own classifyTool decision");
   assert.ok(seenEvents.includes("PostToolUse") && seenEvents.includes("PostToolUseFailure"), "isError must select PostToolUseFailure, not PostToolUse");
+});
+
+// OMP's ctx.agent for a subagent. A session file's first line is its header.
+const SUBAGENT = { kind: "sub", id: "0-Explore", name: "explore", depth: 1 };
+const sessionFile = (path, header) => {
+  mkdirSync(dirname(path), { recursive: true });
+  writeFileSync(path, `${JSON.stringify({ type: "session", ...header })}\n{"type":"message"}\n`);
+  return path;
+};
+const subagentContext = (h, id, header) => h.context(id, { agent: SUBAGENT, getHeader: header && (() => header) });
+
+test("a subagent runs under its parent's session id with agent fields, never opens or ends a session, and still routes through the live proxy", async (t) => {
+  // The CLI prints nothing for SubagentStart; an empty response is not "runtime unreachable".
+  const h = harness(t, async (event) => event === "SubagentStart" ? undefined : event === "PostCompact" ? { context: "RECOMPACTED" } : {});
+  const parent = sessionFile(join(h.root, "parent.jsonl"), { id: "parent-id" });
+  const ctx = subagentContext(h, "child-id", { parentSession: parent });
+  await h.runtime.start(ctx);
+  assert.equal(h.selected().baseUrl, "http://127.0.0.1:8787/w/pi/openai/v1", "a live run-state must open the gate for a subagent");
+  assert.equal(await h.runtime.beforeAgentStart("hello", ctx), undefined, "Core is not injected into a subagent");
+  await h.runtime.turnStart();
+  await h.runtime.toolCall({ toolName: "read", input: {} });
+  await h.runtime.toolResult({ toolName: "read", input: {}, content: [{ type: "text", text: "out" }], isError: false });
+  await h.runtime.turnEnd();
+  await h.runtime.beforeCompact();
+  await h.runtime.compact();
+  assert.equal(await h.runtime.beforeAgentStart("again", ctx), undefined, "PostCompact context must not install Core into a subagent");
+  await h.runtime.shutdown();
+  assert.deepEqual(h.calls.map(({ event }) => event), [
+    "SubagentStart", "ModelBefore", "PreToolUse", "PostToolUse", "ModelAfter", "PreCompact", "PostCompact", "SubagentStop",
+  ]);
+  for (const { event, payload } of h.calls) {
+    assert.deepEqual(
+      { session_id: payload.session_id, agent_id: payload.agent_id, agent_type: payload.agent_type },
+      { session_id: "parent-id", agent_id: "0-Explore", agent_type: "explore" },
+      event,
+    );
+  }
+});
+
+test("a subagent receives only the context SubagentStart returns, plus tool nudges", async (t) => {
+  const h = harness(t, async (event) => ({
+    SubagentStart: { hookSpecificOutput: { hookEventName: "SubagentStart", additionalContext: "SUBAGENT_CONTEXT" } },
+    SessionStart: { context: "CORE" }, UserPromptSubmit: { context: "PROMPT" }, PreToolUse: { context: "NUDGE" },
+  })[event] ?? {});
+  const ctx = subagentContext(h, "child-id");
+  await h.runtime.start(ctx);
+  assert.deepEqual(await h.runtime.beforeAgentStart("hello", ctx), ["SUBAGENT_CONTEXT"]);
+  await h.runtime.toolCall({ toolName: "read", input: {} });
+  assert.deepEqual(await h.runtime.beforeAgentStart("again", ctx), ["SUBAGENT_CONTEXT", "NUDGE"]);
+});
+
+test("a main session, with or without ctx.agent, keeps the full session lifecycle and sends no agent fields", async (t) => {
+  const h = harness(t);
+  // A forked main session names its source in parentSession; that is not a subagent parent.
+  const source = sessionFile(join(h.root, "source.jsonl"), { id: "source-id" });
+  const getHeader = () => ({ parentSession: source });
+  for (const agent of [undefined, { kind: "main", id: "0-Main", name: "main", depth: 0 }]) {
+    h.calls.length = 0;
+    const ctx = h.context("main-id", { agent, getHeader });
+    await h.runtime.start(ctx);
+    assert.deepEqual(await h.runtime.beforeAgentStart("hello", ctx), ["CORE_main-id"]);
+    await h.runtime.turnEnd();
+    await h.runtime.shutdown();
+    assert.deepEqual(h.calls.map(({ event }) => event), ["SessionStart", "UserPromptSubmit", "ModelAfter", "Stop", "SessionEnd"]);
+    for (const { payload } of h.calls) {
+      assert.equal(payload.session_id, "main-id");
+      assert.equal("agent_id" in payload || "agent_type" in payload, false);
+    }
+  }
+});
+
+test("navigating away from a subagent ends it with SubagentStop, not SessionEnd", async (t) => {
+  const h = harness(t);
+  await h.runtime.start(subagentContext(h, "child-id"));
+  await h.runtime.start(h.context("main-id"));
+  assert.deepEqual(h.calls.map(({ event }) => event), ["SubagentStart", "SubagentStop", "SessionStart"]);
+});
+
+test("a subagent whose parent id cannot be resolved falls back to its own session id", async (t) => {
+  const h = harness(t);
+  const noId = sessionFile(join(h.root, "no-id.jsonl"), {});
+  writeFileSync(join(h.root, "garbage.jsonl"), "not json\n");
+  const getHeaders = {
+    "no getHeader": undefined,
+    "null header": () => null,
+    "header without parentSession": () => ({}),
+    "parent file is missing": () => ({ parentSession: join(h.root, "gone.jsonl") }),
+    "parent file is not JSON": () => ({ parentSession: join(h.root, "garbage.jsonl") }),
+    "parent header has no id": () => ({ parentSession: noId }),
+    "getHeader throws": () => { throw new Error("session closed"); },
+  };
+  for (const [name, getHeader] of Object.entries(getHeaders)) {
+    await h.runtime.shutdown();
+    h.calls.length = 0;
+    await h.runtime.start(h.context("child-id", { agent: SUBAGENT, getHeader }));
+    assert.equal(h.calls[0].event, "SubagentStart", name);
+    assert.equal(h.calls[0].payload.session_id, "child-id", name);
+  }
+});
+
+test("a nested subagent reports under the root session id, not its parent subagent's", async (t) => {
+  const h = harness(t);
+  const main = sessionFile(join(h.root, "main.jsonl"), { id: "root-id" });
+  // OMP stores a subagent at <parent session minus .jsonl>/<agentId>.jsonl.
+  const planner = sessionFile(join(h.root, "main", "0-Plan.jsonl"), { id: "planner-id", parentSession: main });
+  await h.runtime.start(h.context("grandchild-id", { agent: { ...SUBAGENT, id: "1-Explore", depth: 2 }, getHeader: () => ({ parentSession: planner }) }));
+  assert.equal(h.calls[0].payload.session_id, "root-id");
+  assert.equal(h.calls[0].payload.agent_id, "1-Explore");
 });

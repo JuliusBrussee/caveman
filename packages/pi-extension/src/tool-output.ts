@@ -4,7 +4,7 @@
 
 import type { ToolResultEvent } from "@earendil-works/pi-coding-agent";
 import type { HookBridge } from "./lifecycle.ts";
-import { MAX_OUTPUT_REPLACEMENT_BYTES, MAX_TOOL_OUTPUT_BYTES, normalizeRecoveryHandle, outputReplacementOf } from "./protocol.ts";
+import { type HookIds, MAX_OUTPUT_REPLACEMENT_BYTES, MAX_TOOL_OUTPUT_BYTES, normalizeRecoveryHandle, outputReplacementOf } from "./protocol.ts";
 import type { RecoveryClient } from "./recovery.ts";
 
 // Partial-patch result shape for tool_result handlers (ToolResultEventResult is
@@ -22,7 +22,7 @@ const RECOVERY_TOOL = "caveman_retrieve";
 
 export async function shrinkToolResult(
   bridge: HookBridge,
-  sessionId: string,
+  ids: HookIds,
   event: ToolOutputEvent,
   recovery: Pick<RecoveryClient, "verify">,
 ): Promise<ToolResultPatch | undefined> {
@@ -37,7 +37,7 @@ export async function shrinkToolResult(
   let replacement: string;
   try {
     const response = await bridge.call(event.isError ? "PostToolUseFailure" : "PostToolUse", {
-      session_id: sessionId,
+      ...ids,
       tool_name: event.toolName,
       tool_input: event.input,
       tool_output: text,

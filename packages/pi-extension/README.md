@@ -81,6 +81,28 @@ Recovered originals are never compressed again, whether OMP calls
 `xd://caveman_retrieve`).
 OMP's `todo` results, the agent's own task list, are never compressed either.
 
+OMP loads the extension into every subagent session too. With OMP 18.5.1 or newer
+(the first release whose extension context carries `ctx.agent`), a subagent is
+not a Caveman session of its own:
+
+- Every native-hook call from a subagent uses its parent session's id plus
+  `agent_id` and `agent_type`, so the runtime, telemetry and the proxy see one
+  session. A nested subagent reports under the main session. If the parent
+  session has no file on disk, or OMP does not expose it, the subagent keeps
+  its own session id.
+- It starts with `SubagentStart` and ends with `SubagentStop`, never
+  `SessionStart` or `SessionEnd`, and never sends `UserPromptSubmit` or `Stop`.
+  Model, tool, tool-result and compaction events keep working.
+- Core is not injected into a subagent. Only context returned by
+  `SubagentStart` reaches it (the CLI returns none today), matching how Claude
+  Code treats subagents.
+- `SubagentStart` prints nothing, so an empty reply does not mean the runtime is
+  unreachable. The subagent goes straight to the proxy and recovery check and
+  routes through a live proxy exactly like its parent.
+
+Older OMP does not set `ctx.agent`; every session there keeps the full session
+lifecycle.
+
 The native entry shares Caveman's existing `native-hook pi` protocol and
 `/w/pi` gateway routes. It does not add a `caveman wrap omp` installer path.
 

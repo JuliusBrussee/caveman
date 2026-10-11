@@ -1,13 +1,13 @@
 // Shared Caveman session runtime. Pi and OMP own event/schema registration in
 // their separate entries; the native hook protocol and recovery client are shared.
 
-import { readFileSync } from "node:fs";
+import { closeSync, existsSync, openSync, readFileSync, readSync } from "node:fs";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { publishedForwardHeadersOf, publishedUpstreamsOf } from "../../cli/src/provider-routing.ts";
 import type { RoutingContext, RoutingHost, RoutingModel } from "./provider.ts";
 import { HookBridge, promptDigest, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
-import { MAX_CONTEXT_BYTES, additionalContextOf, isLoopbackUrl } from "./protocol.ts";
+import { MAX_CONTEXT_BYTES, additionalContextOf, isLoopbackUrl, type HookIds } from "./protocol.ts";
 import { ProviderRouter } from "./provider.ts";
 import { RecoveryClient } from "./recovery.ts";
 import { shrinkToolResult, type ToolOutputEvent } from "./tool-output.ts";
@@ -88,14 +88,64 @@ async function readLiveRunState(gateway: string): Promise<RunState | undefined> 
 }
 
 export type CavemanContext<M extends RoutingModel> = RoutingContext<M> & {
-  sessionManager: { getSessionId(): string };
+  // OMP >= 18.5.1 sets `agent` on every extension context; Pi and older OMP leave it unset.
+  agent?: { kind: string; id: string; name: string };
+  sessionManager: { getSessionId(): string; getHeader?(): { parentSession?: string } | null | undefined };
   hasUI: boolean;
   ui: { notify(message: string, kind: "warning" | "info"): void };
 };
 
+const HEADER_BYTES = 64 * 1024;
+
+// The first line of an OMP session file is its header: {"type":"session","id":…}.
+// shortcut: a header line over HEADER_BYTES reads as unparseable and the subagent
+// keeps its own id; raise the cap if OMP session headers ever grow that large.
+function sessionFileId(file: string): string | undefined {
+  try {
+    const fd = openSync(file, "r");
+    try {
+      const buffer = Buffer.alloc(HEADER_BYTES);
+      const head = buffer.toString("utf8", 0, readSync(fd, buffer, 0, HEADER_BYTES, 0));
+      const header = JSON.parse(head.split("\n", 1)[0]!);
+      return header?.type === "session" && typeof header.id === "string" && header.id ? header.id : undefined;
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    return undefined;
+  }
+}
+
+// OMP stores a subagent at <parent session minus .jsonl>/<agentId>.jsonl. Climb to
+// the interactive session (the walk OMP itself uses to resume) so a nested subagent
+// shares the main session's id. A forked main session's own parentSession is never
+// followed: only this directory layout marks a file as a subagent's.
+function rootSessionFile(file: string): string {
+  let current = resolve(file);
+  for (let depth = 0; depth < 8 && existsSync(`${dirname(current)}.jsonl`); depth++) current = `${dirname(current)}.jsonl`;
+  return current;
+}
+
+// A subagent reports under the main session's id, so Caveman mode, telemetry and the
+// proxy treat it as part of that session, plus its own agent identity. With no
+// resolvable parent (in-memory parent session, header unavailable) it keeps its own id.
+function hookIdsOf(ctx: Pick<CavemanContext<RoutingModel>, "agent" | "sessionManager">): HookIds {
+  let own = "default";
+  try { own = ctx.sessionManager.getSessionId() || "default"; } catch { /* unsaved session */ }
+  const agent = ctx.agent;
+  if (agent?.kind !== "sub") return { session_id: own };
+  let parent: string | undefined;
+  try {
+    const file = ctx.sessionManager.getHeader?.()?.parentSession;
+    if (file) parent = sessionFileId(rootSessionFile(file));
+  } catch { /* header unavailable */ }
+  return { session_id: parent ?? own, agent_id: agent.id, agent_type: agent.name };
+}
+
 export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M>) {
   type Session = {
-    id: string;
+    ids: HookIds;
+    sub: boolean;
     ctx: CavemanContext<M>;
     bridge: HookBridge;
     recovery: RecoveryClient;
@@ -144,20 +194,21 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
     });
     transition = transition.then(async () => {
       await closed;
-      if (previous) await previous.bridge.call("SessionEnd", { session_id: previous.id });
+      if (previous) await previous.bridge.call(previous.sub ? "SubagentStop" : "SessionEnd", previous.ids);
       if (!ctx || next !== generation) return;
-      let id = "default";
-      try { id = ctx.sessionManager.getSessionId() || "default"; } catch { /* unsaved session */ }
       const state: Session = {
-        id, ctx, bridge: new HookBridge(), recovery: new RecoveryClient(),
+        ids: hookIdsOf(ctx), sub: ctx.agent?.kind === "sub", ctx, bridge: new HookBridge(), recovery: new RecoveryClient(),
         router: new ProviderRouter(host, (message, kind) => notify(ctx, message, kind)),
         pending: [], pendingBytes: 0, gateDone: false,
       };
       current = state;
-      const start = await state.bridge.call("SessionStart", { session_id: id });
+      // The CLI prints nothing for SubagentStart, so only an empty SessionStart
+      // response means "native runtime unreachable". A subagent goes straight to the
+      // run-state gate and routes through a live proxy exactly like its parent.
+      const start = await state.bridge.call(state.sub ? "SubagentStart" : "SessionStart", state.ids);
       if (current !== state) return;
       state.core = additionalContextOf(start);
-      if (!start) {
+      if (!start && !state.sub) {
         state.gateDone = true;
         notify(ctx, "Caveman: direct mode, no compression this session (caveman native runtime unreachable)", "warning");
         return;
@@ -210,8 +261,10 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
       // Pi can refresh its active model without firing one) can leave the
       // route stale. Recheck before every turn, not just on model_select.
       if (state.gateDone) await state.router.apply(ctx.model, ctx);
-      const response = await state.bridge.call("UserPromptSubmit", {
-        session_id: state.id, model: ctx.model?.id, provider: ctx.model?.provider,
+      // A subagent has no user prompt of its own, and Core never reaches it (Claude
+      // Code sends subagents no SessionStart context): only SubagentStart's context does.
+      const response = state.sub ? undefined : await state.bridge.call("UserPromptSubmit", {
+        ...state.ids, model: ctx.model?.id, provider: ctx.model?.provider,
         prompt: promptDigest(prompt), task_type: taskType(prompt),
         task_terms: taskTerms(prompt), task_continuation: taskContinuation(prompt),
       });
@@ -222,19 +275,19 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
       return parts.length ? parts : undefined;
     }),
     turnStart: guard("turn_start", () => {
-      if (current) void current.bridge.call("ModelBefore", { session_id: current.id });
+      if (current) void current.bridge.call("ModelBefore", current.ids);
     }),
     turnEnd: guard("turn_end", async () => {
       const state = current;
       if (!state) return;
-      await state.bridge.call("ModelAfter", { session_id: state.id });
-      if (current === state) void state.bridge.call("Stop", { session_id: state.id });
+      await state.bridge.call("ModelAfter", state.ids);
+      if (current === state && !state.sub) void state.bridge.call("Stop", state.ids);
     }),
     toolCall: guard("tool_call", async (event: { toolName: string; input: object }) => {
       const state = current;
       if (!state) return;
       const response = await state.bridge.call("PreToolUse", {
-        session_id: state.id, tool_name: event.toolName, tool_input: event.input,
+        ...state.ids, tool_name: event.toolName, tool_input: event.input,
       });
       if (current !== state) return;
       const context = additionalContextOf(response);
@@ -247,19 +300,19 @@ export function createCavemanRuntime<M extends RoutingModel>(host: RoutingHost<M
     toolResult: guard("tool_result", async (event: ToolOutputEvent) => {
       const state = current;
       if (!state) return undefined;
-      const result = await shrinkToolResult(state.bridge, state.id, event, state.recovery);
+      const result = await shrinkToolResult(state.bridge, state.ids, event, state.recovery);
       return current === state ? result : undefined;
     }),
     beforeCompact: guard("session_before_compact", () => {
-      if (current) void current.bridge.call("PreCompact", { session_id: current.id });
+      if (current) void current.bridge.call("PreCompact", current.ids);
     }),
     compact: guard("session_compact", async () => {
       const state = current;
       if (!state) return;
-      const response = await state.bridge.call("PostCompact", { session_id: state.id });
+      const response = await state.bridge.call("PostCompact", state.ids);
       if (current !== state) return;
       const context = additionalContextOf(response);
-      if (context) state.core = context;
+      if (context && !state.sub) state.core = context;
     }),
   };
 }
