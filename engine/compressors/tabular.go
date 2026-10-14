@@ -302,8 +302,10 @@ func keepNumericExtrema(rows [][]string, start int, keep []bool) {
 			// compares false against everything, so the first one seen would
 			// latch both minIndex and maxIndex and no later row could ever
 			// displace it — the column's real extrema would stop being kept,
-			// which is this function's whole job.
-			value, isNumber := invariantNumber(strings.TrimSpace(rows[row][column]))
+			// which is this function's whole job. A percentage is read as its
+			// number: a coverage or error-rate column is as numeric as any other,
+			// and its one outlier is the row the agent is looking for.
+			value, isNumber := invariantNumber(strings.TrimSuffix(strings.TrimSpace(rows[row][column]), "%"))
 			if !isNumber {
 				continue
 			}
