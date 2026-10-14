@@ -956,10 +956,6 @@ def _compress_file_locked(filepath: Path) -> bool:
     provider = configured_provider()
     print(f"Compressing with {provider}...")
     masked_body, code_blocks = mask_code_blocks(body)
-    nocompress_regions = [
-        block for _, block in code_blocks
-        if NOCOMPRESS_OPEN_RE.match(block.split("\n", 1)[0])
-    ]
     masked_compressed = call_claude(build_compress_prompt(masked_body))
     try:
         compressed_body = restore_code_blocks(masked_compressed, code_blocks)
@@ -1061,15 +1057,21 @@ def _compress_file_locked(filepath: Path) -> bool:
         # file (build_fix_prompt is given one, and the anchor check above
         # requires it to start with the original's first line), so its
         # frontmatter is split off to compare like against like.
-        _, fixed_body = split_frontmatter(fixed)
+        fixed_frontmatter, fixed_body = split_frontmatter(fixed)
         if not _is_smaller_than_body(fixed_body, body):
             print("   Skipping this attempt.")
             continue
 
-        # The fix prompt carries <!-- nocompress --> regions unmasked and
-        # validate() never compares prose, so check them verbatim here.
-        if any(block.rstrip("\n") not in fixed for block in nocompress_regions):
-            print("❌ Fix attempt aborted: output changed a <!-- nocompress --> region.")
+        # The fix prompt carries the whole file unmasked, so hold the repair to
+        # the first pass's guards: frontmatter and every masked block (code,
+        # including fences indented under list items, which validate() cannot
+        # see, and <!-- nocompress --> regions) must come back verbatim.
+        if fixed_frontmatter != frontmatter:
+            print("❌ Fix attempt aborted: output changed the YAML frontmatter.")
+            print("   Skipping this attempt.")
+            continue
+        if any(block.rstrip("\n") not in fixed_body for _, block in code_blocks):
+            print("❌ Fix attempt aborted: output changed a preserved code or <!-- nocompress --> block.")
             print("   Skipping this attempt.")
             continue
 
