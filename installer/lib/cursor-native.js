@@ -19,6 +19,7 @@ const path = require('path');
 const OWNED = require('./owned-install');
 const SETTINGS = require('./settings');
 const HOST_HOOKS = require('./host-hooks');
+const DEDUPE_HOOKS = require('./cursor-dedupe-hooks');
 const { transformOpencodeAgentFrontmatter } = require('./opencode-agent');
 
 const INTEGRATION = 'cursor';
@@ -65,6 +66,12 @@ function readHooksJson(file) {
   if (list !== undefined && !Array.isArray(list)) {
     throw new Error(`${file} hooks.sessionStart is not an array; left untouched`);
   }
+  for (const key of ['preToolUse', 'beforeShellExecution']) {
+    const hookList = config.hooks && config.hooks[key];
+    if (hookList !== undefined && !Array.isArray(hookList)) {
+      throw new Error(`${file} hooks.${key} is not an array; left untouched`);
+    }
+  }
   return config;
 }
 
@@ -80,6 +87,26 @@ function mergeSessionStartHook(root, command) {
   config.version = 1;
   config.hooks = { ...config.hooks, sessionStart: [...list.filter((entry) => !isOurs(entry, root)), { command, timeout: 10 }] };
   SETTINGS.writeSettings(file, config);
+}
+
+function mergeDedupeHooks(root, node, platform = process.platform) {
+  const file = hooksJsonPath(root);
+  const config = readHooksJson(file);
+  const merged = DEDUPE_HOOKS.mergeDedupeHooksDocument(config, root, node, platform);
+  SETTINGS.writeSettings(file, merged);
+}
+
+function unmergeDedupeHooks(root) {
+  const file = hooksJsonPath(root);
+  if (!fs.existsSync(file)) return;
+  const config = readHooksJson(file);
+  const { changed, doc } = DEDUPE_HOOKS.stripDedupeHooks(config, root);
+  if (!changed) return;
+  if (Object.keys(doc.hooks).length === 0 && Object.keys(doc).every((key) => key === 'version' || key === 'hooks')) {
+    fs.unlinkSync(file);
+  } else {
+    SETTINGS.writeSettings(file, doc);
+  }
 }
 
 function unmergeSessionStartHook(root) {
@@ -110,15 +137,27 @@ function installCursorNative({
   });
   if (withHooks) {
     const command = HOST_HOOKS.hookCommand(root, 'cursor', node);
-    operations.push({ ...HOST_HOOKS.payloadOperation(repoRoot), register: () => mergeSessionStartHook(root, command) });
+    operations.push({
+      ...HOST_HOOKS.payloadOperation(repoRoot),
+      register: () => {
+        mergeSessionStartHook(root, command);
+        mergeDedupeHooks(root, node);
+      },
+    });
   }
   if (dryRun) {
     for (const operation of operations) note(`  would install ${path.join(root, operation.relativePath)}`);
-    if (withHooks) note(`  would add a sessionStart hook to ${hooksJsonPath(root)}`);
+    if (withHooks) {
+      note(`  would add a sessionStart hook to ${hooksJsonPath(root)}`);
+      note(`  would merge caveman Cursor dedupe hook entries into ${hooksJsonPath(root)}`);
+    }
     return;
   }
   OWNED.installOwned({ root, integration: INTEGRATION, operations, force, note });
-  if (withHooks) note(`  sessionStart hook registered in ${hooksJsonPath(root)}`);
+  if (withHooks) {
+    note(`  sessionStart hook registered in ${hooksJsonPath(root)}`);
+    note(`  Cursor dedupe hooks registered in ${hooksJsonPath(root)}`);
+  }
   note('  open a new Cursor chat to load the agents and the hook');
 }
 
@@ -127,7 +166,12 @@ function uninstallCursorNative({ home = os.homedir(), dryRun = false, note = () 
   const payload = path.join(root, HOST_HOOKS.PAYLOAD_DIR);
   return OWNED.uninstallOwned({
     root, integration: INTEGRATION, dryRun, note, warn,
-    unregister: (target) => { if (target === payload) unmergeSessionStartHook(root); },
+    unregister: (target) => {
+      if (target === payload) {
+        unmergeSessionStartHook(root);
+        unmergeDedupeHooks(root);
+      }
+    },
   });
 }
 
@@ -135,6 +179,9 @@ module.exports = {
   CURSOR_AGENT_SPECS,
   cursorConfigDir,
   transformCursorAgentFrontmatter,
+  hooksJsonPath,
   installCursorNative,
   uninstallCursorNative,
+  mergeDedupeHooks,
+  unmergeDedupeHooks,
 };
