@@ -912,10 +912,24 @@ def compress_file(filepath: Path) -> bool:
         )
 
     with file_lock(filepath):
-        return _compress_file_locked(filepath)
+        backup_path = backup_dir_for(filepath) / (filepath.stem + ".original.md")
+        had_backup = backup_path.exists()
+        run = {"live_write_started": False}
+        try:
+            return _compress_file_locked(filepath, run)
+        except BaseException:
+            # A provider error, timeout or Ctrl-C mid-run must not leave the
+            # staging file next to the source, or a backup that makes every
+            # later run abort with "Backup file already exists". The backup is
+            # removed only if this run created it and never started the live
+            # write; past that point it may be the only copy of the original.
+            filepath.with_name(filepath.name + ".caveman-staged").unlink(missing_ok=True)
+            if not had_backup and not run["live_write_started"]:
+                backup_path.unlink(missing_ok=True)
+            raise
 
 
-def _compress_file_locked(filepath: Path) -> bool:
+def _compress_file_locked(filepath: Path, run: dict) -> bool:
     """Body of compress_file; runs entirely under compress_file's file_lock for this resolved path."""
     print(f"Processing: {filepath}")
 
@@ -1019,6 +1033,7 @@ def _compress_file_locked(filepath: Path) -> bool:
 
         if result.is_valid:
             print("Validation passed")
+            run["live_write_started"] = True
             _write_target(filepath, compressed, backup_path, newline)
             staging_path.unlink(missing_ok=True)
             return True
