@@ -2026,28 +2026,64 @@ function privateTmpDir() {
 }
 
 // ── HTTPS download via stdlib ─────────────────────────────────────────────
+const DOWNLOAD_MAX_REDIRECTS = 5;
+const DOWNLOAD_TIMEOUT_MS    = 60_000;
+const DOWNLOAD_MAX_BYTES     = 8 * 1024 * 1024; // 8 MiB
+
 function downloadTo(url, dest) {
   // Prefer curl/wget when available (better proxy + cert handling on legacy
   // systems); fall back to Node https.
   if (hasCmd('curl')) {
-    const r = child_process.spawnSync('curl', ['-fsSL', '-o', dest, url], { stdio: 'inherit' });
+    // --proto-redir =https  reject any redirect that downgrades off https
+    // --max-redirs 5        cap redirect chain length
+    // --max-time 60         hard wall-clock limit
+    // --max-filesize 8M     refuse oversized responses before writing
+    const r = child_process.spawnSync('curl', [
+      '-fsSL', '--proto-redir', '=https',
+      '--max-redirs', String(DOWNLOAD_MAX_REDIRECTS),
+      '--max-time', String(DOWNLOAD_TIMEOUT_MS / 1000),
+      '--max-filesize', String(DOWNLOAD_MAX_BYTES),
+      '-o', dest, url,
+    ], { stdio: 'inherit' });
     if (r.status === 0) return;
     throw new Error(`curl failed for ${url}`);
   }
   const https = require('https');
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        resolve(downloadTo(res.headers.location, dest));
+    let redirects = 0;
+    function fetch(target) {
+      if (!target.startsWith('https://')) {
+        reject(new Error(`download refused non-https URL: ${target}`));
         return;
       }
-      if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return; }
-      const out = fs.createWriteStream(dest);
-      res.pipe(out);
-      out.on('finish', () => out.close(resolve));
-      out.on('error', reject);
-    });
-    req.on('error', reject);
+      const req = https.get(target, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          if (++redirects > DOWNLOAD_MAX_REDIRECTS) {
+            reject(new Error(`too many redirects for ${url}`));
+            return;
+          }
+          fetch(res.headers.location);
+          return;
+        }
+        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return; }
+        let received = 0;
+        const out = fs.createWriteStream(dest);
+        res.on('data', (chunk) => {
+          received += chunk.length;
+          if (received > DOWNLOAD_MAX_BYTES) {
+            out.destroy();
+            res.destroy();
+            reject(new Error(`download exceeded ${DOWNLOAD_MAX_BYTES} bytes for ${url}`));
+          }
+        });
+        res.pipe(out);
+        out.on('finish', () => out.close(resolve));
+        out.on('error', reject);
+      });
+      req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => { req.destroy(); reject(new Error(`download timed out for ${url}`)); });
+      req.on('error', reject);
+    }
+    fetch(url);
   });
 }
 
