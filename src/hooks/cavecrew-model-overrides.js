@@ -45,10 +45,12 @@ function resolvePluginRoot(hookDir) {
 
 // Patch the YAML frontmatter of `content` to set `model: <modelValue>`.
 // Returns the patched string, or the original if no frontmatter or already identical.
-// Rejects `modelValue` strings that contain newlines or control characters.
+// Rejects `modelValue` strings that contain newlines, control characters, or
+// Unicode line-break codepoints (U+0085 NEL, U+2028 LS, U+2029 PS) that YAML
+// parsers treat as line endings but JS /[\x00-\x1f]/ does not catch.
 function patchFrontmatterModel(content, modelValue) {
   // Reject blank or unsafe model strings
-  if (!modelValue || /[\x00-\x1f\x7f]/.test(modelValue)) return content;
+  if (!modelValue || /[\x00-\x1f\x7f]|[\u0085\u2028\u2029]/.test(modelValue)) return content;
 
   // Must begin with YAML frontmatter delimiter
   if (!content.startsWith('---')) return content;
@@ -129,7 +131,16 @@ function applyOverrides(pluginRoot, env) {
     if (patched === content) continue;
 
     try {
-      fs.writeFileSync(agentPath, patched, 'utf8');
+      // Refuse symlinks — writing through a symlink could redirect the write
+      // to an arbitrary path outside the plugin directory.
+      if (fs.lstatSync(agentPath).isSymbolicLink()) continue;
+
+      // Atomic write: stage to a sibling temp file, then rename into place.
+      // Preserves the original file's mode so permission bits are not lost.
+      const origMode = fs.statSync(agentPath).mode;
+      const tmp = agentPath + '.caveman-tmp-' + process.pid;
+      fs.writeFileSync(tmp, patched, { encoding: 'utf8', mode: origMode });
+      fs.renameSync(tmp, agentPath);
     } catch (e) {
       // Silent fail — never block session start
     }
