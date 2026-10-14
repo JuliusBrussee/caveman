@@ -10,13 +10,9 @@ Follow the [LangChain quickstart](https://docs.caveman.so/integrations/framework
 
 ```sh
 python -m pip install 'caveman-sdk==1.2.0' 'caveman-middleware[langchain]==1.0.0' 'langchain==1.4.1' 'langchain-core==1.6.3' 'langgraph==1.2.11'
-curl -fsSLo quickstart.py https://docs.caveman.so/examples/middleware/quickstart.py
-DEMO_MODE=record python quickstart.py
-DEMO_MODE=compress python quickstart.py
-DEMO_MODE=off python quickstart.py
 ```
 
-The default example makes no provider request. It runs a deterministic native model/tool loop against the real local runtime, checks compression and exact paginated recovery, and asserts that application history retains originals. The optional provider run is separately labeled and can incur charges.
+The framework guide above is the runnable walkthrough. A separate downloadable quickstart script is not published on the docs site.
 
 ## Choose an integration
 

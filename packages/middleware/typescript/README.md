@@ -10,13 +10,9 @@ Follow the [AI SDK quickstart](https://docs.caveman.so/integrations/frameworks) 
 
 ```sh
 npm install --save-exact @caveman-ai/sdk@1.2.0 @caveman-ai/middleware@1.0.1 ai@7.0.94 @ai-sdk/provider@4.0.11 zod@4.4.3
-curl -fsSLo quickstart.ts https://docs.caveman.so/examples/middleware/quickstart.ts
-DEMO_MODE=record node --experimental-strip-types quickstart.ts
-DEMO_MODE=compress node --experimental-strip-types quickstart.ts
-DEMO_MODE=off node --experimental-strip-types quickstart.ts
 ```
 
-The default example makes no provider request. It runs a deterministic native model/tool loop against the real local runtime, checks compression and exact paginated recovery, and asserts that application history retains originals. The optional provider run is separately labeled and can incur charges.
+The framework guide above is the runnable walkthrough. A separate downloadable quickstart script is not published on the docs site.
 
 ## Choose an integration
 
