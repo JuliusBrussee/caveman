@@ -15,64 +15,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { isolatedEnv } from './_isolated-env.mjs';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 
-// ── Constants (must match installer/install.js) ────────────────────────────
-const DOWNLOAD_MAX_REDIRECTS = 5;
-const DOWNLOAD_TIMEOUT_MS    = 60_000;
-const DOWNLOAD_MAX_BYTES     = 8 * 1024 * 1024;
-
-// ── Inline reimplementation of downloadTo (Node-fallback path only) ────────
-// Kept structurally identical to the implementation in install.js so any
-// divergence between the two is a bug in that file.
-function makeDownloadTo(fakeHttps) {
-  return function downloadTo(url, dest) {
-    return new Promise((resolve, reject) => {
-      let redirects = 0;
-      function fetch(target) {
-        if (!target.startsWith('https://')) {
-          reject(new Error('download refused non-https URL: ' + target));
-          return;
-        }
-        const req = fakeHttps.get(target, (res) => {
-          if (res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-            if (++redirects > DOWNLOAD_MAX_REDIRECTS) {
-              reject(new Error('too many redirects for ' + url));
-              return;
-            }
-            fetch(res.headers.location);
-            return;
-          }
-          if (res.statusCode !== 200) {
-            reject(new Error('HTTP ' + res.statusCode + ' for ' + url));
-            return;
-          }
-          let received = 0;
-          const out = {
-            write() {}, end() {}, close(cb) { resolve(); if (cb) cb(); }, destroy() {},
-            on(e, cb) { if (e === 'finish') process.nextTick(cb); return out; },
-          };
-          res.on('data', (chunk) => {
-            received += chunk.length;
-            if (received > DOWNLOAD_MAX_BYTES) {
-              out.destroy(); res.destroy();
-              reject(new Error('download exceeded ' + DOWNLOAD_MAX_BYTES + ' bytes for ' + url));
-            }
-          });
-          res.pipe(out);
-        });
-        req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
-          req.destroy();
-          reject(new Error('download timed out for ' + url));
-        });
-        req.on('error', reject);
-      }
-      fetch(url);
-    });
-  };
-}
+// ── Load the real downloadTo and its constants from the installer ──────────
+const {
+  downloadTo,
+  DOWNLOAD_MAX_REDIRECTS,
+  DOWNLOAD_TIMEOUT_MS,
+  DOWNLOAD_MAX_BYTES,
+} = createRequire(import.meta.url)('../../installer/install.js');
 
 // ── Fake-https factory ─────────────────────────────────────────────────────
 function makeFakeHttps({ statusCode = 200, location = null, hangTimeout = null, bodyChunks = ['ok'] } = {}) {
@@ -86,7 +40,7 @@ function makeFakeHttps({ statusCode = 200, location = null, hangTimeout = null, 
         pipe(dest) {
           if (hangTimeout !== null) return; // never delivers data
           for (const chunk of bodyChunks) fakeRes.emit('data', Buffer.from(chunk));
-          process.nextTick(() => dest.close && dest.close());
+          process.nextTick(() => dest.end());
         },
       });
       const fakeReq = new EventEmitter();
@@ -105,9 +59,9 @@ function makeFakeHttps({ statusCode = 200, location = null, hangTimeout = null, 
 // ── Node-fallback branch tests ─────────────────────────────────────────────
 
 test('Node fallback: http:// redirect is rejected', async () => {
-  const dl = makeDownloadTo(makeFakeHttps({ statusCode: 301, location: 'http://evil.example.com/x' }));
   await assert.rejects(
-    () => dl('https://raw.githubusercontent.com/ok', '/dev/null'),
+    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null',
+      makeFakeHttps({ statusCode: 301, location: 'http://evil.example.com/x' })),
     /non-https/,
   );
 });
@@ -130,9 +84,8 @@ test('Node fallback: redirect chain beyond limit is rejected', async () => {
       return fakeReq;
     },
   };
-  const dl = makeDownloadTo(loopHttps);
   await assert.rejects(
-    () => dl('https://raw.githubusercontent.com/ok', '/dev/null'),
+    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null', loopHttps),
     /too many redirects/,
   );
   assert.ok(count <= DOWNLOAD_MAX_REDIRECTS + 2, `excessive fetches: ${count}`);
@@ -140,24 +93,30 @@ test('Node fallback: redirect chain beyond limit is rejected', async () => {
 
 test('Node fallback: oversized body is rejected', async () => {
   const BIG = DOWNLOAD_MAX_BYTES + 1;
-  const dl = makeDownloadTo(makeFakeHttps({ statusCode: 200, bodyChunks: [Buffer.alloc(BIG).fill(65).toString('binary')] }));
   await assert.rejects(
-    () => dl('https://raw.githubusercontent.com/ok', '/dev/null'),
+    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null',
+      makeFakeHttps({ statusCode: 200, bodyChunks: [Buffer.alloc(BIG).fill(65).toString('binary')] })),
     /exceeded/,
   );
 });
 
 test('Node fallback: timeout fires on a hanging connection', async () => {
-  const dl = makeDownloadTo(makeFakeHttps({ statusCode: 200, hangTimeout: 10 }));
   await assert.rejects(
-    () => dl('https://raw.githubusercontent.com/ok', '/dev/null'),
+    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null',
+      makeFakeHttps({ statusCode: 200, hangTimeout: 10 })),
     /timed out/,
   );
 });
 
 test('Node fallback: successful small download resolves without error', async () => {
-  const dl = makeDownloadTo(makeFakeHttps({ statusCode: 200, bodyChunks: ['hello'] }));
-  await assert.doesNotReject(() => dl('https://raw.githubusercontent.com/ok', '/dev/null'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-test-'));
+  const dest = path.join(tmp, 'out');
+  try {
+    await assert.doesNotReject(() => downloadTo('https://raw.githubusercontent.com/ok', dest,
+      makeFakeHttps({ statusCode: 200, bodyChunks: ['hello'] })));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 
 // ── curl-path tests (POSIX only, requires a real shell) ────────────────────

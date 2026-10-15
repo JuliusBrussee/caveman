@@ -2030,10 +2030,10 @@ const DOWNLOAD_MAX_REDIRECTS = 5;
 const DOWNLOAD_TIMEOUT_MS    = 60_000;
 const DOWNLOAD_MAX_BYTES     = 8 * 1024 * 1024; // 8 MiB
 
-function downloadTo(url, dest) {
+function downloadTo(url, dest, _https) {
   // Prefer curl/wget when available (better proxy + cert handling on legacy
   // systems); fall back to Node https.
-  if (hasCmd('curl')) {
+  if (!_https && hasCmd('curl')) {
     // --proto-redir =https  reject any redirect that downgrades off https
     // --max-redirs 5        cap redirect chain length
     // --max-time 60         hard wall-clock limit
@@ -2048,7 +2048,7 @@ function downloadTo(url, dest) {
     if (r.status === 0) return;
     throw new Error(`curl failed for ${url}`);
   }
-  const https = require('https');
+  const https = _https || require('https');
   return new Promise((resolve, reject) => {
     let redirects = 0;
     function fetch(target) {
@@ -2871,5 +2871,9 @@ async function main() {
   return 0;
 }
 
-main().then(code => process.exit(code || 0))
-      .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
+if (require.main === module) {
+  main().then(code => process.exit(code || 0))
+        .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
+}
+
+module.exports = { downloadTo, DOWNLOAD_MAX_REDIRECTS, DOWNLOAD_TIMEOUT_MS, DOWNLOAD_MAX_BYTES };
