@@ -1230,13 +1230,16 @@ function installAntigravityCli(ctx) {
     fs.mkdirSync(path.join(pluginDir, 'rules'), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({
       name: AGY_PLUGIN_NAME,
-      description: 'Caveman: terse replies, every technical fact kept',
+      version: packageVersion(repoRoot),
+      description: 'Caveman: terse replies, every technical factor kept',
+      contextFileName: 'rules/AGENTS.md',
     }, null, 2) + '\n');
     fs.copyFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), path.join(pluginDir, 'rules', 'AGENTS.md'));
     for (const name of AGY_SKILL_DIRS) {
       fs.cpSync(path.join(repoRoot, 'skills', name), path.join(pluginDir, 'skills', name), { recursive: true });
     }
     if (spawnOk(runSpawn('agy', ['plugin', 'install', pluginDir], null, false))) {
+      runSpawn('agy', ['plugin', 'enable', AGY_PLUGIN_NAME], null, false);
       results.installed.push('antigravity-cli');
       note('  new agy sessions start in caveman mode; `agy plugin disable caveman` turns it off');
     } else {

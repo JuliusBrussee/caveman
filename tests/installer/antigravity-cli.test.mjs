@@ -53,6 +53,11 @@ test('stages the plugin with skills and the always-on rule, then hands it to agy
   assert.equal(path.basename(install[2]), 'caveman');
   assert.equal(fs.existsSync(install[2]), false, 'staging copy is cleaned up');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).name, 'caveman');
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).contextFileName,
+    'rules/AGENTS.md',
+    'plugin.json must declare contextFileName so agy loads the rules',
+  );
   for (const id of SKILLS) assert.ok(fs.existsSync(path.join(installed, 'skills', id, 'SKILL.md')), id);
   assert.equal(
     fs.readFileSync(path.join(installed, 'rules', 'AGENTS.md'), 'utf8'),
