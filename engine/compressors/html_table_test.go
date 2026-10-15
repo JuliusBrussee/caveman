@@ -262,6 +262,9 @@ func TestHTMLArticleTableDeterministicAndIdempotent(t *testing.T) {
 func FuzzHTMLCompress(f *testing.F) {
 	f.Add(inArticle(serviceTable(30, 7)))
 	f.Add(articleHTML)
+	f.Add(opsDashboard(30, 7))
+	f.Add(`<!doctype html><div role="grid"><div role="row"><div role="gridcell">x</div></div></div>`)
+	f.Add(`<!doctype html><ul>` + strings.Repeat(`<li class="i"><b>k</b>v</li>`, 14) + `</ul>`)
 	f.Add(inArticle(`<table><tr><th>a|b</th><th></th></tr><tr><td colspan="x">1</td><td>2</td></tr></table>`))
 	f.Add(inArticle(`<table><tr><td><span>/</span>x</td></tr><tr><td><pre>a` + "\n" + `b</pre></td></tr></table>`))
 	f.Fuzz(func(t *testing.T, doc string) {

@@ -35,6 +35,11 @@ var (
 // Markdown table and shaped by the tabular compressor (html_table.go), so its
 // rows keep their columns and are elided like a CSV's. An article without such
 // a table comes out byte for byte as before.
+//
+// A page the article extractor declines is usually not prose at all but data: a
+// dashboard, a coverage or test report, an admin list. Those get the structural
+// view in html_structural.go instead, which keeps the page's text and renders
+// its tables and repeated records the same way.
 type htmlCompressor struct {
 	minOutputBytes int
 	tab            *tabularCompressor
@@ -59,7 +64,10 @@ func (c *htmlCompressor) CompressQuery(input []byte, query string) ([]byte, bool
 }
 
 func (c *htmlCompressor) compress(input []byte, query string) ([]byte, bool) {
-	return c.article(input, query)
+	if out, ok := c.article(input, query); ok {
+		return out, true
+	}
+	return c.structural(input, query)
 }
 
 func (c *htmlCompressor) renderer(query string) *tableRenderer {
@@ -304,7 +312,7 @@ func renderText(n *html.Node, table func(*html.Node) (string, bool)) string {
 	var pres, tables []string
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
-		if n.Type == html.ElementNode && n.DataAtom == atom.Table {
+		if n.Type == html.ElementNode && (n.DataAtom == atom.Table || isARIATable(n)) {
 			if rendered, ok := table(n); ok {
 				b.WriteString("\n\x00TBL")
 				b.WriteString(strconv.Itoa(len(tables)))

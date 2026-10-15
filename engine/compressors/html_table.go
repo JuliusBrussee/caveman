@@ -34,11 +34,16 @@ func (r *tableRenderer) line(s string) {
 	}
 }
 
-// tableBlock renders one table as Markdown lines for the article path, which
-// places the block itself.
+// tableBlock renders one native or ARIA table as Markdown lines for the article
+// path, which places the block itself.
 func (r *tableRenderer) tableBlock(n *html.Node) (string, bool) {
 	start := len(r.lines)
-	ok := r.table(n)
+	var ok bool
+	if n.DataAtom == atom.Table {
+		ok = r.table(n)
+	} else {
+		ok = r.ariaTable(n)
+	}
 	block := strings.Join(r.lines[start:], "\n")
 	r.lines = r.lines[:start]
 	return block, ok
@@ -256,7 +261,7 @@ func isStructuralBlock(n *html.Node) bool {
 		atom.Table, atom.Tbody, atom.Td, atom.Tfoot, atom.Th, atom.Thead, atom.Tr, atom.Ul:
 		return true
 	}
-	return htmlPreformatRe.MatchString(htmlAttr(n, "style"))
+	return hasHandledRole(n) || htmlPreformatRe.MatchString(htmlAttr(n, "style"))
 }
 
 // inlineJoiner gathers inline content the way a browser lays it out, with one
