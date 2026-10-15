@@ -100,6 +100,14 @@ function stripTrailingCommas(src) {
 // stripping, meta.jsonc is set true — writeSettings re-serializes plain JSON,
 // so those comments do not survive the round trip. Callers that mutate a file
 // the user authored should warn and point at their backup.
+function parseSettingsObject(raw) {
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('settings root must be an object');
+  }
+  return parsed;
+}
+
 function readSettings(p, meta) {
   if (!fs.existsSync(p)) return {};
   let raw;
@@ -112,9 +120,9 @@ function readSettings(p, meta) {
   // writeSettings puts it back.
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (!raw.trim()) return {};
-  try { return JSON.parse(raw); } catch (_) { /* fall through to JSONC */ }
+  try { return parseSettingsObject(raw); } catch (_) { /* fall through to JSONC */ }
   try {
-    const parsed = JSON.parse(stripJsonComments(raw));
+    const parsed = parseSettingsObject(stripJsonComments(raw));
     if (meta) meta.jsonc = true;
     return parsed;
   }

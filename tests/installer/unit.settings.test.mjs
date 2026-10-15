@@ -65,6 +65,18 @@ test('readSettings handles plain JSON', () => {
   assert.deepEqual(SETTINGS.readSettings(p), { theme: 'dark' });
 });
 
+test('readSettings refuses non-object roots without changing the file', () => {
+  for (const raw of ['[]', '42', 'true', '"settings"', '[ /* comment */ ]']) {
+    const p = tmpFile('s.json', raw);
+    try {
+      assert.equal(SETTINGS.readSettings(p), null, raw);
+      assert.equal(fs.readFileSync(p, 'utf8'), raw);
+    } finally {
+      fs.rmSync(path.dirname(p), { recursive: true, force: true });
+    }
+  }
+});
+
 test('readSettings handles JSONC (comments + trailing commas)', () => {
   const p = tmpFile('s.json', `// my settings
 {
