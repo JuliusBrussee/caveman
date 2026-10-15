@@ -221,12 +221,83 @@ func resolveProfile(raw, policyMode string) (string, profileFeatures, error) {
 	}
 }
 
-func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
-	started := time.Now()
-	sessionLock := r.sessionLock(request.Session.ID)
-	sessionLock.Lock()
-	defer sessionLock.Unlock()
+// decisionResult carries one settled decision from the drain goroutine back to
+// Handle.
+type decisionResult struct {
+	response Response
+	err      error
+}
 
+// Handle decides one packed host event. The context is the hook deadline and it
+// is honored: the thin host adapter across the socket gives up at the same
+// deadline, so a store call wedged on cross-process database contention must
+// not run Handle to the store's own 5s busy timeout. It used to (issue #1279:
+// an upgraded home whose ccr.db was write-locked by stale 2.x processes closed
+// every native.sock connection with an empty reply seconds after the hook had
+// already failed open, and every queued event behind it did the same).
+func (r *Runtime) Handle(ctx context.Context, request Request) (Response, error) {
+	if err := ctx.Err(); err != nil {
+		return Response{}, fmt.Errorf("native runtime: hook budget exhausted before %s: %w", request.Event.Type, err)
+	}
+	sessionLock := r.sessionLock(request.Session.ID)
+	if err := acquireSessionLock(ctx, sessionLock); err != nil {
+		return Response{}, err
+	}
+	// The decision runs on its own goroutine so the deadline bounds it from the
+	// outside: when the budget dies, Handle returns fail-open immediately and
+	// the drain below finishes or abandons the in-flight store work in the
+	// background. The session stripe moves with the drain (released by its
+	// defer), so later events for this session keep their order against
+	// whatever the drain still has in flight.
+	out := make(chan decisionResult, 1)
+	go func() {
+		defer sessionLock.Unlock()
+		response, err := r.respond(ctx, request)
+		out <- decisionResult{response: response, err: err}
+	}()
+	select {
+	case result := <-out:
+		return result.response, result.err
+	case <-ctx.Done():
+		return Response{}, fmt.Errorf("native runtime: hook budget exhausted during %s: %w", request.Event.Type, ctx.Err())
+	}
+}
+
+// acquireSessionLock takes the session stripe or gives up when the hook
+// deadline expires. TryLock polling keeps a session whose previous event is
+// still draining a blocked store call from stacking unbounded waiters on the
+// stripe for seconds.
+func acquireSessionLock(ctx context.Context, lock *sync.Mutex) error {
+	if lock.TryLock() {
+		return nil
+	}
+	tick := time.NewTimer(time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("native runtime: hook budget exhausted waiting for session: %w", ctx.Err())
+		case <-tick.C:
+			if lock.TryLock() {
+				return nil
+			}
+			tick.Reset(time.Millisecond)
+		}
+	}
+}
+
+// respond is the decision body Handle drains on its goroutine. The context
+// checks bound the store work it STARTS: once the hook deadline has passed, the
+// response can no longer reach the host, so pending store writes are skipped
+// instead of queued behind the wedged store connection. Work already in flight
+// still finishes (idempotent writes, single-connection ordering), and
+// session.end finalization runs even on a dead budget so a session the host
+// ended is always archived.
+func (r *Runtime) respond(ctx context.Context, request Request) (Response, error) {
+	started := time.Now()
+	if err := ctx.Err(); err != nil {
+		return Response{}, err
+	}
 	if request.ProtocolVersion != ProtocolVersion {
 		return Response{}, fmt.Errorf("native runtime: unsupported protocol version %d", request.ProtocolVersion)
 	}
@@ -340,9 +411,16 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 	if err != nil {
 		return Response{}, err
 	}
-	response.RuntimeUS = time.Since(started).Microseconds()
-	if err := r.recordDecision(request, response); err != nil {
-		return Response{}, err
+	// Past the deadline the response never reaches the host, so skip the
+	// decision record instead of queueing more store work behind a wedged
+	// connection. The session.end finalization below still runs on the drain:
+	// a session the host ended must be archived regardless of budget.
+	budgetAlive := ctx.Err() == nil
+	if budgetAlive {
+		response.RuntimeUS = time.Since(started).Microseconds()
+		if err := r.recordDecision(request, response); err != nil {
+			return Response{}, err
+		}
 	}
 	if request.Event.Type == "session.end" && r.receiptDir != "" {
 		receipt, writeErr := r.writeReceipt(request)
@@ -364,6 +442,8 @@ func (r *Runtime) Handle(_ context.Context, request Request) (Response, error) {
 // coding-agent sessions spend their shared 250 ms hook budget waiting on each
 // other's repository and CCR work. Fixed stripes bound lock memory for a
 // long-lived runtime; hash collisions only serialize, never weaken isolation.
+// Waiters still give up at their own hook deadline (acquireSessionLock) instead
+// of queueing for the full drain of a blocked event.
 func (r *Runtime) sessionLock(sessionID string) *sync.Mutex {
 	var hash uint32 = 2166136261
 	for i := 0; i < len(sessionID); i++ {
