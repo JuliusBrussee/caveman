@@ -96,10 +96,14 @@ func (e *Engine) Detect(input []byte) string {
 // looksLikeTerminal detects raw terminal/command output deterministically. A raw
 // ANSI escape sequence is conclusive. A dense run of bare carriage returns (a
 // progress bar redrawing in place) is the secondary signal; CRLF line endings are
-// excluded so ordinary \r\n text never trips it.
+// excluded so ordinary \r\n text never trips it. CR-terminated (classic-Mac)
+// documents have no LFs and multiple bare CRs, so require an LF or ANSI escape.
 func looksLikeTerminal(input []byte) bool {
 	if ansiEscRe.Match(input) {
 		return true
+	}
+	if !bytes.Contains(input, []byte("\n")) {
+		return false
 	}
 	bareCR := bytes.Count(input, []byte("\r")) - bytes.Count(input, []byte("\r\n"))
 	return bareCR >= 3

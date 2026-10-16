@@ -87,6 +87,45 @@ func TestTerminalPassesThroughPlainShort(t *testing.T) {
 	}
 }
 
+func TestTerminalProgressRedrawWithLFAndANSI(t *testing.T) {
+	in := []byte("\x1b[34mDownloading\x1b[0m 10%\r\x1b[34mDownloading\x1b[0m 50%\r\x1b[32mDownloading 100% done\x1b[0m\n")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		t.Fatal("expected progress redraw with LF and ANSI to compress")
+	}
+	if bytes.Contains(out, []byte("10%")) || bytes.Contains(out, []byte("50%")) {
+		t.Errorf("intermediate progress frames survived: %q", out)
+	}
+	if !bytes.Contains(out, []byte("Downloading 100% done")) {
+		t.Errorf("final progress state lost: %q", out)
+	}
+	if bytes.ContainsRune(out, 0x1b) {
+		t.Errorf("ANSI escapes survived: %q", out)
+	}
+}
+
+func TestTerminalANSIColoredOutput(t *testing.T) {
+	in := []byte("\x1b[31merror:\x1b[0m something went wrong\n")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		t.Fatal("expected ANSI colored output to compress")
+	}
+	if bytes.ContainsRune(out, 0x1b) {
+		t.Errorf("ANSI escapes survived: %q", out)
+	}
+	if !bytes.Contains(out, []byte("error: something went wrong")) {
+		t.Errorf("text content lost: %q", out)
+	}
+}
+
+func TestTerminalCRLFDocumentBehavior(t *testing.T) {
+	in := []byte("line one\r\nline two\r\nline three\r\n")
+	// Short CRLF text with no ANSI, no bare CR redraws, and < 4 lines should pass through.
+	if _, ok := NewTerminal().Compress(in); ok {
+		t.Error("short CRLF document should pass through (ok=false)")
+	}
+}
+
 func TestTerminalIsIdempotent(t *testing.T) {
 	var b strings.Builder
 	for i := 0; i < 30; i++ {

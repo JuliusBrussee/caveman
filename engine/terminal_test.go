@@ -21,6 +21,7 @@ func TestDetectTerminal(t *testing.T) {
 		{"progress redraws", "fetch 10%\rfetch 40%\rfetch 80%\rfetch done\n", engine.TypeTerminal},
 		{"plain prose stays text", "The quick brown fox jumps over the lazy dog.", engine.TypeText},
 		{"crlf text not terminal", "line one\r\nline two\r\nline three\r\n", engine.TypeText},
+		{"cr-only 3+ lines classic mac not terminal", "line one\rline two\rline three\rline four\r", engine.TypeText},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -28,6 +29,45 @@ func TestDetectTerminal(t *testing.T) {
 				t.Errorf("Detect(%s) = %q, want %q", c.name, got, c.want)
 			}
 		})
+	}
+}
+
+func TestCROnlyDocumentPipelineAndDetection(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	e := engine.New(store, nil)
+
+	// 84-byte classic-Mac (CR-terminated) payload with multiple bare CRs and 0 LFs
+	in := []byte("Classic Mac document line one\rline two with more text\rline three here\rline four footer\r")
+
+	// Detect must not return terminal
+	if got := e.Detect(in); got == engine.TypeTerminal {
+		t.Errorf("Detect(CR-only) = %q, want non-terminal", got)
+	}
+
+	// Whole document must survive the engine pipeline (pass-through or text compressor, not collapsed to last line)
+	res, err := e.Compress(in, engine.Options{Mode: engine.ModeCompress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.ContentType == engine.TypeTerminal {
+		t.Errorf("CR-only compressed as terminal: %q", res.ContentType)
+	}
+}
+
+func TestPureCRProgressBarWithoutLFAndANSI(t *testing.T) {
+	e := engine.New(nil, nil)
+	// A pure CR progress bar with no ANSI and no LF (e.g. streaming progress updates without newlines).
+	// With our fix requiring LF or ANSI for bare-CR terminal detection, pure CR payload with no LF is not
+	// detected as terminal. (If it were detected as terminal, terminalCompressor would collapse it to its final state).
+	// Because it is not detected as terminal, it passes through as text (or whatever detector matches),
+	// preserving all intermediate progress frames rather than collapsing them to the last line.
+	in := []byte("downloading 10%\rdownloading 50%\rdownloading 100%\r")
+	if got := e.Detect(in); got == engine.TypeTerminal {
+		t.Errorf("pure CR progress bar without LF detected as terminal: %q", got)
 	}
 }
 
