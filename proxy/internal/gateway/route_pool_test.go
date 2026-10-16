@@ -52,7 +52,7 @@ func (p *poolStub) server(t *testing.T) *Server {
 		p.bodies[r.URL.Path] = append(p.bodies[r.URL.Path], string(raw))
 		p.mu.Unlock()
 		switch r.URL.Path {
-		case "/chat/completions":
+		case "/chat/completions", "/v1/chat/completions":
 			if p.poolCode != 0 && (!p.poolFailPinned || strings.Contains(string(raw), `"allow_fallbacks":false`)) {
 				w.WriteHeader(p.poolCode)
 				_, _ = io.WriteString(w, `{"error":{"message":"overloaded"}}`)
@@ -192,6 +192,41 @@ func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	_ = json.Unmarshal([]byte(body), &sent)
 	if sent["model"] != "accounts/fireworks/models/kimi-k3" || sent["reasoning_effort"] != "high" || sent["max_tokens"] == nil {
 		t.Errorf("pool body = %s", body)
+	}
+	if req, _ := c.stub.last("/v1/messages"); req != nil {
+		t.Error("the harness's own provider was called too")
+	}
+}
+
+func TestPoolMoonshotK3TargetSendsFittedChatRequest(t *testing.T) {
+	header := http.Header{}
+	header.Set("authorization", "Bearer sk-moonshot")
+	target := &RouteTarget{PoolID: "moonshot/kimi-k3", Via: "local", Host: "moonshot", Model: "kimi-k3", Wire: translate.Chat,
+		URL: "https://api.moonshot.ai/v1/chat/completions", Header: header,
+		Translate: translate.Options{Model: "kimi-k3", Dialect: "kimi", Route: "moonshot", MaxTokensField: "max_completion_tokens", Replay: true}}
+	c := newPoolCase(t, target, "max")
+	rec := poolSend(t, c.srv, poolBody)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") {
+		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
+	}
+	req, body := c.stub.last("/v1/chat/completions")
+	if req == nil {
+		t.Fatalf("the Moonshot chat endpoint was not called; target URL = %s", target.URL)
+	}
+	if req.Header.Get("authorization") != "Bearer sk-moonshot" || req.Header.Get("x-api-key") != "" {
+		t.Fatalf("Moonshot headers = %v", req.Header)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent["model"] != "kimi-k3" || sent["reasoning_effort"] != "max" || sent["max_completion_tokens"] != 50.0 {
+		t.Fatalf("Moonshot body = %s", body)
+	}
+	for _, unwanted := range []string{"max_tokens", "max_output_tokens", "thinking", "reasoning"} {
+		if _, ok := sent[unwanted]; ok {
+			t.Fatalf("Moonshot body contains %s: %s", unwanted, body)
+		}
 	}
 	if req, _ := c.stub.last("/v1/messages"); req != nil {
 		t.Error("the harness's own provider was called too")
