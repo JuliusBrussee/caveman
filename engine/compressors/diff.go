@@ -74,6 +74,21 @@ func isDiffStructuralLine(line []byte) bool {
 		bytes.HasPrefix(line, []byte("--- ")) ||
 		bytes.HasPrefix(line, []byte("+++ ")) ||
 		bytes.HasPrefix(line, []byte("@@ ")) ||
+		// These are patch metadata, not unchanged hunk context. Keeping the
+		// newline marker also keeps the line it annotates via keepContext.
+		bytes.HasPrefix(line, []byte("\\")) ||
+		bytes.HasPrefix(line, []byte("old mode ")) ||
+		bytes.HasPrefix(line, []byte("new mode ")) ||
+		bytes.HasPrefix(line, []byte("deleted file mode ")) ||
+		bytes.HasPrefix(line, []byte("new file mode ")) ||
+		bytes.HasPrefix(line, []byte("copy from ")) ||
+		bytes.HasPrefix(line, []byte("copy to ")) ||
+		bytes.HasPrefix(line, []byte("rename from ")) ||
+		bytes.HasPrefix(line, []byte("rename to ")) ||
+		bytes.HasPrefix(line, []byte("similarity index ")) ||
+		bytes.HasPrefix(line, []byte("dissimilarity index ")) ||
+		bytes.HasPrefix(line, []byte("Binary files ")) ||
+		bytes.HasPrefix(line, []byte("GIT binary patch")) ||
 		(isChangedDiffLine(line))
 }
 
