@@ -122,7 +122,11 @@ function fallbackGetDefaultMode(startDir) {
     let dir = path.resolve(startDir || process.cwd());
     for (let i = 0; i < 64; i++) {
       for (const rel of ['.caveman/config.json', '.caveman.json']) {
-        const mode = fallbackReadMode(path.join(dir, rel));
+        const candidate = path.resolve(dir, rel);
+        // Guard against the resolved path escaping `dir` (e.g. via a `rel`
+        // containing "..") before it is read.
+        if (candidate !== dir && !candidate.startsWith(dir + path.sep)) continue;
+        const mode = fallbackReadMode(candidate);
         if (mode) return mode;
       }
       const parent = path.dirname(dir);
