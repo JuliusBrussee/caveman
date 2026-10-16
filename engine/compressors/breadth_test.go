@@ -133,6 +133,38 @@ func TestDiffCompressorKeepsHunkLinesThatLookLikeHeaders(t *testing.T) {
 	}
 }
 
+// The other side of the column-0 rule: a *context* line whose text reads like
+// an extended header (" new file mode …") is context, so it still belongs to
+// the elided run. A matcher loosened to TrimSpace or substring matching would
+// promote it to structural and keep it; this pins that it is not.
+func TestDiffCompressorElidesContextLinesThatLookLikeHeaders(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("diff --git a/mode.sh b/mode.sh\nindex 111..222 100644\n--- a/mode.sh\n+++ b/mode.sh\n@@ -1,24 +1,24 @@\n")
+	for i := 0; i < 24; i++ {
+		switch i {
+		case 12:
+			b.WriteString(" new file mode 100644\n")
+		case 16:
+			b.WriteString(" rename to somewhere\n")
+		default:
+			fmt.Fprintf(&b, " unchanged line %02d\n", i)
+		}
+	}
+
+	out, ok := compressors.NewDiff().Compress([]byte(b.String()))
+	if !ok {
+		t.Fatal("expected diff compression")
+	}
+	for _, gone := range []string{" new file mode 100644", " rename to somewhere"} {
+		if bytes.Contains(out, []byte(gone)) {
+			t.Fatalf("compressed diff kept context line %q as if it were a header:\n%s", gone, out)
+		}
+	}
+	if !bytes.Contains(out, []byte("context lines elided (caveman)")) {
+		t.Fatalf("expected the long context run to be elided:\n%s", out)
+	}
+}
+
 func TestSearchResultCompressorKeepsImportantHits(t *testing.T) {
 	var b strings.Builder
 	for i := 1; i <= 28; i++ {
