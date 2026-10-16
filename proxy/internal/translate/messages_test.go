@@ -163,6 +163,56 @@ func TestMessagesToChatEffortDialects(t *testing.T) {
 	}
 }
 
+func TestMoonshotK3ChatRequest(t *testing.T) {
+	for _, tc := range []struct{ effort, want string }{
+		{"none", "low"},
+		{"minimal", "low"},
+		{"low", "low"},
+		{"medium", "high"},
+		{"high", "high"},
+		{"xhigh", "high"},
+		{"max", "max"},
+	} {
+		t.Run(tc.effort, func(t *testing.T) {
+			opts := Options{Model: "kimi-k3", Effort: tc.effort, Dialect: "kimi", Route: "moonshot", MaxTokensField: "max_completion_tokens"}
+			for _, request := range []struct {
+				name, from, body, tokenField string
+				wantTokens                   any
+			}{
+				{"messages", Messages, `{"model":"m","max_tokens":4000,"messages":[{"role":"user","content":"hi"}]}`, "max_completion_tokens", 4000.0},
+				{"chat", Chat, `{"model":"m","messages":[{"role":"user","content":"hi"}]}`, "", nil},
+				{"responses", Responses, `{"model":"m","max_output_tokens":4000,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"hi"}]}]}`, "max_completion_tokens", 4000.0},
+			} {
+				t.Run(request.name, func(t *testing.T) {
+					sent, _ := mustRequest(t, request.from, Chat, request.body, opts)
+					if got := sent["reasoning_effort"]; got != tc.want {
+						t.Fatalf("reasoning_effort = %v, want %q (body %v)", got, tc.want, sent)
+					}
+					if request.tokenField != "" {
+						if got := sent[request.tokenField]; got != request.wantTokens {
+							t.Fatalf("%s = %v, want %v (body %v)", request.tokenField, got, request.wantTokens, sent)
+						}
+					}
+					for _, deprecated := range []string{"max_tokens", "max_output_tokens", "thinking", "reasoning"} {
+						if _, ok := sent[deprecated]; ok {
+							t.Fatalf("unfitted %s remains (body %v)", deprecated, sent)
+						}
+					}
+				})
+			}
+		})
+	}
+	for _, effort := range []string{"ultra", "persistent"} {
+		t.Run(effort, func(t *testing.T) {
+			opts := Options{Model: "kimi-k3", Effort: effort, Dialect: "kimi", Route: "moonshot"}
+			sent, _ := mustRequest(t, Chat, Chat, `{"model":"m","reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`, opts)
+			if _, ok := sent["reasoning_effort"]; ok {
+				t.Fatalf("unmapped effort produced reasoning_effort = %v", sent["reasoning_effort"])
+			}
+		})
+	}
+}
+
 // A chat route's own reasoning goes back to that route and model as
 // reasoning_content; nobody else's does.
 func TestMessagesToChatReplaysOnlyTheRoutesOwnReasoning(t *testing.T) {
