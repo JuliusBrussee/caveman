@@ -74,7 +74,47 @@ func isDiffStructuralLine(line []byte) bool {
 		bytes.HasPrefix(line, []byte("--- ")) ||
 		bytes.HasPrefix(line, []byte("+++ ")) ||
 		bytes.HasPrefix(line, []byte("@@ ")) ||
+		isDiffExtendedHeaderLine(line) ||
 		(isChangedDiffLine(line))
+}
+
+// diffExtendedHeaderPrefixes are git's extended headers plus the one marker it
+// writes after the line it annotates. Each starts at column 0.
+var diffExtendedHeaderPrefixes = [][]byte{
+	[]byte("similarity index "),
+	[]byte("dissimilarity index "),
+	[]byte("rename from "),
+	[]byte("rename to "),
+	[]byte("copy from "),
+	[]byte("copy to "),
+	[]byte("old mode "),
+	[]byte("new mode "),
+	[]byte("new file mode "),
+	[]byte("deleted file mode "),
+	[]byte("Binary files "),
+	[]byte("GIT binary patch"),
+	[]byte("\\ No newline at end of file"),
+}
+
+// isDiffExtendedHeaderLine reports whether line is one of git's extended
+// headers — the per-file metadata that sits between "diff --git" and the first
+// hunk — or the "\ No newline at end of file" marker.
+//
+// None of them can be context, so the column-0 match is unambiguous: inside a
+// hunk every context line carries a leading space and every changed line a
+// leading '+' or '-'. They were classified as context and elided whenever they
+// sat more than keepContext lines from a structural line, which dropped the
+// rename target of a pure-rename block ("rename to" is the 4th line, outside
+// the ±2 window around "diff --git") and the marker recording that a file's
+// last line has no trailing newline — both under a marker claiming only
+// context was dropped.
+func isDiffExtendedHeaderLine(line []byte) bool {
+	for _, prefix := range diffExtendedHeaderPrefixes {
+		if bytes.HasPrefix(line, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isChangedDiffLine reports whether line is an added/removed hunk line.

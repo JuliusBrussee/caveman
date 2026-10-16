@@ -64,6 +64,75 @@ func TestDiffCompressorKeepsBlankLineChanges(t *testing.T) {
 	}
 }
 
+// A file whose last line has no trailing newline is annotated by git with
+// "\ No newline at end of file". It is metadata, not context, but it landed
+// outside the keep window and was replaced by an elision marker — the diff
+// stopped saying that the file is unterminated.
+func TestDiffCompressorKeepsNoNewlineMarker(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("diff --git a/app.go b/app.go\nindex 111..222 100644\n--- a/app.go\n+++ b/app.go\n@@ -1,20 +1,20 @@\n unchanged line 01\n unchanged line 02\n")
+	b.WriteString("-old_value = 1\n+new_value = 2\n")
+	for i := 3; i < 12; i++ {
+		fmt.Fprintf(&b, " unchanged line %02d\n", i)
+	}
+	b.WriteString("\\ No newline at end of file\n")
+
+	out, ok := compressors.NewDiff().Compress([]byte(b.String()))
+	if !ok {
+		t.Fatal("expected diff compression")
+	}
+	if !bytes.Contains(out, []byte("\\ No newline at end of file")) {
+		t.Fatalf("compressed diff dropped the no-newline marker:\n%s", out)
+	}
+}
+
+// A pure rename is rendered as "diff --git" + "similarity index" +
+// "rename from" + "rename to". The ±2 keep window around "diff --git" covers
+// only the first three lines, so the new path — the whole point of the block —
+// was elided as context.
+func TestDiffCompressorKeepsRenameTarget(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("diff --git a/old_name.py b/new_name.py\nsimilarity index 100%\nrename from old_name.py\nrename to new_name.py\n")
+	for i := 0; i < 10; i++ {
+		fmt.Fprintf(&b, " unchanged line %02d\n", i)
+	}
+
+	out, ok := compressors.NewDiff().Compress([]byte(b.String()))
+	if !ok {
+		t.Fatal("expected diff compression")
+	}
+	for _, want := range []string{"rename from old_name.py", "rename to new_name.py"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Fatalf("compressed diff dropped %q:\n%s", want, out)
+		}
+	}
+}
+
+// A hunk line whose own text starts with a header word is still a hunk line —
+// it keeps its leading ' ', '+' or '-' — so the extended-header prefixes must
+// not capture it.
+func TestDiffCompressorKeepsHunkLinesThatLookLikeHeaders(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("diff --git a/notes.md b/notes.md\nindex 111..222 100644\n--- a/notes.md\n+++ b/notes.md\n@@ -1,20 +1,20 @@\n")
+	for i := 0; i < 8; i++ {
+		fmt.Fprintf(&b, " unchanged line %02d\n", i)
+	}
+	b.WriteString("+rename from old\n-new file mode gone\n")
+	for i := 9; i < 20; i++ {
+		fmt.Fprintf(&b, " unchanged line %02d\n", i)
+	}
+
+	out, ok := compressors.NewDiff().Compress([]byte(b.String()))
+	if !ok {
+		t.Fatal("expected diff compression")
+	}
+	for _, want := range []string{"\n+rename from old", "\n-new file mode gone"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Fatalf("compressed diff dropped hunk line %q:\n%s", want, out)
+		}
+	}
+}
+
 func TestSearchResultCompressorKeepsImportantHits(t *testing.T) {
 	var b strings.Builder
 	for i := 1; i <= 28; i++ {
