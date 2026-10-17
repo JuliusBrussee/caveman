@@ -1,8 +1,8 @@
 // Tests for the hardened downloadTo() in installer/install.js.
 //
-// We avoid spawning child processes for most cases and instead re-implement
-// the same downloadTo logic inline with a controllable fake https module,
-// giving deterministic, fast coverage of every branch.
+// Node-fallback tests import the real downloadTo from install.js and inject a
+// fake https module via the optional third argument, giving deterministic, fast
+// coverage of every guard branch without subprocess overhead.
 //
 // The curl-flag tests run the installer via spawnSync with a fake curl binary
 // on PATH that records its argv — these are POSIX-only (fake bin is a shell script).
@@ -60,7 +60,7 @@ function makeFakeHttps({ statusCode = 200, location = null, hangTimeout = null, 
 
 test('Node fallback: http:// redirect is rejected', async () => {
   await assert.rejects(
-    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null',
+    () => downloadTo('https://raw.githubusercontent.com/ok', os.devNull,
       makeFakeHttps({ statusCode: 301, location: 'http://evil.example.com/x' })),
     /non-https/,
   );
@@ -85,7 +85,7 @@ test('Node fallback: redirect chain beyond limit is rejected', async () => {
     },
   };
   await assert.rejects(
-    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null', loopHttps),
+    () => downloadTo('https://raw.githubusercontent.com/ok', os.devNull, loopHttps),
     /too many redirects/,
   );
   assert.ok(count <= DOWNLOAD_MAX_REDIRECTS + 2, `excessive fetches: ${count}`);
@@ -94,7 +94,7 @@ test('Node fallback: redirect chain beyond limit is rejected', async () => {
 test('Node fallback: oversized body is rejected', async () => {
   const BIG = DOWNLOAD_MAX_BYTES + 1;
   await assert.rejects(
-    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null',
+    () => downloadTo('https://raw.githubusercontent.com/ok', os.devNull,
       makeFakeHttps({ statusCode: 200, bodyChunks: [Buffer.alloc(BIG).fill(65).toString('binary')] })),
     /exceeded/,
   );
@@ -102,7 +102,7 @@ test('Node fallback: oversized body is rejected', async () => {
 
 test('Node fallback: timeout fires on a hanging connection', async () => {
   await assert.rejects(
-    () => downloadTo('https://raw.githubusercontent.com/ok', '/dev/null',
+    () => downloadTo('https://raw.githubusercontent.com/ok', os.devNull,
       makeFakeHttps({ statusCode: 200, hangTimeout: 10 })),
     /timed out/,
   );
