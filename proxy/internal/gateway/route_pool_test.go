@@ -198,6 +198,41 @@ func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	}
 }
 
+func TestPoolMoonshotK3TargetSendsFittedChatRequest(t *testing.T) {
+	header := http.Header{}
+	header.Set("authorization", "Bearer sk-moonshot")
+	target := &RouteTarget{PoolID: "moonshot/kimi-k3", Via: "local", Host: "moonshot", Model: "kimi-k3", Wire: translate.Chat,
+		URL: "https://api.moonshot.ai/chat/completions", Header: header,
+		Translate: translate.Options{Model: "kimi-k3", Dialect: "kimi", Route: "moonshot", MaxTokensField: "max_completion_tokens", Replay: true}}
+	c := newPoolCase(t, target, "max")
+	rec := poolSend(t, c.srv, poolBody)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "pool says hi") {
+		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
+	}
+	req, body := c.stub.last("/chat/completions")
+	if req == nil {
+		t.Fatal("the Moonshot chat endpoint was not called")
+	}
+	if req.Header.Get("authorization") != "Bearer sk-moonshot" || req.Header.Get("x-api-key") != "" {
+		t.Fatalf("Moonshot headers = %v", req.Header)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent["model"] != "kimi-k3" || sent["reasoning_effort"] != "max" || sent["max_completion_tokens"] != 50.0 {
+		t.Fatalf("Moonshot body = %s", body)
+	}
+	for _, unwanted := range []string{"max_tokens", "max_output_tokens", "thinking", "reasoning"} {
+		if _, ok := sent[unwanted]; ok {
+			t.Fatalf("Moonshot body contains %s: %s", unwanted, body)
+		}
+	}
+	if req, _ := c.stub.last("/v1/messages"); req != nil {
+		t.Error("the harness's own provider was called too")
+	}
+}
+
 func TestPoolLocalTargetStreamsBackInTheCallersGrammar(t *testing.T) {
 	c := newPoolCase(t, localTarget("api.openai.com"), "")
 	c.stub.poolSSE = "data: {\"id\":\"c1\",\"model\":\"gpt-6.1-sol\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"str\"}}]}\n\n" +

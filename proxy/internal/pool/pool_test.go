@@ -21,7 +21,7 @@ func home(t *testing.T, secrets map[string]string) string {
 		t.Fatal(err)
 	}
 	var logins []Login
-	for _, id := range []string{"anthropic", "openai", "chatgpt", "deepseek", "zai-coding-plan", "openrouter", "unknown-host"} {
+	for _, id := range []string{"anthropic", "openai", "chatgpt", "deepseek", "zai-coding-plan", "openrouter", "moonshot", "unknown-host"} {
 		secret, ok := secrets[id]
 		if !ok {
 			continue
@@ -107,7 +107,7 @@ func TestEntriesFollowWhatThePersonSetUpAndWhatTheRuntimeCanTranslate(t *testing
 }
 
 func TestTargetCarriesTheLoginsCredentialAndTheHostsWire(t *testing.T) {
-	store := NewStore(home(t, map[string]string{"openrouter": "sk-or", "deepseek": "sk-ds", "anthropic": "sk-ant"}))
+	store := NewStore(home(t, map[string]string{"openrouter": "sk-or", "deepseek": "sk-ds", "anthropic": "sk-ant", "moonshot": "sk-moonshot"}))
 	entries := store.Entries("messages", "claude", 64, nil)
 	find := func(id string) Entry {
 		for _, entry := range entries {
@@ -134,6 +134,16 @@ func TestTargetCarriesTheLoginsCredentialAndTheHostsWire(t *testing.T) {
 	target, _ = store.Target(find("deepseek/deepseek-v4-flash"))
 	if target.Translate.Route != "deepseek" || !target.Translate.Replay {
 		t.Fatalf("deepseek target = %+v", target)
+	}
+	entries = store.Entries("chat", "opencode", 64, nil)
+	target, err = store.Target(find("moonshot/kimi-k3"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.URL != "https://api.moonshot.ai/v1/chat/completions" || target.Header.Get("authorization") != "Bearer sk-moonshot" ||
+		target.Translate.Model != "kimi-k3" || target.Translate.Route != "moonshot" || target.Translate.Dialect != "kimi" ||
+		target.Translate.MaxTokensField != "max_completion_tokens" || target.Model != "kimi-k3" || target.Via != "local" {
+		t.Fatalf("moonshot target = %+v", target)
 	}
 	if err := os.Remove(filepath.Join(store.home, secretDir, "deepseek")); err != nil {
 		t.Fatal(err)
