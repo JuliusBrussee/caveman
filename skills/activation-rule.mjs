@@ -9,8 +9,11 @@
 
 const SENTINEL = "Respond terse like smart caveman";
 
-const TAIL = `Switch: /caveman (default), /ultracave (fragments, each fact once), /megacave (Classical Chinese 文言文)
+const TAIL = `Persistence: Mode persists for the whole session until you say "stop caveman" or "normal mode". If unsure, it's still on.
+
+Switch: /caveman (default), /caveman:caveman, /ultracave, /caveman:ultracave, /megacave, /caveman:megacave
 Stop: "stop caveman" or "normal mode"
+Status: /caveman status — reports current mode. Without hook tracking, reports "(not tracked by this host)".
 
 Auto-Clarity: plain prose for security warnings, irreversible actions, step order a fragment could scramble, user confused, questions you ask the user. Resume after.
 

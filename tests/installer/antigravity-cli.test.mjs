@@ -53,6 +53,21 @@ test('stages the plugin with skills and the always-on rule, then hands it to agy
   assert.equal(path.basename(install[2]), 'caveman');
   assert.equal(fs.existsSync(install[2]), false, 'staging copy is cleaned up');
   assert.deepEqual(JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).name, 'caveman');
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).contextFileName,
+    undefined,
+    'plugin.json must not declare contextFileName — it is a Gemini CLI gemini-extension.json key, not an agy plugin.json field; agy discards unknown top-level fields',
+  );
+  assert.equal(
+    JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).description,
+    'Caveman: terse replies, every technical fact kept',
+    'plugin.json description must say "fact" not "factor"',
+  );
+  assert.equal(
+    calls().filter((argv) => argv[1] === 'enable').length,
+    0,
+    'must not call agy plugin enable — plugins are enabled by default and the call overrides a user prior disable',
+  );
   for (const id of SKILLS) assert.ok(fs.existsSync(path.join(installed, 'skills', id, 'SKILL.md')), id);
   assert.equal(
     fs.readFileSync(path.join(installed, 'rules', 'AGENTS.md'), 'utf8'),
