@@ -2067,20 +2067,27 @@ function downloadTo(url, dest, _https) {
         }
         if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return; }
         let received = 0;
-        const out = fs.createWriteStream(dest);
+        let out = null;
+        const unlinkDest = () => { try { fs.unlinkSync(dest); } catch (_) { /* best-effort */ } };
+        out = fs.createWriteStream(dest);
         res.on('data', (chunk) => {
           received += chunk.length;
           if (received > DOWNLOAD_MAX_BYTES) {
             out.destroy();
             res.destroy();
+            unlinkDest();
             reject(new Error(`download exceeded ${DOWNLOAD_MAX_BYTES} bytes for ${url}`));
           }
         });
         res.pipe(out);
         out.on('finish', () => out.close(resolve));
-        out.on('error', reject);
+        out.on('error', (err) => { unlinkDest(); reject(err); });
       });
-      req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => { req.destroy(); reject(new Error(`download timed out for ${url}`)); });
+      req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+        req.destroy();
+        try { fs.unlinkSync(dest); } catch (_) { /* best-effort */ }
+        reject(new Error(`download timed out for ${url}`));
+      });
       req.on('error', reject);
     }
     fetch(url);
