@@ -56,7 +56,9 @@ type mcpScopeScan struct {
 // Agent roots resolve local transcript/config dirs and stay env-overridable so
 // tests never read or write a user's real agent data. After the CAVEMAN_*
 // test overrides come the agents' own relocation variables: CLAUDE_CONFIG_DIR
-// moves Claude Code's whole config dir, CODEX_HOME moves Codex's.
+// moves Claude Code's whole config dir, CODEX_HOME moves Codex's,
+// PI_CODING_AGENT_DIR moves Pi's agent dir and PI_CODING_AGENT_SESSION_DIR moves
+// Pi's session storage.
 func claudeRoot() string {
 	if r := os.Getenv("CAVEMAN_CLAUDE_ROOT"); r != "" {
 		return r
@@ -138,6 +140,48 @@ func piRoot() string {
 		return ""
 	}
 	return filepath.Join(home, ".pi")
+}
+
+// piRoots resolves where Pi keeps its session JSONL trees. The returned root is
+// the base rel_path is taken against; dir is the directory that actually holds
+// the trees. Pi reads PI_CODING_AGENT_DIR as its agent directory and
+// PI_CODING_AGENT_SESSION_DIR as an outright override of where sessions are
+// stored, both tilde-expanded (config.js getAgentDir/getSessionsDir ->
+// expandTildePath); without either it writes to <agent dir>/sessions, whose
+// default is <pi root>/agent/sessions. CAVEMAN_PI_ROOT keeps top precedence so
+// tests and tooling isolate the source, the same ordering the sibling roots use.
+func piRoots() (root, dir string) {
+	if r := os.Getenv("CAVEMAN_PI_ROOT"); r != "" {
+		return r, filepath.Join(r, "agent", "sessions")
+	}
+	if d := expandTilde(os.Getenv("PI_CODING_AGENT_SESSION_DIR")); d != "" {
+		return d, d
+	}
+	if d := expandTilde(os.Getenv("PI_CODING_AGENT_DIR")); d != "" {
+		return d, filepath.Join(d, "sessions")
+	}
+	root = piRoot()
+	if root == "" {
+		return "", ""
+	}
+	return root, filepath.Join(root, "agent", "sessions")
+}
+
+// expandTilde mirrors Pi's expandTildePath (normalizePath with its default
+// options): a bare "~" and a leading "~/" (or "~\\" on Windows) expand to the
+// home directory, anything else is returned unchanged.
+func expandTilde(path string) string {
+	if path != "~" && !strings.HasPrefix(path, "~/") && !strings.HasPrefix(path, `~\`) {
+		return path
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return path
+	}
+	if path == "~" {
+		return home
+	}
+	return filepath.Join(home, path[2:])
 }
 
 // estimateTokens is the project's inferred token heuristic (bytes/4), matching the
