@@ -12,6 +12,8 @@ import (
 func TestMain(m *testing.M) {
 	os.Unsetenv("CLAUDE_CONFIG_DIR")
 	os.Unsetenv("CODEX_HOME")
+	os.Unsetenv("PI_CODING_AGENT_DIR")
+	os.Unsetenv("PI_CODING_AGENT_SESSION_DIR")
 	os.Exit(m.Run())
 }
 
@@ -94,5 +96,71 @@ func TestGeminiAndOpencodeRootsHonorRelocationVariables(t *testing.T) {
 	}
 	if opencodeRoot() != filepath.Join(base, "o-override") {
 		t.Fatalf("CAVEMAN_OPENCODE_ROOT must win: %q", opencodeRoot())
+	}
+}
+
+// Pi reads PI_CODING_AGENT_DIR as its agent directory and
+// PI_CODING_AGENT_SESSION_DIR as an outright session-storage override (both
+// tilde-expanded via expandTildePath); without either it writes sessions under
+// <agent dir>/sessions. The Go learn scanner only read
+// <CAVEMAN_PI_ROOT>/agent/sessions and ignored both variables, so it reported
+// zero sessions for anyone who relocated Pi (#1309 follow-up).
+func TestPiRootsHonorRelocationVariables(t *testing.T) {
+	base := t.TempDir()
+	home := filepath.Join(base, "home")
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CAVEMAN_PI_ROOT", "")
+	t.Setenv("PI_CODING_AGENT_DIR", "")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+
+	// No override: the documented ~/.pi/agent/sessions default.
+	if root, dir := piRoots(); root != filepath.Join(home, ".pi") || dir != filepath.Join(home, ".pi", "agent", "sessions") {
+		t.Fatalf("piRoots() default = root %q dir %q", root, dir)
+	}
+
+	// PI_CODING_AGENT_DIR replaces the agent dir; sessions stay under it.
+	agentDir := filepath.Join(base, "pi-agent")
+	t.Setenv("PI_CODING_AGENT_DIR", agentDir)
+	if root, dir := piRoots(); root != agentDir || dir != filepath.Join(agentDir, "sessions") {
+		t.Fatalf("piRoots() with PI_CODING_AGENT_DIR = root %q dir %q", root, dir)
+	}
+
+	// PI_CODING_AGENT_SESSION_DIR overrides session storage outright and wins
+	// over PI_CODING_AGENT_DIR.
+	sessionDir := filepath.Join(base, "pi-sessions")
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", sessionDir)
+	if root, dir := piRoots(); root != sessionDir || dir != sessionDir {
+		t.Fatalf("piRoots() with PI_CODING_AGENT_SESSION_DIR = root %q dir %q", root, dir)
+	}
+
+	// A leading ~ expands like Pi's expandTildePath.
+	t.Setenv("PI_CODING_AGENT_SESSION_DIR", "~/pi-relocated")
+	if root, dir := piRoots(); root != filepath.Join(home, "pi-relocated") || dir != root {
+		t.Fatalf("piRoots() with ~ = root %q dir %q", root, dir)
+	}
+
+	// CAVEMAN_PI_ROOT keeps top precedence and the historical layout.
+	t.Setenv("CAVEMAN_PI_ROOT", filepath.Join(base, "iso"))
+	if root, dir := piRoots(); root != filepath.Join(base, "iso") || dir != filepath.Join(base, "iso", "agent", "sessions") {
+		t.Fatalf("piRoots() with CAVEMAN_PI_ROOT = root %q dir %q", root, dir)
+	}
+}
+
+func TestExpandTildeMirrorsPi(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	for _, tc := range []struct{ in, want string }{
+		{"~", home},
+		{"~/agent", filepath.Join(home, "agent")},
+		{"~pi", "~pi"},
+		{"/abs/agent", "/abs/agent"},
+		{"relative/agent", "relative/agent"},
+		{"", ""},
+	} {
+		if got := expandTilde(tc.in); got != tc.want {
+			t.Fatalf("expandTilde(%q) = %q, want %q", tc.in, got, tc.want)
+		}
 	}
 }
