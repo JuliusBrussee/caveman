@@ -2069,7 +2069,10 @@ function downloadTo(url, dest, _https) {
         let received = 0;
         let out = null;
         const unlinkDest = () => { try { fs.unlinkSync(dest); } catch (_) { /* best-effort */ } };
-        out = fs.createWriteStream(dest);
+        // openSync so the file exists before any data event fires; unlinkSync
+        // can then remove it synchronously on the oversized-body or error paths.
+        const fd = fs.openSync(dest, 'w');
+        out = fs.createWriteStream(dest, { fd });
         res.on('data', (chunk) => {
           received += chunk.length;
           if (received > DOWNLOAD_MAX_BYTES) {
