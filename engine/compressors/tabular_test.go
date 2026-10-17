@@ -57,6 +57,28 @@ func TestTabularCSVStaysValidAndKeepsHeaderExtremaAndErrors(t *testing.T) {
 	}
 }
 
+func TestTabularKeepsPercentExtrema(t *testing.T) {
+	// A coverage export: every file is fully covered except one in the middle.
+	// Its row differs from the others only in a digit, so only the numeric
+	// extrema keep it, and "12%" has to count as a number for that.
+	var b strings.Builder
+	b.WriteString("file,stmts,cover\n")
+	for i := 0; i < 120; i++ {
+		cover := "100%"
+		if i == 77 {
+			cover = "12%"
+		}
+		fmt.Fprintf(&b, "src/file_%03d.py,40,%s\n", i, cover)
+	}
+	out, ok := compressors.NewTabular().Compress([]byte(b.String()))
+	if !ok {
+		t.Fatal("expected CSV compression")
+	}
+	if !bytes.Contains(out, []byte("src/file_077.py,40,12%")) {
+		t.Errorf("the lowest percentage must survive as a numeric extremum:\n%s", out)
+	}
+}
+
 func TestTabularQueryKeepsRelevantMiddleRows(t *testing.T) {
 	c, ok := compressors.NewTabular().(compressors.QueryAwareCompressor)
 	if !ok {

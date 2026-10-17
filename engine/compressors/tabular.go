@@ -95,8 +95,24 @@ func (c *tabularCompressor) compress(input []byte, query string) ([]byte, bool) 
 	if table.kind == tableMarkdown {
 		headerRows = 2
 	}
-	if len(table.rows) < c.minRows || len(table.rows) <= headerRows+c.keepFirst+c.keepLast+1 {
+	shaped, elidedBytes, ok := c.shapeRows(table, headerRows, query)
+	if !ok {
 		return nil, false
+	}
+	return encodeTable(table, shaped, elidedBytes, input)
+}
+
+// shapeRows picks the rows of a parsed table to keep and replaces each run of
+// dropped rows with a one-cell marker row. The first headerRows rows are the
+// header and are always kept; table.rows[0] names the columns for the
+// invariants. It returns the shaped rows and the bytes the markers replaced,
+// with ok=false when the table is too small to shape or nothing was dropped.
+// The HTML compressor shapes the tables it lifts out of a page through this
+// same path, so a table reads the same to the agent whether it arrived as CSV or
+// as markup.
+func (c *tabularCompressor) shapeRows(table parsedTable, headerRows int, query string) ([][]string, int, bool) {
+	if len(table.rows) < c.minRows || len(table.rows) <= headerRows+c.keepFirst+c.keepLast+1 {
+		return nil, 0, false
 	}
 
 	keep := make([]bool, len(table.rows))
@@ -159,8 +175,14 @@ func (c *tabularCompressor) compress(input []byte, query string) ([]byte, bool) 
 	}
 	flush()
 	if len(shaped) >= len(table.rows) {
-		return nil, false
+		return nil, 0, false
 	}
+	return shaped, elidedBytes, true
+}
+
+// encodeTable writes shaped rows back in the table's own format, with the
+// elision contract line when enough was dropped.
+func encodeTable(table parsedTable, shaped [][]string, elidedBytes int, input []byte) ([]byte, bool) {
 	// The contract line rides as a final row so the table stays a table. Re-entry
 	// is short-circuited by tabularMarkerRe above, so it can never be appended
 	// twice.
@@ -302,8 +324,10 @@ func keepNumericExtrema(rows [][]string, start int, keep []bool) {
 			// compares false against everything, so the first one seen would
 			// latch both minIndex and maxIndex and no later row could ever
 			// displace it — the column's real extrema would stop being kept,
-			// which is this function's whole job.
-			value, isNumber := invariantNumber(strings.TrimSpace(rows[row][column]))
+			// which is this function's whole job. A percentage is read as its
+			// number: a coverage or error-rate column is as numeric as any other,
+			// and its one outlier is the row the agent is looking for.
+			value, isNumber := invariantNumber(strings.TrimSuffix(strings.TrimSpace(rows[row][column]), "%"))
 			if !isNumber {
 				continue
 			}

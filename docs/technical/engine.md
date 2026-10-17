@@ -77,7 +77,7 @@ Default registry contains 16 compressors:
 4. diff
 5. search result
 6. text
-7. HTML
+7. HTML: an article keeps its main text; a data page (dashboard, coverage or test report, admin list) keeps its visible text, and its tables, ARIA grids and runs of same-shaped records become Markdown tables shaped like tabular data
 8. tabular
 9. configuration
 10. tool schema
