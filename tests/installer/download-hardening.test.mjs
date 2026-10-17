@@ -119,6 +119,22 @@ test('Node fallback: successful small download resolves without error', async ()
   }
 });
 
+test('Node fallback: oversized body leaves no partial dest file', async () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'dl-test-'));
+  const dest = path.join(tmp, 'out');
+  const BIG = DOWNLOAD_MAX_BYTES + 1;
+  try {
+    await assert.rejects(
+      () => downloadTo('https://raw.githubusercontent.com/ok', dest,
+        makeFakeHttps({ statusCode: 200, bodyChunks: [Buffer.alloc(BIG).fill(65).toString('binary')] })),
+      /exceeded/,
+    );
+    assert.ok(!fs.existsSync(dest), 'partial dest file should have been removed');
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+});
+
 // ── curl-path tests (POSIX only, requires a real shell) ────────────────────
 
 const posixOnly = { skip: process.platform === 'win32' && 'fake curl is a POSIX shell script' };
