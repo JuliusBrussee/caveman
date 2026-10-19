@@ -59,6 +59,10 @@ function normalizePath(filePath, cwd = process.cwd()) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
+function hasConversationId(input) {
+  return !!(input.conversation_id || input.conversationId || input.session_id || input.sessionId);
+}
+
 function conversationId(input) {
   return input.conversation_id || input.conversationId || input.session_id || input.sessionId || 'default';
 }
@@ -143,6 +147,7 @@ function decideRead(input, options = {}) {
   const stateDir = options.stateDir || defaultStateDir(options.env);
   const state = options.state || loadState(stateDir);
   const cwd = options.cwd || process.cwd();
+  if (!hasConversationId(input)) return { permission: 'allow', state };
   const convId = conversationId(input);
   const ti = toolInput(input);
   const filePath = readPath(input);
@@ -226,8 +231,12 @@ function searchTreeSnapshot(rootPath, options = {}) {
   let newest;
   let sizeSum = 0;
   let count = 0;
+  let truncated = false;
   const visit = (p) => {
-    if (count >= maxFiles) return;
+    if (count >= maxFiles) {
+      truncated = true;
+      return;
+    }
     let st;
     try {
       st = fs.statSync(p);
@@ -243,7 +252,10 @@ function searchTreeSnapshot(rootPath, options = {}) {
         return;
       }
       for (const ent of entries) {
-        if (count >= maxFiles) return;
+        if (count >= maxFiles) {
+          truncated = true;
+          return;
+        }
         if (ent.name === 'node_modules' || ent.name === '.git') continue;
         visit(path.join(p, ent.name));
       }
@@ -253,7 +265,16 @@ function searchTreeSnapshot(rootPath, options = {}) {
     if (newest === undefined || st.mtimeMs > newest) newest = st.mtimeMs;
   };
   visit(rootPath);
-  return newest === undefined ? null : { mtimeMs: newest, sizeSum };
+  if (newest === undefined) {
+    try {
+      const st = fs.statSync(rootPath);
+      if (!st.isDirectory()) return null;
+      newest = st.mtimeMs;
+    } catch {
+      return null;
+    }
+  }
+  return { mtimeMs: newest, sizeSum, truncated };
 }
 
 function newestMtimeUnder(rootPath, options = {}) {
@@ -265,6 +286,7 @@ function decideSearch(input, toolKind, options = {}) {
   const stateDir = options.stateDir || defaultStateDir(options.env);
   const state = options.state || loadState(stateDir);
   const cwd = options.cwd || process.cwd();
+  if (!hasConversationId(input)) return { permission: 'allow', state };
   const convId = conversationId(input);
   const ti = toolInput(input);
   const key = searchQueryKey(toolKind, ti, cwd);
@@ -276,7 +298,7 @@ function decideSearch(input, toolKind, options = {}) {
   } catch {
     return { permission: 'allow', state };
   }
-  if (snapshot === null) return { permission: 'allow', state };
+  if (snapshot === null || snapshot.truncated) return { permission: 'allow', state };
 
   const c = convState(state, convId);
   const seen = c.searches[key];
@@ -301,19 +323,85 @@ function decideGlob(input, options = {}) {
 }
 
 const EXACT_GIT_COMMANDS = new Set(['git status', 'git diff', 'git log -n']);
+const TEST_TREE_SHELL_KEYS = new Set(['npm test', 'go test ./...']);
 
-function gitWorktreeFingerprint(cwd = process.cwd()) {
+function porcelainPaths(porcelain) {
+  const paths = [];
+  for (const line of String(porcelain || '').split('\n')) {
+    if (!line.trim()) continue;
+    let rest = line.length >= 3 ? line.slice(2).trim() : line.trim();
+    const arrow = rest.indexOf(' -> ');
+    if (arrow !== -1) rest = rest.slice(arrow + 4);
+    rest = rest.trim();
+    if (rest.startsWith('"') && rest.endsWith('"')) rest = rest.slice(1, -1);
+    paths.push(rest);
+  }
+  return paths;
+}
+
+function porcelainPathStamps(cwd, porcelain) {
+  const paths = porcelainPaths(porcelain).sort();
+  const parts = [];
+  for (const rel of paths) {
+    const full = path.isAbsolute(rel) ? rel : path.join(cwd, rel);
+    try {
+      const st = fs.statSync(full);
+      let contentHash = '';
+      if (st.isFile()) {
+        contentHash = crypto.createHash('sha256').update(fs.readFileSync(full)).digest('hex');
+      }
+      parts.push(`${rel}:${st.mtimeMs}:${st.size}:${contentHash}`);
+    } catch {
+      parts.push(`${rel}:missing`);
+    }
+  }
+  return parts.join('|');
+}
+
+function gitWorktreeFingerprint(cwd = process.cwd(), gitCommand = null) {
   try {
     const head = execSync('git rev-parse HEAD', { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
     const porcelain = execSync('git status --porcelain', {
       cwd,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'ignore'],
-    }).trim();
-    return `${head}:${porcelain}`;
+    }).replace(/\r\n/g, '\n').replace(/\n$/, '');
+    const base = `${head}:${porcelain}`;
+    if (gitCommand === 'git diff') return `${base}:${porcelainPathStamps(cwd, porcelain)}`;
+    return base;
   } catch {
     return null;
   }
+}
+
+function shellStampForKey(key, cwd, options = {}) {
+  if (TEST_TREE_SHELL_KEYS.has(key)) {
+    const snapshot = searchTreeSnapshot(cwd, options);
+    if (!snapshot || snapshot.truncated) return null;
+    return { kind: 'tree', treeMtime: snapshot.mtimeMs, treeSize: snapshot.sizeSum };
+  }
+  if (key.startsWith('node --test ')) {
+    const filePath = key.slice('node --test '.length);
+    try {
+      const fp = fileFingerprint(filePath);
+      return { kind: 'file', mtimeMs: fp.mtimeMs, size: fp.size, hash: fp.hash };
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+function shellStampMatches(stored, stamp) {
+  if (stored === true) return true;
+  if (!stored || !stamp) return false;
+  if (stored.kind === 'tree' && stamp.kind === 'tree') {
+    return stored.treeMtime === stamp.treeMtime && stored.treeSize === stamp.treeSize;
+  }
+  if (stored.kind === 'file' && stamp.kind === 'file') {
+    return stored.mtimeMs === stamp.mtimeMs && stored.size === stamp.size && stored.hash === stamp.hash;
+  }
+  return false;
 }
 
 function shellKey(command, cwd = process.cwd()) {
@@ -334,6 +422,7 @@ function shellKey(command, cwd = process.cwd()) {
 function decideShell(input, options = {}) {
   const stateDir = options.stateDir || defaultStateDir(options.env);
   const state = options.state || loadState(stateDir);
+  if (!hasConversationId(input)) return { permission: 'allow', state };
   const convId = conversationId(input);
   const cwd = options.cwd || process.cwd();
   const command = input.command || input.shell_command || toolInput(input).command;
@@ -342,7 +431,7 @@ function decideShell(input, options = {}) {
 
   const c = convState(state, convId);
   if (EXACT_GIT_COMMANDS.has(key)) {
-    const fp = gitWorktreeFingerprint(cwd);
+    const fp = gitWorktreeFingerprint(cwd, key);
     if (!fp) return { permission: 'allow', state };
     if (c.shell[key] === fp) {
       return {
@@ -355,14 +444,15 @@ function decideShell(input, options = {}) {
     return { permission: 'allow', state };
   }
 
-  if (c.shell[key]) {
+  const stamp = shellStampForKey(key, cwd, options);
+  if (shellStampMatches(c.shell[key], stamp)) {
     return {
       permission: 'deny',
       agent_message: `Already ran \`${key}\` in this chat. Use the earlier output or run a narrower test file.`,
       state,
     };
   }
-  c.shell[key] = true;
+  if (stamp) c.shell[key] = stamp;
   return { permission: 'allow', state };
 }
 
@@ -457,7 +547,11 @@ module.exports = {
   stateFilePath,
   defaultStateDir,
   shellKey,
+  hasConversationId,
+  shellStampForKey,
+  shellStampMatches,
   gitWorktreeFingerprint,
+  porcelainPathStamps,
   newestMtimeUnder,
   searchTreeSnapshot,
   searchQueryKey,

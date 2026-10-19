@@ -274,12 +274,35 @@ test('new chat denies one full Read when fingerprint matches, then allows', () =
 });
 
 test('repeat full test suite denied in same conversation', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-npm-test-'));
+  const stateDir = path.join(dir, 'state');
   const state = { version: 1, conversations: {}, fingerprints: {} };
   const input = { conversation_id: 'c1', command: 'npm test' };
-  const first = HOOK.decideShell(input, { state, stateDir: '/tmp/unused' });
+  const first = HOOK.decideShell(input, { state, stateDir, cwd: dir });
   assert.equal(first.permission, 'allow');
-  const second = HOOK.decideShell(input, { state: first.state, stateDir: '/tmp/unused' });
+  const second = HOOK.decideShell(input, { state: first.state, stateDir, cwd: dir });
   assert.equal(second.permission, 'deny');
+  fs.writeFileSync(path.join(dir, 'extra.txt'), 'touch\n');
+  const third = HOOK.decideShell(input, { state: second.state, stateDir, cwd: dir });
+  assert.equal(third.permission, 'allow');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('node --test allows rerun after target file changes', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-node-test-'));
+  const testFile = path.join(dir, 'sample.test.mjs');
+  fs.writeFileSync(testFile, 'import test from "node:test";\ntest("x", () => {});\n');
+  const stateDir = path.join(dir, 'state');
+  let state = { version: 1, conversations: {}, fingerprints: {} };
+  const input = { conversation_id: 'c1', command: `node --test ${testFile}` };
+  const first = HOOK.decideShell(input, { state, stateDir, cwd: dir });
+  assert.equal(first.permission, 'allow');
+  const second = HOOK.decideShell(input, { state: first.state, stateDir, cwd: dir });
+  assert.equal(second.permission, 'deny');
+  fs.appendFileSync(testFile, '\n');
+  const third = HOOK.decideShell(input, { state: second.state, stateDir, cwd: dir });
+  assert.equal(third.permission, 'allow');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('identical Grep denied; changed pattern allowed', () => {
@@ -298,6 +321,19 @@ test('identical Grep denied; changed pattern allowed', () => {
     { state: second.state, stateDir, cwd: dir },
   );
   assert.equal(changed.permission, 'allow');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('Grep not denied when tree snapshot is truncated', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-grep-trunc-'));
+  for (let i = 0; i < 4; i++) fs.writeFileSync(path.join(dir, `f${i}.txt`), `line${i}\n`);
+  const stateDir = path.join(dir, 'state');
+  let state = HOOK.loadState(stateDir);
+  const query = { conversation_id: 'c1', tool_input: { pattern: 'line', path: dir } };
+  const first = HOOK.decideGrep(query, { state, stateDir, cwd: dir, maxFiles: 2 });
+  assert.equal(first.permission, 'allow');
+  const second = HOOK.decideGrep(query, { state: first.state, stateDir, cwd: dir, maxFiles: 2 });
+  assert.equal(second.permission, 'allow');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -358,6 +394,36 @@ test('exact git status denied only while fingerprint matches', () => {
   fs.appendFileSync(path.join(dir, 'README'), 'more\n');
   const third = HOOK.decideShell(input, { state: second.state, stateDir, cwd: dir });
   assert.equal(third.permission, 'allow');
+  fs.rmSync(dir, { recursive: true, force: true });
+});
+
+test('git diff denied only while dirty file content unchanged', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-cursor-git-diff-'));
+  const gitEnv = {
+    ...process.env,
+    GIT_AUTHOR_NAME: 'caveman-test',
+    GIT_AUTHOR_EMAIL: 'caveman-test@example.com',
+    GIT_COMMITTER_NAME: 'caveman-test',
+    GIT_COMMITTER_EMAIL: 'caveman-test@example.com',
+  };
+  assert.equal(spawnSync('git', ['init'], { cwd: dir, env: gitEnv }).status, 0);
+  const readme = path.join(dir, 'README');
+  fs.writeFileSync(readme, 'hi\n');
+  assert.equal(spawnSync('git', ['add', 'README'], { cwd: dir, env: gitEnv }).status, 0);
+  assert.equal(spawnSync('git', ['commit', '-m', 'init'], { cwd: dir, env: gitEnv }).status, 0);
+  fs.appendFileSync(readme, 'dirty\n');
+  const stateDir = path.join(dir, 'state');
+  let state = HOOK.loadState(stateDir);
+  const input = { conversation_id: 'c1', command: 'git diff' };
+  const first = HOOK.decideShell(input, { state, stateDir, cwd: dir });
+  assert.equal(first.permission, 'allow');
+  const second = HOOK.decideShell(input, { state: first.state, stateDir, cwd: dir });
+  assert.equal(second.permission, 'deny');
+  fs.appendFileSync(readme, 'more\n');
+  const third = HOOK.decideShell(input, { state: second.state, stateDir, cwd: dir });
+  assert.equal(third.permission, 'allow');
+  const fourth = HOOK.decideShell(input, { state: third.state, stateDir, cwd: dir });
+  assert.equal(fourth.permission, 'deny');
   fs.rmSync(dir, { recursive: true, force: true });
 });
 
@@ -713,7 +779,7 @@ test('real repo dedupe token table for PR comment', () => {
     rows.push(rowFromPayload(label, payloadText, denied.agent_message));
   }
   denyRepeatGrep('Grep `decideRead` in `src/hooks`', 'decideRead', 'src/hooks');
-  denyRepeatGrep('Grep `cursor-dedupe` in the repo', 'cursor-dedupe', '.');
+  denyRepeatGrep('Grep `cursor-dedupe` in `src/hooks`', 'cursor-dedupe', 'src/hooks');
   denyRepeatGlob('Glob `tests/**/*.test.mjs`', '**/*.test.mjs', 'tests');
   denyRepeatGitStatus('`git status`');
 
@@ -766,6 +832,18 @@ test('real repo dedupe token table for PR comment', () => {
   console.log(lines.join('\n'));
 
   fs.rmSync(path.dirname(stateDir), { recursive: true, force: true });
+});
+
+test('dedupe skipped when payload has no conversation id', () => {
+  const { dir, file } = tempFile('same\n');
+  const stateDir = path.join(dir, 'state');
+  let state = HOOK.loadState(stateDir);
+  const readInput = { tool_input: { path: file } };
+  const first = HOOK.decideRead(readInput, { state, stateDir, cwd: dir });
+  const second = HOOK.decideRead(readInput, { state: first.state, stateDir, cwd: dir });
+  assert.equal(first.permission, 'allow');
+  assert.equal(second.permission, 'allow');
+  fs.rmSync(dir, { recursive: true, force: true });
 });
 
 test('hook CLI fails open on invalid JSON and missing path', () => {
