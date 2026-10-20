@@ -36,6 +36,9 @@ func New(baseURL string) providers.Adapter {
 		// protocol, so the bare and prefixed mounts carry them for the same
 		// reason the inference routes are doubled up.
 		MetadataRoutes: []string{"/anthropic/v1/models", "/v1/models"},
+		// Claude Code signed in with a Claude Platform profile refreshes its
+		// token at {ANTHROPIC_BASE_URL}/v1/oauth/token.
+		OAuthTokenRoutes: []string{"/anthropic/v1/oauth/token", "/v1/oauth/token"},
 	}}
 }
 
