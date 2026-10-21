@@ -27,19 +27,28 @@ PINNED_REF="${CAVEMAN_REF:-v4.0.1}"
 # kept equal to packages/cli/package.json (tests/installer/shim-security).
 CLI_VERSION="4.0.1"
 
-# Require Node ≥18. nvm is a common path; print a hint if missing.
+# Prefer Node, including its existing version check. Bun is a fallback only
+# when Node is absent, not a way to hide an old or broken Node installation.
+RUNTIME=node
 if ! command -v node >/dev/null 2>&1; then
-  echo "caveman: Node.js (≥18) required. Install:" >&2
-  echo "  macOS:  brew install node" >&2
-  echo "  Linux:  see https://nodejs.org or use nvm (https://github.com/nvm-sh/nvm)" >&2
-  exit 1
+  if command -v bun >/dev/null 2>&1; then
+    RUNTIME=bun
+  else
+    echo "caveman: Node.js (≥18) or Bun required. Install:" >&2
+    echo "  macOS:  brew install node" >&2
+    echo "  Linux:  see https://nodejs.org or use nvm (https://github.com/nvm-sh/nvm)" >&2
+    echo "  Bun (experimental skills-only fallback): https://bun.sh" >&2
+    exit 1
+  fi
 fi
 
-NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
-if [ "$NODE_MAJOR" -lt 18 ]; then
-  echo "caveman: Node $NODE_MAJOR too old. Need Node ≥18." >&2
-  echo "  Upgrade: https://nodejs.org" >&2
-  exit 1
+if [ "$RUNTIME" = node ]; then
+  NODE_MAJOR=$(node -p "process.versions.node.split('.')[0]")
+  if [ "$NODE_MAJOR" -lt 18 ]; then
+    echo "caveman: Node $NODE_MAJOR too old. Need Node ≥18." >&2
+    echo "  Upgrade: https://nodejs.org" >&2
+    exit 1
+  fi
 fi
 
 # first_run ends the install in the CLI's first run. The terminal comes from
@@ -53,6 +62,12 @@ first_run() {
       --non-interactive) launch=0 ;;
     esac
   done
+  if [ "$RUNTIME" = bun ]; then
+    echo
+    echo "caveman: skills installer finished with Bun. The runtime (smaller inputs, Auto routing) needs Node 22.13+."
+    echo "  Install Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@$CLI_VERSION"
+    return 0
+  fi
   # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
   node_version=$(node -p "process.versions.node")
   node_minor=${node_version#*.}
@@ -95,7 +110,15 @@ if [ -n "$source_path" ]; then
   here="$(cd "$(dirname "$source_path")" 2>/dev/null && pwd)" || here=""
 fi
 if [ -n "$here" ] && [ -f "$here/installer/install.js" ]; then
-  node "$here/installer/install.js" "$@"
+  "$RUNTIME" "$here/installer/install.js" "$@"
+  first_run "$@"
+  exit 0
+fi
+
+# Force Bun for the package's Node shebang, and retain the same release pin.
+# `bun x` is built into bun; a separate bunx executable is not required.
+if [ "$RUNTIME" = bun ]; then
+  bun x --bun "github:$REPO#$PINNED_REF" "$@"
   first_run "$@"
   exit 0
 fi

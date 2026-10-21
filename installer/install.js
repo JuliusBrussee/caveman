@@ -32,6 +32,8 @@ const HOST_HOOKS = require('./lib/host-hooks');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 const { parseCommandArgs } = require('./lib/command-args');
+const { packageInvocation } = require('./lib/package-runner');
+const IS_BUN = Boolean(process.versions.bun);
 
 const REPO = 'JuliusBrussee/caveman';
 // Mirrors the `engines.node` floor in package.json. Hardcoded rather than read
@@ -217,6 +219,8 @@ function checkWslWindowsNode() {
 }
 
 function checkNodeVersion() {
+  // Bun reports a compatibility Node version; it is not a Node installation.
+  if (IS_BUN) return;
   const major = parseInt(process.versions.node.split('.')[0], 10);
   if (major < 18) die(`caveman: Node ${process.versions.node} too old. Need Node ≥18. https://nodejs.org`);
 }
@@ -885,16 +889,17 @@ function installViaSkills(ctx, prov) {
   // workspace-wide library is managed in the UI, not a home-directory scan.
   // Other adapters resolve their user directories and supported home overrides.
   // `#ref` pins skill content to this release, like the hook downloads.
-  const args = ['-y', 'skills', 'add', `${REPO}#${PINNED_REF}`, '--skill', '*', '-a', prov.profile, '--yes'];
+  const args = ['skills', 'add', `${REPO}#${PINNED_REF}`, '--skill', '*', '-a', prov.profile, '--yes'];
   if (prov.skillsScope === 'project') note(`  Installing into this project: ${process.cwd()}`);
   else args.push('-g');
-  const r = runSpawn('npx', args, null, opts.dryRun);
+  const runner = packageInvocation(args);
+  const r = runSpawn(runner.command, runner.args, null, opts.dryRun);
   if (spawnOk(r)) {
     results.installed.push(prov.id);
     if (prov.id === 'codex' && opts.withHooks !== false) installCodexHook(ctx);
     if (prov.id === 'cursor') installCursorNative(ctx);
     if (prov.id === 'copilot') installCopilotCliHook(ctx);
-  } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  } else results.failed.push([prov.id, `skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
 
@@ -2129,6 +2134,8 @@ function newerBundledCli() {
 // that CLI is also the `caveman` first on PATH. Null when there is no bundled
 // CLI or its floor is met.
 function bundledCliNodeFloorUnmet() {
+  // The CLI is Node-only even when Bun emulates a sufficiently new Node.
+  if (IS_BUN) return '22.13';
   try {
     const pkg = JSON.parse(fs.readFileSync(require.resolve('@caveman-ai/cli/package.json'), 'utf8'));
     const floor = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$/.exec((pkg.engines && pkg.engines.node) || '');
@@ -2194,7 +2201,7 @@ function uninstall(ctx) {
     const stranded = remainingNativeIntegrations();
     if (stranded.length > 0) cleanupFailed = true;
     for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
-    if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${process.version}. Upgrade Node first.`);
+    if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${IS_BUN ? `Bun ${process.versions.bun}` : process.version}. Upgrade Node first.`);
     if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
   }
 
@@ -2674,8 +2681,14 @@ function printHelp() {
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
   node installer/install.js [flags]
-  bash install.sh [flags]              # shim → npx
-  pwsh install.ps1 [flags]             # shim → npx
+  bun installer/install.js [flags]    # experimental skills-only fallback
+  bash install.sh [flags]              # Node first, Bun when Node is absent
+  pwsh install.ps1 [flags]             # same runtime selection on Windows
+
+RUNTIMES
+  Node >=18, or Bun for skills and file-based integrations. With Bun,
+  automatic hooks are skipped; Claude's plugin, --with-hooks and
+  --with-mcp-shrink still require Node. The runtime CLI needs Node 22.13+.
 
 FLAGS
   --dry-run             Print what would run, do nothing.
@@ -2732,6 +2745,19 @@ async function main() {
   if (opts.help) { printHelp(); return 0; }
   if (opts.listOnly) { printList(opts.noColor); return 0; }
 
+  // Reject explicit unsupported work before any host command or file write.
+  // Automatically installed hooks are optional; never persist commands that
+  // will later ask the user's host for an absent Node executable.
+  if (IS_BUN) {
+    if (opts.withHooks === true || opts.withMcpShrink) {
+      die('caveman: --with-hooks and --with-mcp-shrink require Node >=18; Bun supports skills-only installation.');
+    }
+    if (opts.only.includes('claude')) {
+      die('caveman: the Claude Code plugin requires Node >=18 for its hooks. Install Node and retry.');
+    }
+    opts.withHooks = false;
+  }
+
   checkWslWindowsNode();
   checkNodeVersion();
 
@@ -2752,6 +2778,7 @@ async function main() {
   ctx.say('🪨 caveman installer');
   ctx.note(`  ${REPO}`);
   if (opts.dryRun) ctx.note('  (dry run — nothing will be written)');
+  if (IS_BUN) ctx.note('  Bun: installing skills without Node-only hooks. Install Node >=18 for automatic activation.');
   process.stdout.write('\n');
 
   // Detect everything once
@@ -2770,6 +2797,7 @@ async function main() {
   // are auto-skipped — user must opt in via `--only <id>`. Stops the installer
   // from firing `npx skills add ...` against agents the user never installed
   // just because some other tool created `~/.foo` along the way.
+  let unsupportedSkips = 0;
   for (const prov of PROVIDERS) {
     if (!want(prov.id)) continue;
     if (prov.soft && !explicit(prov.id)) continue;
@@ -2779,6 +2807,11 @@ async function main() {
     // no repo clone is available; openclaw bails when the workspace dir is
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
+    if (IS_BUN && prov.id === 'claude') {
+      ctx.results.skipped.push(['claude', 'plugin hooks require Node >=18; install Node and retry']);
+      unsupportedSkips++;
+      continue;
+    }
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
@@ -2830,8 +2863,9 @@ async function main() {
   ctx.note('  verified team savings coming soon — join waitlist: https://caveman.so');
   ctx.note(`  uninstall: npx -y github:${REPO} -- --uninstall`);
 
-  // Exit code: nonzero only if every detected agent failed
-  if (ctx.results.detected > 0 && !ctx.results.installed.length && !ctx.results.skipped.length) return 1;
+  // Unsupported providers are not successful skips: they must not hide a
+  // failure of every attempted install. Preserve Node skip accounting.
+  if (ctx.results.detected > 0 && !ctx.results.installed.length && ctx.results.skipped.length === unsupportedSkips) return 1;
   return 0;
 }
 
