@@ -36,6 +36,31 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/instal
 
 ## Per-agent install
 
+### Bun-only machines (experimental)
+
+The installer source supports Bun when Node.js is absent. Both shell shims
+prefer Node >=18 when it is installed; an old Node version still needs an
+upgrade. Bun does not require a separate `bunx` command. Nested skill downloads
+use `bun x --bun` so a Node shebang does not try to start a missing Node.
+
+From a checkout containing this change, run `bash install.sh --only codex`
+or `pwsh install.ps1 --only codex`; alternatively run
+`bun installer/install.js --only codex`. The release-pinned one-liners above
+will gain this behavior when a release includes the change.
+
+This is support for the installer, not a claim that every agent runs on Bun.
+Skills and file-based integrations can install, but automatic Node hooks are
+skipped. The Claude Code plugin, explicit `--with-hooks`, and
+`--with-mcp-shrink` still require Node >=18 and report that requirement before
+making changes. Each agent keeps its own runtime requirements.
+
+The compression/routing CLI and its first-run setup still need Node 22.13+.
+Bun installs print that next step instead of launching it. Uninstall can clean
+up owned files with Bun, but will not run the Node CLI to disable native routing;
+remaining routing is reported as incomplete with instructions to finish under Node.
+
+### Commands by agent
+
 If you want to install for one agent (or want to know exactly what command runs under the hood), use the table below. Every row also works as `--only <id>` to the unified installer.
 
 > **On npm 12 or newer, add `--allow-git=root` to any bare `npx -y github:...` command below.** npm 12 turns off git package fetches by default, so a plain `npx -y github:JuliusBrussee/caveman` stops with `npm error code EALLOWGIT`. The flag opts in just the one package you asked for: `npx --allow-git=root -y github:JuliusBrussee/caveman -- --only <id>`. Check with `npx --version`. `install.sh` and `install.ps1` detect the npm major and add the flag themselves starting with `v3.2.0`, so the one-liners above (pinned to `v4.0.1`) work on npm 12. **One-liners pinned to `v3.1.0` or older download shims that predate that change and keep failing on npm 12**: switch the tag to `v4.0.1`, or install with the flag directly: `npx --allow-git=root -y github:JuliusBrussee/caveman#v4.0.1 -- --only <id>`.

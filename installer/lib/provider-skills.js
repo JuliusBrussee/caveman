@@ -4,6 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const OWNED = require('./owned-install');
+const { packageInvocation } = require('./package-runner');
 
 const REPO = 'JuliusBrussee/caveman';
 
@@ -98,9 +99,10 @@ function install({
       temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-skill-source-'));
       // The universal profile is only a disposable download destination. --copy
       // materializes every selected skill without touching any agent profile.
-      const result = run('npx', [
-        '-y', 'skills', 'add', ref ? `${REPO}#${ref}` : REPO, '--skill', '*', '-a', 'codex', '--yes', '--copy',
-      ], { cwd: temporary });
+      const runner = packageInvocation([
+        'skills', 'add', ref ? `${REPO}#${ref}` : REPO, '--skill', '*', '-a', 'codex', '--yes', '--copy',
+      ]);
+      const result = run(runner.command, runner.args, { cwd: temporary });
       if (!result || result.status !== 0 || result.error || result.signal) {
         throw new Error(`skill download failed${result?.error?.message ? `: ${result.error.message}` : ''}`);
       }

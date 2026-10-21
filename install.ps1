@@ -37,21 +37,29 @@ function Install-Caveman {
   # kept equal to packages/cli/package.json (tests/installer/shim-security).
   $CliVersion = "4.0.1"
 
-  # Require Node ≥18.
+  # Keep Node first; only fall back when it is absent, never when it is old.
+  $Runtime = "node"
   $node = Get-Command node -ErrorAction SilentlyContinue
   if (-not $node) {
-    Write-Error @"
-caveman: Node.js (>=18) required. Install:
+    if (Get-Command bun -ErrorAction SilentlyContinue) {
+      $Runtime = "bun"
+    } else {
+      Write-Error @"
+caveman: Node.js (>=18) or Bun required. Install:
   - winget install OpenJS.NodeJS.LTS
   - or download from https://nodejs.org
+  - Bun (experimental skills-only fallback): https://bun.sh
 "@
-    $global:LASTEXITCODE = 1; return
+      $global:LASTEXITCODE = 1; return
+    }
   }
 
-  $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
-  if ($nodeMajor -lt 18) {
-    Write-Error "caveman: Node $nodeMajor too old. Need Node >=18. Upgrade: https://nodejs.org"
-    $global:LASTEXITCODE = 1; return
+  if ($Runtime -eq "node") {
+    $nodeMajor = [int](& node -p "process.versions.node.split('.')[0]")
+    if ($nodeMajor -lt 18) {
+      Write-Error "caveman: Node $nodeMajor too old. Need Node >=18. Upgrade: https://nodejs.org"
+      $global:LASTEXITCODE = 1; return
+    }
   }
 
   # If we're inside the repo clone, run the local installer directly.
@@ -66,7 +74,10 @@ caveman: Node.js (>=18) required. Install:
   }
 
   if ($local) {
-    & node $local @InstallerArgs
+    & $Runtime $local @InstallerArgs
+  } elseif ($Runtime -eq "bun") {
+    # --bun overrides the package's Node shebang; no separate bunx is needed.
+    & bun x --bun "github:$Repo#$PinnedRef" @InstallerArgs
   } else {
     # Curl-pipe path: delegate to npx.
     $npx = Get-Command npx -ErrorAction SilentlyContinue
@@ -100,6 +111,12 @@ caveman: Node.js (>=18) required. Install:
   # End in the CLI's first run: modules, agents, one Continue.
   $skip = @($InstallerArgs | Where-Object { $_ -in @("-h", "--help", "--list", "-u", "--uninstall", "--dry-run") })
   if ($skip.Count -gt 0) { return }
+  if ($Runtime -eq "bun") {
+    Write-Host ""
+    Write-Host "caveman: skills installer finished with Bun. The runtime (smaller inputs, Auto routing) needs Node 22.13+."
+    Write-Host "  Install Node (https://nodejs.org), then run: npx -y @caveman-ai/cli@$CliVersion"
+    $global:LASTEXITCODE = 0; return
+  }
   # The skills above run on Node 18; the CLI (runtime, routing) needs 22.13.
   # A prerelease Node ("25.0.0-nightly…") is not a [version] until its suffix goes.
   $nodeVersion = [version](([string](& node -p "process.versions.node")) -replace '[-+].*$', '')
