@@ -485,3 +485,19 @@ func TestSanitizeAndMapHeaders_FailsClosedWithoutCredentials(t *testing.T) {
 		t.Error("unknown explicit Bedrock auth kind must fail closed")
 	}
 }
+
+// An inference-profile or provisioned-model ARN names the model with a "/" in
+// it. A client sends that slash percent-encoded, because it is part of one path
+// segment; decoding it into a separator changes the route Bedrock sees from
+// /model/{modelId}/{action} to one with an extra segment.
+func TestResolveUpstreamURLKeepsEncodedSlashInARN(t *testing.T) {
+	a := newAdapter(t)
+	arn := "arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aapplication-inference-profile%2Fabc123"
+	got, err := resolve(t, a, invokePath(arn, "converse"), nil)
+	if err != nil {
+		t.Fatalf("resolve: %v", err)
+	}
+	if !strings.HasSuffix(got, "application-inference-profile%2Fabc123/converse") {
+		t.Fatalf("model id slash was not kept encoded: %s", got)
+	}
+}
