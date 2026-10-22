@@ -43,6 +43,18 @@ class CompressCLITests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), data)
             self.assertEqual(list(Path(cwd).iterdir()), [source])
 
+    def test_credential_dotfile_is_refused_before_detection(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            source = Path(cwd) / ".npmrc"
+            data = b"//registry.npmjs.org/:_authToken=npm_secret\n"
+            source.write_bytes(data)
+            result = self.run_cli([source.name], cwd)
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertIn("filename looks sensitive", result.stdout)
+            self.assertNotIn("Detected:", result.stdout)
+            self.assertEqual(source.read_bytes(), data)
+            self.assertEqual(list(Path(cwd).iterdir()), [source])
+
     def test_missing_unicode_file_reports_error_without_import_or_encoding_failure(self):
         with tempfile.TemporaryDirectory() as cwd:
             result = self.run_cli(["不存在.md"], cwd)

@@ -521,6 +521,12 @@ class CompressSafetyTests(unittest.TestCase):
         self.assertTrue(compress_mod.is_sensitive_path(Path("project/private_keys/service-notes.md")))
         self.assertFalse(compress_mod.is_sensitive_path(Path("project/docs/service-notes.md")))
 
+    def test_credential_dotfiles_are_blocked(self):
+        for name in (".npmrc", ".pypirc", ".pgpass", ".git-credentials", ".htpasswd", ".s3cfg", ".boto"):
+            with self.subTest(name=name):
+                self.assertTrue(compress_mod.is_sensitive_path(Path("home/user") / name))
+        self.assertFalse(compress_mod.is_sensitive_path(Path("project/.cursorrules")))
+
     def test_code_blocks_are_masked_before_model_and_restored_byte_exact(self):
         original = (
             "# Tree\n\nProse before.\n\n"
