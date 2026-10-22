@@ -4,13 +4,18 @@ on:
   push:
     branches: [main]
     paths:
-      - skills/caveman/SKILL.md
-      - skills/ultracave/SKILL.md
-      - skills/megacave/SKILL.md
-      - skills/cavecrew/SKILL.md
-      - agents/cavecrew-*.md
-      - skills/caveman-compress/SKILL.md
-      - skills/caveman-compress/scripts/**
+      - 'skills/**'
+      - 'agents/cavecrew-*.md'
+      - 'commands/caveman-init.md'
+      - 'src/hooks/**'
+      - 'src/tools/caveman-init.js'
+      - '.claude-plugin/plugin.json'
+      - 'scripts/build-claude-plugin.mjs'
+      - 'docs/claude-plugin.md'
+      - 'LICENSE'
+      - 'LICENSE-MIT'
+      - 'NOTICE'
+      - '.github/workflows/sync-skill.yml'
 
 concurrency:
   group: sync-skill
@@ -57,6 +62,9 @@ jobs:
           cp agents/cavecrew-builder.md plugins/caveman/agents/cavecrew-builder.md
           cp agents/cavecrew-reviewer.md plugins/caveman/agents/cavecrew-reviewer.md
 
+      - name: Generate Claude plugin payload
+        run: node scripts/build-claude-plugin.mjs
+
       - name: Rebuild caveman.skill ZIP
         # `zip -r` ADDS to an existing archive, and dist/caveman.skill is tracked
         # (.gitignore keeps it with `!dist/caveman.skill`), so a file deleted from
@@ -69,6 +77,7 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
         run: |
           git add \
+            plugins/claude/ \
             skills/caveman-compress/ \
             plugins/caveman/skills/caveman-compress/ \
             plugins/caveman/skills/caveman/SKILL.md \

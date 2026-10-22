@@ -43,6 +43,7 @@ function releaseVersion() {
 
 // Manifests a host reads to tell the user which caveman they are running.
 const HOST_MANIFESTS = [
+  'plugins/claude/.claude-plugin/plugin.json',
   '.claude-plugin/plugin.json',
   '.cursor-plugin/plugin.json',
   'gemini-extension.json',

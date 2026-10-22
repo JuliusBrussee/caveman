@@ -37,7 +37,8 @@
     "LICENSE",
     "NOTICE",
     "!**/__pycache__/**",
-    "!**/*.py[cod]"
+    "!**/*.py[cod]",
+    "!plugins/claude/**"
   ],
   "packageManager": "pnpm@10.14.0",
   "dependencies": {

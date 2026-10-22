@@ -121,9 +121,9 @@ def _frontmatter_description(path: Path) -> str:
 def verify_shipped_skills_are_documented() -> None:
     """Every skills/*/SKILL.md installs into end users' agents.
 
-    .claude-plugin/marketplace.json sets source "./", so the plugin root is the
-    repo root and Claude Code auto-discovers every skills/ subdirectory — there
-    is no allowlist in plugin.json to gate it. A directory added here silently
+    The Claude payload generator includes every tracked canonical skill
+    directory in plugins/claude/skills, which Claude Code auto-discovers.
+    A directory added here and included in the generated payload silently
     claims a slot in every user's skill list and competes for activation, so it
     must at least be named in the docs that tell users what they installed.
     """
@@ -224,6 +224,40 @@ def verify_skill_frontmatter_upload_compatibility() -> None:
     print("Skill frontmatter descriptions avoid XML-like tags")
 
 
+def verify_claude_plugin_payload() -> None:
+    section("Claude Plugin Payload")
+
+    marketplace = read_json(ROOT / ".claude-plugin/marketplace.json")
+    entries = [
+        entry for entry in marketplace["plugins"]
+        if entry.get("name") == "caveman"
+    ]
+    ensure(len(entries) == 1, "expected exactly one caveman marketplace entry")
+    ensure(
+        entries[0].get("source") == "./plugins/claude",
+        "Claude marketplace must use the generated plugins/claude payload",
+    )
+
+    result = run(["node", str(ROOT / "scripts/build-claude-plugin.mjs"), "--check"])
+    ensure(result.returncode == 0, "Claude plugin payload verification failed")
+
+    payload = ROOT / "plugins/claude"
+    ensure(not (payload / "bin").exists(), "Claude payload must not ship bin/")
+    ensure(
+        not (payload / "hooks/hooks.json").exists(),
+        "Claude payload must not double-register manifest hooks",
+    )
+    ensure(
+        not (payload / "package.json").exists(),
+        "Claude payload must not ship the root installer package manifest",
+    )
+    ensure(
+        not (payload / "pnpm-lock.yaml").exists(),
+        "Claude payload must not ship the workspace pnpm lockfile",
+    )
+    print(result.stdout.strip())
+
+
 def verify_synced_files() -> None:
     section("Synced Files")
     skill_source = ROOT / "skills/caveman/SKILL.md"
@@ -302,9 +336,10 @@ def verify_synced_files() -> None:
 def verify_manifests_and_syntax() -> None:
     section("Manifests And Syntax")
 
-    claude_manifest_path = ROOT / ".claude-plugin/plugin.json"
+    claude_manifest_path = ROOT / "plugins/claude/.claude-plugin/plugin.json"
     manifest_paths = [
         claude_manifest_path,
+        ROOT / ".claude-plugin/plugin.json",
         ROOT / ".claude-plugin/marketplace.json",
         ROOT / ".cursor-plugin/plugin.json",
         ROOT / "hooks/hooks-cursor.json",
@@ -1163,6 +1198,7 @@ def main() -> int:
         verify_shipped_skills_are_documented,
         verify_skills_root_holds_only_skills,
         verify_skill_frontmatter_upload_compatibility,
+        verify_claude_plugin_payload,
         verify_synced_files,
         verify_manifests_and_syntax,
         verify_package_contents,
