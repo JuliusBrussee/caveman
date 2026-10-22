@@ -158,7 +158,7 @@ validate output         (no tokens)
 if errors: configured provider fixes cherry-picked issues only   (tokens: targeted fix)
   does NOT recompress; only patches broken parts
         ↓
-retry up to 2 times
+validate again (one fix call at most)
         ↓
 write compressed → CLAUDE.md
 write original   → CLAUDE.original.md
