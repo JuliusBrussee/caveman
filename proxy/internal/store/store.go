@@ -287,7 +287,12 @@ CREATE TABLE IF NOT EXISTS experiment_arms (
 );
 
 CREATE INDEX IF NOT EXISTS idx_experiment_arms_experiment
-  ON experiment_arms(experiment_id, started_at);`
+  ON experiment_arms(experiment_id, started_at);
+
+-- Stats windows filter and sort on julianday(ts). The expression must match
+-- the query text in stats.go. On an existing database this builds once.
+CREATE INDEX IF NOT EXISTS idx_requests_julianday_ts
+  ON requests(julianday(ts), id);`
 
 // migrations are additive ALTERs for stores created before a column existed.
 // CREATE TABLE IF NOT EXISTS never adds a column to an existing table, so each new
