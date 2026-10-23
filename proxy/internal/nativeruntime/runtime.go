@@ -1276,7 +1276,7 @@ func (r *Runtime) afterTool(request Request, response Response, allowMask bool) 
 	// answering. Naming the tool and the exact argument turns a dead end into one
 	// call.
 	replacement := fmt.Sprintf(
-		"[%s]\nstatus: current\nsource: %s\nfull: %s\nrecover: call caveman_retrieve with recovery_handle=%q to get these bytes back in full — one call returns the entire original.",
+		"[%s]\nstatus: current\nsource: %s\nfull: %s\nrecover: call caveman_retrieve with only recovery_handle=%q to get these bytes back in full — one call returns the entire original. Adding a query returns only a matching excerpt.",
 		typeName, source, response.RecoveryRef, response.RecoveryRef)
 	// Mask only when replacement plus one retrieval call and safety margin is
 	// materially smaller. Bytes are conservative proxy for tokenizer variance.
