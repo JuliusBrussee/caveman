@@ -81,6 +81,10 @@ def detect_file_type(filepath: Path) -> str:
         One of: 'natural_language', 'code', 'config', 'unknown'
     """
     ext = filepath.suffix.lower()
+    # pathlib gives a dotfile such as `.env` no suffix, so a skip-listed name
+    # would otherwise reach the content sniffing below and come back as prose.
+    if not ext and filepath.name.lower() in SKIP_EXTENSIONS:
+        ext = filepath.name.lower()
 
     # Known code filenames win over any extension rule
     if filepath.name.lower() in KNOWN_CODE_FILENAMES:
