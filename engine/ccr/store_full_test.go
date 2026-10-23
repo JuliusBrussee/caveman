@@ -4,6 +4,7 @@ package ccr
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"database/sql"
 	"errors"
@@ -41,26 +42,40 @@ func TestReplacedConnectionKeepsPageCap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer store.Close()
 	want := int64(budget / 4096)
-	// With no idle connection allowed, database/sql closes the connection
-	// when this statement ends, in this goroutine. The next statement opens a
-	// new connection. A short lifetime instead leaves the close to a cleaner
-	// goroutine, and on Windows the open file then blocks TempDir cleanup.
-	store.db.SetMaxIdleConns(0)
-	if _, err := store.db.Exec(`SELECT 1`); err != nil {
+	// Hold the existing connection, so the pool must open a new one. The test
+	// does not close the only connection: in WAL mode, closing the last
+	// connection can replace the journal files, and then Close refuses the
+	// store and leaves the file open, which fails TempDir cleanup on Windows.
+	ctx := context.Background()
+	store.db.SetMaxOpenConns(2)
+	first, err := store.db.Conn(ctx)
+	if err != nil {
 		t.Fatal(err)
 	}
-	store.db.SetMaxIdleConns(1)
-	if store.db.Stats().MaxIdleClosed == 0 {
-		t.Fatal("the pool kept the first connection, so no new connection was opened")
+	second, err := store.db.Conn(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if open := store.db.Stats().OpenConnections; open != 2 {
+		t.Fatalf("open connections = %d, want 2", open)
 	}
 	var got int64
-	if err := store.db.QueryRow(`PRAGMA max_page_count`).Scan(&got); err != nil {
+	if err := second.QueryRowContext(ctx, `PRAGMA max_page_count`).Scan(&got); err != nil {
 		t.Fatal(err)
 	}
+	if err := second.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	store.db.SetMaxOpenConns(1)
 	if got != want {
 		t.Fatalf("max_page_count on the new connection = %d, want %d", got, want)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
 	}
 }
 
