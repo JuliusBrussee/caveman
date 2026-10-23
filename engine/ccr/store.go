@@ -28,6 +28,10 @@ import (
 // guesses a recovery — an unknown handle is an explicit miss.
 var ErrNotFound = errors.New("ccr: recovery handle not found")
 
+// ErrCorruptRecovery is returned when stored bytes do not match their handle or
+// their content hash. The store never returns such bytes as a recovery.
+var ErrCorruptRecovery = errors.New("ccr: stored recovery data does not match its handle, so the store is damaged (run PRAGMA quick_check)")
+
 // ErrBudgetExceeded means a new recovery was refused before publishing lossy
 // bytes because the local store's configured payload budget would be exceeded.
 // Existing handles remain intact and retrievable; callers must pass through.
@@ -212,12 +216,37 @@ type Stats struct {
 	StorageBytes    int64 `json:"storage_bytes,omitempty"`
 	MaxStorageBytes int64 `json:"max_storage_bytes,omitempty"`
 	StorageFull     bool  `json:"storage_full,omitempty"`
+	// StorageFullReason names why StorageFull is true: StorageFullPayloadBudget,
+	// StorageFullPageCap or StorageFullDiskFull. It is empty when not full.
+	StorageFullReason string `json:"storage_full_reason,omitempty"`
 }
+
+// Values of Stats.StorageFullReason.
+const (
+	// StorageFullPayloadBudget means retained payload bytes reached the budget.
+	StorageFullPayloadBudget = "payload_budget"
+	// StorageFullPageCap means the database file reached its SQLite page cap.
+	// Indexes, overflow pages and unused space count toward the cap.
+	StorageFullPageCap = "page_cap"
+	// StorageFullDiskFull means a write failed with SQLITE_FULL while the
+	// file was below its page cap, so the disk or file system refused it.
+	StorageFullDiskFull = "disk_full"
+)
 
 // Handle returns the content-addressed handle for a payload without storing it.
 func Handle(original []byte) string {
 	sum := sha256.Sum256(original)
 	return "ccr_" + hex.EncodeToString(sum[:16])
+}
+
+// verifyObjectData checks that obj.Data still matches the content hash that
+// PutObject enforced at write time.
+func verifyObjectData(obj Object) error {
+	sum := sha256.Sum256(obj.Data)
+	if "sha256:"+hex.EncodeToString(sum[:]) != obj.ContentHash {
+		return fmt.Errorf("%w: object %s", ErrCorruptRecovery, obj.ID)
+	}
+	return nil
 }
 
 func ratio(before, after int) float64 {
