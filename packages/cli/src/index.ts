@@ -123,10 +123,13 @@ const wrapTempDirs = new Set<string>();
 const PROXY_ADDR = "127.0.0.1:8787";
 const PROXY_URL = `http://${PROXY_ADDR}`;
 // Restores Claude Code's tool search after we take over ANTHROPIC_BASE_URL.
-// "auto" defers to Claude Code's own tool-catalog size threshold, so a user with
-// two small MCP servers pays no extra round-trip while a heavy setup stops
-// inlining every schema. "true" would force it on regardless.
-const TOOL_SEARCH_DEFAULT = "auto";
+// "true" matches Claude Code's own default when the variable is unset. "auto"
+// would gate it on a tool-catalog size threshold, which hosts that connect MCP
+// servers after the first request (Agent SDK apps) cross mid-session: early
+// turns inline every schema and the flip to deferred busts the prompt cache.
+const TOOL_SEARCH_DEFAULT = "true";
+// Earlier releases wrote "auto"; disable still withdraws it as ours.
+const LEGACY_TOOL_SEARCH_DEFAULTS = ["auto"];
 
 // The agent traffic target (wrap, `enable <agent>`, module wiring), resolved per
 // invocation. Signing in never moves agent traffic through a Caveman hop: the
@@ -10797,7 +10800,7 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     // Symmetric to the enable-side ENABLE_TOOL_SEARCH write: only withdraw the
     // value we introduced ourselves and only while it is still untouched, so a
     // user who set their own afterwards keeps it.
-    if (beforeEnv.ENABLE_TOOL_SEARCH === undefined && currentEnv.ENABLE_TOOL_SEARCH === TOOL_SEARCH_DEFAULT) {
+    if (beforeEnv.ENABLE_TOOL_SEARCH === undefined && (currentEnv.ENABLE_TOOL_SEARCH === TOOL_SEARCH_DEFAULT || LEGACY_TOOL_SEARCH_DEFAULTS.includes(String(currentEnv.ENABLE_TOOL_SEARCH)))) {
       delete currentEnv.ENABLE_TOOL_SEARCH;
     }
     // Auto's picker keys this enable added, each only while it is still ours.
