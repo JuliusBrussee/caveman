@@ -43,13 +43,18 @@ func TestReplacedConnectionKeepsPageCap(t *testing.T) {
 	}
 	defer store.Close()
 	want := int64(budget / 4096)
-	// A lifetime of one nanosecond makes database/sql drop the pooled
-	// connection and open a new one for the next statement.
-	store.db.SetConnMaxLifetime(time.Nanosecond)
+	// With no idle connection allowed, database/sql closes the connection
+	// when this statement ends, in this goroutine. The next statement opens a
+	// new connection. A short lifetime instead leaves the close to a cleaner
+	// goroutine, and on Windows the open file then blocks TempDir cleanup.
+	store.db.SetMaxIdleConns(0)
 	if _, err := store.db.Exec(`SELECT 1`); err != nil {
 		t.Fatal(err)
 	}
-	store.db.SetConnMaxLifetime(0)
+	store.db.SetMaxIdleConns(1)
+	if store.db.Stats().MaxIdleClosed == 0 {
+		t.Fatal("the pool kept the first connection, so no new connection was opened")
+	}
 	var got int64
 	if err := store.db.QueryRow(`PRAGMA max_page_count`).Scan(&got); err != nil {
 		t.Fatal(err)
