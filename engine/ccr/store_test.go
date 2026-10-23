@@ -375,7 +375,10 @@ func TestPersistentStoreBudgetRefusesNewRecoveryAndPreservesExisting(t *testing.
 	if err != nil {
 		t.Fatal(err)
 	}
-	if stats.StorageBytes != int64(len(first)) || stats.MaxStorageBytes != budget || stats.StorageFull {
+	// The refused second write leaves the store reported as full until a write
+	// succeeds, even though the stored bytes are below the budget.
+	if stats.StorageBytes != int64(len(first)) || stats.MaxStorageBytes != budget ||
+		!stats.StorageFull || stats.StorageFullReason != ccr.StorageFullPayloadBudget {
 		t.Fatalf("storage stats = %+v", stats)
 	}
 }
