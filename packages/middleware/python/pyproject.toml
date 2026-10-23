@@ -36,7 +36,10 @@ openai = ["openai>=2.20,<4"]
 anthropic = ["anthropic>=1.0,<2"]
 google = ["google-genai>=2.18,<3"]
 langchain = ["langchain>=1.1,<2", "langchain-core>=1.1,<2", "langgraph>=1.0.2,<2"]
-litellm = ["litellm>=1.95,<2"]
+# 1.106.0-1.106.2 import optional mcp on ordinary tool calls (BerriAI/litellm#46045).
+# 1.107.0 was compromised: https://docs.litellm.ai/blog/security-incident-oct-21-2026
+# Exclude only those releases so future patches still reach the canary.
+litellm = ["litellm>=1.95,!=1.106.0,!=1.106.1,!=1.106.2,!=1.107.0,<2"]
 strands = ["strands-agents>=1.43,<2"]
 agno = ["agno>=3.0,<4"]
 asgi = []  # pure ASGI 3: no framework dependency

@@ -12,7 +12,7 @@ langchain-core==1.6.5
 langgraph==1.2.12
 langgraph-prebuilt==1.1.0
 anthropic==1.8.0
-litellm==1.102.1
+litellm==1.105.3
 google-genai==2.25.0
 strands-agents==1.57.0
 agno==3.0.11

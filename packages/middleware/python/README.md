@@ -71,7 +71,7 @@ Wrapping never raises for a version problem, even in strict mode. To fail fast a
 | `langchain` | langchain 1.1–<2, langchain-core 1.1–<2, langgraph 1.0.2–<2 | 1.1.0 / 1.1.0 / 1.0.2 | 1.4.2 / 1.6.5 / 1.2.12 |
 | `openai` | openai 2.20–<4 | 2.20.0 | 2.54.0, 3.19.2 |
 | `anthropic` | anthropic 1.0–<2 | 1.0.0 | 1.8.0 |
-| `litellm` | litellm 1.95–<2 | 1.95.0 | 1.102.1 |
+| `litellm` | litellm 1.95–<2 (extra exclusions below) | 1.95.0 | 1.105.3 |
 | `google` | google-genai 2.18–<3 | 2.18.0 | 2.25.0 |
 | `strands` | strands-agents 1.43–<2 | 1.43.0 | 1.57.0 |
 | `agno` | agno 3.0–<4 | 3.0.0 | 3.0.11 |
@@ -83,6 +83,8 @@ Wrapping never raises for a version problem, even in strict mode. To fail fast a
 | `asgi` | none (ASGI 3) | n/a | n/a |
 
 CI tests the oldest versions on Python 3.11 and the newest on Python 3.13, using `constraints/floor.txt` and `constraints/latest.txt`. It also runs the certified families on 3.12 and 3.14. Every lane tests the built wheel, installed. A nightly run installs each extra's newest releases with no constraints and opens an issue when one breaks an adapter. The extras stop at the next major version, so a new major is only tested once its range is widened.
+
+`[litellm]` excludes 1.106.0, 1.106.1, and 1.106.2: ordinary tool calls fail without the optional `mcp` package ([upstream issue](https://github.com/BerriAI/litellm/issues/46045)). It also excludes 1.107.0, the compromised release named in LiteLLM's [security notice](https://docs.litellm.ai/blog/security-incident-oct-21-2026). These are installation exclusions, not a narrower runtime gate; the gate checks adapter compatibility, not package security.
 
 `[openai]` accepts openai 2.20 through 3.x. LiteLLM and CrewAI require `openai<3`, so `[openai,litellm]` or `[openai,crewai]` installs openai 2.x. The adapter supports 2.x, but you can't get openai 3.x in the same environment as those two frameworks. `[asgi]` has no dependencies; it works with any ASGI 3 server or framework.
 
