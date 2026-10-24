@@ -759,7 +759,7 @@ STRICT RULES:
 - Preserve ALL URLs exactly
 - Preserve ALL headings exactly
 - Preserve file paths and commands
-- Return ONLY the compressed markdown body — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
+- Return ONLY the compressed markdown body, with no preface, commentary, or YAML frontmatter — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
 
 Only compress natural language prose. Never restructure, add formatting, or improve organization.
 
@@ -793,7 +793,7 @@ ORIGINAL (reference only):
 COMPRESSED (fix this):
 {compressed}
 
-Return ONLY the fixed compressed file. No explanation.
+Return ONLY the fixed compressed markdown body. No preface, commentary, YAML frontmatter, or explanation.
 """
 
 
@@ -881,6 +881,32 @@ def restore_code_blocks(text: str, blocks: List[Tuple[str, str]]) -> str:
     if CODE_MARKER_PREFIX in restored:
         raise ValueError("Provider returned an unknown Caveman code-preservation marker")
     return restored
+
+
+def _frontmatter_block_count(masked_body: str) -> int:
+    """Count mapping-shaped delimiter blocks outside preserved code."""
+    lines = masked_body.splitlines()
+    delimiters = [i for i, line in enumerate(lines) if line == "---"]
+    count = 0
+    for start, end in zip(delimiters, delimiters[1:]):
+        content = [line for line in lines[start + 1:end] if line.strip()]
+        key_value = re.compile(r"^[A-Za-z_][A-Za-z0-9_.-]*:(\s.*)?$")
+        if content and key_value.match(content[0]) and all(
+            key_value.match(line) or line[0].isspace() or line.startswith("- ")
+            for line in content[1:]
+        ):
+            count += 1
+    return count
+
+
+def _body_candidate_error(original_masked: str, candidate_masked: str) -> str:
+    """Use the same body-only structural guards for compression and repair."""
+    anchor = first_nonblank_line(original_masked)
+    if anchor.startswith(("#", CODE_MARKER_PREFIX)) and first_nonblank_line(candidate_masked) != anchor:
+        return "output does not start with the original body's first line (possible preamble leak)"
+    if _frontmatter_block_count(candidate_masked) > _frontmatter_block_count(original_masked):
+        return "output added YAML frontmatter to the markdown body"
+    return ""
 
 
 # ---------- Core Logic ----------
@@ -971,6 +997,15 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
     print(f"Compressing with {provider}...")
     masked_body, code_blocks = mask_code_blocks(body)
     masked_compressed = call_claude(build_compress_prompt(masked_body))
+    if masked_compressed is None or not masked_compressed.strip():
+        print(f"❌ Compression aborted: {provider} returned an empty response.")
+        print("   Original file is untouched (no backup created).")
+        return False
+    body_error = _body_candidate_error(masked_body, masked_compressed)
+    if body_error:
+        print(f"❌ Compression aborted: {body_error}.")
+        print("   Original file is untouched (no backup created).")
+        return False
     try:
         compressed_body = restore_code_blocks(masked_compressed, code_blocks)
     except ValueError as error:
@@ -1046,7 +1081,7 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
 
         print(f"Fixing with {provider}...")
         fixed = call_claude(
-            build_fix_prompt(original_text, compressed, result.errors)
+            build_fix_prompt(body, compressed_body, result.errors)
         )
 
         if fixed is None or not fixed.strip():
@@ -1054,42 +1089,31 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
             print("   Skipping this attempt.")
             continue
 
-        # Guard against a prose preamble smuggled in ahead of the real fixed
-        # content (issue #588). Only enforced when the original starts with a
-        # structural anchor (frontmatter `---` or a heading) — plain-prose
-        # first lines get legitimately rewritten by compression, and requiring
-        # them verbatim would reject every valid fix.
-        anchor = first_nonblank_line(original_text)
-        if anchor.startswith(("---", "#")) and first_nonblank_line(fixed) != anchor:
-            print("❌ Fix attempt aborted: output does not start with the original's first line.")
-            print("   Possible preamble leak. Skipping this attempt.")
+        # Repairs use the same body-only contract as the initial compression.
+        # Mask code for structural checks so fenced YAML is never frontmatter.
+        try:
+            masked_fixed, _ = mask_code_blocks(fixed)
+        except ValueError as error:
+            print(f"❌ Fix attempt aborted: {error}")
             continue
-
-        # The repaired candidate is what gets written if it validates, so the
-        # non-expansion invariant has to hold for it too — a repair that
-        # restores the structure validate() asked for by padding the prose back
-        # out is exactly the "compression" #776 is about. `fixed` is a whole
-        # file (build_fix_prompt is given one, and the anchor check above
-        # requires it to start with the original's first line), so its
-        # frontmatter is split off to compare like against like.
-        fixed_frontmatter, fixed_body = split_frontmatter(fixed)
+        body_error = _body_candidate_error(masked_body, masked_fixed)
+        if body_error:
+            print(f"❌ Fix attempt aborted: {body_error}.")
+            print("   Skipping this attempt.")
+            continue
+        fixed_body = fixed
         if not _is_smaller_than_body(fixed_body, body):
             print("   Skipping this attempt.")
             continue
 
-        # The fix prompt carries the whole file unmasked, so hold the repair to
-        # the first pass's guards: frontmatter and every masked block (code,
-        # including fences indented under list items, which validate() cannot
-        # see, and <!-- nocompress --> regions) must come back verbatim.
-        if fixed_frontmatter != frontmatter:
-            print("❌ Fix attempt aborted: output changed the YAML frontmatter.")
-            print("   Skipping this attempt.")
-            continue
+        # The fix prompt carries the body unmasked; every protected block
+        # must still come back verbatim, including list-nested fences.
         if any(block.rstrip("\n") not in fixed_body for _, block in code_blocks):
             print("❌ Fix attempt aborted: output changed a preserved code or <!-- nocompress --> block.")
             print("   Skipping this attempt.")
             continue
 
-        compressed = fixed
+        compressed_body = fixed_body
+        compressed = frontmatter + compressed_body
 
     return False

@@ -169,7 +169,7 @@ class CompressSafetyTests(unittest.TestCase):
 
     def _run_fix_pass(self, fix, fix_is_faithful=False):
         # The first candidate drops the URL, so the real validate() rejects it
-        # and `fix` (a whole file, as build_fix_prompt asks for) is the repair.
+        # and `fix` (a body only, as build_fix_prompt asks for) is the repair.
         original = (
             "---\n"
             "name: deploy-notes\n"
@@ -193,14 +193,15 @@ class CompressSafetyTests(unittest.TestCase):
              tempfile.TemporaryDirectory() as data_home, \
              mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             path = self._file_with(Path(tmp), original)
-            repair = fix(original.replace(
+            frontmatter, _ = compress_mod.split_frontmatter(original)
+            repair = fix(body.replace(
                 "Some prose about the deploy process that is fairly verbose and wordy.", "Deploy prose."
             ))
             with mock.patch.object(compress_mod, "call_claude", side_effect=[first, repair]):
                 ok = compress_mod.compress_file(path)
             if fix_is_faithful:
                 self.assertTrue(ok)
-                self.assertEqual(path.read_text(encoding="utf-8"), repair)
+                self.assertEqual(path.read_text(encoding="utf-8"), frontmatter + repair)
                 return
             self.assertFalse(ok)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
@@ -218,11 +219,8 @@ class CompressSafetyTests(unittest.TestCase):
         self._run_fix_pass(lambda text: text.replace("-n prod", "-n dev"))
 
     def test_fix_pass_cannot_rewrite_frontmatter(self):
-        # The first pass strips frontmatter before the model sees it; the fix
-        # prompt sends the whole file, and validate() never compares it.
-        self._run_fix_pass(lambda text: text.replace(
-            "Notes for deploying the service to production safely.", "deploy notes prod."
-        ))
+        # Frontmatter is local-only; this heading-first case rejects at the anchor guard.
+        self._run_fix_pass(lambda text: "---\nname: changed\n---\n" + text)
 
     def test_real_compression_writes_backup_and_target(self):
         # Isolate the backup data dir to a temp location so the out-of-tree
