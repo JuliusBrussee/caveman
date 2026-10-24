@@ -1,6 +1,7 @@
 package store
 
 import (
+	"database/sql"
 	"encoding/json"
 	"math"
 	"path/filepath"
@@ -314,4 +315,76 @@ func TestStatsMissingObservedBucketRateStaysUnpriced(t *testing.T) {
 			t.Fatal("unused rate prevented valid pricing")
 		}
 	})
+}
+
+// statsPlanQuery is the BuildStatsReport query shape with a day window. It
+// shares the WHERE and ORDER BY text with production code.
+const statsPlanQuery = `EXPLAIN QUERY PLAN SELECT request_id FROM requests WHERE ` +
+	statsWhereTo + ` AND ` + statsWhereFrom + ` ` + statsOrderBy
+
+func statsQueryPlan(t *testing.T, s *Store) string {
+	t.Helper()
+	rows, err := s.db.Query(statsPlanQuery, "2026-09-08T13:00:00Z", "2026-09-08T00:00:00Z")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var plan []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		plan = append(plan, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return strings.Join(plan, "\n")
+}
+
+func statsAssertIndexedPlan(t *testing.T, s *Store) {
+	t.Helper()
+	plan := statsQueryPlan(t, s)
+	if !strings.Contains(plan, "idx_requests_julianday_ts") {
+		t.Fatalf("plan does not use the julianday index:\n%s", plan)
+	}
+	for _, bad := range []string{"SCAN requests", "USE TEMP B-TREE FOR ORDER BY"} {
+		if strings.Contains(plan, bad) {
+			t.Fatalf("plan contains %q:\n%s", bad, plan)
+		}
+	}
+}
+
+func TestStatsQueryUsesJulianDayIndex(t *testing.T) {
+	statsAssertIndexedPlan(t, statsTestStore(t))
+}
+
+func TestOpenAddsJulianDayIndexToExistingDatabase(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "old.db")
+	// An old database has the requests table and no index.
+	old, err := sql.Open("sqlite", sqliteDSN(path))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`CREATE TABLE requests (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, request_id TEXT NOT NULL, basis TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := old.Exec(`INSERT INTO requests (ts, request_id, basis) VALUES ('2026-09-08 10:00:00.000', 'r1', 'inferred')`); err != nil {
+		t.Fatal(err)
+	}
+	if err := old.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	var n int
+	if err := s.db.QueryRow(`SELECT count(*) FROM sqlite_master WHERE type='index' AND name='idx_requests_julianday_ts'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("index count = %d, err = %v", n, err)
+	}
+	statsAssertIndexedPlan(t, s)
 }

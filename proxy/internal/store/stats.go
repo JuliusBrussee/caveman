@@ -192,6 +192,14 @@ func sanitizeStatsMeasurement(rec *gateway.RequestRecord) {
 	}
 }
 
+// These three fragments must match the idx_requests_julianday_ts expression
+// index in store.go. If the text drifts, SQLite scans the table and sorts it.
+const (
+	statsWhereTo   = "julianday(ts) <= julianday(?)"
+	statsWhereFrom = "julianday(ts) >= julianday(?)"
+	statsOrderBy   = "ORDER BY julianday(ts) DESC, id DESC"
+)
+
 // BuildStatsReport reads the request ledger only. Transcript imports are not
 // unioned into this report: without an exact request join that would double count
 // routed traffic and attach savings to unrelated agent usage.
@@ -211,12 +219,12 @@ func (s *Store) BuildStatsReport(opts StatsReportOptions) (StatsReport, error) {
 	}
 	// Older ChatGPT rows used RFC3339 while the generic route used storeTSLayout.
 	// Compare instants, not their differing separators or timezone offsets.
-	where := []string{"julianday(ts) <= julianday(?)"}
+	where := []string{statsWhereTo}
 	args := []any{now.Format(time.RFC3339Nano)}
 	if opts.Days > 0 {
 		from := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC).AddDate(0, 0, 1-opts.Days)
 		out.Window.From = from.Format(time.RFC3339)
-		where = append(where, "julianday(ts) >= julianday(?)")
+		where = append(where, statsWhereFrom)
 		args = append(args, from.Format(time.RFC3339))
 	}
 	for _, filter := range []struct{ column, value string }{
@@ -239,7 +247,7 @@ func (s *Store) BuildStatsReport(opts StatsReportOptions) (StatsReport, error) {
 		COALESCE(pricing_provider,''), COALESCE(pricing_model,''), COALESCE(pricing_catalog_version,''),
 		COALESCE(price_input_per_million,0), COALESCE(price_output_per_million,0), COALESCE(price_cache_read_per_million,0), COALESCE(price_cache_write_per_million,0), COALESCE(price_cache_write_1h_per_million,0), COALESCE(price_reasoning_per_million,0),
 		COALESCE(raw_request_sha256,''), COALESCE(transformed_request_sha256,''), `+cacheWarmRow+`
-		FROM requests WHERE `+strings.Join(where, " AND ")+` ORDER BY julianday(ts) DESC, id DESC`, args...)
+		FROM requests WHERE `+strings.Join(where, " AND ")+` `+statsOrderBy, args...)
 	if err != nil {
 		return out, err
 	}
