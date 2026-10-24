@@ -261,7 +261,7 @@ async function wrapAndEchoEnv(agentId, envVar, extraEnv = {}) {
   });
 }
 
-async function wrapAndEchoEnvJson(agentId, envVars, extraEnv = {}, cwd = undefined) {
+async function wrapAndEchoEnvJson(agentId, envVars, extraEnv = {}, cwd = undefined, args = []) {
   const { mkdtempSync, writeFileSync, mkdirSync } = await import("node:fs");
   const { tmpdir } = await import("node:os");
   const binDir = mkdtempSync(join(tmpdir(), `cave-${agentId}-`));
@@ -277,7 +277,7 @@ process.stdout.write(JSON.stringify(Object.fromEntries(keys.map((key) => [key, p
   delete env.CAVE_GATEWAY_URL;
   Object.assign(env, extraEnv);
   return await new Promise((resolve, reject) => {
-    const child = spawn("node", [cli, "wrap", agentId], { env, ...(cwd ? { cwd } : {}) });
+    const child = spawn("node", [cli, "wrap", agentId, ...args], { env, ...(cwd ? { cwd } : {}) });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -653,6 +653,45 @@ test("gemini profile injects distinct Gemini and Vertex local routes", async () 
   const env = JSON.parse(out.stdout);
   assert.equal(env.GOOGLE_GEMINI_BASE_URL, attributed("http://127.0.0.1:8787", "gemini"));
   assert.equal(env.GOOGLE_VERTEX_BASE_URL, `${attributed("http://127.0.0.1:8787", "gemini")}/vertex`);
+});
+
+// Gemini CLI resolves an unset auth type to `gateway` once GOOGLE_GEMINI_BASE_URL
+// is set, and its headless validator rejects that (exit 41). Wrap writes no user
+// config, so a headless launch with no auth type of the user's own names the fix.
+test("headless gemini wrap names the selectedType fix only when no auth type is chosen", async () => {
+  const { mkdtempSync, mkdirSync, writeFileSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const noSwitches = { GOOGLE_GENAI_USE_GCA: "", GOOGLE_GENAI_USE_VERTEXAI: "", CLOUD_SHELL: "", GEMINI_CLI_USE_COMPUTE_ADC: "", GEMINI_CLI_HOME: mkdtempSync(join(tmpdir(), "cave-gemini-home-")) };
+  const hint = /selectedType.*gemini-api-key/;
+
+  const unset = await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], noSwitches);
+  assert.equal(unset.code, 0, unset.stderr);
+  assert.match(unset.stderr, hint);
+
+  const chosenHome = mkdtempSync(join(tmpdir(), "cave-gemini-home-"));
+  mkdirSync(join(chosenHome, ".gemini"));
+  writeFileSync(join(chosenHome, ".gemini", "settings.json"), '// user\n{"security":{"auth":{"selectedType":"gemini-api-key"}}}\n');
+  const launchedWithoutHint = (out) => {
+    assert.equal(out.code, 0, out.stderr);
+    assert.equal(JSON.parse(out.stdout).GOOGLE_GEMINI_BASE_URL, attributed("http://127.0.0.1:8787", "gemini"));
+    assert.doesNotMatch(out.stderr, hint);
+  };
+  launchedWithoutHint(await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], { ...noSwitches, GEMINI_CLI_HOME: chosenHome }));
+
+  const project = mkdtempSync(join(tmpdir(), "cave-gemini-project-"));
+  mkdirSync(join(project, ".gemini"));
+  writeFileSync(join(project, ".gemini", "settings.json"), '{"security":{"auth":{"selectedType":"oauth-personal"}}}\n');
+  launchedWithoutHint(await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], noSwitches, project));
+
+  launchedWithoutHint(await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], { ...noSwitches, GOOGLE_GENAI_USE_VERTEXAI: "true" }));
+  const dotenvHome = mkdtempSync(join(tmpdir(), "cave-gemini-home-"));
+  mkdirSync(join(dotenvHome, ".gemini"));
+  writeFileSync(join(dotenvHome, ".gemini", ".env"), "GOOGLE_GENAI_USE_GCA=true\n");
+  // An exported value, even empty, outranks the .env file, as in Gemini; unset it here.
+  launchedWithoutHint(await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], { ...noSwitches, GOOGLE_GENAI_USE_GCA: undefined, GEMINI_CLI_HOME: dotenvHome }));
+  // Interactive sessions and subcommands never reach the headless validator.
+  launchedWithoutHint(await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], noSwitches, undefined, ["-i", "hello"]));
+  launchedWithoutHint(await wrapAndEchoEnvJson("gemini", ["GOOGLE_GEMINI_BASE_URL"], noSwitches, undefined, ["mcp", "list"]));
 });
 
 test("managed Gemini wrap fails closed to direct provider routing", async () => {
