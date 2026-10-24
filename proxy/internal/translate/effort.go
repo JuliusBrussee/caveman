@@ -15,6 +15,7 @@ const (
 	dialectOpenAIChat = "openai_chat" // reasoning_effort: <effort> (OpenAI, xAI, Groq, Gemini's compatible endpoint, ...)
 	dialectOpenRouter = "openrouter"  // reasoning: {effort}
 	dialectDeepSeek   = "deepseek"    // thinking: {type} + reasoning_effort low|high|max
+	dialectKimi       = "kimi"        // reasoning_effort: low|high|max (Kimi K3, always thinking)
 	dialectToggle     = "toggle"      // thinking: {type: enabled|disabled} (Z.ai GLM, Kimi K2.x)
 	dialectQwen       = "qwen"        // enable_thinking + thinking_budget (DashScope)
 	dialectNone       = "none"        // no effort field at all (local servers)
@@ -48,6 +49,13 @@ func applyChatEffort(body map[string]json.RawMessage, effort, dialect string) {
 		// DeepSeek takes low | high | max (its docs map the rest the same way).
 		level := map[string]string{"minimal": "low", "low": "low", "medium": "high", "high": "high", "xhigh": "high", "max": "max"}[effort]
 		body["thinking"] = mustJSON(map[string]string{"type": "enabled"})
+		if level != "" {
+			body["reasoning_effort"] = mustJSON(level)
+		}
+	case dialectKimi:
+		// Kimi K3 always thinks and accepts only low | high | max. Its lowest
+		// level also covers a request to turn thinking off.
+		level := map[string]string{"none": "low", "minimal": "low", "low": "low", "medium": "high", "high": "high", "xhigh": "high", "max": "max"}[effort]
 		if level != "" {
 			body["reasoning_effort"] = mustJSON(level)
 		}
