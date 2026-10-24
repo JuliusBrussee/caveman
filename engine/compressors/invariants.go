@@ -192,9 +192,18 @@ var invariantSecretFieldRe = regexp.MustCompile(`(?i)(secret|passw|token|api[_-]
 // through to enumeration or coverage, which state only exact, counted facts
 // ("amount: 500x26 NaN x1"). A run whose values are ALL "NaN" is still
 // constant and still reported as such, because that IS verified.
+//
+// The same goes for an integer a float64 cannot hold exactly. Past 2^53 two
+// different integers can parse to the same float64 (snowflake IDs, nanosecond
+// timestamps), so the comparisons below cannot tell which one is larger and the
+// marker would name a bound that an elided row exceeds. Such a literal stays
+// off the numeric track too, and is reported by exact string bounds instead.
 func invariantNumber(value string) (float64, bool) {
 	n, err := strconv.ParseFloat(value, 64)
 	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+		return 0, false
+	}
+	if math.Abs(n) >= 1<<53 && !strings.ContainsAny(value, ".eE") {
 		return 0, false
 	}
 	return n, true
