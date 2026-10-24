@@ -6866,6 +6866,7 @@ async function spawnWrapped(
   }
   if (!direct && agent?.id === "claude") Object.assign(env, claudeCaveBuildEnv());
   if (!direct) maybeWarnHermesMissingKey(agent, gw);
+  if (!direct) maybeWarnGeminiHeadlessAuth(agent, childArgs);
   if (direct) {
     // buildWrapEnv writes the agent-attributed `${gw}/w/<agent>` form, and an
     // outer routed wrap may leak the bare form; a direct launch strips both.
@@ -6998,6 +6999,34 @@ function firstEnvSecret(env: NodeJS.ProcessEnv, keys: string[]): string | undefi
     if (typeof value === "string" && value.trim()) return value.trim();
   }
   return undefined;
+}
+
+// Wrap writes no user config, so where Gemini would reject the `gateway` auth
+// type our route makes it pick (see geminiEnvSelectsAuth), a headless launch
+// names the fix instead. Headless mirrors Gemini's isHeadlessMode.
+// ponytail: a positional query and system-level settings files are not read;
+// a miss only means Gemini's own error shows without this line.
+function maybeWarnGeminiHeadlessAuth(agent: AgentProfile | undefined, args: string[]) {
+  if (agent?.id !== "gemini") return;
+  const flag = (names: string[]) => args.some((arg) => names.some((name) => arg === name || arg.startsWith(`${name}=`)));
+  // Interactive and ACP sessions pick auth their own way; subcommands and
+  // version/help never authenticate.
+  if (flag(["-i", "--prompt-interactive", "--acp", "--experimental-acp", "-v", "--version", "-h", "--help"])) return;
+  if (["mcp", "extensions", "skills", "hooks"].includes(args[0] ?? "")) return;
+  const headless = process.env.CI === "true" || process.env.GITHUB_ACTIONS === "true"
+    || !process.stdin.isTTY || !process.stdout.isTTY || flag(["-p", "--prompt"]);
+  if (!headless) return;
+  for (const file of [geminiSettingsPath(), join(process.cwd(), ".gemini", "settings.json")]) {
+    try {
+      if (getObject(readJson5Lenient(file), ["security", "auth"])?.selectedType) return;
+    } catch {
+      // Missing or unreadable: no auth type chosen there.
+    }
+  }
+  let dotenv = "";
+  try { dotenv = readFileSync(join(geminiConfigDir(), ".env"), "utf8"); } catch { /* no global .env */ }
+  if (geminiEnvSelectsAuth(dotenv)) return;
+  process.stderr.write(`caveman: headless Gemini CLI needs an auth type of your own or it exits "Invalid auth method selected."; add "security": {"auth": {"selectedType": "${GEMINI_PINNED_AUTH}"}} to ${geminiSettingsPath()}\n`);
 }
 
 function maybeWarnHermesMissingKey(agent: AgentProfile | undefined, gw = gatewayURL()) {
@@ -8942,6 +8971,32 @@ function geminiRouteShadow(): string | null {
   }
 }
 
+// Gemini CLI resolves an unset (or empty) auth type from env: GOOGLE_GENAI_USE_GCA,
+// then GOOGLE_GENAI_USE_VERTEXAI, then GOOGLE_GEMINI_BASE_URL -> `gateway`, a type
+// its own headless validator rejects ("Invalid auth method selected.", exit 41;
+// google-gemini/gemini-cli#27550, closed not planned). Our route always sets the
+// base URL, so the API-key type is pinned unless one of these switches is on:
+// GCA and Vertex resolve before the base URL, and Cloud Shell / compute ADC users
+// get their type written by Gemini itself. The shell wins over the .env file and
+// the last line wins within it, as in Gemini.
+const GEMINI_PINNED_AUTH = "gemini-api-key";
+const GEMINI_PINNED_AUTH_NOTE = `auth: security.auth.selectedType = ${GEMINI_PINNED_AUTH} (Gemini CLI rejects the gateway type it picks for a routed base URL; /auth in Gemini changes it)`;
+function geminiEnvSelectsAuth(dotenv: string): boolean {
+  return ["GOOGLE_GENAI_USE_GCA", "GOOGLE_GENAI_USE_VERTEXAI", "CLOUD_SHELL", "GEMINI_CLI_USE_COMPUTE_ADC"].some((key) => {
+    const line = dotenv.split(/\r?\n/).findLast((item) => new RegExp(`^\\s*(?:export\\s+)?${key}\\s*=`).test(item));
+    return (process.env[key] ?? configValue(line?.slice(line.indexOf("=") + 1))) === "true";
+  });
+}
+
+// An install from before the pin existed journals no `selected_auth` at all
+// (an install that chose not to pin records null): enable and doctor --fix
+// re-wire it so the pin is decided once.
+function geminiAuthUndecided(agent: string): boolean {
+  if (agent !== "gemini") return false;
+  const operation = readNativeJournal("gemini")?.operations.find((item) => item.kind === "gemini-settings");
+  return Boolean(operation && !("selected_auth" in (operation.owned ?? {})));
+}
+
 function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   if (wrapMode(gw) === "managed") {
     throw new Error("managed Gemini CLI routing is unsupported because Gemini CLI cannot send separate Caveman and upstream credentials");
@@ -8950,6 +9005,20 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   const settingsBefore = fileBytes(settingsPath);
   const settings = parseJsonFileObject(settingsPath, settingsBefore);
   assertNativeHooksShape(settingsPath, settings, "gemini");
+  const envPath = join(geminiConfigDir(), ".env");
+  const envBefore = fileBytes(envPath);
+  // Pin the API-key type only where the user chose none (see geminiEnvSelectsAuth);
+  // a non-object security/auth value is left as is.
+  const security = settings.security === undefined ? {} : asJsonObject(settings.security);
+  const auth = security && (security.auth === undefined ? {} : asJsonObject(security.auth));
+  const selectedAuth = auth && !auth.selectedType && !geminiEnvSelectsAuth(envBefore?.toString("utf8") ?? "")
+    ? GEMINI_PINNED_AUTH
+    : null;
+  if (selectedAuth) {
+    auth!.selectedType = selectedAuth;
+    security!.auth = auth;
+    settings.security = security;
+  }
   if (settings.mcpServers !== undefined && (typeof settings.mcpServers !== "object" || settings.mcpServers === null || Array.isArray(settings.mcpServers))) {
     throw new Error(`${settingsPath} mcpServers must be a JSON object; refusing to overwrite it`);
   }
@@ -8962,8 +9031,6 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   settings.mcpServers = servers;
   const withHooks = nativeHooksDocument("gemini", nativeShrinkEnabled(), settings);
 
-  const envPath = join(geminiConfigDir(), ".env");
-  const envBefore = fileBytes(envPath);
   const route = appendUrlPath(gw, "/w/gemini");
   const nativeEnv = geminiNativeEnv(envBefore?.toString("utf8") ?? "", route);
   // The block goes last in the file, so it would win over the user's own.
@@ -8975,7 +9042,7 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
       before: settingsBefore,
       after: jsonBytes(withHooks, settingsBefore),
       kind: "gemini-settings",
-      owned: { installed_mcp: installedMcp, previous_mcp: previousMcp ?? null },
+      owned: { installed_mcp: installedMcp, previous_mcp: previousMcp ?? null, selected_auth: selectedAuth },
     },
     {
       file: envPath,
@@ -10614,8 +10681,9 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
         // is not the current target); it is re-wired below, outside the lock.
         // Module apply (quiet) writes only the files its plan showed, so the
         // voice skills ride along with an explicit `caveman enable` only.
-        // A Claude profile the journal does not cover is re-wired the same way.
-        if (agentStaleRoute(agent) || existing.unwired_profiles.length > 0) {
+        // A Claude profile the journal does not cover is re-wired the same way,
+        // and so is a Gemini install that predates the auth pin.
+        if (agentStaleRoute(agent) || existing.unwired_profiles.length > 0 || geminiAuthUndecided(agent)) {
           if (!quiet) installNativeVoiceSkills(agent);
           return "stale" as const;
         }
@@ -10637,6 +10705,7 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
       process.stderr.write(`caveman enable ${agent}: planned user-scoped writes\n`);
       for (const mutation of mutations) process.stderr.write(`  ${mutation.kind}: ${mutation.file}\n`);
       if (typeof route === "string") process.stderr.write(`  routing: ${route}\n`);
+      if (mutations.some((item) => typeof item.owned?.selected_auth === "string")) process.stderr.write(`  ${GEMINI_PINNED_AUTH_NOTE}\n`);
       process.stderr.write(agent === "aider" ? "  recovery MCP: unavailable in Aider\n" : `  recovery MCP: ${mcpBinary}\n`);
       process.stderr.write(agent === "aider"
         ? `  Core: read-only ${aiderCorePath()}; lifecycle/tool interception unavailable; Ledger observational\n`
@@ -10677,8 +10746,11 @@ function enableNative(argv: string[], { quiet = false }: { quiet?: boolean } = {
     setNativeOptOut(agent, false);
     if (outcome === "stale") {
       const was = agentStaleRoute(agent);
+      const authUndecided = geminiAuthUndecided(agent);
       repairNativeAgent(agent, { quiet: true });
-      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: ${was ? `routing: ${was} → ${new URL(gw).origin}` : "native Caveman now covers every profile"}\n`);
+      if (!quiet) process.stderr.write(`${mark("ok")} ${profile.display_name}: ${was ? `routing: ${was} → ${new URL(gw).origin}` : authUndecided ? "native Caveman wiring refreshed" : "native Caveman now covers every profile"}\n`);
+      const pinned = readNativeJournal(agent)?.operations.find((item) => item.kind === "gemini-settings")?.owned?.selected_auth;
+      if (!quiet && authUndecided && typeof pinned === "string") process.stderr.write(dim(`→ ${GEMINI_PINNED_AUTH_NOTE}\n`));
     }
     ensureLocalProxyForNative(agent, gw);
     if (quiet || outcome === "stale") continue;
@@ -10852,6 +10924,16 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     }
     if (Object.keys(servers).length > 0) currentRoot.mcpServers = servers;
     else delete currentRoot.mcpServers;
+    // Withdraw the pinned auth type only while it is still ours; a type the
+    // user picked since (Gemini's /auth rewrites it) outlives disable.
+    const selected = operation.owned?.selected_auth;
+    const security = asJsonObject(currentRoot.security);
+    const auth = asJsonObject(security?.auth);
+    if (typeof selected === "string" && auth?.selectedType === selected) {
+      delete auth.selectedType;
+      if (Object.keys(auth).length === 0 && !getObject(beforeRoot, ["security", "auth"])) delete security!.auth;
+      if (Object.keys(security!).length === 0 && !asJsonObject(beforeRoot.security)) delete currentRoot.security;
+    }
     return jsonBytes(currentRoot, current);
   }
   if (operation.kind === "gemini-env") {
@@ -11575,7 +11657,7 @@ async function nativeDoctor(argv: string[]) {
       if (target !== "aider") await claimRuntimePort();
       enableNative([target]);
       fixResult = "enabled";
-    } else if (before.state === "installed" && !agentStaleRoute(target)) {
+    } else if (before.state === "installed" && !agentStaleRoute(target) && !geminiAuthUndecided(target)) {
       fixResult = "not_needed";
     } else {
       repairNativeAgent(target);

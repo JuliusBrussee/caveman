@@ -1671,6 +1671,86 @@ test("enable/disable gemini installs lifecycle, MCP, routing and preserves later
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "gemini.json")), false);
 });
 
+// With GOOGLE_GEMINI_BASE_URL set, Gemini CLI resolves an unset auth type to
+// `gateway`, which its own headless validator rejects (exit 41). Enable pins the
+// API-key type only where the user has made no choice of their own.
+test("enable gemini selects API-key auth only when unset, and disable withdraws only its own value", async () => {
+  const geminiFixture = (settings, extraEnv = {}) => {
+    const fx = fixture();
+    const settingsPath = join(fx.home, ".gemini", "settings.json");
+    mkdirSync(dirname(settingsPath), { recursive: true });
+    if (settings) writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+    const env = { ...fx.env, ...extraEnv };
+    for (const key of ["GOOGLE_GENAI_USE_GCA", "GOOGLE_GENAI_USE_VERTEXAI", "CLOUD_SHELL", "GEMINI_CLI_USE_COMPUTE_ADC"]) if (!(key in extraEnv)) delete env[key];
+    return { env, settingsPath, read: () => JSON.parse(readFileSync(settingsPath, "utf8")) };
+  };
+
+  const unset = geminiFixture({ theme: "keep" });
+  const enabled = await run(["enable", "gemini"], unset.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  assert.match(enabled.stderr, /security\.auth\.selectedType = gemini-api-key/);
+  assert.equal(unset.read().security.auth.selectedType, "gemini-api-key");
+  writeFileSync(unset.settingsPath, JSON.stringify({ ...unset.read(), later: true }, null, 2) + "\n");
+  // A re-wire to a moved gateway restores, then pins again: never doubled, never leaked.
+  const moved = { ...unset.env, CAVE_GATEWAY_URL: await unusedGateway() };
+  assert.equal((await run(["enable", "gemini"], moved)).code, 0);
+  assert.equal(unset.read().security.auth.selectedType, "gemini-api-key");
+  assert.equal((await run(["disable", "gemini"], moved)).code, 0);
+  assert.equal(unset.read().security, undefined);
+  assert.equal(unset.read().later, true);
+
+  // An install from before the pin journals no selected_auth; enable re-wires it.
+  const legacy = geminiFixture({ theme: "keep" });
+  assert.equal((await run(["enable", "gemini"], legacy.env)).code, 0);
+  const journalPath = join(dirname(dirname(legacy.settingsPath)), ".caveman", "integrations", "gemini.json");
+  const journal = JSON.parse(readFileSync(journalPath, "utf8"));
+  delete journal.operations.find((item) => item.kind === "gemini-settings").owned.selected_auth;
+  writeFileSync(journalPath, JSON.stringify(journal, null, 2));
+  const { security: _pinned, ...withoutPin } = legacy.read();
+  writeFileSync(legacy.settingsPath, JSON.stringify(withoutPin, null, 2) + "\n");
+  const upgraded = await run(["enable", "gemini"], legacy.env);
+  assert.equal(upgraded.code, 0, upgraded.stderr);
+  assert.match(upgraded.stderr, /wiring refreshed[\s\S]*selectedType = gemini-api-key/);
+  assert.equal(legacy.read().security.auth.selectedType, "gemini-api-key");
+  assert.match((await run(["enable", "gemini"], legacy.env)).stderr, /already enabled/);
+  assert.equal((await run(["disable", "gemini"], legacy.env)).code, 0);
+  assert.equal(legacy.read().security, undefined);
+
+  // Containers the user already had survive an edited-file disable.
+  const empty = geminiFixture({ security: { auth: {} } });
+  assert.equal((await run(["enable", "gemini"], empty.env)).code, 0);
+  writeFileSync(empty.settingsPath, JSON.stringify({ ...empty.read(), later: true }, null, 2) + "\n");
+  assert.equal((await run(["disable", "gemini"], empty.env)).code, 0);
+  assert.deepEqual(empty.read().security, { auth: {} });
+
+  const rechosen = geminiFixture(null);
+  assert.equal((await run(["enable", "gemini"], rechosen.env)).code, 0);
+  const afterEnable = rechosen.read();
+  afterEnable.security.auth.selectedType = "oauth-personal";
+  writeFileSync(rechosen.settingsPath, JSON.stringify(afterEnable, null, 2) + "\n");
+  assert.equal((await run(["disable", "gemini"], rechosen.env)).code, 0);
+  assert.equal(rechosen.read().security.auth.selectedType, "oauth-personal");
+
+  const oauth = geminiFixture({ security: { auth: { selectedType: "oauth-personal" } } });
+  assert.equal((await run(["enable", "gemini"], oauth.env)).code, 0);
+  assert.equal(oauth.read().security.auth.selectedType, "oauth-personal");
+  assert.equal((await run(["disable", "gemini"], oauth.env)).code, 0);
+  assert.equal(oauth.read().security.auth.selectedType, "oauth-personal");
+
+  // Gemini resolves the Vertex and GCA switches before the base URL, and writes
+  // Cloud Shell's type itself, so a pinned type would override their choice.
+  for (const key of ["GOOGLE_GENAI_USE_VERTEXAI", "CLOUD_SHELL"]) {
+    const switched = geminiFixture({}, { [key]: "true" });
+    assert.equal((await run(["enable", "gemini"], switched.env)).code, 0);
+    assert.equal(switched.read().security, undefined, key);
+  }
+  const dotenvGca = geminiFixture({});
+  // The last line wins, as in Gemini's dotenv.
+  writeFileSync(join(dirname(dotenvGca.settingsPath), ".env"), "GOOGLE_GENAI_USE_GCA=false\nGOOGLE_GENAI_USE_GCA=true\n");
+  assert.equal((await run(["enable", "gemini"], dotenvGca.env)).code, 0);
+  assert.equal(dotenvGca.read().security, undefined);
+});
+
 test("enable/disable opencode installs one native plugin, routed providers and reversible MCP", async () => {
   const fx = fixture();
   const configDir = join(fx.home, ".config", "opencode");
