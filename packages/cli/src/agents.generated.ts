@@ -502,10 +502,10 @@ export const PROFILES: AgentProfile[] = [
     "command_hook": {
       "method": "pi-extension"
     },
-    "tested_agent_version": "1.0.4",
+    "tested_agent_version": "1.3.0",
     "injection_completeness": "builder-assisted",
-    "last_verified_at": "2026-10-06",
-    "verified_by": "local pinned-binary probe (pi 1.0.4, agents/probe-installed.mjs); packages/pi-extension suite against pi-coding-agent 1.0.4",
+    "last_verified_at": "2026-10-16",
+    "verified_by": "local pinned-binary probe (pi 1.3.0, agents/probe-installed.mjs); packages/pi-extension suite against pi-coding-agent 1.3.0",
     "fallback": "none",
     "maintainer": null
   },

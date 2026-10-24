@@ -64,4 +64,4 @@ Requires the Caveman CLI (`npm i -g @caveman-ai/cli`) plus the local
 `caveman-proxy` / `caveman-mcp` binaries (`caveman setup`). Without them the
 extension loads, says so once, and stays out of the way.
 
-Pinned against `@earendil-works/pi-coding-agent` 1.0.4.
+Pinned against `@earendil-works/pi-coding-agent` 1.3.0.
