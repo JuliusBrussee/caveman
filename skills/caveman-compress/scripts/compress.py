@@ -72,6 +72,7 @@ SENSITIVE_BASENAME_REGEX = re.compile(
     r"(?ix)^("
     r"\.env(\..+)?"
     r"|\.netrc"
+    r"|\.(npmrc|pypirc|pgpass|s3cfg|boto)"
     r"|credentials(\..+)?"
     r"|secrets?(\..+)?"
     r"|passwords?(\..+)?"
