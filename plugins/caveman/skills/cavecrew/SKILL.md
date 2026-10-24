@@ -67,6 +67,7 @@ Skip investigator. Hand exact path:line to `cavecrew-builder` directly.
 
 ## What NOT to do
 
+- Don't accept or reject a subagent's absence claim (`No match.`, `No issues.`, "section missing", "unchanged") without one targeted check of the relevant file, search scope, or diff. Check cited line numbers are within the file before acting.
 - Don't use `cavecrew-builder` when you don't already know the file. Spawn investigator first or main thread will eat tokens passing context.
 - Don't chain `cavecrew-investigator → cavecrew-builder` for a 5-file refactor. Builder will return `too-big.` and you'll have wasted a turn.
 - Don't ask `cavecrew-reviewer` for "general feedback" — it returns findings only, no architecture opinions. Use `Code Reviewer` for that when installed.
