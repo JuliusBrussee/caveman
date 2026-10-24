@@ -165,7 +165,7 @@ export default function (pi: ExtensionAPI) {
     description: "Recover exact original content from a Caveman recovery handle.",
     parameters: Type.Object({
       recovery_handle: Type.String({ description: "Exact ccr_ handle returned by Caveman or copied from a <<ccr:HANDLE>> marker." }),
-      query: Type.Optional(Type.String({ description: "One broad description covering every detail needed from this handle." })),
+      query: Type.Optional(Type.String({ description: "Optional. Omit it to get the entire original. With it, only a matching excerpt is returned, with gaps marked. Use one broad description covering every detail needed." })),
     }),
     async execute(_toolCallId, params, signal) {
       const result = await recovery.retrieve(params.recovery_handle, params.query, signal);
