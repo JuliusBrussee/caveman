@@ -13,15 +13,33 @@ import (
 
 type piSessionSource struct {
 	root string
+	// sessionsDir is the directory holding the JSONL trees, resolved from Pi's
+	// PI_CODING_AGENT_DIR / PI_CODING_AGENT_SESSION_DIR (see piRoots). Empty
+	// falls back to <root>/agent/sessions so a source built directly from a root
+	// keeps the historical layout.
+	sessionsDir string
 }
 
 func (s piSessionSource) id() string { return "pi" }
+
+// newPiSessionSource resolves Pi's session tree location from the environment.
+// The source dir is disabled (zero value) when no root can be resolved.
+func newPiSessionSource() piSessionSource {
+	root, dir := piRoots()
+	if root == "" {
+		return piSessionSource{}
+	}
+	return piSessionSource{root: root, sessionsDir: dir}
+}
 
 func (s piSessionSource) discover(deadline *behaviorDeadline) ([]sessionRef, bool) {
 	if s.root == "" {
 		return nil, false
 	}
-	agentSessions := filepath.Join(s.root, "agent", "sessions")
+	agentSessions := s.sessionsDir
+	if agentSessions == "" {
+		agentSessions = filepath.Join(s.root, "agent", "sessions")
+	}
 	var refs []sessionRef
 	timeBoxed := false
 	_ = filepath.WalkDir(agentSessions, func(path string, d os.DirEntry, err error) error {

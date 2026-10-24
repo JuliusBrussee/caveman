@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -146,6 +147,75 @@ func TestPiSessionSourceReadsUsageAndCompletesToolCalls(t *testing.T) {
 	if !strings.Contains(read.OutputText, "TOOL OUTPUT") || completed["task"].IsError != true {
 		t.Fatalf("completed calls = %+v, want read output attached and task marked error", completed)
 	}
+}
+
+// TestPiSessionSourceHonorsRelocatedSessionsDirs proves the scanner follows Pi's
+// relocation variables instead of only <CAVEMAN_PI_ROOT>/agent/sessions.
+func TestPiSessionSourceHonorsRelocatedSessionsDirs(t *testing.T) {
+	writeSession := func(t *testing.T, path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		line := `{"type":"session","id":"s","timestamp":"2026-08-16T12:00:00Z","cwd":"/repo/pi"}` + "\n"
+		if err := os.WriteFile(path, []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	discoverRelPaths := func(t *testing.T, source piSessionSource) []string {
+		t.Helper()
+		refs, truncated := source.discover(nil)
+		if truncated {
+			t.Fatal("discover unexpectedly time-boxed")
+		}
+		paths := make([]string, 0, len(refs))
+		for _, ref := range refs {
+			paths = append(paths, ref.relPath)
+		}
+		sort.Strings(paths)
+		return paths
+	}
+
+	t.Run("PI_CODING_AGENT_DIR", func(t *testing.T) {
+		base := t.TempDir()
+		t.Setenv("CAVEMAN_PI_ROOT", "")
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", "")
+		t.Setenv("PI_CODING_AGENT_DIR", base)
+		writeSession(t, filepath.Join(base, "sessions", "--repo-pi--", "20260816_00.jsonl"))
+		got := discoverRelPaths(t, newPiSessionSource())
+		want := "sessions/--repo-pi--/20260816_00.jsonl"
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("discover relPaths = %v, want [%s]", got, want)
+		}
+	})
+
+	t.Run("PI_CODING_AGENT_SESSION_DIR", func(t *testing.T) {
+		base := t.TempDir()
+		sessionDir := filepath.Join(base, "relocated")
+		t.Setenv("CAVEMAN_PI_ROOT", "")
+		t.Setenv("PI_CODING_AGENT_DIR", "")
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", sessionDir)
+		writeSession(t, filepath.Join(sessionDir, "--repo-pi--", "20260816_00.jsonl"))
+		got := discoverRelPaths(t, newPiSessionSource())
+		want := "--repo-pi--/20260816_00.jsonl"
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("discover relPaths = %v, want [%s]", got, want)
+		}
+	})
+
+	t.Run("CAVEMAN_PI_ROOT_wins", func(t *testing.T) {
+		base := t.TempDir()
+		iso := filepath.Join(base, "iso")
+		t.Setenv("PI_CODING_AGENT_DIR", filepath.Join(base, "ignored"))
+		t.Setenv("PI_CODING_AGENT_SESSION_DIR", filepath.Join(base, "ignored-sessions"))
+		t.Setenv("CAVEMAN_PI_ROOT", iso)
+		writeSession(t, filepath.Join(iso, "agent", "sessions", "--repo-pi--", "20260816_00.jsonl"))
+		got := discoverRelPaths(t, newPiSessionSource())
+		want := "agent/sessions/--repo-pi--/20260816_00.jsonl"
+		if len(got) != 1 || got[0] != want {
+			t.Fatalf("discover relPaths = %v, want [%s]", got, want)
+		}
+	})
 }
 
 func TestPiTaskSpawnsCountsOnlySpawnTools(t *testing.T) {
