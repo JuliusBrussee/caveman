@@ -10,6 +10,7 @@ HOOKS_DIR="$CLAUDE_DIR/hooks"
 SETTINGS="$CLAUDE_DIR/settings.json"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
 SETTINGS_HELPER=""
+BACKUP_MADE=0
 if [ -f "$SCRIPT_DIR/../../installer/lib/settings.js" ]; then
   SETTINGS_HELPER="$SCRIPT_DIR/../../installer/lib/settings.js"
 fi
@@ -59,6 +60,7 @@ if [ -f "$SETTINGS" ]; then
     # existing .bak, which is the only pre-caveman copy the user has.
     if [ ! -f "$SETTINGS.bak" ]; then
       cp "$SETTINGS" "$SETTINGS.bak"
+      BACKUP_MADE=1
     fi
 
     # Pass paths via env vars — avoids shell injection if $HOME contains single quotes
@@ -176,8 +178,11 @@ if [ "$REMOVED_FILES" -eq 0 ]; then
   echo "  No hook files found in $HOOKS_DIR"
 fi
 
-# 3. Clean up backup file left by installer
-if [ -f "$SETTINGS.bak" ]; then
+# 3. Clean up the backup this run made. A .bak that was already there is the
+# user's (or install's pre-caveman copy) and stays. So does ours when it is the
+# only copy of comments the rewrite dropped, i.e. when it is not plain JSON.
+if [ "$BACKUP_MADE" = 1 ] && [ -f "$SETTINGS.bak" ] \
+   && CAVEMAN_BAK="$SETTINGS.bak" node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>/dev/null; then
   rm "$SETTINGS.bak"
   echo "  Removed: $SETTINGS.bak"
 fi

@@ -59,8 +59,10 @@ if (Test-Path $Settings) {
     } else {
         # Back up before editing, same policy as install.ps1: never overwrite an
         # existing .bak, which is the only pre-caveman copy the user has.
+        $BackupMade = $false
         if (-not (Test-Path "$Settings.bak")) {
             Copy-Item $Settings "$Settings.bak"
+            $BackupMade = $true
         }
 
         # Pass path via env var — avoids injection if username contains a single quote.
@@ -173,8 +175,16 @@ console.log('  Removed ' + removed + ' caveman hook entries from settings.json')
             exit 1
         }
 
-        # Clean up backup file left by installer
-        if (Test-Path "$Settings.bak") {
+        # Clean up the backup this run made. A .bak that was already there is the
+        # user's (or install's pre-caveman copy) and stays. So does ours when it
+        # is the only copy of comments the rewrite dropped, i.e. not plain JSON.
+        $env:CAVEMAN_BAK = ($Settings -replace '\\', '/') + '.bak'
+        $BackupIsPlainJson = $false
+        if ($BackupMade -and (Test-Path "$Settings.bak")) {
+            node -e "JSON.parse(require('fs').readFileSync(process.env.CAVEMAN_BAK, 'utf8'))" 2>$null
+            $BackupIsPlainJson = ($LASTEXITCODE -eq 0)
+        }
+        if ($BackupIsPlainJson) {
             Remove-Item "$Settings.bak" -Force
             Write-Host "  Removed: $Settings.bak"
         }
