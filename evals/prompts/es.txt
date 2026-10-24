@@ -1,0 +1,10 @@
+¿Por qué mi componente de React se vuelve a renderizar cada vez que se actualiza el padre?
+Explica el pool de conexiones a una base de datos.
+¿Qué diferencia hay entre TCP y UDP?
+¿Cómo arreglo una fuga de memoria en un proceso de Node.js que lleva mucho tiempo en marcha?
+¿Qué me dice el comando EXPLAIN de SQL?
+¿Cómo gestiona una tabla hash las colisiones?
+¿Por qué me salen errores de CORS en la consola del navegador?
+¿Para qué sirve un debouncer en un campo de búsqueda?
+¿En qué se diferencia git rebase de git merge?
+¿Cuándo uso una cola y cuándo un topic en un sistema de mensajería?

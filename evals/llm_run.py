@@ -85,6 +85,7 @@ TERSE_PREFIXES = {
     "en": "Answer concisely.",
     "pt": "Responda de forma concisa.",
     "fr": "Réponds de façon concise.",
+    "es": "Responde de forma concisa.",
 }
 
 LANG = os.environ.get("CAVEMAN_EVAL_LANG", "en")
