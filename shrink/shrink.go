@@ -283,13 +283,17 @@ func extractTools(input []byte) ([]toolEntry, error) {
 	return entries, nil
 }
 
-// schemaOf returns a tool's parameter schema, under either "inputSchema" (MCP) or
-// "parameters" (OpenAI).
+// schemaOf returns a tool's parameter schema, under "inputSchema" (MCP),
+// "parameters" (OpenAI) or "input_schema" (Anthropic).
 func schemaOf(tool map[string]any) map[string]any {
 	if s, ok := tool["inputSchema"].(map[string]any); ok {
 		return s
 	}
 	if s, ok := tool["parameters"].(map[string]any); ok {
+		return s
+	}
+	// Anthropic Messages tools carry the schema under input_schema.
+	if s, ok := tool["input_schema"].(map[string]any); ok {
 		return s
 	}
 	return nil
