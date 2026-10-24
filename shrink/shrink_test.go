@@ -126,6 +126,28 @@ func TestStructuralSelectionSurfaceInvariant(t *testing.T) {
 	}
 }
 
+// TestSelectionProfileReadsAnthropicInputSchema pins that an Anthropic-format
+// tool (schema under input_schema) exposes the same surface as the MCP and
+// OpenAI spellings. Before, its schema was not found, so the profile was empty
+// and the selection-surface invariant compared empty with empty.
+func TestSelectionProfileReadsAnthropicInputSchema(t *testing.T) {
+	const schema = `{"type":"object","properties":{"x":{"type":"string","enum":["p","q"]}},"required":["x"]}`
+	profile := func(key string) ToolProfile {
+		got, err := SelectionProfile([]byte(`[{"name":"t","` + key + `":` + schema + `}]`))
+		if err != nil {
+			t.Fatalf("profile(%s): %v", key, err)
+		}
+		return got["t"]
+	}
+	want := profile("inputSchema")
+	if len(want.Params) != 1 || len(want.Required) != 1 {
+		t.Fatalf("unexpected baseline profile: %+v", want)
+	}
+	if got := profile("input_schema"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("input_schema profile = %+v, want %+v", got, want)
+	}
+}
+
 // TestShrinkPreservesArgumentConstraints is the call-validity gate at the product
 // boundary: a shrunk catalog must keep the sentences an agent needs to build a
 // valid call. Selection surviving is not enough — arguments are constructed from

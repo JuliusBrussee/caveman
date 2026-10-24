@@ -2,7 +2,9 @@ package cloudlink
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -1437,5 +1439,64 @@ func TestADecisionHoldsWhileItIsUsed(t *testing.T) {
 	link.Ask(t.Context(), messagesAsk("claude-opus-5-5"))()
 	if asks.Load() != 2 {
 		t.Fatalf("asks %d, want a new one %v after the last use", asks.Load(), rememberFor)
+	}
+}
+
+// writeCloudDoc writes cloud.json for a home whose path the caller chooses, so
+// two installs can be given the SAME path and still be told apart.
+func writeCloudDoc(t *testing.T, home string, doc map[string]any) {
+	t.Helper()
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(doc)
+	if err := os.WriteFile(filepath.Join(home, "cloud.json"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An install id keyed on the caveman home PATH is the same string on every
+// machine where the user has the same name, so the dashboard adds three hosts
+// into one row (#1305). The id has to come from something the install itself
+// owns.
+func TestInstallIDDistinguishesInstallsSharingAHomePath(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home", ".caveman")
+	base := func(anon string) map[string]any {
+		return map[string]any{
+			"tokenStore": "file",
+			"telemetry":  map[string]any{"enabled": true, "anonymousId": anon},
+		}
+	}
+
+	writeCloudDoc(t, home, base("11111111-1111-1111-1111-111111111111"))
+	first := newLink(home).settings().install
+
+	writeCloudDoc(t, home, base("22222222-2222-2222-2222-222222222222"))
+	second := newLink(home).settings().install
+
+	if first == "" || second == "" {
+		t.Fatalf("install id is empty: %q / %q", first, second)
+	}
+	if first == second {
+		t.Errorf("two installs at the same home path share install id %q; the dashboard merges them into one machine", first)
+	}
+	pathHash := sha256.Sum256([]byte(home))
+	if first == hex.EncodeToString(pathHash[:]) {
+		t.Errorf("install id is sha256 of the home path, so it is identical on every host with this username: %q", first)
+	}
+}
+
+// A deviceId the CLI already persisted stays authoritative: it is what the
+// entitlement device_hash is taken from, so the two must not drift apart.
+func TestInstallIDPrefersTheDeviceIDTheCLIWrote(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "home", ".caveman")
+	writeCloudDoc(t, home, map[string]any{
+		"tokenStore": "file",
+		"deviceId":   "device-1",
+		"telemetry":  map[string]any{"enabled": true, "anonymousId": "anon-should-lose"},
+	})
+	want := sha256.Sum256([]byte("device-1"))
+	if got := newLink(home).settings().install; got != hex.EncodeToString(want[:]) {
+		t.Errorf("install id = %q, want sha256(deviceId)", got)
 	}
 }

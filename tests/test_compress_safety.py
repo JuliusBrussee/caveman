@@ -73,6 +73,68 @@ class CompressSafetyTests(unittest.TestCase):
         path.write_text(text, encoding="utf-8", newline="")
         return path
 
+    def test_same_filename_in_two_projects_each_keep_their_own_original(self):
+        """#1351: both projects' .claude/CLAUDE.md mapped to one backup slot, so the
+        second run aborted on the first project's backup — and the abort told the
+        user to delete it, destroying the other project's only uncompressed copy."""
+        body = "# Notes\n\n" + "Some long natural language prose to compress here. " * 10 + "\n"
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            paths = []
+            for project in ("home", "repo"):
+                claude_dir = Path(tmp) / project / ".claude"
+                claude_dir.mkdir(parents=True)
+                path = claude_dir / "CLAUDE.md"
+                path.write_text(body + f"Project {project}.\n", encoding="utf-8", newline="")
+                paths.append(path)
+
+            for path in paths:
+                with mock.patch.object(compress_mod, "call_claude", return_value="# Notes\n\nShort.\n"), \
+                     mock.patch.object(compress_mod, "validate") as v:
+                    v.return_value = mock.Mock(is_valid=True, errors=[], warnings=[])
+                    self.assertTrue(compress_mod.compress_file(path), f"{path} was refused")
+
+            backups = [
+                compress_mod.backup_dir_for(p.resolve()) / "CLAUDE.original.md" for p in paths
+            ]
+            self.assertNotEqual(backups[0], backups[1])
+            for path, backup in zip(paths, backups):
+                self.assertTrue(backup.exists())
+                # Each backup still holds ITS OWN project's uncompressed text.
+                self.assertIn(f"Project {path.parent.parent.name}.", backup.read_text(encoding="utf-8"))
+
+    def test_pre_rekey_backup_still_blocks_a_rerun(self):
+        """The #1351 rekey must not strand an existing backup: a file compressed
+        before the key changed has its only original under the old parent-name
+        path, and rerunning there would capture the compressed text as the new
+        'original'. The old location is refused, never overwritten or deleted."""
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            compressed_now = "# Notes\n\nShort.\n"
+            path = self._file_with(Path(tmp), compressed_now)
+            legacy = compress_mod.legacy_backup_dir_for(path.resolve()) / "task.original.md"
+            legacy.parent.mkdir(parents=True, exist_ok=True)
+            legacy.write_text("# Notes\n\nThe long uncompressed original.\n", encoding="utf-8")
+
+            out = io.StringIO()
+            with mock.patch.object(compress_mod, "call_claude") as call, \
+                 contextlib.redirect_stdout(out):
+                ok = compress_mod.compress_file(path)
+
+            self.assertFalse(ok)
+            call.assert_not_called()
+            self.assertEqual(path.read_text(encoding="utf-8"), compressed_now)
+            self.assertIn("The long uncompressed original.", legacy.read_text(encoding="utf-8"))
+            self.assertFalse(
+                (compress_mod.backup_dir_for(path.resolve()) / "task.original.md").exists()
+            )
+            message = out.getvalue()
+            # The old location was shared by every same-named file on the machine,
+            # so the message must flag that and must NOT offer to copy it over the
+            # live file — that backup may be a different project's original.
+            self.assertIn("possibly another project's", message)
+            self.assertNotIn(f"cp '{legacy}'", message)
+
     def test_empty_input_refused(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = self._file_with(Path(tmp), "")
@@ -169,7 +231,7 @@ class CompressSafetyTests(unittest.TestCase):
 
     def _run_fix_pass(self, fix, fix_is_faithful=False):
         # The first candidate drops the URL, so the real validate() rejects it
-        # and `fix` (a whole file, as build_fix_prompt asks for) is the repair.
+        # and `fix` (a body only, as build_fix_prompt asks for) is the repair.
         original = (
             "---\n"
             "name: deploy-notes\n"
@@ -193,14 +255,15 @@ class CompressSafetyTests(unittest.TestCase):
              tempfile.TemporaryDirectory() as data_home, \
              mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
             path = self._file_with(Path(tmp), original)
-            repair = fix(original.replace(
+            frontmatter, _ = compress_mod.split_frontmatter(original)
+            repair = fix(body.replace(
                 "Some prose about the deploy process that is fairly verbose and wordy.", "Deploy prose."
             ))
             with mock.patch.object(compress_mod, "call_claude", side_effect=[first, repair]):
                 ok = compress_mod.compress_file(path)
             if fix_is_faithful:
                 self.assertTrue(ok)
-                self.assertEqual(path.read_text(encoding="utf-8"), repair)
+                self.assertEqual(path.read_text(encoding="utf-8"), frontmatter + repair)
                 return
             self.assertFalse(ok)
             self.assertEqual(path.read_text(encoding="utf-8"), original)
@@ -218,11 +281,8 @@ class CompressSafetyTests(unittest.TestCase):
         self._run_fix_pass(lambda text: text.replace("-n prod", "-n dev"))
 
     def test_fix_pass_cannot_rewrite_frontmatter(self):
-        # The first pass strips frontmatter before the model sees it; the fix
-        # prompt sends the whole file, and validate() never compares it.
-        self._run_fix_pass(lambda text: text.replace(
-            "Notes for deploying the service to production safely.", "deploy notes prod."
-        ))
+        # Frontmatter is local-only; this heading-first case rejects at the anchor guard.
+        self._run_fix_pass(lambda text: "---\nname: changed\n---\n" + text)
 
     def test_real_compression_writes_backup_and_target(self):
         # Isolate the backup data dir to a temp location so the out-of-tree
@@ -520,6 +580,12 @@ class CompressSafetyTests(unittest.TestCase):
         self.assertTrue(compress_mod.is_sensitive_path(Path("project/api-keys/service-notes.md")))
         self.assertTrue(compress_mod.is_sensitive_path(Path("project/private_keys/service-notes.md")))
         self.assertFalse(compress_mod.is_sensitive_path(Path("project/docs/service-notes.md")))
+
+    def test_credential_dotfiles_are_blocked(self):
+        for name in (".npmrc", ".pypirc", ".pgpass", ".git-credentials", ".htpasswd", ".s3cfg", ".boto"):
+            with self.subTest(name=name):
+                self.assertTrue(compress_mod.is_sensitive_path(Path("home/user") / name))
+        self.assertFalse(compress_mod.is_sensitive_path(Path("project/.cursorrules")))
 
     def test_code_blocks_are_masked_before_model_and_restored_byte_exact(self):
         original = (

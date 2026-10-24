@@ -108,7 +108,7 @@ class Compatibility:
 COMPATIBILITY = MappingProxyType({
     "langchain": Compatibility("certified", (("langchain", "1.1", "2"), ("langchain-core", "1.1", "2"), ("langgraph", "1.0.2", "2"))),
     "openai": Compatibility("certified", (("openai", "2.20", "4"),)),
-    "anthropic": Compatibility("certified", (("anthropic", "1.0", "2"),)),
+    "anthropic": Compatibility("certified", (("anthropic", "1.0", "3"),)),
     "litellm": Compatibility("certified", (("litellm", "1.95", "2"),)),
     "google": Compatibility("experimental", (("google-genai", "2.18", "3"),)),
     "strands": Compatibility("experimental", (("strands-agents", "1.43", "2"),)),

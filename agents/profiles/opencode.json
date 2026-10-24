@@ -4,7 +4,7 @@
   "display_name": "opencode",
   "vendor": "sst",
   "homepage": "https://opencode.ai/docs/config",
-  "binary_names": ["opencode"],
+  "binary_names": ["opencode", "opencode2"],
   "args": [],
   "install": "npm i -g opencode-ai",
   "wire_protocol": "openai-chat",

@@ -397,13 +397,35 @@ func (l *Link) load(current, legacy, credentials string, refreshKeychain bool) s
 		secret = stringOf(doc["token"]) // legacy inline token
 	}
 	out.access, out.key = decodeCredentials(secret)
+	out.install = installID(doc, l.home)
+	return out
+}
+
+// installID identifies the machine an event came from. It must be unique PER
+// INSTALL: the caveman home path is not, so hashing it reported every Linux
+// host with the same username as one machine and the dashboard added their
+// requests into a single row (#1305). The path survives only as the last
+// resort, for a document that carries neither id.
+//
+// deviceId comes first because the CLI already derives the entitlement
+// device_hash from it, and the two must not disagree about what a device is.
+// It is written lazily, though — only once an entitlement flow has run — which
+// is why the collision showed up on three fresh hosts and not on the one that
+// had checked its entitlement. telemetry.anonymousId is the CLI's own
+// per-install random id, written when telemetry consent is first recorded, so
+// it is present on exactly the installs that send these events.
+func installID(doc map[string]any, home string) string {
 	id := stringOf(doc["deviceId"])
 	if id == "" {
-		id = l.home
+		if telemetry, ok := doc["telemetry"].(map[string]any); ok {
+			id = stringOf(telemetry["anonymousId"])
+		}
+	}
+	if id == "" {
+		id = home
 	}
 	sum := sha256.Sum256([]byte(id))
-	out.install = hex.EncodeToString(sum[:])
-	return out
+	return hex.EncodeToString(sum[:])
 }
 
 // telemetryOptOut is the CLI's persisted `telemetry off` in a config document.

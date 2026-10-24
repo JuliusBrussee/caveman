@@ -5,7 +5,9 @@
 // commented settings.json no longer crashes the installer or the runtime hooks.
 //
 // Public API:
-//   readSettings(path)             → object, {}, or null on hard parse failure
+//   readSettings(path)             → object, {}, or null when the file cannot
+//                                    be used: unreadable, unparseable, or a root
+//                                    that is not a JSON object
 //   writeSettings(path, obj)       → atomic write with newline
 //   stripJsonComments(src)         → string with // and /* */ stripped (string-aware)
 //   validateHookFields(settings)   → validates only Caveman-managed handlers
@@ -100,6 +102,30 @@ function stripTrailingCommas(src) {
 // stripping, meta.jsonc is set true — writeSettings re-serializes plain JSON,
 // so those comments do not survive the round trip. Callers that mutate a file
 // the user authored should warn and point at their backup.
+// A root that parses but is not an object is worse than one that does not parse
+// at all. Every caller merges into what this returns, and `[]`, `null`, `42` and
+// `"x"` all take a property assignment without complaining — an array drops it
+// again on JSON.stringify, a primitive never held it. The install then reports
+// success over a settings.json with no hooks in it. Refusing here keeps that
+// judgement in one place; the callers already treat null as "leave it alone".
+function parseSettingsObject(raw) {
+  const parsed = JSON.parse(raw);
+  if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new SettingsRootError(Array.isArray(parsed) ? 'array' : parsed === null ? 'null' : typeof parsed);
+  }
+  return parsed;
+}
+
+// Distinguished from a SyntaxError so the warning can say which of the two
+// happened: `[]` is valid JSON, and telling its author it is not sends them
+// hunting for a typo that is not there.
+class SettingsRootError extends Error {
+  constructor(found) {
+    super(`its top level is a JSON ${found}, and settings must be an object`);
+    this.name = 'SettingsRootError';
+  }
+}
+
 function readSettings(p, meta) {
   if (!fs.existsSync(p)) return {};
   let raw;
@@ -112,14 +138,16 @@ function readSettings(p, meta) {
   // writeSettings puts it back.
   if (raw.charCodeAt(0) === 0xfeff) raw = raw.slice(1);
   if (!raw.trim()) return {};
-  try { return JSON.parse(raw); } catch (_) { /* fall through to JSONC */ }
+  try { return parseSettingsObject(raw); } catch (_) { /* fall through to JSONC */ }
   try {
-    const parsed = JSON.parse(stripJsonComments(raw));
+    const parsed = parseSettingsObject(stripJsonComments(raw));
     if (meta) meta.jsonc = true;
     return parsed;
   }
   catch (e) {
-    process.stderr.write(`caveman: warning — ${p} is not valid JSON or JSONC: ${e.message}\n`);
+    process.stderr.write(e instanceof SettingsRootError
+      ? `caveman: warning — ${p} cannot be used: ${e.message}\n`
+      : `caveman: warning — ${p} is not valid JSON or JSONC: ${e.message}\n`);
     return null;
   }
 }

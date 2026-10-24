@@ -29,9 +29,19 @@ CLAUDE.original.md ← human-readable backup (you edit this)
 
 Original remains in data directory rather than next to live file, so skill
 auto-loaders do not read it twice. Path is
-`$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>/` on macOS and Linux,
-or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>\` on Windows. Edit
-`.original.md` there, then run skill again to re-compress.
+`$XDG_DATA_HOME/caveman-compress/backups/<parent-dir-name>-<hash>/` on macOS and
+Linux, or `%LOCALAPPDATA%\caveman-compress\backups\<parent-dir-name>-<hash>\` on
+Windows. `<hash>` keys the file's full parent path, so `~/.claude/CLAUDE.md` and
+`some-repo/.claude/CLAUDE.md` keep separate backups.
+
+To edit and re-compress, restore first — the skill refuses to run while a backup
+exists, so that it never captures already-compressed text as the new "original":
+
+```bash
+cp "$BACKUP" CLAUDE.md     # restore the uncompressed original
+mv "$BACKUP" "$BACKUP.kept" # move it aside (do not just delete it)
+# edit CLAUDE.md, then run the skill again
+```
 
 ## Benchmarks
 
@@ -158,7 +168,7 @@ validate output         (no tokens)
 if errors: configured provider fixes cherry-picked issues only   (tokens: targeted fix)
   does NOT recompress; only patches broken parts
         ↓
-retry up to 2 times
+validate again (one fix call at most)
         ↓
 write compressed → CLAUDE.md
 write original   → CLAUDE.original.md

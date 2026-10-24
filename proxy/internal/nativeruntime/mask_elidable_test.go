@@ -167,6 +167,26 @@ func TestMaskThresholdUnchangedForMaskableClasses(t *testing.T) {
 	}
 }
 
+// TestShortToolOutputIsNotMasked (#1365): a stub that carries no content costs
+// the agent a full extra model request to redeem, which is more than writing a
+// few KB into context once. Below minMaskBytes the output passes through, but is
+// still captured so the handle stays valid.
+func TestShortToolOutputIsNotMasked(t *testing.T) {
+	runtime := maskRuntime(t)
+	for _, size := range []int{1800, minMaskBytes - 200} {
+		masked, response := maskDecision(t, runtime, prosebBlob(size))
+		if masked {
+			t.Errorf("a ~%d-byte output must pass through unchanged", size)
+		}
+		if response.RecoveryRef == "" {
+			t.Errorf("a ~%d-byte output must still be captured for recovery", size)
+		}
+	}
+	if masked, _ := maskDecision(t, runtime, prosebBlob(minMaskBytes+200)); !masked {
+		t.Error("an output past minMaskBytes must still be masked")
+	}
+}
+
 // TestUnavailableClassifierFallsBackToMasking is the fail-safe direction: without
 // a classifier the runtime cannot know what elision would do, so it masks —
 // bounded context, never an unbounded pass-through.

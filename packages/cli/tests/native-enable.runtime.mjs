@@ -13,7 +13,7 @@ import { assertHidesChildWindows, assertHidesChildWindowsPython } from "./harnes
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.js");
 
-function fixture({ opencodeVersion = "opencode 1.0.0" } = {}) {
+function fixture({ opencodeVersion = "opencode 1.0.0", opencode2Version = null } = {}) {
   const home = mkdtempSync(join(tmpdir(), "cave-native-enable-"));
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
@@ -21,6 +21,11 @@ function fixture({ opencodeVersion = "opencode 1.0.0" } = {}) {
     writeFileSync(join(bin, agent), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${agent} 1.0.0'; fi\n`, { mode: 0o755 });
   }
   writeFileSync(join(bin, "opencode"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${opencodeVersion}'; fi\n`, { mode: 0o755 });
+  // @opencode/cli publishes `opencode` and `opencode2` from one package, so a
+  // host can carry two majors at once — and both read the same plugins dir.
+  if (opencode2Version) {
+    writeFileSync(join(bin, "opencode2"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${opencode2Version}'; fi\n`, { mode: 0o755 });
+  }
   const mcp = join(bin, "caveman-mcp");
   writeFileSync(mcp, `#!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
@@ -129,7 +134,7 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   assert.equal(settings.env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, "1");
   // Redirecting the base URL makes Claude Code drop tool search and inline every
   // MCP tool schema, so enable must restore it alongside the route.
-  assert.equal(settings.env.ENABLE_TOOL_SEARCH, "auto");
+  assert.equal(settings.env.ENABLE_TOOL_SEARCH, "true");
   assert.match(installedBytes, /native-hook-fast\.js/);
   assert.match(installedBytes, /native-hook claude/);
   assert.match(installedBytes, /caveman-proxy/);
@@ -168,6 +173,26 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   assert.equal(afterMcp.mcpServers.later.command, "later-mcp");
   assert.equal(afterMcp.mcpServers.caveman, undefined);
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")), false);
+});
+
+test("disable claude withdraws the legacy \"auto\" tool-search default", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".claude"), { recursive: true });
+  writeFileSync(join(fx.home, ".claude", "settings.json"), JSON.stringify({ env: { KEEP: "yes" } }, null, 2) + "\n");
+  const enabled = await run(["enable", "claude"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  // Installs made by earlier releases carry "auto"; disable must still remove it.
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  settings.env.ENABLE_TOOL_SEARCH = "auto";
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const after = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.equal(after.env.KEEP, "yes");
+  assert.equal(after.env.ENABLE_TOOL_SEARCH, undefined);
 });
 
 test("enable claude preserves a user-set first-party assertion across enable and disable", async () => {
@@ -2191,6 +2216,85 @@ test("doctor reports opencode degraded after the host upgrades past the installe
   assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
 });
 
+// The opencode plugin file is ONE path both majors read, so "which major is
+// this host" is the wrong question whenever two majors are installed. @opencode/cli
+// publishes `opencode` and `opencode2` from the same package, and a 1.x left on
+// PATH for other projects wins the first-found probe: the gate saw major 1,
+// emitted the V1 hook map, and OpenCode 2 rejected it with
+// `PluginModule.LoadError: ... Missing key at ["default"]` (#1316).
+test("enable opencode emits the dual-major plugin when two opencode majors are installed", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 1.19.3", opencode2Version: "opencode 2.0.26" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const plugin = readFileSync(pluginPath, "utf8");
+  // Both entrypoints, because both hosts load this one file.
+  assert.match(plugin, /export const CavemanNative/, "a 1.x host on this machine still needs the V1 hook map");
+  assert.match(plugin, /async setup\(ctx\)/, "the 2.x host needs the V2 setup, or it refuses to load the file");
+  assert.match(plugin, /id: "caveman-native"/, "V2 requires the default export to carry an id");
+  const syntax = spawnSync(process.execPath, ["--check", pluginPath], { encoding: "utf8" });
+  assert.equal(syntax.status, 0, syntax.stderr);
+
+  // A file both majors load is current for this host, so doctor must not call
+  // the install degraded and send the user into a --fix loop.
+  const doctor = await run(["doctor", "opencode"], fx.env);
+  assert.equal(doctor.code, 0, doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).state, "installed");
+});
+
+// With only `opencode2` on PATH, binOf fell back to binary_names[0] ("opencode"),
+// which which() could not find — so the host read as binary_not_found and an
+// OpenCode 2-only machine could not be enabled at all.
+test("enable opencode finds a host installed only as opencode2", async () => {
+  const fx = fixture({ opencode2Version: "opencode 2.0.26" });
+  unlinkSync(join(fx.home, "bin", "opencode"));
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const plugin = readFileSync(join(configDir, "plugins", "caveman-native.js"), "utf8");
+  assert.match(plugin, /async setup\(ctx\)/, "a 2.x-only host gets the V2 plugin");
+  assert.doesNotMatch(plugin, /export const CavemanNative/, "no V1 hook map when no 1.x is installed");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).version, "opencode 2.0.26",
+    "the opencode2 bin is the host doctor reports, not a binary_not_found");
+});
+
+// A V1-only install already on disk is NOT current on a machine that also runs
+// 2.x, whichever binary the first-found probe happens to land on — that host
+// refuses to load it. doctor is the documented repair door for this drift.
+test("doctor flags a V1 opencode plugin once a second, 2.x bin appears", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 1.19.3" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+  assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  assert.match(readFileSync(pluginPath, "utf8"), /export const CavemanNative/, "V1-only host gets the V1 plugin");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+
+  // The user installs @opencode/cli 2.x beside the 1.x they kept. `opencode`
+  // still answers 1.19.3, so nothing the old single-binary probe looked at moved.
+  writeFileSync(join(fx.home, "bin", "opencode2"),
+    `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'opencode 2.0.26'; fi\n`, { mode: 0o755 });
+
+  const doctor = await run(["doctor", "opencode"], fx.env);
+  assert.notEqual(doctor.code, 0, "a plugin one installed host cannot load must not report healthy");
+  assert.equal(JSON.parse(doctor.stdout).state, "degraded");
+  assert.equal(JSON.parse(doctor.stdout).components.lifecycle_hooks, false);
+
+  assert.equal((await run(["doctor", "opencode", "--fix"], fx.env)).code, 0);
+  const repaired = readFileSync(pluginPath, "utf8");
+  assert.match(repaired, /export const CavemanNative/, "--fix keeps the 1.x entrypoint that host still needs");
+  assert.match(repaired, /async setup\(ctx\)/, "--fix adds the 2.x entrypoint");
+  assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+});
+
 test("doctor flags an opencode install that predates the opencode-go route and --fix adds it", async () => {
   const fx = fixture();
   const configDir = join(fx.home, ".config", "opencode");
@@ -3054,4 +3158,22 @@ test("the claude shortcut does not fall back to wrap on a foreign-route conflict
   assert.match(out.stderr, /points at your own endpoint https:\/\/api\.deepseek\.com\/anthropic, which the proxy cannot forward to; launching directly/);
   assert.doesNotMatch(out.stderr, /using session-only wrap for this run/);
   assert.equal(readFileSync(settingsPath, "utf8"), original);
+});
+
+// Both Claude routing doors — the persistent native install and the ephemeral
+// `wrap` env — restore tool search from one constant (#1361). A literal at
+// either site would let the two doors drift, and only the native one is covered
+// by a behavioural test, so pin the shared constant and both readers here.
+test("both Claude routing doors restore tool search from the shared constant", () => {
+  const source = readFileSync(join(dirname(fileURLToPath(import.meta.url)), "..", "src", "index.ts"), "utf8");
+  const declarations = source.match(/^const TOOL_SEARCH_DEFAULT = .*$/gm) ?? [];
+  assert.equal(declarations.length, 1, `expected one TOOL_SEARCH_DEFAULT declaration, got ${declarations.length}`);
+  // Claude Code's own default with the variable unset is always-on tool search;
+  // restoring the base URL must not silently move the user to threshold mode.
+  assert.equal(declarations[0], 'const TOOL_SEARCH_DEFAULT = "true";');
+  const writes = source.match(/ENABLE_TOOL_SEARCH = [^;\n]+/g) ?? [];
+  assert.equal(writes.length, 2, `expected the native-enable and wrap writes, got ${writes.length}: ${writes}`);
+  for (const write of writes) {
+    assert.match(write, /TOOL_SEARCH_DEFAULT/, `a routing door writes a literal instead of the constant: ${write}`);
+  }
 });

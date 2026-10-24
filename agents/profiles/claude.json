@@ -35,10 +35,10 @@
   "attribution": {
     "header": "x-cave-agent"
   },
-  "tested_agent_version": "2.1.302",
+  "tested_agent_version": "2.1.308",
   "injection_completeness": "builder-assisted",
-  "last_verified_at": "2026-10-16",
-  "verified_by": "local pinned-binary probe (claude 2.1.302 on Node 24.16.0, agents/probe-installed.mjs); route probe from a scratch HOME and CLAUDE_CONFIG_DIR: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true under the injected base URL, the injected ANTHROPIC_AUTH_TOKEN (a dummy value) arriving as Authorization: Bearer with no x-api-key, and the run completed (exit 0, stop_reason end_turn)",
+  "last_verified_at": "2026-10-22",
+  "verified_by": "local pinned-binary probe (claude 2.1.308 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0); route probe from a scratch HOME and CLAUDE_CONFIG_DIR with onboarding pre-accepted in ~/.claude.json: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true under the injected base URL, the injected ANTHROPIC_AUTH_TOKEN (a dummy value) arriving as Authorization: Bearer with no x-api-key, and the run completed (exit 0, stop_reason end_turn). The unauthenticated HEAD /api/hello reachability preflight first recorded on 2.1.306 is still sent to the same injected base URL before the turn, now with a Bun/1.4.4 user-agent rather than the CLI's own -- a mount that answers /v1/messages but rejects HEAD on an unknown path is worth checking against this. The turn itself is a streaming request (stream: true) carrying anthropic-beta: claude-code-20250219 and user-agent claude-cli/2.1.308 (external, sdk-cli)",
   "fallback": "generic-env",
   "maintainer": null
 }

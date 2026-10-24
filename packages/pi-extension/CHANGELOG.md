@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Send the per-prompt runtime context as a hidden message of the run, not in
+  the system prompt. A system prompt that changed at every prompt made the
+  provider re-write its prompt cache from the system prompt onward, twice per
+  prompt (#1364). Core context still rides the system prompt, byte-stable.
+
 ## 0.3.1 — 2026-10-13
 
 - Read Caveman 4's config home (`$CAVEMAN_HOME/cloud.json`), its `localPort`,

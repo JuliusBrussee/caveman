@@ -23,10 +23,10 @@
   "attribution": {
     "header": "x-cave-agent"
   },
-  "tested_agent_version": "0.64.0",
+  "tested_agent_version": "0.65.0",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-10-16",
-  "verified_by": "local pinned-binary probe (gemini 0.64.0 on Node 24.16.0, agents/probe-installed.mjs); route probe from a scratch HOME with GEMINI_CLI_TRUST_WORKSPACE=true and security.auth.selectedType gemini-api-key in its settings: GOOGLE_GEMINI_BASE_URL redirection observed reaching POST /v1beta/models/{model}:generateContent (model-router classifier) and POST /v1beta/models/{model}:streamGenerateContent?alt=sse (the turn) under the injected base URL, carrying the key as x-goog-api-key, and the run completed (exit 0). NOT observed: an env-only launch — with no selectedType, 0.64.0 (like 0.63.0) derives the gateway auth type from GOOGLE_GEMINI_BASE_URL and exits 41 \"Invalid auth method selected.\" before sending any request",
+  "last_verified_at": "2026-10-21",
+  "verified_by": "local pinned-binary probe (gemini 0.65.0 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0); route probe from a scratch HOME with GEMINI_CLI_TRUST_WORKSPACE=true and security.auth.selectedType gemini-api-key in its settings: GOOGLE_GEMINI_BASE_URL redirection observed reaching POST /v1beta/models/{model}:generateContent (model-router classifier) and POST /v1beta/models/{model}:streamGenerateContent?alt=sse (the turn) under the injected base URL, carrying the key as x-goog-api-key, and the run completed (exit 0). The classifier's own call was answered by a generic stub rather than a schema-valid classifier response, so it exhausted its retries and fell back to the default model; the route and auth header are what this probe observed, not the classifier's verdict. NOT observed: an env-only launch -- with no selectedType, 0.65.0 (like 0.64.0 and 0.63.0) derives the gateway auth type from GOOGLE_GEMINI_BASE_URL and exits 41 \"Invalid auth method selected.\" before sending any request (re-confirmed on 0.65.0: zero requests reached the recorder)",
   "fallback": "generic-env",
   "maintainer": null
 }

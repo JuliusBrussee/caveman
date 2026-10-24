@@ -192,12 +192,84 @@ var invariantSecretFieldRe = regexp.MustCompile(`(?i)(secret|passw|token|api[_-]
 // through to enumeration or coverage, which state only exact, counted facts
 // ("amount: 500x26 NaN x1"). A run whose values are ALL "NaN" is still
 // constant and still reported as such, because that IS verified.
+//
+// The same goes for a literal float64 cannot ORDER at the precision it was
+// written to. Past 2^53 two different integers parse to the same float64
+// (snowflake IDs, nanosecond timestamps); the same collision happens well
+// below 2^53 once a value carries enough fraction digits, because
+// "123456789012345.26" and "123456789012345.27" are 0.01 apart where the
+// float64 grid near 1.2e14 steps by 0.03125. Either way the comparisons below
+// cannot tell which literal is larger, so the marker names a bound that an
+// elided row exceeds -- the one claim this file may never make.
+//
+// The test is therefore not "is this an integer" but "can a float64 separate
+// two adjacent values at this literal's own granularity": the distance to the
+// next representable float64 must be smaller than one step of the last digit
+// the literal actually wrote. That keeps ordinary money and measurement
+// columns ("5.00".."199.99", ULP ~3e-14 against a 0.01 step) on the numeric
+// track while taking the unorderable literals off it, to be reported by exact
+// string bounds instead.
 func invariantNumber(value string) (float64, bool) {
 	n, err := strconv.ParseFloat(value, 64)
 	if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
 		return 0, false
 	}
+	if !invariantFloatSeparatesDecimals(value, n) {
+		return 0, false
+	}
 	return n, true
+}
+
+// invariantFloatSeparatesDecimals reports whether float64 comparison can order
+// `value` against another literal written to the same number of digits.
+//
+// granularity is one step of the literal's least significant digit: 10^(exp-frac)
+// for a decimal literal with `frac` fraction digits and an `e exp` suffix. The
+// float64 grid spacing at that magnitude (the ULP) must come in under it, or two
+// distinct literals can land on the same float64 and the min/max comparisons stop
+// being a total order over the column.
+//
+// Anything whose granularity cannot be read off the literal -- a hex float
+// ("0x1p60"), an underscore-separated digit group, an exponent past the float64
+// decimal range -- is refused rather than guessed at: the cost of refusing is a
+// marker that states string bounds instead of a range, and the cost of guessing
+// wrong is a false claim.
+func invariantFloatSeparatesDecimals(value string, n float64) bool {
+	if n == 0 {
+		return true
+	}
+	if strings.ContainsAny(value, "xX_pP") {
+		return false
+	}
+
+	mantissa, exp := value, 0
+	if i := strings.IndexAny(value, "eE"); i >= 0 {
+		parsed, err := strconv.Atoi(value[i+1:])
+		if err != nil {
+			return false
+		}
+		mantissa, exp = value[:i], parsed
+	}
+	frac := 0
+	if i := strings.IndexByte(mantissa, '.'); i >= 0 {
+		frac = len(mantissa) - i - 1
+	}
+
+	// math.Pow10 is exact for the whole float64 decimal range and returns Inf or
+	// 0 outside it; either way the comparison below then refuses the literal.
+	granularity := math.Pow10(exp - frac)
+	if granularity <= 0 || math.IsInf(granularity, 0) {
+		return false
+	}
+
+	// `<=` rather than `<`: equal spacings still map distinct literals to
+	// distinct float64s. They are only ever equal in the integer case over
+	// [2^52, 2^53), where a power of two meets a power of ten at 1 and the float
+	// grid IS the integer grid -- which is why 2^53-1 keeps its range and 2^53,
+	// where the grid starts stepping by 2, does not.
+	abs := math.Abs(n)
+	ulp := math.Nextafter(abs, math.Inf(1)) - abs
+	return ulp <= granularity
 }
 
 // summarizeElided renders the facts that hold across every unit of one elided

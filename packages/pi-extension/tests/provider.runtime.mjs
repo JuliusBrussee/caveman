@@ -249,6 +249,20 @@ test("unlisted providers stay direct with an actionable mount notice", async () 
   assert.match(h.notices.at(-1), /no compat mount named "unlisted-relay".*add compat\.unlisted-relay\.base_url/);
 });
 
+// #1324: that remedy has to work for Pi's own DeepSeek provider, whose base is
+// https://api.deepseek.com with no /v1. A mount on the same base routes it, and
+// closing the gate gives the model its own endpoint back.
+test("a compat mount routes a provider whose OpenAI base has no /v1", async () => {
+  const deepseek = { provider: "deepseek", id: "deepseek-flash", api: "openai-completions", baseUrl: "https://api.deepseek.com" };
+  const h = harness([deepseek]);
+  await h.router.openGate(GATEWAY, h.ctx, { deepseek: "https://api.deepseek.com" }, NATIVE);
+  assert.equal(h.router.routing(), true, h.notices.join("\n"));
+  assert.equal(h.ctx.model.baseUrl, `${GATEWAY}/w/pi/compat/deepseek`);
+  assert.deepEqual(h.notices, []);
+  assert.equal(await h.router.closeGate(h.ctx), true);
+  assert.deepEqual(h.ctx.model, deepseek);
+});
+
 test("a provider whose baseUrl is a sentinel is not offered a compat mount", async () => {
   const bridge = { provider: "claude-bridge", id: "m", api: "anthropic-messages", baseUrl: "claude-bridge" };
   const h = harness([bridge]);

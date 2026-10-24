@@ -33,7 +33,7 @@ Issues = "https://github.com/JuliusBrussee/caveman/issues"
 # installed together. The framework's own dependency ranges pick the provider.
 [project.optional-dependencies]
 openai = ["openai>=2.20,<4"]
-anthropic = ["anthropic>=1.0,<2"]
+anthropic = ["anthropic>=1.0,<3"]
 google = ["google-genai>=2.18,<3"]
 langchain = ["langchain>=1.1,<2", "langchain-core>=1.1,<2", "langgraph>=1.0.2,<2"]
 litellm = ["litellm>=1.95,<2"]

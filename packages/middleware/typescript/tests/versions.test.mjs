@@ -58,8 +58,11 @@ test('framework peers are optional and unranged (Decision 2); tested releases, m
   // C11: each entry is gated only on the packages it imports; nothing is gated on @langchain/langgraph.
   assert.deepEqual(inspectFrameworkCompatibility('langchain').frameworks.map(check => check.package), ['langchain', '@langchain/core']);
   assert.deepEqual(inspectFrameworkCompatibility('langchain-core').frameworks.map(check => check.package), ['@langchain/core']);
-  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.133.0'), true, 'released 0.125-0.133 were tested');
-  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.134.0'), false, 'zero-major next minor may break APIs');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '0.137.0'), true, 'released 0.125-0.137 were tested');
+  // Upstream closed the 0.x line at 0.137.0 by shipping 1.0.0, so this bound is the next major like every sibling's.
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '1.0.0'), true, '1.0.0 was tested');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '1.1.0'), true, '1.1.0 was tested');
+  assert.equal(frameworkCompatible('@anthropic-ai/sdk', '2.0.0'), false, 'the next major may break APIs');
   assert.equal(frameworkCompatible('openai', '7.12.0'), false, 'older patch than validated floor');
   assert.throws(() => inspectFrameworkCompatibility('typo'), /Unknown Caveman adapter/);
 });
@@ -174,7 +177,9 @@ test('check-latest-in-range reads every TypeScript and Python range and flags on
   const pkg = JSON.parse(await readFile(new URL('../package.json', import.meta.url), 'utf8'));
   const entries = await ranges();
   assert.deepEqual(entries.filter(([registry]) => registry === 'npm').map(([, name]) => name), Object.keys(pkg.supportedFrameworkVersions));
-  assert.deepEqual(entries.find(([registry, name]) => registry === 'pypi' && name === 'anthropic'), ['pypi', 'anthropic', '1.0', '2']);
+  // Upper bound tracks _versions.py, which admitted the Anthropic Python SDK's
+  // 1.x line when upstream shipped it; ranges() reads that file, not this literal.
+  assert.deepEqual(entries.find(([registry, name]) => registry === 'pypi' && name === 'anthropic'), ['pypi', 'anthropic', '1.0', '3']);
   assert.ok(entries.some(([registry, name]) => registry === 'pypi' && name === 'autogen-ext'));
   const sample = [['npm', '@anthropic-ai/sdk', '0.124.0', '0.129'], ['pypi', 'openai', '2.20', '4'], ['npm', 'openai', '7.12.1', '8']];
   assert.deepEqual(drift(sample, { 'npm:@anthropic-ai/sdk': '0.128.0', 'pypi:openai': '3.9.1', 'npm:openai': '7.23.0' }), []);

@@ -280,6 +280,36 @@ test("open gate: first request routes through /w/pi with Core in the system prom
   }
 });
 
+// Per-prompt context must not rewrite the system prompt: the provider caches
+// the prompt from the system prompt onward, so a changing system prompt
+// re-writes the whole cached conversation at every prompt (#1364).
+test("open gate: dynamic context rides a message and the system prompt stays byte-stable", { skip: !havePi && "pi devDependency missing" }, async () => {
+  const { server, requests, port } = await startStub();
+  const fx = fixture(port);
+  try {
+    const out = await runPi(fx.env, [
+      "--extension", stubProviderExtension, "--extension", extension,
+      "--no-session", "--no-skills", "--no-context-files", "--no-prompt-templates", "--no-themes", "--no-extensions",
+      "--provider", "openai", "--model", "stub-model",
+      "-p", "say hi", "say bye",
+    ]);
+    assert.match(out.stdout, /CAVEMAN_STUB_OK/, `stdout: ${out.stdout}\nstderr: ${out.stderr}`);
+    const bodies = requests.filter((r) => r.method === "POST").map((r) => JSON.parse(r.body));
+    assert.ok(bodies.length >= 2, `expected a request per prompt, got ${bodies.length}`);
+    const system = (b) => b.messages.filter((m) => m.role === "system" || m.role === "developer").map((m) => JSON.stringify(m.content)).join("\n");
+    const rest = (b) => JSON.stringify(b.messages.filter((m) => m.role !== "system" && m.role !== "developer"));
+    assert.match(system(bodies[0]), /CORE_MARKER_XYZ/, "Core stays in the system prompt");
+    assert.equal(system(bodies[1]), system(bodies[0]), "the system prompt must not change between prompts");
+    for (const b of bodies) {
+      assert.doesNotMatch(system(b), /DYNAMIC_MARKER_ABC/, "dynamic context must not enter the system prompt");
+      assert.match(rest(b), /DYNAMIC_MARKER_ABC/, "dynamic context rides a message of the run");
+    }
+  } finally {
+    fx.cleanup();
+    server.close();
+  }
+});
+
 // The CLI keeps its config in $CAVEMAN_HOME/cloud.json; the pre-v4
 // ~/.caveman-cloud/config.json no longer decides the gateway once that exists.
 test("open gate: the gateway comes from $CAVEMAN_HOME/cloud.json, not the old config", { skip: !havePi && "pi devDependency missing" }, async () => {
