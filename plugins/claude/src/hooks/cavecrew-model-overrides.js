@@ -1,0 +1,159 @@
+#!/usr/bin/env node
+// cavecrew model overrides — patch installed agent frontmatter from env vars.
+//
+// Called by caveman-activate.js early in SessionStart so users can pin
+// per-agent models without shadow-copying entire agent files.
+//
+// Env vars:
+//   CAVECREW_REVIEWER_MODEL    → agents/cavecrew-reviewer.md
+//   CAVECREW_BUILDER_MODEL     → agents/cavecrew-builder.md
+//   CAVECREW_INVESTIGATOR_MODEL → agents/cavecrew-investigator.md
+//
+// Rules:
+//   - Unset / blank → no-op.
+//   - Values containing newlines or control characters → ignored.
+//   - Existing `model:` line in frontmatter → replaced in-place.
+//   - No `model:` line → inserted after `tools:` (or before closing `---`).
+//   - File missing / outside plugin layout → silent no-op.
+//   - All filesystem errors → silent fail.
+
+const fs = require('fs');
+const path = require('path');
+
+const AGENT_ENV_MAP = [
+  { envVar: 'CAVECREW_REVIEWER_MODEL',     file: path.join('agents', 'cavecrew-reviewer.md') },
+  { envVar: 'CAVECREW_BUILDER_MODEL',      file: path.join('agents', 'cavecrew-builder.md') },
+  { envVar: 'CAVECREW_INVESTIGATOR_MODEL', file: path.join('agents', 'cavecrew-investigator.md') },
+];
+
+// Return the plugin root directory given the hooks directory path.
+// Layouts (#645): plugin/repo checkout puts this file at <root>/src/hooks/
+// (agents/ lives two levels up); standalone installs at <config>/hooks/
+// (one level up). Prefer CLAUDE_PLUGIN_ROOT, then the first candidate that
+// actually contains an agents/ directory.
+function resolvePluginRoot(hookDir) {
+  const candidates = [];
+  if (process.env.CLAUDE_PLUGIN_ROOT) candidates.push(process.env.CLAUDE_PLUGIN_ROOT);
+  candidates.push(path.resolve(hookDir, '..', '..'), path.resolve(hookDir, '..'));
+  for (const root of candidates) {
+    try {
+      if (fs.statSync(path.join(root, 'agents')).isDirectory()) return root;
+    } catch (e) {}
+  }
+  return path.resolve(hookDir, '..');
+}
+
+// Patch the YAML frontmatter of `content` to set `model: <modelValue>`.
+// Returns the patched string, or the original if no frontmatter or already identical.
+// Rejects `modelValue` strings that contain newlines, control characters, or
+// Unicode line-break codepoints (U+0085 NEL, U+2028 LS, U+2029 PS) that YAML
+// parsers treat as line endings but JS /[\x00-\x1f]/ does not catch.
+function patchFrontmatterModel(content, modelValue) {
+  // Reject blank or unsafe model strings
+  if (!modelValue || /[\x00-\x1f\x7f]|[\u0085\u2028\u2029]/.test(modelValue)) return content;
+
+  // Must begin with YAML frontmatter delimiter
+  if (!content.startsWith('---')) return content;
+
+  // Find the closing ---
+  const closeIdx = content.indexOf('\n---', 3);
+  if (closeIdx === -1) return content;
+
+  const fmRaw = content.slice(0, closeIdx);           // opening --- through last fm line
+  const after  = content.slice(closeIdx);             // \n--- onward (body)
+
+  // Preserve original line ending so we don't create mixed CRLF/LF on Windows
+  const nl = fmRaw.includes('\r\n') ? '\r\n' : '\n';
+
+  const modelLine = 'model: ' + modelValue;
+  const modelRe   = /^model:[ \t]*.*$/m;
+
+  if (modelRe.test(fmRaw)) {
+    // Replace existing model: line
+    const patched = fmRaw.replace(modelRe, modelLine);
+    if (patched === fmRaw) return content;            // already identical
+    return patched + after;
+  }
+
+  // Insert after tools: line when present; else before closing ---
+  const toolsMatch = fmRaw.match(/^tools:[ \t]*.*$/m);
+  if (toolsMatch) {
+    const toolsEnd = fmRaw.indexOf(toolsMatch[0]) + toolsMatch[0].length;
+    return fmRaw.slice(0, toolsEnd) + nl + modelLine + fmRaw.slice(toolsEnd) + after;
+  }
+
+  // Append before closing delimiter
+  return fmRaw + nl + modelLine + after;
+}
+
+// insideGitWorkTree reports whether `dir` sits inside a git working tree.
+//
+// A plugin root inside one is a SOURCE CHECKOUT, not an installed plugin:
+// resolvePluginRoot returns the repo root when this hook runs from a clone, so
+// with any CAVECREW_*_MODEL set, EVERY SessionStart rewrote tracked agents/*.md
+// and dirtied the working tree just by opening the repo. An installed plugin
+// lives under $CLAUDE_CONFIG_DIR with no .git above it, so overrides still apply
+// there — the one place they can be applied without editing someone's source.
+function insideGitWorkTree(dir) {
+  let current = path.resolve(dir);
+  for (let i = 0; i < 64; i++) {
+    try {
+      if (fs.existsSync(path.join(current, '.git'))) return true;
+    } catch (e) { /* unreadable ancestor → keep walking */ }
+    const parent = path.dirname(current);
+    if (parent === current) return false;
+    current = parent;
+  }
+  return false;
+}
+
+// Apply all env-var overrides to agent files under `pluginRoot`.
+// `env` defaults to process.env; pass an object in tests.
+function applyOverrides(pluginRoot, env) {
+  const envArg = env || process.env;
+  if (insideGitWorkTree(pluginRoot)) return;
+  for (const { envVar, file } of AGENT_ENV_MAP) {
+    const raw = envArg[envVar];
+    if (!raw || !raw.trim()) continue;
+
+    const modelValue = raw.trim();
+    if (/[\x00-\x1f\x7f]/.test(modelValue)) continue;
+
+    const agentPath = path.join(pluginRoot, file);
+    let content;
+    try {
+      content = fs.readFileSync(agentPath, 'utf8');
+    } catch (e) {
+      continue; // missing file or wrong layout → silent no-op
+    }
+
+    const patched = patchFrontmatterModel(content, modelValue);
+    if (patched === content) continue;
+
+    // Staged outside the try so the cleanup below can still find it: a failed
+    // rename must not leave the staging file in the user's plugin directory.
+    let tmp = null;
+    try {
+      // Refuse symlinks — writing through a symlink could redirect the write
+      // to an arbitrary path outside the plugin directory.
+      if (fs.lstatSync(agentPath).isSymbolicLink()) continue;
+
+      // Atomic write: stage to a sibling temp file, then rename into place.
+      // Preserves the original file's mode so permission bits are not lost.
+      const origMode = fs.statSync(agentPath).mode;
+      tmp = agentPath + '.caveman-tmp-' + process.pid;
+      fs.writeFileSync(tmp, patched, { encoding: 'utf8', mode: origMode });
+      fs.renameSync(tmp, agentPath);
+      tmp = null; // renamed into place — nothing staged left to remove
+    } catch (e) {
+      // Silent fail — never block session start. The rename is the step most
+      // likely to fail for a reason the hook cannot control (EPERM from an
+      // open handle on Windows, EACCES on a read-only parent), and it runs on
+      // every SessionStart, so a staged file left behind accumulates one copy
+      // per pid next to the agent files.
+      if (tmp) { try { fs.unlinkSync(tmp); } catch (_) {} }
+    }
+  }
+}
+
+module.exports = { resolvePluginRoot, patchFrontmatterModel, applyOverrides, insideGitWorkTree, AGENT_ENV_MAP };

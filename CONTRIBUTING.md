@@ -45,4 +45,33 @@ authorship and DCO sign-off.
   untouched.
 - Match the surrounding style. Small, focused PRs review fastest.
 
+## Claude plugin packaging
+
+Claude's marketplace installs `plugins/claude/`. This directory is generated;
+edit the canonical files at the repository root, not the generated copies.
+
+After changing a packaged source file:
+
+1. Add any new source files to Git's index so the generator includes them.
+2. Run `node scripts/build-claude-plugin.mjs`.
+3. Run `node scripts/build-claude-plugin.mjs --check`.
+4. Include both the source changes and generated output in the pull request.
+
+The generator includes all tracked files inside each `skills/<name>/`
+directory that has a tracked `SKILL.md`, plus the plugin manifest, cavecrew
+agents, init command, hooks, init script, README, and license notices.
+The root installer package manifest and pnpm lockfile are not plugin inputs.
+The generated Claude payload is excluded from the npm installer tarball.
+
+`python3 tests/verify_repo.py` checks generated-file parity. Post-merge
+synchronization is a fallback, not a substitute for including current output
+in a PR. Existing `plugins/caveman/` mirrors and the release ZIP retain their
+separate synchronization requirements.
+
+The generated plugin manifest copies the canonical release version.
+In an isolated Claude Code 2.1.306 test, a packaging change at the same
+version did not update an existing installation; a higher plugin version did.
+Coordinate delivery with the project's release process rather than assigning
+a separate version to the generated manifest.
+
 Questions → open a discussion or ping us at **hello@caveman.so**.

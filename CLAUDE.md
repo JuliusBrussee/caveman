@@ -136,18 +136,18 @@ caveman/
 | `src/plugins/opencode/plugin.js` | opencode native plugin. ESM Bun module — `session.created` writes flag, `tui.prompt.append` parses slash/natural-language activation and appends per-prompt reinforcement. Reuses `caveman-config.js` via `createRequire`. |
 | `src/plugins/opencode/commands/*.md` | Six opencode slash-command prompt templates (`/caveman`, `/caveman-{commit,review,compress,stats,help}`). |
 
-### `skills/` is auto-discovered wholesale — every subdirectory ships
+### Every canonical skill ships in the Claude plugin
 
-`.claude-plugin/marketplace.json` sets `"source": "./"`, so the plugin root IS
-the repo root, and Claude Code auto-discovers **every** `skills/*/SKILL.md`
-with no `skills` key in `plugin.json` to gate it. Adding a directory under
-`skills/` therefore installs it into every plugin user's agent, where its
-`description` competes for activation on ordinary work.
+`.claude-plugin/marketplace.json` points at `./plugins/claude`.
+`node scripts/build-claude-plugin.mjs` copies every tracked
+`skills/<name>/` directory with a tracked `SKILL.md` into that payload.
+Claude auto-discovers the generated skill directories.
 
-There is no allowlist. Before adding a directory here, decide whether it
-should reach end users; if not, it belongs under `packages/` or another root.
-Keep the two tables above and the README "What you get" table in sync with the
-actual directory listing — `ls skills/` is the source of truth.
+Adding a canonical skill therefore adds it to the installed plugin after
+regeneration, where its description competes for activation during users' work.
+Only place a skill here if it should ship to users. Keep the README and skill
+documentation tables synchronized. Add new source files to Git's index before
+running the generator.
 
 ### `agents/*.md` is auto-discovered too — and `plugin.json` must NOT list them
 
@@ -182,34 +182,40 @@ We removed the agent-specific dotdir mirrors at the repo root (`.cursor/`, `.win
 
 A handful of dotdir leftovers (`.junie/`, `.kiro/`, `.roo/`, `.agents/`) still hold a stale `cavecrew/SKILL.md` mirror from before the cleanup. They aren't read by anything in the current install path; remove on sight, no migration needed.
 
-What's left is the Claude Code plugin distribution (required by the plugin loader) and the release ZIP.
+The generated Claude plugin, existing Codex plugin mirrors, and release ZIP
+are separate artifacts.
 
-| File | Synced from |
-|------|-------------|
-| `plugins/caveman/skills/caveman/SKILL.md` | `skills/caveman/SKILL.md` |
-| `plugins/caveman/skills/caveman-compress/SKILL.md` (+ `scripts/`) | `skills/caveman-compress/SKILL.md` (+ `scripts/`) |
-| `plugins/caveman/skills/cavecrew/SKILL.md` | `skills/cavecrew/SKILL.md` |
-| `plugins/caveman/agents/cavecrew-*.md` | `agents/cavecrew-*.md` |
-| `dist/caveman.skill` | ZIP of `skills/caveman/` directory (gitignored; rebuilt by CI on release) |
+| Artifact | Source and generation |
+|----------|-----------------------|
+| `plugins/claude/` | Complete Claude payload; run `node scripts/build-claude-plugin.mjs` |
+| `plugins/caveman/skills/{caveman,ultracave,megacave,cavecrew}/SKILL.md` | Corresponding canonical `skills/<name>/SKILL.md`; copy as in `sync-skill.yml` |
+| `plugins/caveman/skills/caveman-compress/` | Canonical skill and its `scripts/`, copied by `sync-skill.yml` |
+| `plugins/caveman/agents/cavecrew-*.md` | Canonical `agents/cavecrew-*.md`, copied by `sync-skill.yml` |
+| `dist/caveman.skill` | Tracked ZIP of `skills/caveman/`, rebuilt by `sync-skill.yml` |
 
-Skills not in this table (`caveman-commit`, `caveman-review`, `caveman-help`, `caveman-stats`) are not mirrored into the Claude Code plugin distribution by CI. They reach Claude Code through the standalone hook + skill install path, and reach other agents via `npx skills add`. A `plugins/caveman/skills/caveman-stats/` directory is currently checked in as a hand-committed copy; the sync workflow does not touch it, so don't rely on edits there to propagate.
+`plugins/caveman/` remains the existing Codex plugin distribution. Its
+`caveman-stats` skill is a hand-maintained copy outside the sync workflow.
+Claude's marketplace now uses `plugins/claude/`, which includes all canonical
+skills rather than this subset.
+
+Edit canonical sources, regenerate or copy the affected artifacts, and include
+the synchronized output in the same PR. `tests/verify_repo.py` checks parity.
 
 ---
 
 ## CI sync workflow
 
-`.github/workflows/sync-skill.yml` triggers on main push when `skills/**/SKILL.md` or `agents/cavecrew-*.md` changes.
+`.github/workflows/sync-skill.yml` runs on pushes to `main` that change the
+packaged inputs or generation workflow.
 
-What it does:
-1. Copies `skills/caveman/SKILL.md` and `skills/cavecrew/SKILL.md` into their `plugins/caveman/skills/<name>/` mirrors so the Claude Code plugin loader sees the latest behavior.
-2. Copies `skills/caveman-compress/SKILL.md` and its `scripts/` into `plugins/caveman/skills/caveman-compress/`.
-3. Copies `agents/cavecrew-*.md` into `plugins/caveman/agents/`.
-4. Rebuilds `dist/caveman.skill` (ZIP of `skills/caveman/`) for the release artifact.
-5. Commits and pushes with `[skip ci]` to avoid loops.
+It synchronizes the existing Codex skill and agent mirrors, runs
+`node scripts/build-claude-plugin.mjs` for the complete Claude payload, rebuilds
+`dist/caveman.skill`, and commits changed artifacts with `[skip ci]`.
 
-CI bot commits as `github-actions[bot]`. After PR merge, wait for workflow before declaring release complete.
+PRs must already contain synchronized output. This post-merge workflow does
+not replace local generation or the read-only checks in `tests/verify_repo.py`.
 
-The old steps that mirrored SKILL.md and rules into root dotdirs (`.cursor/`, `.windsurf/`, `.clinerules/`, `.github/copilot-instructions.md`) are gone — those mirrors no longer exist. The old `caveman-compress/` → `skills/compress/` rename-on-sync is also gone now that compress lives at `skills/caveman-compress/`.
+The old per-editor rule mirrors are not recreated by this workflow.
 
 ---
 
@@ -414,7 +420,7 @@ To reproduce: `uv run python benchmarks/run.py` (needs `ANTHROPIC_API_KEY` in `.
 
 ## Key rules for agents working here
 
-- Edit `skills/<name>/SKILL.md` for behavior changes. Never edit synced copies under `plugins/caveman/skills/`.
+- Edit `skills/<name>/SKILL.md` for behavior changes. Regenerate `plugins/claude/` with `node scripts/build-claude-plugin.mjs` and include the output in the PR. Do not independently author generated copies. For existing `plugins/caveman/skills/` mirrors, copy the canonical source using the mappings above and include those synchronized changes when required by `tests/verify_repo.py`.
 - Edit `src/rules/caveman-activate.md` for auto-activation rule changes. Never edit any per-agent rule copy a user has on their machine.
 - Edit `src/rules/caveman-openclaw-bootstrap.md` for the OpenClaw SOUL.md bootstrap snippet. Keep the `<!-- caveman-begin -->` / `<!-- caveman-end -->` markers and the `Respond terse like smart caveman` sentinel — `installer/lib/openclaw.js` keys idempotency off both. If you change the embedded fallback in `installer/lib/openclaw.js`, keep it byte-equivalent to the file.
 - Per-skill human docs live in `skills/<name>/README.md`. The LLM-facing body is in `SKILL.md`. Don't merge them — different audiences.
