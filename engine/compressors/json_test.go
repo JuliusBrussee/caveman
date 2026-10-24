@@ -127,6 +127,95 @@ func TestJSONCompressorDeterministic(t *testing.T) {
 	}
 }
 
+func TestJSONCompressorCanonicalElisionNote(t *testing.T) {
+	row, err := json.Marshal(map[string]string{"kind": "sample", "data": strings.Repeat("x", 256)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Each array drops 59 identical rows, well above the 4096-byte note gate.
+	rows := "[" + strings.Repeat(string(row)+",", 63) + string(row) + "]"
+	cases := []struct {
+		name      string
+		input     string
+		arrays    []string // canonical traversal order; the first receives the note
+		preserved string
+	}{
+		{"single", `{"alpha":` + rows + `}`, []string{"alpha"}, ""},
+		{"siblings", `{"omega":` + rows + `,"middle":` + rows + `,"alpha":` + rows + `}`, []string{"alpha", "middle", "omega"}, ""},
+		{"nested", `{"omega":` + rows + `,"alpha":{"omega":` + rows + `,"alpha":` + rows + `}}`, []string{"alpha.alpha", "alpha.omega", "omega"}, ""},
+		{"protected", `{"omega":` + rows + `,"middle":` + rows + `,"alpha":{"error":` + rows + `}}`, []string{"middle", "omega"}, "alpha.error"},
+	}
+	arrayAt := func(t *testing.T, root any, path string) []any {
+		t.Helper()
+		value := root
+		for _, key := range strings.Split(path, ".") {
+			object, ok := value.(map[string]any)
+			if !ok {
+				t.Fatalf("expected object on path %s", path)
+			}
+			value = object[key]
+		}
+		array, ok := value.([]any)
+		if !ok {
+			t.Fatalf("expected array at %s", path)
+		}
+		return array
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := compressors.NewJSON()
+			input := []byte(tc.input)
+			var first []byte
+			// Assert the canonical location on every call, rather than only
+			// comparing two outputs that could happen to share a map order.
+			for attempt := 0; attempt < 32; attempt++ {
+				out, ok := c.Compress(input)
+				if !ok {
+					t.Fatal("expected compression")
+				}
+				var root any
+				if err := json.Unmarshal(out, &root); err != nil {
+					t.Fatal(err)
+				}
+				if got := bytes.Count(out, []byte(`"`+compressors.ElidedNoteKey+`"`)); got != 1 {
+					t.Fatalf("got %d notes, want exactly one", got)
+				}
+				for i, path := range tc.arrays {
+					array := arrayAt(t, root, path)
+					if len(array) != 6 {
+						t.Fatalf("%s: got %d elements, want 5 anchors and a marker", path, len(array))
+					}
+					marker, ok := array[3].(map[string]any)
+					if !ok || marker[compressors.ElidedKey] != float64(59) {
+						t.Fatalf("%s: expected 59 elided rows at index 3, got %v", path, array[3])
+					}
+					if _, hasNote := marker[compressors.ElidedNoteKey]; hasNote != (i == 0) {
+						t.Fatalf("%s: note present = %v, want %v", path, hasNote, i == 0)
+					}
+				}
+				if tc.preserved != "" {
+					got, err := json.Marshal(arrayAt(t, root, tc.preserved))
+					if err != nil || string(got) != rows {
+						t.Fatalf("protected subtree %s changed", tc.preserved)
+					}
+				}
+				if attempt == 0 {
+					first = out
+				} else if !bytes.Equal(first, out) {
+					t.Fatal("identical input produced different bytes")
+				}
+			}
+			queryOut, ok := c.(compressors.QueryAwareCompressor).CompressQuery(input, "")
+			if !ok || !bytes.Equal(first, queryOut) {
+				t.Fatal("empty-query output differs from Compress")
+			}
+			if again, ok := c.Compress(first); ok && !bytes.Equal(first, again) {
+				t.Fatal("compressed output is not idempotent")
+			}
+		})
+	}
+}
+
 func TestJSONCompressorQueryBias(t *testing.T) {
 	c, ok := compressors.NewJSON().(compressors.QueryAwareCompressor)
 	if !ok {
