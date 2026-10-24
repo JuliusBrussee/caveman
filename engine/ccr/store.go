@@ -212,7 +212,22 @@ type Stats struct {
 	StorageBytes    int64 `json:"storage_bytes,omitempty"`
 	MaxStorageBytes int64 `json:"max_storage_bytes,omitempty"`
 	StorageFull     bool  `json:"storage_full,omitempty"`
+	// StorageFullReason names why StorageFull is true: StorageFullPayloadBudget,
+	// StorageFullPageCap or StorageFullDiskFull. It is empty when not full.
+	StorageFullReason string `json:"storage_full_reason,omitempty"`
 }
+
+// Values of Stats.StorageFullReason.
+const (
+	// StorageFullPayloadBudget means retained payload bytes reached the budget.
+	StorageFullPayloadBudget = "payload_budget"
+	// StorageFullPageCap means the database file reached its SQLite page cap.
+	// Indexes, overflow pages and unused space count toward the cap.
+	StorageFullPageCap = "page_cap"
+	// StorageFullDiskFull means a write failed with SQLITE_FULL while the
+	// file was below its page cap, so the disk or file system refused it.
+	StorageFullDiskFull = "disk_full"
+)
 
 // Handle returns the content-addressed handle for a payload without storing it.
 func Handle(original []byte) string {
