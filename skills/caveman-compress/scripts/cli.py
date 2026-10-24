@@ -70,7 +70,8 @@ def main():
             print(f"Original:   {backup_path}")
             sys.exit(0)
         else:
-            print("\n❌ Compression failed after retries")
+            # Also reached when no attempt ran (backup exists, empty file, ...).
+            print("\n❌ Compression did not complete (see above). Original file is untouched.")
             sys.exit(2)
 
     except KeyboardInterrupt:

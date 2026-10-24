@@ -43,6 +43,16 @@ class CompressCLITests(unittest.TestCase):
             self.assertEqual(source.read_bytes(), data)
             self.assertEqual(list(Path(cwd).iterdir()), [source])
 
+    def test_refusal_without_any_attempt_does_not_claim_retries(self):
+        with tempfile.TemporaryDirectory() as cwd:
+            source = Path(cwd) / "empty.md"
+            source.write_bytes(b"   \n")
+            result = self.run_cli([source.name], cwd)
+            self.assertEqual(result.returncode, 2, result.stderr)
+            self.assertIn("file is empty", result.stdout)
+            self.assertIn("Compression did not complete", result.stdout)
+            self.assertNotIn("after retries", result.stdout)
+
     def test_missing_unicode_file_reports_error_without_import_or_encoding_failure(self):
         with tempfile.TemporaryDirectory() as cwd:
             result = self.run_cli(["不存在.md"], cwd)
