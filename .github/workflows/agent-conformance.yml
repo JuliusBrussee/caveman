@@ -81,7 +81,7 @@ jobs:
           - id: pi
             install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
           - id: qwen
-            install: npm install -g @qwen-code/qwen-code@0.25.2
+            install: npm install -g @qwen-code/qwen-code@0.26.0
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
