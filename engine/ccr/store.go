@@ -28,6 +28,10 @@ import (
 // guesses a recovery — an unknown handle is an explicit miss.
 var ErrNotFound = errors.New("ccr: recovery handle not found")
 
+// ErrCorruptRecovery is returned when stored bytes do not match their handle or
+// their content hash. The store never returns such bytes as a recovery.
+var ErrCorruptRecovery = errors.New("ccr: stored recovery data does not match its handle, so the store is damaged (run PRAGMA quick_check)")
+
 // ErrBudgetExceeded means a new recovery was refused before publishing lossy
 // bytes because the local store's configured payload budget would be exceeded.
 // Existing handles remain intact and retrievable; callers must pass through.
@@ -218,6 +222,16 @@ type Stats struct {
 func Handle(original []byte) string {
 	sum := sha256.Sum256(original)
 	return "ccr_" + hex.EncodeToString(sum[:16])
+}
+
+// verifyObjectData checks that obj.Data still matches the content hash that
+// PutObject enforced at write time.
+func verifyObjectData(obj Object) error {
+	sum := sha256.Sum256(obj.Data)
+	if "sha256:"+hex.EncodeToString(sum[:]) != obj.ContentHash {
+		return fmt.Errorf("%w: object %s", ErrCorruptRecovery, obj.ID)
+	}
+	return nil
 }
 
 func ratio(before, after int) float64 {

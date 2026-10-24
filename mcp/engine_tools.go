@@ -3,12 +3,14 @@ package mcp
 import (
 	"crypto/sha256"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strings"
 	"sync"
 
 	"github.com/JuliusBrussee/caveman/engine"
+	"github.com/JuliusBrussee/caveman/engine/ccr"
 )
 
 // Engine is the slice of the Caveman Engine the Caveman tools need.
@@ -181,7 +183,7 @@ func retrieveTool(eng Engine, args json.RawMessage) ToolResult {
 	if a.VerifyOnly {
 		original, err := eng.Retrieve(a.RecoveryHandle)
 		if err != nil {
-			return ToolError("cave_unknown_handle", "no original found for handle")
+			return retrieveError(err)
 		}
 		return ToolText(map[string]any{
 			"recovery_handle": a.RecoveryHandle,
@@ -193,9 +195,18 @@ func retrieveTool(eng Engine, args json.RawMessage) ToolResult {
 	// byte-exact full recovery. RetrieveQuery never drops detail it cannot rank.
 	original, err := eng.RetrieveQuery(a.RecoveryHandle, a.Query)
 	if err != nil {
-		return ToolError("cave_unknown_handle", "no original found for handle")
+		return retrieveError(err)
 	}
 	return ToolRawText(string(original))
+}
+
+// retrieveError maps a retrieval failure to its tool error. Damaged stored data
+// must not read as an unknown handle, because the agent would retry in vain.
+func retrieveError(err error) ToolResult {
+	if errors.Is(err, ccr.ErrCorruptRecovery) {
+		return ToolError("cave_corrupt_recovery", "stored data for this handle is damaged. Run PRAGMA quick_check on ~/.caveman/ccr.db")
+	}
+	return ToolError("cave_unknown_handle", "no original found for handle")
 }
 
 // normalizeRecoveryHandle accepts every form of a recovery reference this stack

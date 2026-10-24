@@ -590,6 +590,9 @@ func (s *Store) get(handle string) ([]byte, error) {
 	case err != nil:
 		return nil, fmt.Errorf("ccr get: %w", err)
 	}
+	if Handle(original) != handle {
+		return nil, fmt.Errorf("%w: %s", ErrCorruptRecovery, handle)
+	}
 	return original, nil
 }
 
@@ -731,16 +734,19 @@ const objectColumns = `object_id, object_type, content_hash, source, created_at,
 
 // resolveObjectData fills obj.Data from the row it references when obj was
 // stored as a dedup pointer (see PutObject); dataRef == "" means obj already
-// carries its own data and is returned unchanged.
+// carries its own data. Either way, the data must match obj.ContentHash or the
+// read fails with ErrCorruptRecovery.
 func (s *Store) resolveObjectData(obj Object, dataRef string) (Object, error) {
-	if dataRef == "" {
-		return obj, nil
+	if dataRef != "" {
+		var data []byte
+		if err := s.db.QueryRow(`SELECT data FROM typed_objects WHERE object_id = ?`, dataRef).Scan(&data); err != nil {
+			return Object{}, fmt.Errorf("ccr typed object dedup resolve: %w", err)
+		}
+		obj.Data = data
 	}
-	var data []byte
-	if err := s.db.QueryRow(`SELECT data FROM typed_objects WHERE object_id = ?`, dataRef).Scan(&data); err != nil {
-		return Object{}, fmt.Errorf("ccr typed object dedup resolve: %w", err)
+	if err := verifyObjectData(obj); err != nil {
+		return Object{}, err
 	}
-	obj.Data = data
 	return obj, nil
 }
 
