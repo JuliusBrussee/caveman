@@ -29,7 +29,7 @@ def test_python_client_forwards_every_command(monkeypatch: pytest.MonkeyPatch) -
     assert cavemem.recall("billing", 4)["args"] == ["recall", "billing", "4"]
     assert cavemem.recall("billing", 4, 900)["args"] == ["recall", "billing", "4", "900"]
     assert cavemem.recall("billing", token_budget=0)["args"] == ["recall", "billing", "0", "0"]
-    assert cavemem.supersede("mem_1", "replacement")["args"] == ["supersede", "mem_1", "replacement"]
+    assert cavemem.supersede("mem_1", "replacement")["args"] == ["supersede", "mem_1", "--stdin"]
     assert cavemem.history("mem_1")["args"] == ["history", "mem_1"]
     assert cavemem.forget("mem_1")["args"] == ["forget", "mem_1"]
     assert all(command[0] == "/fixture/cavemem" for command, _ in calls)
@@ -37,7 +37,8 @@ def test_python_client_forwards_every_command(monkeypatch: pytest.MonkeyPatch) -
     # is not utf-8 — text=True alone would use the ANSI code page there.
     base = {"capture_output": True, "text": True, "check": True, "encoding": "utf-8"}
     assert calls[0][1] == {**base, "input": "raw memory"}
-    assert all(kwargs == base for _, kwargs in calls[1:])
+    assert calls[5][1] == {**base, "input": "replacement"}
+    assert all(kwargs == base for i, (_, kwargs) in enumerate(calls) if i not in (0, 5))
 
 
 def test_python_client_round_trips_non_ascii_memory(

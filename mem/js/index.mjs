@@ -42,7 +42,7 @@ export function recall(query, limit, tokenBudget) {
 
 /** Replace one current memory while preserving its version history. */
 export function supersede(id, text) {
-  return call(["supersede", id, text]);
+  return call(["supersede", id, "--stdin"], text);
 }
 
 /** Return oldest-to-newest versions for a memory lineage. */
