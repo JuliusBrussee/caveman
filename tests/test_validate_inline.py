@@ -10,6 +10,7 @@ from scripts.validate import (  # noqa: E402
     ValidationResult,
     extract_code_blocks,
     extract_inline_codes,
+    extract_paths,
     extract_urls,
     validate,
     validate_inline_codes,
@@ -22,6 +23,33 @@ class TestUrlInBackticks(unittest.TestCase):
 
     def test_trailing_backtick_not_part_of_url(self):
         self.assertEqual(extract_urls("see `https://x.io/a` now"), {"https://x.io/a"})
+
+
+class TestTrailingPunctuation(unittest.TestCase):
+    """#1353: punctuation right after a URL or path was extracted as part of it,
+    so a reply that only moved a comma or period failed validation."""
+
+    def test_trailing_punctuation_not_part_of_url(self):
+        self.assertEqual(
+            extract_urls("See https://docs.example.com/billing/v2, then https://x.io/a."),
+            {"https://docs.example.com/billing/v2", "https://x.io/a"},
+        )
+
+    def test_trailing_punctuation_not_part_of_path(self):
+        self.assertEqual(extract_paths("Read docs/runbook.md. Then ./run.sh!"), {"docs/runbook.md", "./run.sh"})
+
+    def test_dot_inside_path_kept(self):
+        self.assertEqual(extract_paths("Edit src/app.config.ts"), {"src/app.config.ts"})
+
+    def test_moved_comma_and_period_validate(self):
+        orig = "# T\n\nSee https://docs.example.com/billing/v2 and docs/runbook.md for details.\n"
+        comp = "# T\n\nSee https://docs.example.com/billing/v2, docs/runbook.md.\n"
+        with tempfile.TemporaryDirectory() as tmp:
+            o, c = Path(tmp) / "a.original.md", Path(tmp) / "a.md"
+            o.write_text(orig, encoding="utf-8")
+            c.write_text(comp, encoding="utf-8")
+            result = validate(o, c)
+        self.assertTrue(result.is_valid, result.errors)
 
 
 class TestIndentedFence(unittest.TestCase):
