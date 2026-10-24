@@ -45,6 +45,18 @@ for (const [base, original] of [
 ]) test(`compat overlap follows Go path join for ${base}`, () => {
   assert.equal(verifiedProviderRoute(gw, 'openai-responses', 'relay', original, { compat_upstreams: { relay: base } }), gw + '/compat/relay/v1');
 });
+// #1324: Pi's built-in DeepSeek and Z.ai bases carry no /v1. The mount forwards
+// the unversioned path as sent, so a mount on that same base verifies; a mount
+// that would put /v1 back on the way out still does not.
+for (const [provider, base] of [
+  ['deepseek', 'https://api.deepseek.com'],
+  ['zai', 'https://api.z.ai/api/coding/paas/v4'],
+]) test(`compat routes an OpenAI base without /v1: ${base}`, () => {
+  for (const api of ['openai-completions', 'openai-responses']) {
+    assert.equal(verifiedProviderRoute(gw, api, provider, base, { compat_upstreams: { [provider]: base } }), gw + `/compat/${provider}`);
+  }
+  assert.equal(verifiedProviderRoute(gw, 'openai-completions', provider, base, { compat_upstreams: { [provider]: base + '/v1' } }), undefined);
+});
 test('internal double slashes do not collapse into another tenant endpoint', () => {
   assert.equal(verifiedProviderRoute(gw, 'openai-responses', 'relay', 'https://relay.example/tenant/sub/v1', { compat_upstreams: { relay: 'https://relay.example/tenant//sub' } }), undefined);
 });
