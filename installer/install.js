@@ -1204,6 +1204,8 @@ function installHermes(ctx) {
 // the plugin is enabled; agy has no session-start hook (PreInvocation runs
 // before every model call). Checked live with agy 1.2.17: caveman voice with
 // the rule, normal prose without it or with the plugin disabled.
+// plugin.json carries only name/version/description; `contextFileName` is a
+// Gemini CLI gemini-extension.json key, not an agy field (agy discards it).
 const AGY_PLUGIN_NAME = 'caveman';
 const AGY_SKILL_DIRS = HERMES_SKILL_DIRS;
 
@@ -1230,6 +1232,7 @@ function installAntigravityCli(ctx) {
     fs.mkdirSync(path.join(pluginDir, 'rules'), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({
       name: AGY_PLUGIN_NAME,
+      version: packageVersion(repoRoot),
       description: 'Caveman: terse replies, every technical fact kept',
     }, null, 2) + '\n');
     fs.copyFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), path.join(pluginDir, 'rules', 'AGENTS.md'));
