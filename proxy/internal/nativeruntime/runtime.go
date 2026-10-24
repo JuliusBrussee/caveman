@@ -1229,6 +1229,14 @@ func repositoryStateMatches(observed, current string) bool {
 	return current != "" && observed == current
 }
 
+// minMaskBytes is the smallest tool output worth replacing with a content-free
+// handle (#1365). The agent usually needs the content back, and redeeming the
+// handle costs a whole extra model request that re-reads the cached context,
+// which outweighs writing a few KB once. 4096 matches the Hermes shrink floor
+// (CAVE_HERMES_SHRINK_MIN_BYTES). Smaller outputs are still captured, so the
+// handle stays valid, and pass through unchanged.
+const minMaskBytes = 4096
+
 func (r *Runtime) afterTool(request Request, response Response, allowMask bool) (Response, error) {
 	if request.Tool == nil {
 		return response, nil
@@ -1280,7 +1288,8 @@ func (r *Runtime) afterTool(request Request, response Response, allowMask bool) 
 		typeName, source, response.RecoveryRef, response.RecoveryRef)
 	// Mask only when replacement plus one retrieval call and safety margin is
 	// materially smaller. Bytes are conservative proxy for tokenizer variance.
-	if allowMask && len(request.Tool.Output) > len(replacement)+256+128 &&
+	if allowMask && len(request.Tool.Output) >= minMaskBytes &&
+		len(request.Tool.Output) > len(replacement)+256+128 &&
 		!r.maskWouldDiscardFacts(request.Tool.Output) {
 		response.OutputReplacement = replacement
 		if err := r.store.SetObjectLifecycle(id, ccr.Warm); err != nil {

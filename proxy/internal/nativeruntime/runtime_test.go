@@ -710,7 +710,7 @@ func TestSessionEndWritesHonestReceiptOutsideModelContext(t *testing.T) {
 		CostBasis: "catalog_list_price_subtotal_provider_complete_priced_rows", SavingsBasis: "inferred_standalone_not_verified",
 	}})
 	session := Session{ID: "claude:host-9", HostSessionID: "host-9"}
-	large := []byte(strings.Repeat("safe result\n", 300))
+	large := []byte(strings.Repeat("safe result\n", 400))
 	if _, err := runtime.Handle(context.Background(), Request{
 		ProtocolVersion: 1,
 		Agent:           Agent{ID: "claude"},
@@ -872,7 +872,7 @@ func TestDeferredMaskIsInjectedOnceForHostsWithoutDirectOutputRewrite(t *testing
 	defer store.Close()
 	runtime := New(store)
 	session := Session{ID: "codex:deferred-mask"}
-	large := []byte(strings.Repeat("bounded output\n", 200))
+	large := []byte(strings.Repeat("bounded output\n", 300))
 	after, err := runtime.Handle(context.Background(), Request{
 		ProtocolVersion: 1, PolicyMode: "safe", Profile: "full-safe", Agent: Agent{ID: "codex"},
 		Session: session, Event: Event{Type: "tool.after"},

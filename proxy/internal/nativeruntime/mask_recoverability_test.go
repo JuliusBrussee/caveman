@@ -26,7 +26,7 @@ func TestMaskedToolOutputTellsTheAgentHowToRecoverIt(t *testing.T) {
 	runtime := New(store)
 	const session = "session-mask"
 
-	page := strings.Repeat(`{"sku":"SKU-60000","title":"Part SKU-60000 rev 0","active":false}`+"\n", 40)
+	page := strings.Repeat(`{"sku":"SKU-60000","title":"Part SKU-60000 rev 0","active":false}`+"\n", 80)
 	response, err := runtime.afterTool(Request{
 		Session: Session{ID: session},
 		Tool:    &Tool{Name: "taskdata_fetch", Output: []byte(page)},

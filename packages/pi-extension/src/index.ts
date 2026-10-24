@@ -281,7 +281,7 @@ export default function (pi: ExtensionAPI) {
 
   // caveman_retrieve's own output is the recovered ORIGINAL. Shrinking it hands
   // the model a fresh ccr:// mask (the proxy's classifyTool files it as an
-  // ObjectCommandResult and masks anything past ~448 bytes), so recovery loops
+  // ObjectCommandResult and masks anything past ~4 KB), so recovery loops
   // instead of terminating — and registering this tool disabled the proxy's
   // server-side retrieve loop, so nothing else would strip it.
   // A shrink hands the model a ccr:// handle plus an instruction to call
