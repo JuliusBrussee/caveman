@@ -5,6 +5,8 @@ import (
 	"encoding/csv"
 	"fmt"
 	"io"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -212,5 +214,44 @@ func TestTabularNonFiniteCellIsNotAbsorbedIntoARange(t *testing.T) {
 	}
 	if !bytes.Contains(withNaN, []byte("NaN")) {
 		t.Fatalf("the NaN row left no trace in the compressed view:\n%s", withNaN)
+	}
+}
+
+// Past 2^53 two different integers can parse to the same float64 (snowflake
+// IDs, nanosecond timestamps). The id column stayed on the numeric track, the
+// compare could not tell ...8500 from ...8600, and the marker stated a maximum
+// that an elided row exceeds. Whatever bounds the marker states for the column
+// must cover every elided row.
+func TestTabularLargeIntegerRangeCoversEveryElidedRow(t *testing.T) {
+	const first, step, rows = 1234567890123456000, 100, 30
+	var b strings.Builder
+	b.WriteString("id,status\n")
+	for i := 0; i < rows; i++ {
+		fmt.Fprintf(&b, "%d,ok\n", first+i*step)
+	}
+	out, ok := compressors.NewTabular().Compress([]byte(b.String()))
+	if !ok {
+		t.Fatal("expected CSV compression")
+	}
+	marker := regexp.MustCompile(`id[=: ][^.]*?(\d{19})\.\.(\d{19})`).FindSubmatch(out)
+	if marker == nil {
+		return // no stated range, nothing to get wrong
+	}
+	lo, _ := strconv.ParseInt(string(marker[1]), 10, 64)
+	hi, _ := strconv.ParseInt(string(marker[2]), 10, 64)
+	kept := map[int64]bool{}
+	for _, line := range strings.Split(string(out), "\n") {
+		if id, err := strconv.ParseInt(strings.SplitN(line, ",", 2)[0], 10, 64); err == nil {
+			kept[id] = true
+		}
+	}
+	for i := 0; i < rows; i++ {
+		id := int64(first + i*step)
+		if kept[id] {
+			continue
+		}
+		if id < lo || id > hi {
+			t.Fatalf("elided id %d is outside the stated range %d..%d:\n%s", id, lo, hi, out)
+		}
 	}
 }
