@@ -250,10 +250,14 @@ export default function (pi: ExtensionAPI) {
     pendingContext = [];
     pendingBytes = 0;
     if (!coreContext && dynamic.length === 0) return undefined;
-    // Core is appended byte-stably every turn (prefix caching); dynamic context
-    // rides only the turn it arrived on.
-    const parts = [event.systemPrompt, coreContext, ...dynamic].filter(Boolean) as string[];
-    return { systemPrompt: parts.join("\n\n") };
+    // Core is appended byte-stably every turn (prefix caching). Dynamic context
+    // changes per prompt, so it rides a hidden message at the tail of this run
+    // instead: in the system prompt it would rewrite the provider's prompt cache
+    // from the system prompt onward, twice per prompt (#1364).
+    const result: { systemPrompt?: string; message?: { customType: string; content: string; display: boolean } } = {};
+    if (coreContext) result.systemPrompt = [event.systemPrompt, coreContext].filter(Boolean).join("\n\n");
+    if (dynamic.length > 0) result.message = { customType: "caveman-context", content: dynamic.join("\n\n"), display: false };
+    return result;
   }));
 
   pi.on("turn_start", GUARD_turn_start(() => { void bridge.call("ModelBefore", { session_id: sessionId }); }));
