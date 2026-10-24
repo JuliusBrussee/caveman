@@ -392,6 +392,14 @@ type MetadataRequestMatcher interface {
 	MatchMetadataRequest(r *http.Request) bool
 }
 
+// OAuthTokenRouter is an optional provider capability: the provider's OAuth
+// token endpoint, which a client reaches through the same base URL as its
+// inference. Base implements it for every embedder, and an adapter with no
+// OAuthTokenRoutes declared matches nothing.
+type OAuthTokenRouter interface {
+	MatchOAuthTokenRoute(method string, path string) bool
+}
+
 // TokenCounter is an optional provider capability for projecting an original
 // inference request onto that provider's token-count endpoint. Implementations
 // only shape and parse bytes; the gateway owns all network I/O so credentials,
@@ -470,6 +478,14 @@ type Base struct {
 	// stays fail-closed. The gateway forwards these unchanged: no request body,
 	// no transform, no usage accounting and no spend row.
 	MetadataRoutes []string
+	// OAuthTokenRoutes lists this provider's OAuth token endpoint mounts. An
+	// SDK signed in with a user OAuth profile refreshes its access token at
+	// {base URL}/v1/oauth/token, so with the base URL pointed at the proxy the
+	// refresh arrives here; answering 404 cave_route_not_found broke the agent
+	// as soon as its access token expired. Exact paths, POST only. The gateway
+	// relays them byte-for-byte with no provider credential attached: the body
+	// is the grant, and it carries no inference to inspect, price or record.
+	OAuthTokenRoutes []string
 }
 
 // usageParseProvider is the provider key usage accounting parses with.
@@ -526,6 +542,20 @@ func (b Base) MatchMetadataRoute(method, path string) bool {
 	return false
 }
 
+// MatchOAuthTokenRoute reports whether this is a request to the provider's
+// OAuth token endpoint (see Base.OAuthTokenRoutes).
+func (b Base) MatchOAuthTokenRoute(method, path string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	for _, route := range b.OAuthTokenRoutes {
+		if path == route {
+			return true
+		}
+	}
+	return false
+}
+
 func (b Base) ResolveUpstreamURL(ctx context.Context, req *http.Request, route RouteContext) (*url.URL, error) {
 	baseURL := b.BaseURL
 	if route.BaseURL != "" {
@@ -569,6 +599,10 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 	}
 	copyIfPresent(out, req.Header, "anthropic-version")
 	copyIfPresent(out, req.Header, "anthropic-beta")
+	// A user OAuth token is scoped to an organization, not a workspace; the
+	// client names the workspace on every request, and dropping the header
+	// bills and rate-limits the call against a workspace the user did not pick.
+	copyIfPresent(out, req.Header, "anthropic-workspace-id")
 	copyIfPresent(out, req.Header, "api-version")
 	if env.Bool("CAVE_PROPAGATE_TRACE_HEADERS_UPSTREAM", false) {
 		copyIfPresent(out, req.Header, "traceparent")

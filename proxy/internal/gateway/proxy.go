@@ -139,6 +139,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		s.metadataPassthrough(w, r, adapter, s.creds.Resolve(adapter.Name(), r), requestID)
 		return
 	}
+	// The OAuth token refresh shares the agent's base URL but is no inference
+	// either, so it gets the same treatment, without a provider credential.
+	if adapter := s.matchOAuthTokenAdapter(r); adapter != nil {
+		s.oauthTokenPassthrough(w, r, adapter, requestID)
+		return
+	}
 	adapter := s.matchAdapter(r)
 	if adapter == nil {
 		// fail-closed routing: an unrecognized path is a 404, never a blind pass-through.

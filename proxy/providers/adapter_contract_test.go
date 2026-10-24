@@ -281,10 +281,16 @@ func TestSanitizeAndMapHeaders_AnthropicBearerSchemePreserved(t *testing.T) {
 	b := Base{Provider: "anthropic"}
 	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("anthropic-workspace-id", "wrkspc_test")
 
 	out, err := b.SanitizeAndMapHeaders(req.Context(), req, Credential{Key: "OAUTH-TOKEN", Scheme: "bearer"}, nil)
 	if err != nil {
 		t.Fatalf("sanitize: %v", err)
+	}
+	// A user OAuth token is org-scoped; the workspace the agent named must
+	// reach the provider or the call lands in a different workspace.
+	if got := out.Get("anthropic-workspace-id"); got != "wrkspc_test" {
+		t.Errorf("anthropic-workspace-id = %q, want wrkspc_test", got)
 	}
 	if got := out.Get("authorization"); got != "Bearer OAUTH-TOKEN" {
 		t.Errorf("authorization = %q, want Bearer OAUTH-TOKEN", got)
