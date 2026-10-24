@@ -366,3 +366,41 @@ func TestOpenMigratesLegacyMemorySchema(t *testing.T) {
 		t.Fatalf("migrated memory recall = %+v, %v", hits, err)
 	}
 }
+
+func TestSupersedeCanRevertToAnEarlierValue(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.Remember("database host is db-a.internal")
+	b, err := s.Supersede(a.ID, "database host is db-b.internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverted, err := s.Supersede(b.ID, a.Text)
+	if err != nil {
+		t.Fatalf("revert to earlier value: %v", err)
+	}
+	if reverted.ID == a.ID || reverted.Text != a.Text || reverted.Supersedes != b.ID {
+		t.Fatalf("revert = %+v, want a fresh id replacing %s", reverted, b.ID)
+	}
+	history, err := s.History(reverted.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(history) != 3 || history[0].ID != a.ID || history[1].ID != b.ID || history[2].ID != reverted.ID {
+		t.Fatalf("history after revert = %+v", history)
+	}
+	hits, err := s.Recall("database host", RecallOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 1 || hits[0].ID != reverted.ID {
+		t.Fatalf("recall after revert = %+v, want only the reverted version", hits)
+	}
+	// A second revert (A -> B again) must also work and stay linear.
+	again, err := s.Supersede(reverted.ID, b.Text)
+	if err != nil {
+		t.Fatalf("second revert: %v", err)
+	}
+	if history, err = s.History(again.ID); err != nil || len(history) != 4 {
+		t.Fatalf("history after second revert = %+v, err %v", history, err)
+	}
+}

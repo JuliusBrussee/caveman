@@ -60,7 +60,7 @@ def recall(
 
 def supersede(mem_id: str, text: str) -> dict[str, Any]:
     """Replace one current memory while preserving its version history."""
-    return _call(["supersede", mem_id, text])
+    return _call(["supersede", mem_id, "--stdin"], text)
 
 
 def history(mem_id: str) -> dict[str, Any]:
