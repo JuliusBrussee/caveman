@@ -129,7 +129,7 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   assert.equal(settings.env._CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL, "1");
   // Redirecting the base URL makes Claude Code drop tool search and inline every
   // MCP tool schema, so enable must restore it alongside the route.
-  assert.equal(settings.env.ENABLE_TOOL_SEARCH, "auto");
+  assert.equal(settings.env.ENABLE_TOOL_SEARCH, "true");
   assert.match(installedBytes, /native-hook-fast\.js/);
   assert.match(installedBytes, /native-hook claude/);
   assert.match(installedBytes, /caveman-proxy/);
@@ -168,6 +168,26 @@ test("enable/disable claude is idempotent and preserves unrelated later edits", 
   assert.equal(afterMcp.mcpServers.later.command, "later-mcp");
   assert.equal(afterMcp.mcpServers.caveman, undefined);
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "claude.json")), false);
+});
+
+test("disable claude withdraws the legacy \"auto\" tool-search default", async () => {
+  const fx = fixture();
+  mkdirSync(join(fx.home, ".claude"), { recursive: true });
+  writeFileSync(join(fx.home, ".claude", "settings.json"), JSON.stringify({ env: { KEEP: "yes" } }, null, 2) + "\n");
+  const enabled = await run(["enable", "claude"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  // Installs made by earlier releases carry "auto"; disable must still remove it.
+  const settingsPath = join(fx.home, ".claude", "settings.json");
+  const settings = JSON.parse(readFileSync(settingsPath, "utf8"));
+  settings.env.ENABLE_TOOL_SEARCH = "auto";
+  writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + "\n");
+
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const after = JSON.parse(readFileSync(settingsPath, "utf8"));
+  assert.equal(after.env.KEEP, "yes");
+  assert.equal(after.env.ENABLE_TOOL_SEARCH, undefined);
 });
 
 test("enable claude preserves a user-set first-party assertion across enable and disable", async () => {
