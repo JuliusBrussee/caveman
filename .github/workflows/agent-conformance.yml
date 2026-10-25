@@ -77,7 +77,7 @@ jobs:
           - id: openclaw
             install: npm install -g openclaw@2026.10.5
           - id: opencode
-            install: npm install -g opencode-ai@1.19.3
+            install: npm install -g opencode-ai@1.19.4
           - id: pi
             install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
           - id: qwen
