@@ -20238,6 +20238,22 @@ function cavememRun(memArgs: string[], opts: { soft?: boolean; stdin?: boolean }
   return null;
 }
 
+// A cavemem older than `supersede --stdin` reads supersede's second argument as
+// the replacement TEXT, so handing one "--stdin" stores the literal flag,
+// expires the real memory and exits 0. The binary advertises the capability, so
+// ask before sending a replacement over stdin. Soft: an unreadable version
+// answers "no", which refuses rather than risking the write.
+function cavememSupersedeStdin(): boolean {
+  const out = cavememRun(["version", "--json"], { soft: true });
+  if (!out) return false;
+  try {
+    const { capabilities } = JSON.parse(out) as { capabilities?: unknown };
+    return Array.isArray(capabilities) && capabilities.includes("supersede-stdin");
+  } catch {
+    return false;
+  }
+}
+
 // mem is the durable-memory command family (cavemem). remember/recall/recover/
 // forget are mechanical store ops; the editing skill and the opt-in recall hook
 // build on them. Memory edits to a user's config are NEVER done here — only the
@@ -20292,6 +20308,10 @@ function mem(rest: string[]) {
       // so a replacement bigger than one argv element (~128 KB on Linux,
       // ~32 KB of whole command line on Windows) reaches the store at all.
       if (id && rest2.length === 1 && rest2[0] === "--stdin") {
+        if (!cavememSupersedeStdin()) {
+          console.error("caveman: this cavemem build cannot read a replacement from stdin (no supersede-stdin capability); upgrade it, or pass the text as an argument");
+          process.exit(1);
+        }
         process.stdout.write(cavememRun(["supersede", id, "--stdin"], { stdin: true }) ?? "");
         return;
       }

@@ -40,8 +40,36 @@ export function recall(query, limit, tokenBudget) {
   return call(args);
 }
 
+// Replacement bytes that still fit in one command-line argument. Linux caps a
+// single argv element at MAX_ARG_STRLEN (128 KiB) and Windows caps the whole
+// command line near 32 KiB; stay under both with room for the binary path, the
+// id and the environment.
+const ARGV_TEXT_LIMIT = process.platform === "win32" ? 24 * 1024 : 96 * 1024;
+
+async function supersedeStdinSupported() {
+  try {
+    const { capabilities } = await call(["version", "--json"]);
+    return Array.isArray(capabilities) && capabilities.includes("supersede-stdin");
+  } catch {
+    return false;
+  }
+}
+
 /** Replace one current memory while preserving its version history. */
-export function supersede(id, text) {
+export async function supersede(id, text) {
+  // A cavemem older than `supersede --stdin` reads its second argument as the
+  // replacement text, so handing one "--stdin" stores the literal flag, expires
+  // the real memory and reports success. Use the argv form for everything it
+  // can carry — every build understands that — and require the advertised
+  // capability before sending a replacement over stdin.
+  if (Buffer.byteLength(text) <= ARGV_TEXT_LIMIT) return call(["supersede", id, text]);
+  if (!(await supersedeStdinSupported())) {
+    throw new Error(
+      `cavemem cannot supersede with ${Buffer.byteLength(text)} bytes of replacement text: ` +
+        "this build does not advertise the supersede-stdin capability, and the text is too " +
+        "large for one command-line argument. Upgrade the cavemem binary.",
+    );
+  }
   return call(["supersede", id, "--stdin"], text);
 }
 

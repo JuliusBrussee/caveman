@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -336,5 +337,28 @@ func TestSupersedeReadsReplacementFromStdinAndMapsTooLargeExit(t *testing.T) {
 	huge := strings.NewReader(strings.Repeat("x", mem.MaxMemoryBytes+1))
 	if code := handleArgs(store, []string{"supersede", current.ID, "--stdin"}, huge, &out, &errOut); code != memoryTooLargeExitCode {
 		t.Fatalf("oversized supersede exit %d, want %d", code, memoryTooLargeExitCode)
+	}
+}
+
+func TestVersionAdvertisesSupersedeStdin(t *testing.T) {
+	// Clients branch on this list: a build that reads a replacement from stdin
+	// must say so, because one that does not treats supersede's second argument
+	// as the replacement text and would store a literal "--stdin".
+	var out bytes.Buffer
+	runVersion([]string{"--json"}, &out)
+	var payload struct {
+		Schema       string   `json:"schema"`
+		Capabilities []string `json:"capabilities"`
+	}
+	if err := json.Unmarshal(out.Bytes(), &payload); err != nil {
+		t.Fatalf("version --json is not JSON: %v (%s)", err, out.String())
+	}
+	if payload.Schema != "caveman.mem.version.v1" {
+		t.Fatalf("schema = %q", payload.Schema)
+	}
+	for _, want := range []string{"supersede", "supersede-stdin"} {
+		if !slices.Contains(payload.Capabilities, want) {
+			t.Fatalf("capabilities %v missing %q", payload.Capabilities, want)
+		}
 	}
 }

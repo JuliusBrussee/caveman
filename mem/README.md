@@ -19,6 +19,8 @@ go build -o cavemem ./mem/cmd/cavemem
 ./cavemem recall   "where is the deploy key"      # JSON: { hits: [...], basis: "inferred" }
 ./cavemem recall   "full migration context" 5 0   # explicit 0 token budget = unlimited
 ./cavemem supersede mem_xxxxxxxx "deploy key moved to vault ops/deploy-v2"   # or: supersede mem_xxxxxxxx --stdin
+                                                                             # --stdin needs the supersede-stdin capability
+                                                                             # (see: ./cavemem version --json)
 ./cavemem history   mem_yyyyyyyy                  # oldest → current
 ./cavemem forget   mem_xxxxxxxx
 ./cavemem          # runs the MCP server over stdio
