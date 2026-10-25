@@ -470,6 +470,72 @@ func TestChatGPTSSECleanEOFWithoutTerminalEventAborts(t *testing.T) {
 	}
 }
 
+func TestChatGPTCodexClientCancellationAfterTerminalDeliveryPreservesAccounting(t *testing.T) {
+	live := strings.Repeat("codex oauth live tool output ", 40)
+	requestBody := `{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + live + `"}]}]}`
+	sse := "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":111,\"output_tokens\":22}}}\n\n"
+	for _, tt := range []struct {
+		name        string
+		contentType string
+	}{
+		{name: "event-stream-header", contentType: "text/event-stream"},
+		{name: "mislabelled-json-header", contentType: "application/json"},
+	} {
+		ctx, cancel := context.WithCancel(context.Background())
+		func() {
+			defer cancel()
+			transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{tt.contentType}},
+					Body:       io.NopCloser(&cancelAfterBodyReader{body: []byte(sse)}),
+					Request:    r,
+				}, nil
+			})
+			sink := &captureSink{}
+			srv := New(Config{
+				Auth:            stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
+				Sink:            sink,
+				Compressor:      &liveZoneCompressor{},
+				PrefixCache:     newTestPrefixCache(),
+				RecoveryViaMCP:  true,
+				ChatGPTUpstream: "https://chatgpt.test/backend-api/codex",
+				HTTPClient:      &http.Client{Transport: transport},
+			})
+			req := httptest.NewRequest(http.MethodPost, "/chatgpt/responses", strings.NewReader(requestBody)).WithContext(ctx)
+			req.Header.Set("x-cave-agent", "codex")
+			req.Header.Set("Authorization", "Bearer codex-oauth-secret")
+			req.Header.Set("ChatGPT-Account-ID", "acct_test")
+			w := &cancelAfterWriteResponseWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel}
+			var handlerPanic any
+			func() {
+				defer func() { handlerPanic = recover() }()
+				srv.Handler().ServeHTTP(w, req)
+			}()
+
+			row := sink.last(t)
+			if row.ErrorCode != "" {
+				t.Fatalf("%s: got error code %q, want no error for a delivered terminal frame", tt.name, row.ErrorCode)
+			}
+			if handlerPanic != nil {
+				t.Fatalf("%s: completed Codex stream aborted the response: %v", tt.name, handlerPanic)
+			}
+			if got := w.Body.String(); got != sse {
+				t.Fatalf("%s: completed SSE frame changed: got %q, want %q", tt.name, got, sse)
+			}
+			if !row.Stream || row.InputTokens != 111 || row.OutputTokens != 22 {
+				t.Fatalf("%s: completed Codex stream accounting = %+v", tt.name, row)
+			}
+			if row.CompressionTokensBefore <= row.CompressionTokensAfter || row.RecoveryHandle == "" {
+				t.Fatalf("%s: completed Codex stream lost compression accounting: %+v", tt.name, row)
+			}
+			if row.TotalCostUSD != 0 || row.SavingsUSD != 0 {
+				t.Fatalf("%s: subscription traffic must remain unpriced: %+v", tt.name, row)
+			}
+		}()
+	}
+}
+
 type cancelAfterWriteResponseWriter struct {
 	*httptest.ResponseRecorder
 	cancel   context.CancelFunc

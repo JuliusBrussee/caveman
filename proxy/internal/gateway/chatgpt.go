@@ -320,13 +320,16 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-caveman-token-count-basis", "estimated_engine_o200k")
 	}
 	respCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
-	piResponsesRoute := rc.AgentSlug == "pi" && r.Method == http.MethodPost && suffix == "/responses"
+	responsesStreamRoute := (rc.AgentSlug == "pi" || rc.AgentSlug == "codex") &&
+		r.Method == http.MethodPost && suffix == "/responses"
 	requestBodyComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-	piResponsesStream := piResponsesRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
-	stream := streamingResponse(resp.Header) || piResponsesStream
+	responsesStreamRequested := responsesStreamRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
+	stream := streamingResponse(resp.Header) || responsesStreamRequested
 	var responseBody io.Reader = resp.Body
 	var completionTracker streamCompletionTracker
-	if piResponsesRoute && stream && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest && (piResponsesStream || isChatGPTEventStream(resp.Header)) {
+	if responsesStreamRoute && stream && resp.StatusCode >= http.StatusOK &&
+		resp.StatusCode < http.StatusBadRequest &&
+		(responsesStreamRequested || isChatGPTEventStream(resp.Header)) {
 		completionReader := &chatGPTSSECompletionReader{source: responseBody}
 		responseBody = completionReader
 		completionTracker = completionReader
@@ -567,8 +570,8 @@ type cappedBuffer struct {
 const chatGPTSSEEventLimit = 4 << 20
 
 // chatGPTSSECompletionReader keeps streaming response bytes unchanged while
-// confirming that Pi receives a terminal Responses event. Pi's SSE parser only
-// dispatches events terminated by a blank line, so a complete terminal JSON
+// confirming that Pi and Codex receive a terminal Responses event. Their SSE parsers only
+// dispatch events terminated by a blank line, so a complete terminal JSON
 // event at EOF gets the missing delimiter. An EOF without a terminal event is a
 // truncated response, even when the HTTP body closed cleanly.
 type chatGPTSSECompletionReader struct {
