@@ -275,18 +275,31 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
   const stableNode = path.join(stableBin, 'node');
 
   try {
+    // Homebrew's Node can load libnode relative to the executable. Preserve
+    // that installation layout while giving each fixture version its own
+    // executable path; relocating only the hardlink aborts in dyld before the
+    // installer can exercise stable-PATH selection.
+    const runtimeLib = path.resolve(path.dirname(process.execPath), '..', 'lib');
+    if (fs.existsSync(runtimeLib)) {
+      for (const bin of [cellarBin, upgradedCellarBin]) {
+        fs.symlinkSync(runtimeLib, path.join(path.dirname(bin), 'lib'), 'dir');
+      }
+    }
     fs.linkSync(process.execPath, cellarNode);
     fs.symlinkSync(cellarNode, stableNode);
     const r = spawnSync(stableNode, [
       INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
       '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink',
     ], {
-      env: { ...isolatedEnv(path.join(dir, 'home')), PATH: stableBin, CLAUDE_CONFIG_DIR: configDir },
+      env: { ...isolatedEnv(path.join(dir, 'home'), [stableBin, fakeClaudeDir(dir)]), CLAUDE_CONFIG_DIR: configDir },
       encoding: 'utf8',
     });
-    assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
+    assert.equal(r.status, 0, r.error?.message || r.stderr || r.stdout);
 
-    const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    const settingsPath = path.join(configDir, 'settings.json');
+    assert.ok(fs.existsSync(settingsPath),
+      `settings.json missing: status=${r.status} signal=${r.signal}\n${r.error?.message || r.stderr || r.stdout}`);
+    const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
     const command = cavemanHookCommands(settings, 'SessionStart', 'caveman-activate')[0]?.command || '';
     assert.match(command, new RegExp(stableNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
       'hook command should preserve the stable node path found on PATH');
