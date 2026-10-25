@@ -139,6 +139,9 @@ function baseEnv(home, binDir, port, binary = proxyBin) {
     PATH: `${binDir}:${process.env.PATH}`,
     CAVEMAN_HOME: home,
     CAVEMAN_PROXY_BIN: binary,
+    // Only installMcpRecovery's fixture may make recovery available. Host
+    // PATH or an inherited override must not silently satisfy this gate.
+    CAVEMAN_MCP_BIN: join(binDir, "caveman-mcp"),
     CAVE_GATEWAY_URL: `http://127.0.0.1:${port}`,
     CAVEMAN_TELEMETRY: "0",
     NO_COLOR: "1",

@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { isolatedCliEnv, runCli, runCliWithApi } from "./_cli.mjs";
+import { nodeStub, stubEnv } from "./harness/stub-bin.mjs";
 
 function normalizePrefix(value, group, verb) {
   return value.replaceAll(`caveman ${group} ${verb}`, `caveman ${verb}`);
@@ -230,6 +231,15 @@ for (const item of positionalLocalCases) {
     const legacyEnv = isolatedCliEnv();
     const groupedEnv = isolatedCliEnv();
     try {
+      if (item.verb === "mcp") {
+        // Never let an alias-only test mutate a real installed Claude host.
+        for (const isolated of [legacyEnv, groupedEnv]) {
+          const bin = join(isolated.home, "bin");
+          nodeStub(bin, "claude", `import { appendFileSync } from "node:fs";
+appendFileSync(process.env.CLAUDE_TEST_ARGS, JSON.stringify(ARGV) + "\\n");`);
+          isolated.env = stubEnv({ ...isolated.env, CLAUDE_TEST_ARGS: join(isolated.home, "claude-args.jsonl") }, bin);
+        }
+      }
       const legacy = await runCli(item.legacy, { env: legacyEnv.env });
       const grouped = item.prefix === ""
         ? await runCli(item.grouped, { env: groupedEnv.env })
@@ -237,6 +247,15 @@ for (const item of positionalLocalCases) {
       assert.equal(grouped.code, legacy.code);
       assert.equal(normalizePrefix(grouped.stdout, "tools", item.verb), legacy.stdout);
       assert.equal(normalizePrefix(grouped.stderr, "tools", item.verb), legacy.stderr);
+      if (item.verb === "mcp") {
+        assert.equal(legacy.code, 0, legacy.stderr);
+        for (const isolated of [legacyEnv, groupedEnv]) {
+          const calls = readFileSync(isolated.env.CLAUDE_TEST_ARGS, "utf8").trim().split("\n").map(JSON.parse);
+          assert.equal(calls.length, 2);
+          assert.deepEqual(calls[0], ["mcp", "remove", "--scope", "user", "caveman"]);
+          assert.deepEqual(calls[1].slice(0, 7), ["mcp", "add", "--scope", "user", "caveman", "--", isolated.env.CAVEMAN_MCP_BIN]);
+        }
+      }
     } finally {
       legacyEnv.cleanup();
       groupedEnv.cleanup();

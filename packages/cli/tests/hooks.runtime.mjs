@@ -580,6 +580,11 @@ test("record policy keeps native hooks and shrink byte-pass-through", { skip: pr
     const env = {
       ...process.env, HOME: caveHome, CAVEMAN_HOME: caveHome, CAVEMAN_NATIVE_MODE: "record", CAVEMAN_TELEMETRY: "0",
       CAVE_GATEWAY_URL: "http://127.0.0.1:1",
+      // This case owns only the runtime socket and intentionally has no proxy.
+      // SessionStart otherwise revives a real PATH-installed proxy, whose
+      // existing-socket probe connects/closes without a JSON hook request.
+      CAVEMAN_PROXY_BIN: join(caveHome, "missing-proxy"),
+      CAVEMAN_MCP_BIN: join(caveHome, "missing-mcp"),
     };
     const start = await runNativeHook("claude", { hook_event_name: "SessionStart", session_id: "record-1" }, env);
     assert.equal(start.code, 0, start.stderr);

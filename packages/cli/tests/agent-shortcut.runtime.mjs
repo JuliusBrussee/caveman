@@ -332,7 +332,7 @@ test("caveman claude --help never installs persistent integration", async () => 
 // timeout(1)/supervisors SIGTERM the launcher pid, not the process group. The
 // launcher must forward it to the child and then die by the same signal so
 // callers see a signal death, not a clean exit.
-test("process-directed SIGTERM reaches the child and re-raises on the launcher", async () => {
+for (const stopSignal of ["SIGTERM", "SIGINT"]) test(`process-directed ${stopSignal} reaches the child and re-raises on the launcher`, { skip: process.platform === "win32" }, async (t) => {
   const { env, home } = nativeShortcutEnv();
   const setup = await runWithEnv(env, ["enable", "claude"]);
   assert.equal(setup.code, 0, `enable run exited ${setup.code}: ${setup.stderr}`);
@@ -340,15 +340,25 @@ test("process-directed SIGTERM reaches the child and re-raises on the launcher",
   const binDir = dirname(env.CAVEMAN_MCP_BIN);
   writeFileSync(join(binDir, "claude"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo 'claude 1.0.0'; exit 0; fi\necho $$ > ${JSON.stringify(pidFile)}\nexec sleep 30\n`, { mode: 0o755 });
   const child = spawn("node", [cli, "claude"], { env });
+  let stubPid;
+  t.after(() => {
+    child.kill("SIGKILL");
+    if (stubPid) { try { process.kill(stubPid, "SIGKILL"); } catch {} }
+  });
   let stderr = "";
   child.stderr.on("data", (d) => (stderr += d));
   const deadline = Date.now() + 8000;
   while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((resolve) => setTimeout(resolve, 50));
   assert.ok(existsSync(pidFile), `stub agent never started: ${stderr}`);
-  const stubPid = Number(readFileSync(pidFile, "utf8").trim());
-  child.kill("SIGTERM");
-  const exit = await new Promise((resolve) => child.on("exit", (code, signal) => resolve({ code, signal })));
-  assert.equal(exit.signal, "SIGTERM", `launcher must die by SIGTERM (code=${exit.code}, stderr=${stderr})`);
+  stubPid = Number(readFileSync(pidFile, "utf8").trim());
+  const stopped = new Promise((resolve) => child.once("exit", (code, signal) => resolve({ code, signal })));
+  child.kill(stopSignal);
+  let deadlineTimer;
+  const exit = await Promise.race([stopped, new Promise((resolve) => {
+    deadlineTimer = setTimeout(() => resolve({ code: "still-running", signal: null }), 2_000);
+  })]);
+  clearTimeout(deadlineTimer);
+  assert.equal(exit.signal, stopSignal, `launcher must die by ${stopSignal} (code=${exit.code}, stderr=${stderr})`);
   const childDeadline = Date.now() + 2_000;
   let childAlive = true;
   while (childAlive && Date.now() < childDeadline) {
@@ -360,7 +370,7 @@ test("process-directed SIGTERM reaches the child and re-raises on the launcher",
       childAlive = false;
     }
   }
-  assert.equal(childAlive, false, "forwarded SIGTERM must terminate the child");
+  assert.equal(childAlive, false, `forwarded ${stopSignal} must terminate the child`);
 });
 
 test("caveman claude --off keeps the session-only wrap door even when native binaries conform", async () => {

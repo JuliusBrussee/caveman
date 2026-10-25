@@ -1774,7 +1774,7 @@ async function spawnBrowse(bin: string, browserArgs: string[]) {
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
   if (!signal) return 1;
-  const signals: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15 };
+  const signals: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15, SIGBREAK: 21 };
   return 128 + (signals[signal] ?? 1);
 }
 
@@ -2758,15 +2758,40 @@ async function start(argv: string[] = []) {
     process.stderr.write(dim(`→ ${SUBSCRIPTION_NO_RECOVERY_NOTE}\n`));
   }
 
-  const child = spawn(resolved, [], { stdio: "inherit", env });
+  // The HTTP service does not read the terminal. Give it a separate POSIX
+  // process group so a terminal broadcast reaches only this launcher and every
+  // signal can be forwarded exactly once, even when sent directly to a TTY-bound
+  // launcher PID. Keep the child referenced: start still waits for its drain.
+  // Windows keeps its shared console so native Ctrl+C delivery remains intact.
+  const child = spawn(resolved, [], { stdio: "inherit", env, detached: process.platform !== "win32" });
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  const removeSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+  };
+  const stopSignals = process.platform === "win32" ? ["SIGHUP", "SIGINT", "SIGBREAK"] : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+  for (const signal of stopSignals as NodeJS.Signals[]) {
+    const handler = () => {
+      // Windows console events reach both attached processes even with piped
+      // stdin. Node's kill(SIGINT) is TerminateProcess, not graceful forwarding;
+      // SIGHUP/SIGBREAK cannot be forwarded with kill at all. Wait for the child.
+      if (process.platform === "win32") return;
+      child.kill(signal);
+    };
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
   // This handler hard-exits with the child's code and never returns to main(),
   // so the run event goes out now (same pattern as wrap's pre-exec emit).
   emitCommandRunOnce("ok");
   child.on("error", (error) => {
+    removeSignalHandlers();
     console.error(`failed to launch ${bin}: ${error.message} (set CAVEMAN_PROXY_BIN or build the proxy)`);
     process.exit(1);
   });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  child.on("exit", (code, signal) => {
+    removeSignalHandlers();
+    process.exit(code ?? signalExitCode(signal));
+  });
 }
 
 // startMissingProxyUI is the cohesive fallback when `caveman start` can't find a
@@ -6497,24 +6522,47 @@ async function agentShortcut(rest: string[]) {
     // the shared foreground group — forwarding would double-deliver them. But
     // process-directed SIGTERM/SIGHUP (timeout(1), supervisors, pkill) only hit
     // this launcher, so those must be forwarded. Either way the launcher
-    // re-raises on itself after the child exits so callers see a signal death,
-    // not a clean exit.
+    // re-raises on POSIX after the child exits so callers see a signal death,
+    // not a clean exit. Windows reports the corresponding nonzero exit code.
     let fatal: NodeJS.Signals | undefined;
-    for (const signal of ["SIGINT", "SIGQUIT"] as NodeJS.Signals[]) {
-      process.on(signal, () => { fatal = signal; /* the tty delivered it to the child already */ });
-    }
-    for (const signal of ["SIGHUP", "SIGTERM"] as NodeJS.Signals[]) {
-      process.on(signal, () => {
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const signalHandlers = new Map<NodeJS.Signals, () => void>();
+    const removeSignalHandlers = () => {
+      if (grace) clearTimeout(grace);
+      for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+    };
+    const stopSignals = process.platform === "win32" ? ["SIGHUP", "SIGINT", "SIGBREAK"] : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+    for (const signal of stopSignals as NodeJS.Signals[]) {
+      const handler = () => {
         fatal = signal;
+        // Windows broadcasts console events regardless of redirected stdin.
+        // Forwarding with kill would force-terminate the shared-console child.
+        if (process.platform === "win32") return;
+        // POSIX supervisors can send SIGINT/SIGQUIT directly to a non-interactive
+        // launcher PID; leaving those unforwarded would strand the agent.
+        if (process.stdin.isTTY && (signal === "SIGINT" || signal === "SIGQUIT")) return;
+        if (grace) {
+          child.kill("SIGKILL");
+          return;
+        }
         child.kill(signal);
-        const grace = setTimeout(() => child.kill("SIGKILL"), 10_000);
+        grace = setTimeout(() => child.kill("SIGKILL"), 10_000);
         grace.unref();
-      });
+      };
+      signalHandlers.set(signal, handler);
+      process.on(signal, handler);
     }
-    child.on("error", (error) => reject(new Error(`failed to exec ${bin}: ${error.message}`)));
+    child.on("error", (error) => {
+      removeSignalHandlers();
+      reject(new Error(`failed to exec ${bin}: ${error.message}`));
+    });
     child.on("exit", (exitCode, signal) => {
+      removeSignalHandlers();
       if (fatal) {
-        process.removeAllListeners(fatal);
+        if (process.platform === "win32") {
+          resolve(signalExitCode(fatal));
+          return;
+        }
         process.kill(process.pid, fatal);
         return;
       }
@@ -6903,16 +6951,24 @@ async function spawnWrapped(
       const removeSignalHandlers = () => {
         for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
       };
-      const wrapSignals = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"] as NodeJS.Signals[];
+      const wrapSignals = (process.platform === "win32"
+        ? ["SIGHUP", "SIGINT", "SIGBREAK"]
+        : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"]) as NodeJS.Signals[];
       for (const signal of wrapSignals) {
         const handler = () => {
-          // Forward the signal but defer cleanup and self-termination until the
-          // child exits: deleting the wrap temp pack before the agent shuts down
+          // Defer cleanup and self-termination until the child exits:
+          // deleting the wrap temp pack before the agent shuts down
           // races its SessionEnd hooks, which still read the plugin directory.
           removeSignalHandlers();
           const finish = () => {
             cleanupWrapTempDirs();
             removeProxySessionMarker(sessionMarker);
+            // Windows has no signal re-raise equivalent, and kill(SIGHUP or
+            // SIGBREAK) is unsupported. Preserve failure status after cleanup.
+            if (process.platform === "win32") {
+              process.exit(signalExitCode(signal));
+              return;
+            }
             process.kill(process.pid, signal);
           };
           // Escape hatch: a second signal, or a child that traps the first one,
@@ -6928,7 +6984,12 @@ async function spawnWrapped(
             signalHandlers.set(s, escape);
             process.once(s, escape);
           }
-          child.kill(signal);
+          // Windows console events already reach the attached child, including
+          // with redirected stdin. Node's kill(SIGINT) would force-terminate it.
+          // POSIX terminal interrupts also reach the shared foreground group;
+          // forwarding those again can abort the child's graceful cleanup.
+          const terminalBroadcast = process.stdin.isTTY && (signal === "SIGINT" || signal === "SIGQUIT");
+          if (process.platform !== "win32" && !terminalBroadcast) child.kill(signal);
           const grace = setTimeout(escape, 10_000);
           grace.unref();
           child.once("exit", () => {
@@ -9050,8 +9111,8 @@ function opencodeNativePluginPath(): string {
 // first-found probe, the gate read major 1, and OpenCode 2 refused the V1 hook
 // map outright: PluginModule.LoadError, missing "default" (#1316).
 //
-// Empty means no installed binary named a readable version — evidence of
-// neither major, not of absence.
+// Empty means some installed binary has an unreadable version (or none are
+// installed). A readable sibling cannot prove which API that unknown host uses.
 function opencodePluginMajors(): number[] {
   const profile = AGENTS.find((agent) => agent.id === "opencode");
   if (!profile) return [];
@@ -9060,6 +9121,7 @@ function opencodePluginMajors(): number[] {
     const probe = nativeBinaryProbe(name);
     // A failed probe's text is its error output, not a version.
     const semver = probe?.launchable ? parsedSemver(probe.version) : undefined;
+    if (probe && !semver) return [];
     if (semver) majors.add(semver[0]!);
   }
   return [...majors].sort((a, b) => a - b);
@@ -9072,10 +9134,11 @@ function opencodeNativePluginSource(): string {
   //
   // An unreadable version (#1081: a live 1.18.31 host; a slow `--version` on a
   // loaded machine) is evidence of neither major, so it gets the one file both
-  // load: V1's hook map behind a default { server } for OpenCode 1.4+, and the
+  // load: V1's hook map behind a default { server } for OpenCode 1.18.29+, and the
   // V2 { id, setup } beside it. 1.x also calls setup, with a context that has
   // no session or event API, so setup returns there. Checked against real
-  // OpenCode 1.18.35 and 2.0.22; 1.0-1.3 call every export and cannot load it.
+  // OpenCode 1.18.35 and 2.0.22. The official migrate-v1 guide documents dual
+  // entrypoints from 1.18.29; older V1 compatibility is not established here.
   //
   // Two installed majors take that same file, for the same reason: they share
   // this one plugins directory, so a file pinned to either API is one the other
@@ -9103,7 +9166,6 @@ import { createHash } from "node:crypto";
 const command = ${JSON.stringify(cmd)};
 const prefix = ${JSON.stringify(pre)};
 const contexts = new Map();
-const pending = new Map();
 
 function call(event, payload = {}) {
   try {
@@ -9197,10 +9259,10 @@ export const CavemanNative = async () => ({
     if (type === "session.deleted") {
       call("SessionEnd", { session_id: sessionID });
       contexts.delete(sessionID);
-      pending.delete(sessionID);
     }
   },
   "chat.message": async (input, output) => {
+    if (output?.parts?.some((part) => part.synthetic && part.metadata?.cavemanPromptContext)) return;
     const decision = call("UserPromptSubmit", {
       session_id: input.sessionID,
       model: input.model?.modelID,
@@ -9211,26 +9273,40 @@ export const CavemanNative = async () => ({
       task_continuation: taskContinuation(output?.parts),
     });
     const dynamic = decision?.hookSpecificOutput?.additionalContext;
-    if (typeof dynamic === "string" && dynamic) pending.set(input.sessionID, dynamic);
+    // OpenCode saves chat.message parts after this hook. Keep per-turn
+    // guidance with that durable user message: adding/removing it in system
+    // context invalidates the provider's entire cached conversation prefix.
+    // https://github.com/anomalyco/opencode/blob/v1.3.7/packages/opencode/src/session/prompt.ts
+    // The host assigns output.message.id before invoking chat.message.
+    const messageID = output?.message?.id ?? input.messageID;
+    if (typeof dynamic === "string" && dynamic && typeof messageID === "string" &&
+        messageID && Array.isArray(output?.parts)) {
+      // IDs are prefix-validated strings and parts replay in ID order.
+      // Extending the greatest admitted ID preserves ordering and its host
+      // timestamp without depending on a new allocation or the wall clock.
+      const lastID = output.parts.map((part) => part.id)
+        .filter((id) => typeof id === "string" && id.startsWith("prt")).sort().at(-1);
+      const id = (lastID ?? messageID.replace(/^msg/, "prt")) + "_caveman";
+      output.parts.push({
+        id, sessionID: input.sessionID, messageID, type: "text", synthetic: true,
+        metadata: { cavemanPromptContext: true },
+        text: "<system-reminder>\\n" + dynamic + "\\n</system-reminder>",
+      });
+    }
   },
   "experimental.chat.system.transform": async (input, output) => {
     const stable = sessionContext(input.sessionID);
     if (stable) output.system.push(stable);
-    const hint = pending.get(input.sessionID);
-    if (hint) {
-      output.system.push(hint);
-      pending.delete(input.sessionID);
-    }
   },
   "tool.execute.before": async (input, output) => {
-    const decision = call("PreToolUse", {
+    // Advisory reuse hints have no durable failed-tool hook in V1. Skip
+    // that guidance, including from older runtimes, to keep system stable.
+    // Runtime still records this event and explains the cache-safety skip.
+    call("PreToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: output.args,
     });
-    if (typeof decision?.hookSpecificOutput?.additionalContext === "string") {
-      pending.set(input.sessionID, decision.hookSpecificOutput.additionalContext);
-    }
     if (input.tool !== "bash" || typeof output?.args?.command !== "string") return;
     try {
       const raw = execFileSync(command, [...prefix, "shrink-hook"], {
@@ -9264,7 +9340,6 @@ export const CavemanNative = async () => ({
   dispose: async () => {
     for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
     contexts.clear();
-    pending.clear();
   },
 });
 `;
@@ -9354,7 +9429,6 @@ export default {
     // Per-plugin-instance state: one setup() runs per location, so two
     // projects never share session context through module scope.
     const contexts = new Map();
-    const pending = new Map();
 
     function sessionContext(sessionID) {
       if (!contexts.has(sessionID)) {
@@ -9396,11 +9470,11 @@ export default {
       if (type === "session.deleted") {
         call("SessionEnd", { session_id: sessionID });
         contexts.delete(sessionID);
-        pending.delete(sessionID);
       }
     }
 
     await ctx.session.hook("prompt", (event) => {
+      if (event.metadata?.cavemanPromptContext) return;
       const prompt = event.prompt ?? {};
       const decision = call("UserPromptSubmit", {
         session_id: event.sessionID,
@@ -9410,17 +9484,19 @@ export default {
         task_continuation: taskContinuation(prompt),
       });
       const dynamic = decision?.hookSpecificOutput?.additionalContext;
-      if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
+      // The V2 prompt hook runs before durable admission. Append here so
+      // later requests replay identical history even after a plugin reload.
+      // https://opencode.ai/v2/docs/build/plugins/migrate-v1
+      if (typeof dynamic === "string" && dynamic && typeof prompt.text === "string") {
+        const hint = "\\n\\n<system-reminder>\\n" + dynamic + "\\n</system-reminder>";
+        if (!prompt.text.endsWith(hint)) prompt.text += hint;
+        event.metadata = { ...event.metadata, cavemanPromptContext: true };
+      }
     });
 
     await ctx.session.hook("context", (event) => {
       const stable = sessionContext(event.sessionID);
       if (stable) event.system.push({ type: "text", text: stable });
-      const hint = pending.get(event.sessionID);
-      if (hint) {
-        event.system.push({ type: "text", text: hint });
-        pending.delete(event.sessionID);
-      }
     });
 
     await ctx.session.hook("compaction", (event) => {
@@ -9430,14 +9506,13 @@ export default {
     });
 
     await ctx.tool.hook("execute.before", (event) => {
-      const decision = call("PreToolUse", {
+      // Match the V1 cache-safe contract: record the event, but never insert
+      // transient reuse guidance into the provider's cached system prefix.
+      call("PreToolUse", {
         session_id: event.sessionID,
         tool_name: event.tool,
         tool_input: event.input,
       });
-      if (typeof decision?.hookSpecificOutput?.additionalContext === "string") {
-        pending.set(event.sessionID, decision.hookSpecificOutput.additionalContext);
-      }
       // V1 named this tool "bash"; V2 renamed the permission action to
       // "shell". Accept both so the rewrite survives either host.
       const input = event.input;
@@ -9474,7 +9549,6 @@ export default {
       controller.abort();
       for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
       contexts.clear();
-      pending.clear();
     };
   },
 };
