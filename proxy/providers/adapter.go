@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 	"io"
 	"math"
 	"net/http"
@@ -106,8 +107,10 @@ type Credential struct {
 }
 
 type RequestMetadata struct {
-	Provider string
-	Model    string
+	// PreserveTools is trusted operator policy, never a request-body hint.
+	PreserveTools toolpolicy.Matcher
+	Provider      string
+	Model         string
 	// Region is the provider billing region resolved from a trusted route/path,
 	// never a client body field. Region-sensitive callers must use an exact
 	// catalog row rather than silently borrowing another region's price.

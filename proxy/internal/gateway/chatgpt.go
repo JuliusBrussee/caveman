@@ -19,6 +19,7 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
 	"github.com/JuliusBrussee/caveman/shared/platform/httpx"
 	"github.com/JuliusBrussee/caveman/shared/platform/id"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 )
 
 // DefaultChatGPTUpstream is the ChatGPT-subscription Codex backend. A wrapped
@@ -150,7 +151,9 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 				headersForInspect.Set("x-cave-route-path", suffix)
 				meta, inspectErr = adapter.InspectRequest(r.Context(), bytes.NewReader(logicalBody), headersForInspect)
 				if inspectErr == nil {
+					meta.PreserveTools = toolpolicy.NewMatcher(s.preserveTools)
 					meta.Endpoint = suffix
+					s.logToolPreservation(logicalBody, meta)
 					meta.SessionID = evidence.SessionID
 				}
 			}

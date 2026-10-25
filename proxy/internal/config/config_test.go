@@ -782,3 +782,30 @@ func TestLoad_AuthTokenIsEnvironmentOnly(t *testing.T) {
 		t.Fatalf("withDefaults kept a non-environment AuthToken %q", got.AuthToken)
 	}
 }
+
+func TestToolPreservationConfigAndEnvironment(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	if err := os.WriteFile(path, []byte("preserve_tools: [tokensave_context, 'mcp__tokensave__*']\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil || !cfg.PreserveTools.Matches("mcp__tokensave__tokensave_search") {
+		t.Fatalf("config: %v %+v", err, cfg.PreserveTools)
+	}
+	t.Setenv("CAVEMAN_PRESERVE_TOOLS", `["Read"]`)
+	cfg, err = Load(path)
+	if err != nil || !cfg.PreserveTools.Matches("Read") || cfg.PreserveTools.Matches("tokensave_context") {
+		t.Fatal("env did not replace YAML")
+	}
+	t.Setenv("CAVEMAN_PRESERVE_TOOLS", `[]`)
+	cfg, err = Load(path)
+	if err != nil || len(cfg.PreserveTools) != 0 {
+		t.Fatal("empty policy must disable")
+	}
+	for _, raw := range []string{``, `null`, `["*"]`, `[true]`} {
+		t.Setenv("CAVEMAN_PRESERVE_TOOLS", raw)
+		if _, err := Load(path); err == nil {
+			t.Fatalf("accepted malformed policy %q", raw)
+		}
+	}
+}
