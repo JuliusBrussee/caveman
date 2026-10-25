@@ -29,7 +29,8 @@ def test_python_client_forwards_every_command(monkeypatch: pytest.MonkeyPatch) -
     assert cavemem.recall("billing", 4)["args"] == ["recall", "billing", "4"]
     assert cavemem.recall("billing", 4, 900)["args"] == ["recall", "billing", "4", "900"]
     assert cavemem.recall("billing", token_budget=0)["args"] == ["recall", "billing", "0", "0"]
-    assert cavemem.supersede("mem_1", "replacement")["args"] == ["supersede", "mem_1", "--stdin"]
+    # Small replacements ride argv, which every cavemem build reads correctly.
+    assert cavemem.supersede("mem_1", "replacement")["args"] == ["supersede", "mem_1", "replacement"]
     assert cavemem.history("mem_1")["args"] == ["history", "mem_1"]
     assert cavemem.forget("mem_1")["args"] == ["forget", "mem_1"]
     assert all(command[0] == "/fixture/cavemem" for command, _ in calls)
@@ -37,8 +38,37 @@ def test_python_client_forwards_every_command(monkeypatch: pytest.MonkeyPatch) -
     # is not utf-8 — text=True alone would use the ANSI code page there.
     base = {"capture_output": True, "text": True, "check": True, "encoding": "utf-8"}
     assert calls[0][1] == {**base, "input": "raw memory"}
-    assert calls[5][1] == {**base, "input": "replacement"}
-    assert all(kwargs == base for i, (_, kwargs) in enumerate(calls) if i not in (0, 5))
+    assert all(kwargs == base for i, (_, kwargs) in enumerate(calls) if i != 0)
+
+
+def test_python_client_never_sends_stdin_to_a_binary_that_stores_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A cavemem predating ``supersede --stdin`` reads argument two as the text.
+
+    Sending such a build ``--stdin`` stores the literal flag and expires the
+    real memory, so the client must refuse instead.
+    """
+    capabilities = ["mcp", "remember", "recall", "supersede", "history", "forget", "recover"]
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        if command[1] == "version":
+            return SimpleNamespace(stdout=json.dumps({"version": "old", "capabilities": capabilities}))
+        return SimpleNamespace(stdout=json.dumps({"args": command[1:], "basis": "inferred"}))
+
+    monkeypatch.setenv("CAVEMEM_BIN", "/fixture/cavemem")
+    monkeypatch.setattr(cavemem.subprocess, "run", fake_run)
+
+    # Fits in one argument: sent as text, so an old binary stores it correctly.
+    assert cavemem.supersede("mem_1", "replacement")["args"] == ["supersede", "mem_1", "replacement"]
+
+    # Too large for argv, and this build cannot read stdin: refuse before writing.
+    with pytest.raises(RuntimeError, match="supersede-stdin"):
+        cavemem.supersede("mem_1", "x" * (200 * 1024))
+
+    # Once the build advertises the capability, the same text goes over stdin.
+    capabilities.append("supersede-stdin")
+    assert cavemem.supersede("mem_1", "y" * (200 * 1024))["args"] == ["supersede", "mem_1", "--stdin"]
 
 
 def test_python_client_round_trips_non_ascii_memory(
