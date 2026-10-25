@@ -69,7 +69,7 @@ CREATE VIEW typed_objects AS SELECT 1 AS value;`); err != nil {
 		}
 	}
 	var before map[string][]byte
-	sqlite.RegisterConnectionHook(func(conn sqlite.ExecQuerierContext, _ string) error {
+	testConnectionHook = func(conn sqlite.ExecQuerierContext, _ string) error {
 		if _, err := conn.ExecContext(context.Background(), `SELECT value FROM unrelated`, nil); err != nil {
 			return err
 		}
@@ -89,7 +89,7 @@ CREATE VIEW typed_objects AS SELECT 1 AS value;`); err != nil {
 		writeGeneration("fresh")
 		before = readGenerationBytes(t, path)
 		return nil
-	})
+	}
 	store, err := Open(path)
 	response := generationResponse{Preserved: before != nil}
 	if err != nil {
