@@ -1,6 +1,5 @@
 """Metadata-only native usage normalization, independent of provider extras."""
 
-import codecs
 import json
 
 
@@ -40,23 +39,24 @@ class UsageReader:
     def __init__(self, sse=False, max_buffer=None):
         self.sse, self.terminal, self.overflow = sse, False, False
         self.max_buffer = max_buffer or (262144 if sse else 2 << 20)
-        self.text, self.values = "", {}
-        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.buffer, self.values = bytearray(), {}
 
     def feed(self, chunk):
         if self.overflow:
             return
-        # Check before decoding/concatenating an arbitrarily large host chunk.
-        if len(chunk) > self.max_buffer or len(self.text) * 4 + len(chunk) > self.max_buffer:
-            self.text, self.overflow = "", True
+        # Bound retained wire bytes before copying. A decoded character is not
+        # four input bytes: that estimate discarded ordinary ASCII responses
+        # at a quarter of the configured limit, depending on chunk boundaries.
+        if len(self.buffer) + len(chunk) > self.max_buffer:
+            self.buffer.clear()
+            self.overflow = True
             return
-        self.text += self.decoder.decode(chunk)
-        if len(self.text) > self.max_buffer:
-            self.text, self.overflow = "", True
-            return
+        self.buffer.extend(chunk)
         if self.sse:
-            while "\n" in self.text:
-                line, self.text = self.text.split("\n", 1)
+            while b"\n" in self.buffer:
+                end = self.buffer.index(b"\n")
+                line = self.buffer[:end].decode("utf-8", "replace")
+                del self.buffer[:end + 1]
                 if line.startswith("data:"):
                     data = line[5:].strip()
                     if data == "[DONE]":
@@ -83,7 +83,7 @@ class UsageReader:
             return None
         if not self.sse:
             try:
-                self.event(json.loads(self.text))
+                self.event(json.loads(self.buffer.decode("utf-8", "replace")))
                 self.terminal = True
             except (ValueError, TypeError):
                 return None
