@@ -51,7 +51,7 @@ func ExtractCompressible(body []byte, meta providers.RequestMetadata) ([][]byte,
 	}
 	candidates := make([]spliceCandidate, 0, len(zones))
 	for _, zone := range zones {
-		if zone.live {
+		if zone.live && newCompressionEligible(zone.original) {
 			candidates = append(candidates, zone.spliceCandidate)
 		}
 	}
@@ -82,6 +82,8 @@ func ExtractCompressible(body []byte, meta providers.RequestMetadata) ([][]byte,
 // stays byte-stable for the whole conversation. Assistant/system/developer blocks
 // are never collected: the proxy never compresses them, so a substitution could
 // never exist for them.
+// Small tool JSON remains replayable when TOON is disabled, but is not Live:
+// changing the flag must suppress new compression without withdrawing old bytes.
 //
 // Exported for the same reason ExtractCompressible is: Azure OpenAI and
 // OpenAI-compatible adapters reuse the identical wire grammar.
@@ -100,7 +102,7 @@ func ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]provide
 		candidates[i] = zone.spliceCandidate
 		blocks[i] = providers.RewritableBlock{
 			Content: append([]byte(nil), zone.original...),
-			Live:    zone.live,
+			Live:    zone.live && newCompressionEligible(zone.original),
 			Kind:    zone.kind,
 		}
 	}
@@ -437,12 +439,15 @@ func collectStringCandidate(body []byte, span jsonSpan, out *[]spliceCandidate, 
 	*out = append(*out, spliceCandidate{jsonSpan: span, original: original})
 }
 
+// Discovery must survive configuration changes: a small tool JSON block may
+// already have a durable replacement that the provider cached on an earlier run.
 func forcedTOONCandidate(original []byte) bool {
-	if !strings.EqualFold(os.Getenv("CAVE_ENGINE_TOON"), "best-of") {
-		return false
-	}
 	trimmed := bytes.TrimSpace(original)
 	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
+}
+
+func newCompressionEligible(original []byte) bool {
+	return len(original) >= minCompressBlockBytes || strings.EqualFold(os.Getenv("CAVE_ENGINE_TOON"), "best-of")
 }
 
 func messageRole(body []byte, msg jsonSpan) string {

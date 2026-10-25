@@ -195,10 +195,11 @@ func (s *Server) Flush() {
 	}
 }
 
-// Close writes out the rows Config.AsyncRecord is still finishing. Call it
-// after the HTTP server has shut down and before the sink closes; a request
-// still running after Close finishes its row inline.
+// Close ends upgraded provider streams and writes out the rows Config.AsyncRecord
+// is still finishing. Call it after the HTTP server has shut down and before the
+// sink closes; a request still running after Close finishes its row inline.
 func (s *Server) Close() error {
+	s.websockets.close()
 	if s.warmer != nil {
 		s.warmer.close() // first: a warm in flight still records a row
 	}
