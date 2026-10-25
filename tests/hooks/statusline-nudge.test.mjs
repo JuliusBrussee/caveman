@@ -47,6 +47,6 @@ test('SessionStart statusline command preserves a literal dollar-sign path', {
     encoding: 'utf8',
     timeout: 5000,
   });
-  assert.equal(statusline.status, 0, statusline.stderr);
+  assert(statusline.status === 0, statusline.stderr);
   assert.match(statusline.stdout, /\[CAVEMAN\]/);
 });
