@@ -258,7 +258,7 @@ class LlmRunTests(unittest.TestCase):
             self.run_main(fake, {"CAVEMAN_EVAL_LANG": "zz"})
         self.assertEqual(fake.calls, [])
 
-        with self.assertRaisesRegex(SystemExit, "available: en, fr, pt"):
+        with self.assertRaisesRegex(SystemExit, "available: en, es, fr, pt"):
             load("llm_run", {"CAVEMAN_EVAL_LANG": "de"}).main()
 
 
