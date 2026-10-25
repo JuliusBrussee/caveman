@@ -8181,7 +8181,10 @@ function generatedArtifactTargetsExist(text: string): boolean {
 // journaled as config text (codex tables, the hermes mcp_servers block) carry
 // no structured command and are not inspected here.
 function journaledMcpTargetsExist(journal: NativeJournal | null | undefined): boolean {
-  for (const operation of journal?.operations ?? []) {
+  // Same filter the ownership checks apply: a deleted Claude profile's entry
+  // has nothing left to launch, and a stale path in one must not report the
+  // remaining profiles degraded.
+  for (const operation of (journal?.operations ?? []).filter((item) => !claudeProfileGone(item))) {
     const installed = operation.owned?.installed_mcp;
     if (!installed || typeof installed !== "object" || Array.isArray(installed)) continue;
     const { command, args } = installed as { command?: unknown; args?: unknown };
