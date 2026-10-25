@@ -76,8 +76,8 @@ test('npm 12+ opts the root package into git fetching', () => {
   // the immutable release pin on BOTH npm branches.
   assert.equal(
     (code.match(/"github:\$Repo#\$PinnedRef"/g) || []).length,
-    2,
-    'both the npm 12+ and legacy branches must pin the ref',
+    3,
+    'the npm 12+, legacy npm, and Bun branches must pin the ref',
   );
 });
 
