@@ -65,5 +65,6 @@ independent task scoring, and billing are still missing. No measured savings or
 selection equivalence is claimed. Beta synchronization remains a separate task.
 
 The existing TokenSave draft is [PR #800](https://github.com/aovestdipaperino/tokensave/pull/800),
-Refs [#797](https://github.com/aovestdipaperino/tokensave/issues/797). This follow-up
-and its Caveman companion remain local and unmerged. No issue is closed.
+Refs [#797](https://github.com/aovestdipaperino/tokensave/issues/797). The follow-up is pushed; its Caveman companion is
+[draft PR #1404](https://github.com/JuliusBrussee/caveman/pull/1404). Both remain
+drafts and unmerged. No issue is closed.

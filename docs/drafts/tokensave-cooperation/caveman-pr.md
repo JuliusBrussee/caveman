@@ -56,7 +56,8 @@ Gemini catalog shrinking is unsupported and currently leaves its envelope alone.
 No live A/B performance trials were run. TokenSave's existing benchmark runner
 supplies a protocol, but actual telemetry, independently scored agent tasks, and
 billing remain pending. Recovery is not unchanged delivery, and schema equality
-does not prove equivalent tool selection. This PR is prepared for draft review and remains unmerged.
+does not prove equivalent tool selection. Published as [draft PR #1404](https://github.com/JuliusBrussee/caveman/pull/1404);
+it remains unmerged.
 
 Refs #1403
 

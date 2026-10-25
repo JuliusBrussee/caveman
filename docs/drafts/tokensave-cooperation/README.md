@@ -3,13 +3,14 @@
 Both changes are prepared for draft review. Caveman tracking issue:
 [#1403](https://github.com/JuliusBrussee/caveman/issues/1403). The existing TokenSave
 draft is [#800](https://github.com/aovestdipaperino/tokensave/pull/800), Refs #797.
-Caveman draft PR publication is in progress. Neither change is merged or released.
+Caveman draft PR: [#1404](https://github.com/JuliusBrussee/caveman/pull/1404).
+Both implementation branches are pushed. Neither change is merged or released.
 The existing TokenSave compatibility implementation is retained; the follow-up
 makes cooperation opt-in and clarifies readiness and exact-payload preservation.
 
 | Repository | Issue | PR | Implementation | Dependency |
 | --- | --- | --- | --- | --- |
-| Caveman | [#1403](https://github.com/JuliusBrussee/caveman/issues/1403) | [Description](caveman-pr.md), draft publication in progress | Configurable tool-result and catalog preservation, diagnostics, conditional instructions, regression tests | Independent of TokenSave runtime changes |
+| Caveman | [#1403](https://github.com/JuliusBrussee/caveman/issues/1403) | [Draft #1404](https://github.com/JuliusBrussee/caveman/pull/1404), [description](caveman-pr.md) | Configurable tool-result and catalog preservation, diagnostics, conditional instructions, regression tests | Independent of TokenSave runtime changes |
 | TokenSave | [Existing #797](https://github.com/aovestdipaperino/tokensave/issues/797), [local draft](tokensave-issue.md) | [Existing draft #800](https://github.com/aovestdipaperino/tokensave/pull/800), [local follow-up description](tokensave-pr.md) | Existing read-only discovery/diagnostics and MCP cooperation; follow-up makes cooperation opt-in and clarifies indexing readiness and error preservation | Companion documentation must label Caveman controls unreleased until its PR ships |
 
 Sources checked before implementation:
@@ -17,7 +18,7 @@ Sources checked before implementation:
 - Caveman upstream HEAD and local base:
   `9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4`.
 - TokenSave upstream master: `ed7ae0f49d4ee4442fceb00770c657789dffdc3e`.
-- Existing local TokenSave `feat/caveman-compatibility` base:
+- Original local TokenSave `feat/caveman-compatibility` base:
   `b45e77557c11f8b19334dd542c0d695ae293f9ba`.
 - TokenSave master `AGENTS.md` was fetched and compared. The branch retains only
   its intentional additional compatibility guidance; shared instructions match.
@@ -76,3 +77,16 @@ metadata golden update were corrected before the passing final runs.
   equivalence is claimed. Synthetic accounting tests are not performance data.
 - Both changes remain unmerged; the existing TokenSave draft PR remains open. TokenSave beta synchronization is an existing separate
   pending task; do not advertise unported runtime behavior on beta.
+
+## Published drafts
+
+- Caveman issue: https://github.com/JuliusBrussee/caveman/issues/1403.
+- Caveman draft PR: https://github.com/JuliusBrussee/caveman/pull/1404,
+  from `atontini:feat/tokensave-cooperation` to upstream `main`.
+- TokenSave existing issue: https://github.com/aovestdipaperino/tokensave/issues/797.
+- TokenSave updated draft PR: https://github.com/aovestdipaperino/tokensave/pull/800,
+  from `feat/caveman-compatibility` to `master`.
+- TokenSave implementation follow-up commit: `a86ffae`.
+
+No duplicate TokenSave issue was created. Both PRs remain drafts and unmerged;
+CI and maintainer review are pending. Nothing was released or deployed.

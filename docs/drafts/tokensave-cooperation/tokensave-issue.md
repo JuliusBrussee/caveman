@@ -50,5 +50,6 @@ Caveman work does not depend on these TokenSave changes. Runtime work here is
 limited to the already drafted cooperation surface; do not change retrieval
 formatting, proxy configuration, routing, or public MCP contracts.
 
-Companion: proposed Caveman cooperation issue; link after publication. Link
+Companion: [Caveman issue #1403](https://github.com/JuliusBrussee/caveman/issues/1403)
+and [draft PR #1404](https://github.com/JuliusBrussee/caveman/pull/1404). Link
 TokenSave updates with `Refs #797`; issue closure belongs to its maintainer.
