@@ -27,7 +27,7 @@ if (args[0] === "version") { process.stdout.write(JSON.stringify({ version: "tes
 if (args.includes("__fail__") || input.includes("__fail__")) process.exit(17);
 if (Buffer.byteLength(input) > 256 * 1024) process.exit(65);
 if (args.includes("__invalid_json__") || input.includes("__invalid_json__")) process.stdout.write("not json");
-else process.stdout.write(JSON.stringify({ args, basis: "inferred" }));
+else process.stdout.write(JSON.stringify(process.env.FAKE_REPORT_INPUT ? { args, input, basis: "inferred" } : { args, basis: "inferred" }));
 `, { mode: 0o700 });
   await chmod(path, 0o700);
   return { directory, path };
@@ -61,6 +61,37 @@ test("JS client never sends --stdin to a cavemem that would store it as the text
   process.env.FAKE_CAPS = "supersede,supersede-stdin";
   const big = await supersede("mem_1", "y".repeat(200 * 1024));
   assert.deepEqual(big.args, ["supersede", "mem_1", "--stdin"]);
+});
+
+test("JS client sends a replacement argv cannot carry over stdin", { skip: !stubExecutable }, async (t) => {
+  const previous = { bin: process.env.CAVEMEM_BIN, caps: process.env.FAKE_CAPS, report: process.env.FAKE_REPORT_INPUT };
+  const { path } = await fakeBinary();
+  process.env.CAVEMEM_BIN = path;
+  process.env.FAKE_REPORT_INPUT = "1";
+  t.after(() => {
+    for (const [key, value] of [["CAVEMEM_BIN", previous.bin], ["FAKE_CAPS", previous.caps], ["FAKE_REPORT_INPUT", previous.report]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+
+  // Three replacements argv cannot carry, each for a different reason. On argv
+  // the binary would read "--stdin" as the flag (and then take whatever OUR
+  // stdin holds), and a NUL cannot be passed in an argument at all.
+  for (const [reason, text] of [
+    ["literal --stdin", "--stdin"],
+    ["embedded NUL", "alpha\0beta"],
+    ["over the argv limit", "z".repeat(200 * 1024)],
+  ]) {
+    process.env.FAKE_CAPS = "supersede,supersede-stdin";
+    const sent = await supersede("mem_1", text);
+    assert.deepEqual(sent.args, ["supersede", "mem_1", "--stdin"], `${reason}: must use the stdin form`);
+    assert.equal(sent.input, text, `${reason}: the text itself must arrive on stdin`);
+
+    // Without the capability there is no safe way to send it: refuse, never
+    // hand the binary an argument it would misread.
+    process.env.FAKE_CAPS = "mcp,remember,recall,supersede,history,forget,recover";
+    await assert.rejects(() => supersede("mem_1", text), /supersede-stdin/, `${reason}: must refuse on an old binary`);
+  }
 });
 
 test("JS client forwards every command and preserves JSON response", { skip: !stubExecutable }, async (t) => {

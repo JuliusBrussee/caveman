@@ -55,6 +55,15 @@ async function supersedeStdinSupported() {
   }
 }
 
+// Replacement text that cannot ride one command-line argument, for any of three
+// reasons: it exceeds the platform's argv limit; it is exactly "--stdin", which
+// the binary reads as the flag rather than as text (and then takes whatever our
+// own stdin happens to hold); or it embeds a NUL, which no OS can carry in an
+// argument. Each one needs the stdin path, so each one needs the capability.
+function argvCannotCarry(text) {
+  return Buffer.byteLength(text) > ARGV_TEXT_LIMIT || text === "--stdin" || text.includes("\0");
+}
+
 /** Replace one current memory while preserving its version history. */
 export async function supersede(id, text) {
   // A cavemem older than `supersede --stdin` reads its second argument as the
@@ -62,12 +71,13 @@ export async function supersede(id, text) {
   // the real memory and reports success. Use the argv form for everything it
   // can carry — every build understands that — and require the advertised
   // capability before sending a replacement over stdin.
-  if (Buffer.byteLength(text) <= ARGV_TEXT_LIMIT) return call(["supersede", id, text]);
+  if (!argvCannotCarry(text)) return call(["supersede", id, text]);
   if (!(await supersedeStdinSupported())) {
     throw new Error(
-      `cavemem cannot supersede with ${Buffer.byteLength(text)} bytes of replacement text: ` +
-        "this build does not advertise the supersede-stdin capability, and the text is too " +
-        "large for one command-line argument. Upgrade the cavemem binary.",
+      "cavemem cannot supersede with this replacement: it has to be sent over stdin " +
+        `(${Buffer.byteLength(text)} bytes, the literal "--stdin", or an embedded NUL), ` +
+        "and this build does not advertise the supersede-stdin capability. " +
+        "Upgrade the cavemem binary.",
     );
   }
   return call(["supersede", id, "--stdin"], text);

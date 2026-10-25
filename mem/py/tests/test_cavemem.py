@@ -71,6 +71,40 @@ def test_python_client_never_sends_stdin_to_a_binary_that_stores_it(
     assert cavemem.supersede("mem_1", "y" * (200 * 1024))["args"] == ["supersede", "mem_1", "--stdin"]
 
 
+def test_python_client_sends_a_replacement_argv_cannot_carry_over_stdin(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """argv cannot carry three kinds of replacement, each for its own reason.
+
+    ``--stdin`` would be read as the flag — and ``subprocess`` lets the child
+    inherit our stdin, so the binary would store whatever happens to be piped
+    into this process. A NUL cannot be passed in an argument at all.
+    """
+    capabilities = ["supersede", "supersede-stdin"]
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        if command[1] == "version":
+            return SimpleNamespace(stdout=json.dumps({"version": "x", "capabilities": capabilities}))
+        calls.append((command, kwargs))
+        return SimpleNamespace(stdout=json.dumps({"args": command[1:], "basis": "inferred"}))
+
+    monkeypatch.setenv("CAVEMEM_BIN", "/fixture/cavemem")
+    monkeypatch.setattr(cavemem.subprocess, "run", fake_run)
+
+    for text in ["--stdin", "alpha\0beta", "z" * (200 * 1024)]:
+        calls.clear()
+        assert cavemem.supersede("mem_1", text)["args"] == ["supersede", "mem_1", "--stdin"]
+        # The text must travel as input; argv carries only the flag (asserted above).
+        assert calls[0][1]["input"] == text
+
+    # With no capability there is no safe way to send any of them: refuse.
+    capabilities = ["supersede"]
+    for text in ["--stdin", "alpha\0beta", "z" * (200 * 1024)]:
+        with pytest.raises(RuntimeError, match="supersede-stdin"):
+            cavemem.supersede("mem_1", text)
+
+
 def test_python_client_round_trips_non_ascii_memory(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
