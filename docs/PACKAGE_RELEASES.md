@@ -24,7 +24,7 @@ workflow rejects a tag whose version differs from the package metadata.
 | `middleware-python-v*` | PyPI `caveman-middleware` | `1.0.0` | `1.0.0` | Yes |
 | `contracts-v*` | npm `@caveman-ai/contracts` | `2.0.0` | `2.1.0` | Yes |
 | `pi-v*` | npm `@caveman-ai/pi` | `0.3.0` | `0.3.1` | No |
-| `bin-v*` | Go binaries and container image | `bin-v2.1.0` | `bin-v4.0.1` (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
+| `bin-v*` | Go binaries and container image | `bin-v2.1.0` | `bin-v4.0.2` (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
 | `cli-v*` | npm `@caveman-ai/cli` | `2.1.0` | `4.0.1` | No |
 | `v*` | Caveman product (installer, plugin, skills) | `v3.2.0` | `v4.0.1` | Yes, "Latest" |
 
