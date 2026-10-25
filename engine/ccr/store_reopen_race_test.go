@@ -8,6 +8,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -44,11 +45,23 @@ func TestCCRFailedOpenProcess(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := db.Exec(schema + `
+	setup := schema + `
 CREATE TABLE unrelated(value TEXT);
 INSERT INTO unrelated VALUES ('base');
-DROP TABLE typed_objects;
-CREATE VIEW typed_objects AS SELECT 1 AS value;`); err != nil {
+DROP TABLE typed_objects;`
+	if mode == "reader-data-ref" {
+		// Exhaust SQLite's column limit to make only the data_ref migration
+		// fail. The existing table/index satisfy the earlier schema migration.
+		columns := []string{"session_id TEXT", "created_at TEXT"}
+		for i := 0; i < 1998; i++ {
+			columns = append(columns, fmt.Sprintf("fixture_%d TEXT", i))
+		}
+		setup += "CREATE TABLE typed_objects(" + strings.Join(columns, ",") + ");" +
+			"CREATE INDEX typed_objects_session_created ON typed_objects(session_id, created_at DESC);"
+	} else {
+		setup += `CREATE VIEW typed_objects AS SELECT 1 AS value;`
+	}
+	if _, err := db.Exec(setup); err != nil {
 		t.Fatal(err)
 	}
 	if err := db.Close(); err != nil {
@@ -96,7 +109,7 @@ CREATE VIEW typed_objects AS SELECT 1 AS value;`); err != nil {
 		response.Error = err.Error()
 	}
 	if store != nil {
-		t.Fatal("initial open accepted a view where its indexed table must exist")
+		t.Fatal("initial open accepted an invalid recovery schema")
 	}
 	for suffix, want := range before {
 		got, err := os.ReadFile(path + suffix)
@@ -107,11 +120,19 @@ CREATE VIEW typed_objects AS SELECT 1 AS value;`); err != nil {
 }
 
 func TestFailedInitialOpenPreservesJournalsReplacedBeforeCapture(t *testing.T) {
+	for _, mode := range []string{"reader", "reader-data-ref"} {
+		t.Run(mode, func(t *testing.T) {
+			testFailedInitialOpenPreservesJournalsReplacedBeforeCapture(t, mode)
+		})
+	}
+}
+
+func testFailedInitialOpenPreservesJournalsReplacedBeforeCapture(t *testing.T, mode string) {
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCCRFailedOpenProcess$")
-	cmd.Env = append(os.Environ(), "CAVEMAN_TEST_CCR_FAILED_OPEN_PATH="+path, "CAVEMAN_TEST_CCR_FAILED_OPEN_MODE=reader")
+	cmd.Env = append(os.Environ(), "CAVEMAN_TEST_CCR_FAILED_OPEN_PATH="+path, "CAVEMAN_TEST_CCR_FAILED_OPEN_MODE="+mode)
 	cmd.Stderr = os.Stderr
 	output, err := cmd.Output()
 	if err != nil {
@@ -124,7 +145,11 @@ func TestFailedInitialOpenPreservesJournalsReplacedBeforeCapture(t *testing.T) {
 	if response.Skipped {
 		t.Skip(response.Error)
 	}
-	if !strings.Contains(response.Error, "views may not be indexed") || !response.Preserved {
+	wantError := "views may not be indexed"
+	if mode == "reader-data-ref" {
+		wantError = "migrate sqlite data_ref"
+	}
+	if !strings.Contains(response.Error, wantError) || !response.Preserved {
 		t.Fatalf("failed initial open damaged another writer's journals: %+v", response)
 	}
 }

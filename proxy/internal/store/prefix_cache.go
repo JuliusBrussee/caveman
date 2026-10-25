@@ -11,21 +11,27 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/internal/gateway"
 )
 
-// prefixCacheMaxEntries bounds the replacement cache. The store keeps the most
-// recently used entries and drops the rest; an evicted entry is a plain lookup
-// miss, so the gateway forwards that message's original bytes from then on. That
-// costs one prompt-cache rebuild and is byte-stable afterwards — never a
-// half-applied prefix. Compressed rows average a few KB and raw decisions carry
+// prefixCacheMaxEntries is the replacement cache's soft capacity target. The
+// store evicts only entries beyond the provider retention window: forgetting a
+// warm decision would resend raw or differently compressed bytes over a prefix
+// the provider still caches. Compressed rows average a few KB and raw decisions carry
 // no replacement at all; pixel rows hold base64 PNG parts, larger than the text
 // they replace, and have their own cap below. Together that is a soft ceiling of
-// a few hundred MB in ~/.caveman/caveman.db for text, plus at most
-// prefixCachePixelMaxEntries pixel rows (tens of KB each).
+// a few hundred MB in ~/.caveman/caveman.db for text, plus
+// prefixCachePixelMaxEntries pixel rows (tens of KB each). Both targets can be
+// exceeded while their entries remain warm.
 const prefixCacheMaxEntries = 100000
 
 // prefixCacheTouchInterval is how stale a row's last_used_at may get before a
 // lookup hit refreshes it: eviction needs recency to the interval, not to the
 // request.
 const prefixCacheTouchInterval = 10 * time.Minute
+
+// OpenAI extended prompt caching can retain a prefix for up to 24 hours:
+// https://developers.openai.com/api/docs/guides/prompt-caching
+// A timestamp can trail the last forwarded use by the batched-touch interval.
+// Keep that additional margin so eviction never outruns the provider's expiry.
+const prefixCacheRetention = 24*time.Hour + prefixCacheTouchInterval
 
 // prefixCachePixelMaxEntries bounds the pixel rows inside that cap, least
 // recently used first like the rest. One rendered block is one row.
@@ -116,12 +122,12 @@ func (s *Store) readReplacement(key string) (replacement []byte, handle, lastUse
 }
 
 // prefixCacheEvictEvery spaces eviction out: it runs on the first write and
-// then once per this many, so the cap is soft by at most that many rows and the
-// hot path does not re-count the table on every write.
+// then once per this many, so the hot path does not re-count the table on every
+// write. The retention window independently permits warm rows above the cap.
 const prefixCacheEvictEvery = 256
 
-// evictPrefixReplacements keeps the table at prefixCacheMaxEntries, dropping the
-// least recently used rows through the LRU index. Eviction failure is logged,
+// evictPrefixReplacements trims expired entries toward prefixCacheMaxEntries,
+// dropping the least recently used rows through the LRU index. Eviction failure is logged,
 // never propagated: an oversized cache is a disk-space problem, not a
 // correctness one.
 func (s *Store) evictPrefixReplacements() {
@@ -132,21 +138,22 @@ func (s *Store) evictPrefixReplacements() {
 	// serves it from memory, and losing one re-substitutes a conversation over
 	// the raw prefix the provider cached. They are rare (one per accepted raw
 	// retry), so they do not count against the cap either.
+	cutoff := time.Now().UTC().Add(-prefixCacheRetention).Format(storeTSLayout)
 	if _, err := s.db.Exec(
 		`DELETE FROM prefix_replacements WHERE original_sha256 IN (
-		   SELECT original_sha256 FROM prefix_replacements WHERE handle <> ?1
+		   SELECT original_sha256 FROM prefix_replacements WHERE handle <> ?1 AND last_used_at < ?3
 		   ORDER BY last_used_at ASC, original_sha256 ASC
 		   LIMIT max(0, (SELECT COUNT(*) FROM prefix_replacements WHERE handle <> ?1) - ?2)
-		 )`, gateway.RawPinHandle, prefixCacheMaxEntries,
+		 )`, gateway.RawPinHandle, prefixCacheMaxEntries, cutoff,
 	); err != nil && s.logger != nil {
 		s.logger.Warn("prefix replacement eviction failed", "error", err)
 	}
 	if _, err := s.db.Exec(
 		`DELETE FROM prefix_replacements WHERE original_sha256 IN (
-		   SELECT original_sha256 FROM prefix_replacements WHERE handle = ?1
+		   SELECT original_sha256 FROM prefix_replacements WHERE handle = ?1 AND last_used_at < ?3
 		   ORDER BY last_used_at ASC, original_sha256 ASC
 		   LIMIT max(0, (SELECT COUNT(*) FROM prefix_replacements WHERE handle = ?1) - ?2)
-		 )`, gateway.PixelHandle, prefixCachePixelMaxEntries,
+		 )`, gateway.PixelHandle, prefixCachePixelMaxEntries, cutoff,
 	); err != nil && s.logger != nil {
 		s.logger.Warn("prefix replacement pixel eviction failed", "error", err)
 	}

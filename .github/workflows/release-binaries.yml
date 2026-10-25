@@ -13,7 +13,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  reliability:
+    uses: ./.github/workflows/proxy-reliability.yml
+
   build-sign-publish:
+    needs: reliability
     runs-on: ubuntu-latest
     # The cgo cross-builds compile the tree-sitter grammars once per target.
     timeout-minutes: 60

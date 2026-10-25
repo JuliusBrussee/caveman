@@ -271,6 +271,10 @@ test("open gate: first request routes through /w/pi with Core in the system prom
     // FIRST provider request — not a later one — must already ride /w/pi.
     assert.equal(providerHits[0].path, "/w/pi/openai/v1/chat/completions");
     assert.match(providerHits[0].body, /CORE_MARKER_XYZ/, "Core must ride the system prompt of the first request");
+    const messages = JSON.parse(providerHits[0].body).messages;
+    const system = messages.filter((m) => m.role === "system" || m.role === "developer");
+    assert.doesNotMatch(JSON.stringify(system), /DYNAMIC_MARKER_ABC/, "per-prompt context must not rewrite the cached system prefix");
+    assert.match(JSON.stringify(messages.filter((m) => m.role !== "system" && m.role !== "developer")), /DYNAMIC_MARKER_ABC/, "Pi must deliver dynamic context as a turn message");
     const events = readFileSync(fx.hookLog, "utf8").trim().split("\n");
     assert.ok(events.includes("SessionStart"), `hook log: ${events}`);
     assert.ok(events.includes("UserPromptSubmit"), `hook log: ${events}`);
@@ -374,6 +378,40 @@ test("a gatewayUrl stored by login alone is not pi's gateway", { skip: !havePi &
   } finally {
     fx.cleanup();
     server.close();
+  }
+});
+
+test("changing and disappearing runtime context preserves the system prefix", async () => {
+  const fx = fixture(0, { runState: false });
+  const vars = { CAVEMAN_PI_HOOK_CMD: fx.env.CAVEMAN_PI_HOOK_CMD, CAVEMAN_HOME: fx.env.CAVEMAN_HOME, CAVE_GATEWAY_URL: fx.env.CAVE_GATEWAY_URL };
+  const prior = Object.fromEntries(Object.keys(vars).map((key) => [key, process.env[key]]));
+  Object.assign(process.env, vars);
+  const handlers = new Map();
+  const ctx = { hasUI: false, ui: { notify() {} }, sessionManager: { getSessionId: () => "cache-stable" } };
+  try {
+    const { default: factory } = await import(pathToFileURL(extension).href);
+    factory({ registerTool() {}, on: (name, fn) => handlers.set(name, fn) });
+    await handlers.get("session_start")({}, ctx);
+    const start = handlers.get("before_agent_start");
+    const first = await start({ prompt: "first", systemPrompt: "Stable host instructions" }, ctx);
+    const hook = join(fx.root, "caveman-hook.mjs");
+    const source = readFileSync(hook, "utf8");
+    writeFileSync(hook, source.replace("DYNAMIC_MARKER_ABC", "DYNAMIC_MARKER_SECOND"));
+    const second = await start({ prompt: "second", systemPrompt: "Stable host instructions" }, ctx);
+    writeFileSync(hook, source.replace("DYNAMIC_MARKER_ABC", ""));
+    const third = await start({ prompt: "third", systemPrompt: "Stable host instructions" }, ctx);
+    assert.equal(first.systemPrompt, "Stable host instructions\n\nCORE_MARKER_XYZ");
+    assert.equal(second.systemPrompt, first.systemPrompt);
+    assert.equal(third.systemPrompt, first.systemPrompt);
+    assert.deepEqual(first.message, { customType: "caveman-context", content: "DYNAMIC_MARKER_ABC", display: false });
+    assert.equal(second.message.content, "DYNAMIC_MARKER_SECOND");
+    assert.equal(third.message, undefined, "old per-prompt context must not be replayed");
+  } finally {
+    await handlers.get("session_shutdown")?.({}, ctx);
+    for (const [key, value] of Object.entries(prior)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fx.cleanup();
   }
 });
 

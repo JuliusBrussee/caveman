@@ -1,0 +1,65 @@
+name: proxy-reliability
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+  workflow_call:
+  schedule:
+    - cron: "23 16 * * *"
+
+permissions:
+  contents: read
+
+# Releases call this workflow at their own revision and wait for every native
+# platform. Do not cancel a release gate when an unrelated PR run starts.
+concurrency:
+  group: proxy-reliability-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  contracts:
+    name: provider-cache-lifecycle / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-14, windows-latest]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Require the real pinned Pi host (no missing-host skips)
+        run: node --input-type=module -e "import { accessSync } from 'node:fs'; accessSync('packages/pi-extension/node_modules/@earendil-works/pi-coding-agent/dist/cli.js');"
+      # Full packages, not a name filter that silently stops matching renamed
+      # regressions. These use local provider fixtures, never paid API keys.
+      - name: Provider bytes, cache decisions, recovery and shutdown
+        run: go test -count=1 -timeout=20m ./proxy/providers/... ./proxy/internal/gateway ./proxy/internal/store ./proxy/internal/nativeruntime ./proxy/cmd/caveman-proxy ./engine/...
+      - name: Race check cache and request lifecycle
+        if: runner.os == 'Linux'
+        run: go test -race -count=1 -timeout=20m ./proxy/internal/gateway ./proxy/internal/store ./engine/ccr
+      - name: Native Pi lifecycle and stable prompt prefix
+        run: pnpm --dir packages/pi-extension test
+      - name: Build CLI for platform contracts
+        run: pnpm --dir packages/cli build
+      - name: Portable process and wrapper contracts
+        run: node --import ./packages/cli/tests/fixtures/sanitize-host-env.mjs --test --test-force-exit --test-concurrency=2 packages/cli/tests/windows-platform.runtime.mjs packages/cli/tests/portable-command.runtime.mjs packages/cli/tests/start-lifecycle.runtime.mjs packages/cli/tests/pi-wrap.runtime.mjs packages/cli/tests/openclaw-wrap.runtime.mjs tests/installer/portable-process.test.mjs tests/installer/download-hardening.test.mjs
+      - name: POSIX wrapper lifecycle
+        if: runner.os != 'Windows'
+        run: node --import ./packages/cli/tests/fixtures/sanitize-host-env.mjs --test --test-force-exit --test-concurrency=2 packages/cli/tests/wrap.runtime.mjs packages/cli/tests/wrap-restart.runtime.mjs packages/cli/tests/agent-shortcut.runtime.mjs packages/cli/tests/native-enable.runtime.mjs
+      - name: POSIX terminal signal delivery
+        if: runner.os != 'Windows'
+        run: |
+          python3 .blocks/cli-signal-check.py --cli packages/cli/dist/index.js --node node --delivery pid
+          python3 .blocks/cli-signal-check.py --cli packages/cli/dist/index.js --node node --delivery group

@@ -30,3 +30,19 @@ def test_litellm_wheel_accepts_patched_filelock():
 @pytest.mark.parametrize("extra", ["", "openai", "anthropic", "langchain", "asgi"])
 def test_filelock_floor_is_litellm_only(extra):
     assert not _filelock_requirements(extra)
+
+
+@pytest.mark.parametrize("version", ["1.106.0", "1.106.1", "1.106.2", "1.107.0"])
+def test_litellm_wheel_rejects_broken_or_compromised_releases(version):
+    constraints = [Requirement(raw) for raw in requires("caveman-middleware") or []
+                   if Requirement(raw).name == "litellm"]
+    assert constraints, "the installed wheel must carry the LiteLLM exclusions"
+    assert not all(version in requirement.specifier for requirement in constraints)
+
+
+@pytest.mark.parametrize("version", ["1.95.0", "1.102.1", "1.108.0"])
+def test_litellm_wheel_preserves_supported_release_range(version):
+    constraints = [Requirement(raw) for raw in requires("caveman-middleware") or []
+                   if Requirement(raw).name == "litellm"]
+    assert constraints
+    assert all(version in requirement.specifier for requirement in constraints)

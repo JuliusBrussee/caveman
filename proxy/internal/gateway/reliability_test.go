@@ -223,3 +223,28 @@ func TestClientCancellationReleasesUpstream(t *testing.T) {
 		})
 	}
 }
+
+func TestBedrockModelARNEscapingSurvivesGateway(t *testing.T) {
+	const arn = "arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aapplication-inference-profile%2Fabc123"
+	for _, mount := range []string{"", "/w/claude"} {
+		t.Run(mount, func(t *testing.T) {
+			calls := 0
+			srv := New(Config{
+				Adapters: []providers.Adapter{bedrock.New("https://bedrock-runtime.us-east-1.amazonaws.com")},
+				Auth:     stubAuth{rc: RequestContext{RuntimeMode: "record"}}, Creds: stubCreds{key: "fixture-bedrock-key"},
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					calls++
+					if got, want := r.URL.EscapedPath(), "/model/"+arn+"/converse"; got != want {
+						t.Errorf("model ARN escaping changed: got %s want %s", got, want)
+					}
+					return &http.Response{StatusCode: http.StatusOK, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(strings.NewReader(`{}`))}, nil
+				})},
+			})
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodPost, mount+"/bedrock/model/"+arn+"/converse", strings.NewReader(`{"messages":[]}`)))
+			if rec.Code != http.StatusOK || calls != 1 {
+				t.Fatalf("request failed: status=%d calls=%d body=%s", rec.Code, calls, rec.Body)
+			}
+		})
+	}
+}
