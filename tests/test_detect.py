@@ -39,6 +39,11 @@ set -euo pipefail
 echo "deploying"
 """
 
+DOTENV_BODY = """DATABASE_URL=postgres://app:secret@localhost:5432/app
+API_KEY=sk-test-123
+DEBUG=true
+"""
+
 PROSE_BODY = """This project collects notes about our deployment process.
 
 The main goal is to keep the steps simple enough that anyone on the
@@ -76,6 +81,20 @@ class DetectFileTypeTests(unittest.TestCase):
             p = self._write(tmp, "CMakeLists.txt", "add_executable(app main.c)\n")
             self.assertEqual(detect_file_type(p), "code")
             self.assertFalse(should_compress(p))
+
+    def test_dotenv_is_config_not_compressible(self):
+        # `.env` has no suffix in pathlib, so the `.env` skip entry never matched it
+        # and its keys were sent off for compression as prose.
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, ".env", DOTENV_BODY)
+            self.assertEqual(detect_file_type(p), "config")
+            self.assertFalse(should_compress(p))
+
+    def test_prose_dotfile_still_compressible(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, ".cursorrules", PROSE_BODY)
+            self.assertEqual(detect_file_type(p), "natural_language")
+            self.assertTrue(should_compress(p))
 
     def test_shebang_script_is_code(self):
         with tempfile.TemporaryDirectory() as tmp:
