@@ -1,0 +1,283 @@
+#!/bin/bash
+# caveman — one-command hook installer for Claude Code
+# Installs: SessionStart hook (auto-load rules) + SubagentStart hook (subagent mode) + UserPromptSubmit hook (mode tracking) + SessionEnd stats recorder
+# Usage: bash src/hooks/install.sh
+#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/install.sh)
+#   or:  bash src/hooks/install.sh --force   (re-install over existing hooks)
+set -e
+
+FORCE=0
+for arg in "$@"; do
+  case "$arg" in
+    --force|-f) FORCE=1 ;;
+  esac
+done
+
+# Detect Windows (Git Bash / MSYS / MINGW) — not WSL (WSL reports "linux-gnu")
+case "$OSTYPE" in
+  msys*|cygwin*|mingw*)
+    echo "WARNING: Running on Windows ($OSTYPE)."
+    echo "         This script works in Git Bash/MSYS but symlinks may require"
+    echo "         Developer Mode or admin privileges."
+    echo "         If you installed via 'claude plugin install', you don't need this script."
+    echo ""
+    ;;
+esac
+
+# Require node — we use it to merge the hook config into settings.json
+if ! command -v node >/dev/null 2>&1; then
+  echo "ERROR: 'node' is required to install the caveman hooks (used to merge"
+  echo "       the hook config into ~/.claude/settings.json safely)."
+  echo "       Install Node.js from https://nodejs.org and re-run this script."
+  exit 1
+fi
+
+CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
+HOOKS_DIR="$CLAUDE_DIR/hooks"
+SETTINGS="$CLAUDE_DIR/settings.json"
+REPO_URL="https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks"
+
+HOOK_FILES=("package.json" "caveman-config.js" "caveman-parse.js" "caveman-activate.js" "caveman-mode-tracker.js" "caveman-stats.js" "caveman-statusline.sh" "cavecrew-model-overrides.js")
+
+# Resolve source — works from repo clone or curl pipe
+SCRIPT_DIR=""
+if [ -n "${BASH_SOURCE[0]:-}" ] && [ -f "${BASH_SOURCE[0]}" ]; then
+  SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd)"
+fi
+
+# Clone installs share the unified installer's JSONC parser. A standalone copy
+# without that helper refuses unsupported settings before changing any files.
+SETTINGS_HELPER=""
+if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/../../installer/lib/settings.js" ]; then
+  SETTINGS_HELPER="$SCRIPT_DIR/../../installer/lib/settings.js"
+fi
+CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node --input-type=commonjs <<'NODE'
+const fs = require('fs');
+try {
+  const manifest = process.env.CAVEMAN_HOOKS_DIR + '/package.json';
+  if (fs.existsSync(manifest)) {
+    const value = JSON.parse(fs.readFileSync(manifest, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value) || (value.type !== undefined && value.type !== 'commonjs')) {
+      throw new Error('existing hooks/package.json is incompatible with CommonJS hooks');
+    }
+  }
+  const file = process.env.CAVEMAN_SETTINGS;
+  if (fs.existsSync(file)) {
+    const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+    const value = helper ? require(helper).readSettings(file) : JSON.parse(fs.readFileSync(file, 'utf8'));
+    if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('settings.json must be a readable object');
+  }
+} catch (error) {
+  console.error('Cannot install standalone hooks: ' + error.message);
+  console.error('Nothing was changed. For JSONC settings, use installer/install.js from a clone.');
+  process.exit(1);
+}
+NODE
+
+# Check if already installed (unless --force). Older installs only had two hook
+# files, so require the full current set plus the hook registrations before we
+# short-circuit.
+ALREADY_INSTALLED=0
+if [ "$FORCE" -eq 0 ]; then
+  ALL_FILES_PRESENT=1
+  for hook in "${HOOK_FILES[@]}"; do
+    if [ ! -f "$HOOKS_DIR/$hook" ]; then
+      ALL_FILES_PRESENT=0
+      break
+    fi
+  done
+
+  HOOKS_WIRED=0
+  HAS_STATUSLINE=0
+  if [ "$ALL_FILES_PRESENT" -eq 1 ] && [ -f "$SETTINGS" ]; then
+    if CAVEMAN_SETTINGS="$SETTINGS" node -e "
+      const fs = require('fs');
+      const settings = JSON.parse(fs.readFileSync(process.env.CAVEMAN_SETTINGS, 'utf8'));
+      // Probe for the exact script we wire for this event, not a bare
+      // 'caveman' substring — that also matches user hooks merely mentioning
+      // the word in a path (#593), which made us skip wiring and silently
+      // leave caveman inactive.
+      const hasCavemanHook = (event, script) =>
+        Array.isArray(settings.hooks?.[event]) &&
+        settings.hooks[event].some(e =>
+          e.hooks && e.hooks.some(h => h.command && h.command.includes(script))
+        );
+      process.exit(
+        hasCavemanHook('SessionStart', 'caveman-activate.js') &&
+        hasCavemanHook('SubagentStart', 'caveman-activate.js') &&
+        hasCavemanHook('UserPromptSubmit', 'caveman-mode-tracker.js') &&
+        hasCavemanHook('SessionEnd', 'caveman-stats.js') &&
+        !!settings.statusLine
+          ? 0
+          : 1
+      );
+    " >/dev/null 2>&1; then
+      HOOKS_WIRED=1
+      HAS_STATUSLINE=1
+    fi
+  fi
+
+  if [ "$ALL_FILES_PRESENT" -eq 1 ] && [ "$HOOKS_WIRED" -eq 1 ] && [ "$HAS_STATUSLINE" -eq 1 ]; then
+    ALREADY_INSTALLED=1
+    echo "Caveman hooks already installed in $HOOKS_DIR"
+    echo "  Re-run with --force to overwrite: bash src/hooks/install.sh --force"
+    echo ""
+  fi
+fi
+
+if [ "$ALREADY_INSTALLED" -eq 1 ] && [ "$FORCE" -eq 0 ]; then
+  echo "Nothing to do. Hooks are already in place."
+  exit 0
+fi
+
+if [ "$FORCE" -eq 1 ] && [ -f "$HOOKS_DIR/caveman-activate.js" ]; then
+  echo "Reinstalling caveman hooks (--force)..."
+else
+  echo "Installing caveman hooks..."
+fi
+
+# 1. Ensure hooks dir exists
+mkdir -p "$HOOKS_DIR"
+
+# 2. Copy or download hook files
+for hook in "${HOOK_FILES[@]}"; do
+  if [ "$hook" = "package.json" ] && [ -e "$HOOKS_DIR/$hook" ]; then
+    echo "  Preserved existing: $HOOKS_DIR/$hook"
+    continue
+  fi
+  if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/$hook" ]; then
+    cp "$SCRIPT_DIR/$hook" "$HOOKS_DIR/$hook"
+  else
+    curl -fsSL "$REPO_URL/$hook" -o "$HOOKS_DIR/$hook"
+  fi
+  echo "  Installed: $HOOKS_DIR/$hook"
+done
+
+# Make statusline script executable
+chmod +x "$HOOKS_DIR/caveman-statusline.sh"
+
+# 3. Wire hooks + statusline into settings.json (idempotent)
+if [ ! -f "$SETTINGS" ]; then
+  echo '{}' > "$SETTINGS"
+fi
+
+# Back up existing settings.json before touching it. Back up ONCE: without the
+# guard a --force reinstall overwrites the only pre-caveman copy with the
+# already-merged file, destroying the user's recovery path. Same guard as
+# installer/install.js.
+if [ ! -f "$SETTINGS.bak" ]; then
+  cp "$SETTINGS" "$SETTINGS.bak"
+fi
+
+# Pass paths via env vars — avoids shell injection if $HOME contains single quotes
+CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_HOOKS_DIR="$HOOKS_DIR" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node -e "
+  const fs = require('fs');
+  const settingsPath = process.env.CAVEMAN_SETTINGS;
+  const hooksDir = process.env.CAVEMAN_HOOKS_DIR;
+  const managedStatusLinePath = hooksDir + '/caveman-statusline.sh';
+  const shared = process.env.CAVEMAN_SETTINGS_HELPER ? require(process.env.CAVEMAN_SETTINGS_HELPER) : null;
+  const meta = {};
+  const settings = shared ? shared.readSettings(settingsPath, meta) : JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('settings.json must be a readable object');
+  if (meta.jsonc) console.log('  Comments are preserved in ' + settingsPath + '.bak; updated settings use JSON.');
+  if (!settings.hooks) settings.hooks = {};
+
+  // SessionStart — auto-load caveman rules
+  if (!settings.hooks.SessionStart) settings.hooks.SessionStart = [];
+  // Match the exact script, not a bare 'caveman' substring (#593).
+  const hasStart = settings.hooks.SessionStart.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
+  );
+  if (!hasStart) {
+    settings.hooks.SessionStart.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-activate.js\"',
+        timeout: 30,
+        statusMessage: 'Loading caveman mode...'
+      }]
+    });
+  }
+
+  // SubagentStart — hand subagents this session's active mode (#621)
+  if (!settings.hooks.SubagentStart) settings.hooks.SubagentStart = [];
+  const hasSubagent = settings.hooks.SubagentStart.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-activate.js'))
+  );
+  if (!hasSubagent) {
+    settings.hooks.SubagentStart.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-activate.js\" --subagent',
+        timeout: 30,
+        statusMessage: 'Loading caveman mode for subagent...'
+      }]
+    });
+  }
+
+  // UserPromptSubmit — track mode changes when user types /caveman commands
+  if (!settings.hooks.UserPromptSubmit) settings.hooks.UserPromptSubmit = [];
+  const hasPrompt = settings.hooks.UserPromptSubmit.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-mode-tracker.js'))
+  );
+  if (!hasPrompt) {
+    settings.hooks.UserPromptSubmit.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-mode-tracker.js\"',
+        timeout: 30,
+        statusMessage: 'Tracking caveman mode...'
+      }]
+    });
+  }
+
+  // SessionEnd — silently record a lifetime stats snapshot
+  if (!settings.hooks.SessionEnd) settings.hooks.SessionEnd = [];
+  const hasEnd = settings.hooks.SessionEnd.some(e =>
+    e.hooks && e.hooks.some(h => h.command && h.command.includes('caveman-stats.js'))
+  );
+  if (!hasEnd) {
+    settings.hooks.SessionEnd.push({
+      hooks: [{
+        type: 'command',
+        command: 'node \"' + hooksDir + '/caveman-stats.js\" --record',
+        timeout: 5,
+        statusMessage: 'Recording caveman stats...'
+      }]
+    });
+  }
+
+  // Statusline — wire caveman badge (report if skipped)
+  if (!settings.statusLine) {
+    settings.statusLine = {
+      type: 'command',
+      command: 'bash \"' + managedStatusLinePath + '\"'
+    };
+    console.log('  Statusline badge configured.');
+  } else {
+    const cmd = typeof settings.statusLine === 'string'
+      ? settings.statusLine
+      : (settings.statusLine.command || '');
+    if (cmd.includes(managedStatusLinePath)) {
+      console.log('  Statusline badge already configured.');
+    } else {
+      console.log('  NOTE: Existing statusline detected — caveman badge NOT added.');
+      console.log('        See src/hooks/README.md to add the badge to your existing statusline.');
+    }
+  }
+
+  if (shared) shared.writeSettings(settingsPath, settings);
+  else fs.writeFileSync(settingsPath, JSON.stringify(settings, null, 2) + '\n');
+  console.log('  Hooks wired in settings.json');
+"
+
+echo ""
+echo "Done! Restart Claude Code to activate."
+echo ""
+echo "What's installed:"
+echo "  - SessionStart hook: auto-loads caveman rules every session"
+echo "  - SubagentStart hook: subagents inherit the session's active mode"
+echo "  - Mode tracker hook: updates statusline badge when you switch modes"
+echo "    (/caveman, /ultracave, /megacave, /caveman-commit, etc.)"
+echo "  - SessionEnd hook: records lifetime stats silently"
+echo "  - Statusline badge: shows [CAVEMAN], [ULTRACAVE] or [MEGACAVE]"

@@ -10,7 +10,7 @@
     {
       "name": "caveman",
       "description": "Talk like caveman. Cut filler. Keep technical details explicit.",
-      "source": "./",
+      "source": "./plugins/claude",
       "category": "productivity"
     }
   ]
