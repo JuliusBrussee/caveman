@@ -531,6 +531,10 @@ function statuslineScriptOutdated(candidate) {
   }
 }
 
+function posixShellQuote(value) {
+  return "'" + value.replace(/'/g, "'\\''") + "'";
+}
+
 try {
   const isWindows = process.platform === 'win32';
   const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
@@ -590,7 +594,7 @@ try {
     const scriptPath = stableStatuslinePath(scriptName) || path.join(__dirname, scriptName);
     const command = isWindows
       ? `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
-      : `bash "${scriptPath}"`;
+      : `bash ${posixShellQuote(scriptPath)}`;
     const statusLineSnippet =
       '"statusLine": { "type": "command", "command": ' + JSON.stringify(command) + ' }';
     output += "\n\n" +
