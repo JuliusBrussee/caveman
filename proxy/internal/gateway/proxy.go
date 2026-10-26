@@ -30,6 +30,7 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/httpx"
 	"github.com/JuliusBrussee/caveman/shared/platform/id"
 	"github.com/JuliusBrussee/caveman/shared/platform/redact"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 )
 
 // doUpstream retries only connection-setup failures: the provider has not received a request.
@@ -197,6 +198,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		httpx.Error(w, r, http.StatusBadRequest, "cave_provider_request_invalid", "Provider request metadata could not be inspected.")
 		return
 	}
+	meta.PreserveTools = toolpolicy.NewMatcher(s.preserveTools)
 	meta.BillingTier = rc.ProviderBillingTiers[meta.Provider]
 	if evidence.SessionID == "" && s.sessionFallback != nil {
 		if sessionID, basis := s.sessionFallback(time.Now(), meta.Provider, meta.Model); sessionID != "" && (basis == "unique_recent_session" || basis == "unique_recent_time_model") {
@@ -206,6 +208,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	}
 	// Record the real request path rather than the adapter's default provider tag.
 	meta.Endpoint = r.URL.Path
+	s.logToolPreservation(body, meta)
 	// The caller's session identity, already shape-bounded by requestEvidenceFromHeaders.
 	// It reaches adapters as content-blind routing input only (see RequestMetadata).
 	meta.SessionID = evidence.SessionID

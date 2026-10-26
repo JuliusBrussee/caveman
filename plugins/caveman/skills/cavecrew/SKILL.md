@@ -75,3 +75,15 @@ Skip investigator. Hand exact path:line to `cavecrew-builder` directly.
 ## Auto-clarity (inherited)
 
 Subagents drop caveman → normal English for security warnings, irreversible-action confirmations, and any output where fragment ambiguity could be misread. Resume caveman after.
+
+## Semantic code tools
+
+When TokenSave tools are available in this session and the target project is
+indexed, prefer suitable targeted semantic queries for code understanding.
+Use `tokensave_status` when readiness is uncertain. Reuse sufficient results;
+do not repeat broad file exploration or delegate the same research to Cavecrew.
+If unavailable or unindexed, use the normal workflow. Explicit user instructions
+win. This does not change unrelated delegation, models, providers, or routing.
+Optimize your own prose only. Keep tool results, code, identifiers, paths,
+signatures, errors, numbers, and semantic relationships exact. Instructions do
+not enforce proxy preservation; that requires the operator's preservation policy.

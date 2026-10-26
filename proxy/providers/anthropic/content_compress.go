@@ -135,11 +135,11 @@ func (a Adapter) ExtractCompressible(body []byte, meta providers.RequestMetadata
 	if !ok || len(live) == 0 {
 		return nil, nil, false
 	}
-	recovered := recoveryToolUseIDs(body, messageSpans)
+	recovered := recoveryToolUseIDs(body, messageSpans, meta)
 	var candidates []spliceCandidate
 	for i, span := range messageSpans {
 		if live[i] {
-			candidates = append(candidates, collectAnthropicCandidates(body, span, recovered)...)
+			candidates = append(candidates, collectAnthropicCandidates(body, span, recovered, meta.PreserveTools.Enabled())...)
 		}
 	}
 	if len(candidates) == 0 {
@@ -174,7 +174,7 @@ func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata
 	if !ok {
 		return nil, nil, false
 	}
-	recovered := recoveryToolUseIDs(body, messageSpans)
+	recovered := recoveryToolUseIDs(body, messageSpans, meta)
 	var candidates []spliceCandidate
 	var blocks []providers.RewritableBlock
 	for i, span := range messageSpans {
@@ -185,7 +185,7 @@ func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata
 				continue
 			}
 		}
-		for _, c := range collectAnthropicCandidates(body, span, recovered) {
+		for _, c := range collectAnthropicCandidates(body, span, recovered, meta.PreserveTools.Enabled()) {
 			candidates = append(candidates, c)
 			blocks = append(blocks, providers.RewritableBlock{
 				Content: append([]byte(nil), c.original...),
@@ -268,7 +268,7 @@ func objectStringField(body []byte, obj jsonSpan, field string) (string, bool) {
 // the conversation, so the tool_result answering one can be left alone. See
 // providers.IsRecoveryToolName for why compressing recovered bytes strands the
 // agent with no path back to its own data.
-func recoveryToolUseIDs(body []byte, messageSpans []jsonSpan) map[string]bool {
+func recoveryToolUseIDs(body []byte, messageSpans []jsonSpan, meta providers.RequestMetadata) map[string]bool {
 	ids := make(map[string]bool)
 	for _, msg := range messageSpans {
 		if messageRole(body, msg) != "assistant" {
@@ -290,18 +290,19 @@ func recoveryToolUseIDs(body []byte, messageSpans []jsonSpan) map[string]bool {
 				continue
 			}
 			name, _ := objectStringField(body, block, "name")
-			if !providers.IsRecoveryToolName(name) {
+			protected := providers.IsRecoveryToolName(name) || meta.PreserveTools.Matches(name) || (name == "" && meta.PreserveTools.Enabled())
+			if !protected && !meta.PreserveTools.Enabled() {
 				continue
 			}
 			if id, ok := objectStringField(body, block, "id"); ok && id != "" {
-				ids[id] = true
+				ids[id] = ids[id] || protected
 			}
 		}
 	}
 	return ids
 }
 
-func collectAnthropicCandidates(body []byte, msg jsonSpan, recovered map[string]bool) []spliceCandidate {
+func collectAnthropicCandidates(body []byte, msg jsonSpan, recovered map[string]bool, preserveUnknown bool) []spliceCandidate {
 	content, ok := findObjectField(body, msg, "content")
 	if !ok {
 		return nil
@@ -311,12 +312,12 @@ func collectAnthropicCandidates(body []byte, msg jsonSpan, recovered map[string]
 	case isJSONString(body, content):
 		collectStringCandidate(body, content, &out, false, "history")
 	case content.start < content.end && body[content.start] == '[':
-		collectAnthropicBlocks(body, content, &out, false, recovered)
+		collectAnthropicBlocks(body, content, &out, false, recovered, preserveUnknown)
 	}
 	return out
 }
 
-func collectAnthropicBlocks(body []byte, blocksSpan jsonSpan, out *[]spliceCandidate, inToolResult bool, recovered map[string]bool) {
+func collectAnthropicBlocks(body []byte, blocksSpan jsonSpan, out *[]spliceCandidate, inToolResult bool, recovered map[string]bool, preserveUnknown bool) {
 	blocks, ok := arrayElements(body, blocksSpan)
 	if !ok {
 		return
@@ -342,7 +343,7 @@ func collectAnthropicBlocks(body []byte, blocksSpan jsonSpan, out *[]spliceCandi
 			// Recovered bytes are never a compression candidate — not on the turn they
 			// arrive, and not as frozen history afterwards, because collecting them at
 			// all would let the prefix cache substitute the elision back in.
-			if id, ok := objectStringField(body, block, "tool_use_id"); ok && recovered[id] {
+			if id, _ := objectStringField(body, block, "tool_use_id"); providers.ProtectedResult(recovered, id, preserveUnknown) {
 				continue
 			}
 			content, ok := findObjectField(body, block, "content")
@@ -353,7 +354,7 @@ func collectAnthropicBlocks(body []byte, blocksSpan jsonSpan, out *[]spliceCandi
 			case isJSONString(body, content):
 				collectStringCandidate(body, content, out, true, "tool_result")
 			case content.start < content.end && body[content.start] == '[':
-				collectAnthropicBlocks(body, content, out, true, recovered)
+				collectAnthropicBlocks(body, content, out, true, recovered, preserveUnknown)
 			}
 		}
 	}

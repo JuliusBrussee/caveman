@@ -28,7 +28,9 @@ const pixelOptimizerID = "pixel-render"
 // fails, the new renders go out as text and record that, and the earlier
 // renders still go: dropping them would bust the prefix they were cached in.
 func (s *Server) pixelRequest(body []byte, meta providers.RequestMetadata, transform *providers.TransformResult, requestID string) *compressionOutcome {
-	if s.compressor == nil || !pixel.Allowed(meta.Model) {
+	// Pixel has a separate scanner without general call/result correlation.
+	// Keep the whole request raw while tool preservation is requested.
+	if meta.PreserveTools.Enabled() || s.compressor == nil || !pixel.Allowed(meta.Model) {
 		return nil
 	}
 

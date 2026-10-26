@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/engine/ccr"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 )
 
 const catalog = `{
@@ -247,6 +248,38 @@ func TestLintReportsInferredReductions(t *testing.T) {
 	for _, tr := range rep.Tools {
 		if tr.Name == "" {
 			t.Error("a tool report is missing its name")
+		}
+	}
+}
+
+func TestPreservedCatalogAndLint(t *testing.T) {
+	opt := WithPreservedTools(toolpolicy.Policy{"search_*"})
+	result, err := Shrink([]byte(catalog), WithStorePath(":memory:"), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var before, after struct {
+		Tools []json.RawMessage `json:"tools"`
+	}
+	if err := json.Unmarshal([]byte(catalog), &before); err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(result.Output, &after); err != nil {
+		t.Fatal(err)
+	}
+	var original, kept any
+	_ = json.Unmarshal(before.Tools[0], &original)
+	_ = json.Unmarshal(after.Tools[0], &kept)
+	if !reflect.DeepEqual(original, kept) {
+		t.Fatal("protected catalog changed")
+	}
+	report, err := Lint([]byte(catalog), opt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range report.Tools {
+		if tool.Name == "search_files" && tool.TokensBefore != tool.TokensAfter {
+			t.Fatal("lint ignored preservation")
 		}
 	}
 }
