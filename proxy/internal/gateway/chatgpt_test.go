@@ -536,6 +536,80 @@ func TestChatGPTCodexClientCancellationAfterTerminalDeliveryPreservesAccounting(
 	}
 }
 
+// A stream-requested Responses call whose upstream answers with a genuine
+// JSON body must stay byte-exact. The route trusts the REQUEST's stream flag,
+// so before #1397's safeguard the completion reader saw a body with no
+// terminal event, called it truncated and aborted the handler: the client got
+// a broken reply instead of its JSON. Covers codex and the pre-existing pi
+// route, which shared the flaw.
+func TestChatGPTGenuineJSONOnStreamRequestedRouteStaysExact(t *testing.T) {
+	body := `{"id":"resp_1","object":"response","usage":{"input_tokens":5,"output_tokens":7}}`
+	requestBody := `{"model":"gpt-5.5","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"` + strings.Repeat("live tool output ", 40) + `"}]}]}`
+	for _, agent := range []string{"codex", "pi"} {
+		transport := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+			return &http.Response{
+				StatusCode: http.StatusOK,
+				Header:     http.Header{"Content-Type": []string{"application/json"}},
+				Body:       io.NopCloser(strings.NewReader(body)),
+				Request:    r,
+			}, nil
+		})
+		sink := &captureSink{}
+		srv := New(Config{
+			Auth:            stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
+			Sink:            sink,
+			Compressor:      &liveZoneCompressor{},
+			PrefixCache:     newTestPrefixCache(),
+			RecoveryViaMCP:  true,
+			ChatGPTUpstream: "https://chatgpt.test/backend-api/codex",
+			HTTPClient:      &http.Client{Transport: transport},
+		})
+		req := httptest.NewRequest(http.MethodPost, "/chatgpt/responses", strings.NewReader(requestBody))
+		req.Header.Set("x-cave-agent", agent)
+		req.Header.Set("Authorization", "Bearer oauth-secret")
+		req.Header.Set("ChatGPT-Account-ID", "acct_test")
+		w := httptest.NewRecorder()
+		var handlerPanic any
+		func() {
+			defer func() { handlerPanic = recover() }()
+			srv.Handler().ServeHTTP(w, req)
+		}()
+		if handlerPanic != nil {
+			t.Fatalf("%s: genuine JSON body aborted the handler: %v", agent, handlerPanic)
+		}
+		if got := w.Body.String(); got != body {
+			t.Fatalf("%s: JSON body changed: got %q, want %q", agent, got, body)
+		}
+		if row := sink.last(t); row.ErrorCode != "" {
+			t.Fatalf("%s: got error code %q for a complete JSON response", agent, row.ErrorCode)
+		}
+	}
+}
+
+// An SSE body behind a mislabelled JSON Content-Type still has to be tracked:
+// the sniff must accept it, which is what keeps #1397's own case fixed.
+func TestLooksLikeSSEAcceptsFramesAndRejectsJSON(t *testing.T) {
+	for _, tt := range []struct {
+		prefix string
+		want   bool
+	}{
+		{"event: response.completed\ndata: {}\n\n", true},
+		{"data: {\"type\":\"x\"}\n\n", true},
+		{": keep-alive comment\n\n", true},
+		{"\xef\xbb\xbfevent: x\n", true},
+		{"ID: 1\n", true},
+		{`{"id":"resp_1"}`, false},
+		{`[{"id":1}]`, false},
+		{"", false},
+		{"   \n\t", false},
+		{"<html>", false},
+	} {
+		if got := looksLikeSSE([]byte(tt.prefix)); got != tt.want {
+			t.Fatalf("looksLikeSSE(%q) = %v, want %v", tt.prefix, got, tt.want)
+		}
+	}
+}
+
 type cancelAfterWriteResponseWriter struct {
 	*httptest.ResponseRecorder
 	cancel   context.CancelFunc
