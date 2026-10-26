@@ -84,7 +84,9 @@ CAVEMAN_PRESERVE_TOOLS='["tokensave_*"]' caveman-shrink lint tools.json
 Malformed shrinker policy forwards the original catalog unchanged with a
 diagnostic; lint rejects it. Matching MCP and OpenAI tool envelopes remain whole,
 including descriptions,
-parameter guidance, constraints, defaults, and schemas. JSON serialization can
+parameter guidance, constraints, defaults, and schemas. For OpenAI Chat catalogs,
+the protected name inside `function` preserves the entire outer tool entry too.
+JSON serialization can
 change formatting; decoded values remain equal. Unrelated tools still shrink.
 Unsupported Gemini catalog envelopes currently remain uncompressed. The Go
 library exposes `shrink.WithPreservedTools(toolpolicy.Policy{...})` for both

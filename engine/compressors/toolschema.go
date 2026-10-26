@@ -153,6 +153,14 @@ func (c *toolSchemaCompressor) compressToolEnvelope(v any) any {
 		if c.preserve.Matches(name) {
 			return envelope
 		}
+		// OpenAI Chat catalogs put identity inside function, but preservation
+		// covers the whole tool entry, including metadata on its outer wrapper.
+		if function, ok := envelope["function"].(map[string]any); ok {
+			name, _ := function["name"].(string)
+			if c.preserve.Matches(name) {
+				return envelope
+			}
+		}
 		out := cloneJSONMap(envelope)
 		for key, value := range envelope {
 			switch {

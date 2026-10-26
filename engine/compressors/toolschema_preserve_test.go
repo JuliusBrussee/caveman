@@ -16,7 +16,7 @@ func TestPreservedToolCatalogKeepsFullEnvelopeAndSchema(t *testing.T) {
 		t.Run(wrap, func(t *testing.T) {
 			var input any = []any{protected, ordinary}
 			if wrap == "openai" {
-				input = []any{map[string]any{"type": "function", "function": protected}, map[string]any{"type": "function", "function": ordinary}}
+				input = []any{map[string]any{"type": "function", "description": description, "function": protected}, map[string]any{"type": "function", "description": description, "function": ordinary}}
 			}
 			if wrap == "gemini" {
 				input = map[string]any{"tools": []any{map[string]any{"functionDeclarations": []any{protected, ordinary}}}}
@@ -57,6 +57,13 @@ func TestPreservedToolCatalogKeepsFullEnvelopeAndSchema(t *testing.T) {
 			_ = json.Unmarshal(encoded, &want)
 			if !reflect.DeepEqual(find(decoded), want) {
 				t.Fatalf("protected envelope changed: %s", out)
+			}
+			if wrap == "openai" {
+				var original any
+				_ = json.Unmarshal(raw, &original)
+				if !reflect.DeepEqual(decoded.([]any)[0], original.([]any)[0]) {
+					t.Fatalf("protected outer envelope changed: %s", out)
+				}
 			}
 			if wrap != "gemini" && len(out) >= len(raw) {
 				t.Fatal("unrelated catalog entry did not shrink")

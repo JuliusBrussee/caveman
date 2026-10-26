@@ -30,6 +30,20 @@ func TestToolPreservationBeforeEveryAdapterRewrite(t *testing.T) {
 		adapter              providers.Adapter
 	}(nil), cases...)
 	for _, tc := range originals {
+		unnamed := tc
+		unnamed.name += "-unnamed"
+		unnamed.body = strings.ReplaceAll(tc.body, "mcp__tokensave__tokensave_context", "")
+		cases = append(cases, unnamed)
+		if tc.name != "gemini" {
+			orphan := tc
+			orphan.name += "-orphan"
+			idField := `"id":"a"`
+			if tc.name == "responses" {
+				idField = `"call_id":"a"`
+			}
+			orphan.body = strings.Replace(tc.body, idField, strings.Replace(idField, `"a"`, `"absent"`, 1), 1)
+			cases = append(cases, orphan)
+		}
 		bare := tc
 		bare.name += "-bare"
 		bare.body = strings.ReplaceAll(tc.body, "mcp__tokensave__tokensave_context", "tokensave_context")

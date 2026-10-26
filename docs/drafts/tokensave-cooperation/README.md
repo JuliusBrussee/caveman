@@ -69,6 +69,22 @@ metadata golden update were corrected before the passing final runs.
 
 ## Remaining work
 
+### Implementation follow-up (2026-10-26)
+
+Fixed catalog preservation for OpenAI Chat wrappers: a matching nested
+`function.name` now preserves the complete outer tool entry, including its
+description. The new full-envelope regression fails against the previous
+implementation and passes with the fix. Adapter fixtures also cover unnamed
+calls and orphaned results, preserving their serialized payloads while ordinary
+results remain eligible for compression.
+
+Focused Go tests and `go vet` cover the policy, provider adapters, compressor,
+shrinker, config, gateway, and standalone packages. SQLite-backed shrinker tests
+require the documented `umask 077`; the initial default-umask run rejected
+group-writable temporary directories. No live performance trials were run.
+
+### Review and measurement
+
 - Track review and CI on the draft PRs. TokenSave issue #797 remains open;
   issue closure belongs to its maintainer.
 - Actual agent A/B trials remain unperformed. The existing TokenSave runner is
