@@ -51,6 +51,16 @@ test('SessionStart statusline command preserves a literal dollar-sign path', {
   assert.match(statusline.stdout, /\[CAVEMAN\]/);
 });
 
+// The hook is a plain script with no exports, so the helper is lifted out of
+// its source. Static by necessity, and it keeps the three tests below honest
+// about reading the shipped file rather than a copy.
+function loadShellCommand() {
+  const src = fs.readFileSync(path.join(ROOT, 'src/hooks/caveman-activate.js'), 'utf8');
+  const extracted = src.match(/function shellCommand\(parts, platform = process\.platform\) \{[\s\S]*?\n\}/);
+  assert.ok(extracted, 'shellCommand helper not found in caveman-activate.js');
+  return new Function(`${extracted[0]}; return shellCommand;`)();
+}
+
 // The hook cannot require installer/lib/platform-paths.js — src/hooks/ ships
 // without the installer tree beside it — so it carries its own copy of that
 // quoting. Pin the two together: a nudge must suggest byte-for-byte what the
@@ -58,10 +68,7 @@ test('SessionStart statusline command preserves a literal dollar-sign path', {
 // one escaping convention silently leaves the other reachable (#1400 shipped
 // the POSIX branch unescaped and the win32 branch stayed unescaped after it).
 test('nudge shell quoting matches the installer hookCommand on both platforms', async () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/hooks/caveman-activate.js'), 'utf8');
-  const extracted = src.match(/function shellCommand\(parts, platform = process\.platform\) \{[\s\S]*?\n\}/);
-  assert.ok(extracted, 'shellCommand helper not found in caveman-activate.js');
-  const shellCommand = new Function(`${extracted[0]}; return shellCommand;`)();
+  const shellCommand = loadShellCommand();
 
   const { hookCommand } = await import(
     url.pathToFileURL(path.join(ROOT, 'installer/lib/platform-paths.js')).href
@@ -91,18 +98,35 @@ test('nudge shell quoting matches the installer hookCommand on both platforms', 
   }
 });
 
-// Every metacharacter the shell would act on must come back out of the
-// suggested command intact, whichever platform built it.
+// Every metacharacter the shell would act on must be escaped in the suggested
+// command. Pure string work, so it runs on every platform — this is the
+// assertion that covers the win32 branch, which no POSIX runner can execute.
 test('nudge shell quoting neutralizes shell metacharacters', () => {
-  const src = fs.readFileSync(path.join(ROOT, 'src/hooks/caveman-activate.js'), 'utf8');
-  const extracted = src.match(/function shellCommand\(parts, platform = process\.platform\) \{[\s\S]*?\n\}/);
-  const shellCommand = new Function(`${extracted[0]}; return shellCommand;`)();
-  const quoted = shellCommand(['bash', '/tmp/a$B`c"d/caveman-statusline.sh'], 'linux');
-  assert.equal(quoted, '"bash" "/tmp/a\\$B\\`c\\"d/caveman-statusline.sh"');
-  const out = spawnSync('/bin/sh', ['-c', `printf '%s' ${quoted.replace(/^"bash" /, 'echo ')}`], {
-    encoding: 'utf8',
-  });
-  assert.match(out.stdout, /\/tmp\/a\$B`c"d\/caveman-statusline\.sh/);
+  const shellCommand = loadShellCommand();
+  const nasty = '/tmp/a$B`c"d/caveman-statusline.sh';
+  assert.equal(
+    shellCommand(['bash', nasty], 'linux'),
+    '"bash" "/tmp/a\\$B\\`c\\"d/caveman-statusline.sh"',
+  );
+  // win32 adds `\` -> `/` on top of the same escaping.
+  assert.equal(
+    shellCommand(['powershell', '-File', 'C:\\Users\\a$B\\x.ps1'], 'win32'),
+    '"powershell" "-File" "C:/Users/a\\$B/x.ps1"',
+  );
+});
+
+// And the escaped form really does survive a shell. Needs a POSIX shell, so it
+// is skipped on Windows exactly like the end-to-end test above; the escaping
+// itself is asserted cross-platform by the test before this one.
+test('a quoted metacharacter path survives a real POSIX shell', {
+  skip: process.platform === 'win32' ? 'needs a POSIX shell' : false,
+}, () => {
+  const shellCommand = loadShellCommand();
+  const nasty = '/tmp/a$B`c"d/caveman-statusline.sh';
+  const quotedPath = shellCommand([nasty], 'linux');
+  const out = spawnSync('/bin/sh', ['-c', `printf '%s' ${quotedPath}`], { encoding: 'utf8' });
+  assert.equal(out.error, undefined, String(out.error));
+  assert.equal(out.stdout, nasty);
 });
 
 // The drift test above pins the helper; this pins the CALL SITES. A fix that
