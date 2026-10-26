@@ -1671,6 +1671,75 @@ test("enable/disable hermes rewrites an ordinary provider to the generic Caveman
   assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
 });
 
+// #1405: Hermes itself writes a `%YAML 1.1` / `---` document header and
+// two-space sequence items. Every fixture above uses neither, which is why
+// both writer defects shipped. A config in Hermes's own shape must survive.
+//
+// Asserted structurally rather than through a YAML library: the CLI ships
+// zero runtime dependencies and no parser is declared for the test runners
+// either, so a parser-backed assertion would silently skip where it matters.
+// These are the two exact rules the reported parser errors name.
+test("enable/disable hermes keeps a %YAML header and two-space list items valid", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = [
+    "%YAML 1.1",
+    "---",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "plugins:",
+    "  enabled:",
+    "  - herdr-agent-state",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+  const lines = installed.split("\n");
+
+  // Defect 1: `model:` was unshifted to index 0, putting it ABOVE the
+  // directive. A directive after content is a second document —
+  // "ComposerError: expected a single document in the stream".
+  assert.equal(lines[0], "%YAML 1.1", `%YAML must stay first:\n${installed}`);
+  assert.equal(lines[1], "---", `--- must stay second:\n${installed}`);
+  const modelAt = lines.indexOf("model:");
+  assert.ok(modelAt > 1, `model: must be inserted after the header:\n${installed}`);
+
+  // Defect 2: the entry took a fixed four-space indent in a list whose
+  // siblings use two — "ParserError: expected <block end>, but found '-'".
+  const enabledAt = lines.indexOf("  enabled:");
+  assert.ok(enabledAt > 0, installed);
+  const indents = [];
+  for (let i = enabledAt + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const item = line.match(/^(\s+)- \S/);
+    if (item) { indents.push(item[1].length); continue; }
+    if (/^\s*#/.test(line) || line.trim() === "") continue;
+    break; // a key at any depth ends the sequence under `enabled:`
+  }
+  assert.equal(indents.length, 2, `both plugin entries expected under enabled:\n${installed}`);
+  assert.equal(new Set(indents).size, 1, `sibling items must share one indent, got ${indents}:\n${installed}`);
+
+  // The routing values still have to land where Hermes reads them.
+  assert.match(installed, /^  provider: "custom"$/m);
+  assert.match(installed, /^  base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m);
+  assert.match(installed, /^    - caveman_native$|^  - caveman_native$/m);
+  // Unrelated user content is untouched.
+  assert.match(installed, /^_config_version: 52$/m);
+  assert.match(installed, /^  - herdr-agent-state$/m);
+
+  // Reversible: disable restores the user's document exactly.
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";

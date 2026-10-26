@@ -10211,7 +10211,7 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   const lines = yamlLines(source);
   let model = topLevelSection(lines, "model");
   if (!model) {
-    lines.unshift("model:");
+    lines.splice(yamlBodyStart(lines), 0, "model:");
     model = topLevelSection(lines, "model")!;
   }
   const routeIndexes: number[] = [];
@@ -10252,7 +10252,8 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     }
     if (enabled >= 0) {
       if (!hermesNamedPluginEnabled(source, HERMES_NATIVE_PLUGIN_NAME)) {
-        const block = [`    ${HERMES_NATIVE_PLUGIN_BEGIN}`, `    - ${HERMES_NATIVE_PLUGIN_NAME}`, `    ${HERMES_NATIVE_PLUGIN_END}`];
+        const pad = " ".repeat(yamlListItemIndent(lines, enabled, plugins.end) ?? 4);
+        const block = [`${pad}${HERMES_NATIVE_PLUGIN_BEGIN}`, `${pad}- ${HERMES_NATIVE_PLUGIN_NAME}`, `${pad}${HERMES_NATIVE_PLUGIN_END}`];
         lines.splice(enabled + 1, 0, ...block);
         pluginBlock = block.join("\n");
       }
@@ -14043,6 +14044,34 @@ function stripMarkedBlock(text: string, begin: string, end: string): { text: str
     kept.push(line);
   }
   return { text: yamlText(kept), removed };
+}
+
+// A YAML stream may open with `%`-directives and a `---` marker, which is what
+// Hermes itself writes. Content must go AFTER them: a directive that follows
+// content opens a second document, and `yaml.safe_load` then fails with
+// "expected a single document in the stream" (#1405). Leading comments are
+// skipped too, so a header comment keeps describing the file.
+function yamlBodyStart(lines: string[]): number {
+  let i = 0;
+  while (i < lines.length && (/^\s*(?:#.*)?$/.test(lines[i]!) || /^%/.test(lines[i]!))) i++;
+  if (i < lines.length && /^---(?:\s|$)/.test(lines[i]!)) i++;
+  return i;
+}
+
+// Indent of the sequence items already under `lines[keyAt]`, so an inserted
+// entry joins its siblings instead of opening a deeper block. Hermes writes
+// two-space items; a fixed four-space insert into one of those lists is a
+// "expected <block end>, but found '-'" parse error (#1405). null when the
+// list is empty or the shape is not a plain block sequence.
+function yamlListItemIndent(lines: string[], keyAt: number, end: number): number | null {
+  for (let i = keyAt + 1; i < end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const item = line.match(/^(\s+)- /);
+    if (item) return item[1]!.length;
+    return null;
+  }
+  return null;
 }
 
 function topLevelSection(lines: string[], key: string): { start: number; end: number } | undefined {
@@ -18420,7 +18449,10 @@ function enableHermesPluginInConfig(): boolean {
       return false;
     }
     if (enabledLine >= 0) {
-      lines.splice(enabledLine + 1, 0, `    ${HERMES_PLUGIN_ENABLE_BEGIN}`, `    - ${HERMES_PLUGIN_NAME}`, `    ${HERMES_PLUGIN_ENABLE_END}`);
+      // Same sibling-indent rule as hermesNativeConfig: a fixed four-space
+      // entry in a two-space list is a parse error (#1405).
+      const pad = " ".repeat(yamlListItemIndent(lines, enabledLine, plugins.end) ?? 4);
+      lines.splice(enabledLine + 1, 0, `${pad}${HERMES_PLUGIN_ENABLE_BEGIN}`, `${pad}- ${HERMES_PLUGIN_NAME}`, `${pad}${HERMES_PLUGIN_ENABLE_END}`);
     } else {
       lines.splice(plugins.start + 1, 0, `  ${HERMES_PLUGIN_ENABLE_BEGIN}`, "  enabled:", `    - ${HERMES_PLUGIN_NAME}`, `  ${HERMES_PLUGIN_ENABLE_END}`);
     }
