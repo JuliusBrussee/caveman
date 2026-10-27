@@ -73,7 +73,7 @@ jobs:
           - id: hermes
             install: python -m pip install --src "$RUNNER_TEMP/hermes-source" --editable "git+https://github.com/NousResearch/hermes-agent.git@f97608f178d1ffeca59860195ab7da295f7c8e5f#egg=hermes-agent" && python -c "import sys; from importlib.metadata import version; name, expected = 'hermes-agent==0.21.5'.split('=='); observed = version(name); print(observed); sys.exit(0 if observed == expected else 'Hermes package version mismatch')"
           - id: kilo
-            install: npm install -g @kilocode/cli@7.8.15
+            install: npm install -g @kilocode/cli@7.8.18
           - id: openclaw
             install: npm install -g openclaw@2026.10.5
           - id: opencode
