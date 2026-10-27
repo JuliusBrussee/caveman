@@ -8449,6 +8449,7 @@ const HERMES_NATIVE_PLUGIN_END = "# <<< caveman:native-hermes-plugin";
 const HERMES_NATIVE_MCP_BEGIN = "# >>> caveman:native-hermes-mcp";
 const HERMES_NATIVE_MCP_END = "# <<< caveman:native-hermes-mcp";
 const HERMES_NATIVE_PLUGIN_NAME = "caveman_native";
+const HERMES_NATIVE_MCP_SERVER = "caveman-native";
 const GEMINI_NATIVE_ENV_BEGIN = "# >>> caveman:native-routing";
 const GEMINI_NATIVE_ENV_END = "# <<< caveman:native-routing";
 const AIDER_NATIVE_ROUTE_BEGIN = "# >>> caveman:native-aider-routing";
@@ -10271,12 +10272,12 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
 
   const mcpBlockLines = [
     `  ${HERMES_NATIVE_MCP_BEGIN}`,
-    "  caveman-native:",
+    `  ${HERMES_NATIVE_MCP_SERVER}:`,
     `    command: ${yamlQuote(mcpBinary)}`,
     "    enabled: true",
     `  ${HERMES_NATIVE_MCP_END}`,
   ];
-  const mcpBlock = insertHermesNativeListEntry(lines, "mcp_servers", "caveman-native", HERMES_NATIVE_MCP_BEGIN, HERMES_NATIVE_MCP_END, mcpBlockLines);
+  const mcpBlock = insertHermesNativeListEntry(lines, "mcp_servers", HERMES_NATIVE_MCP_SERVER, HERMES_NATIVE_MCP_BEGIN, HERMES_NATIVE_MCP_END, mcpBlockLines);
   return {
     text: yamlText(lines),
     owned: {
@@ -11018,15 +11019,28 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     if (typeof routeBlock !== "string" || !Array.isArray(previousRouteLines)) {
       throw new Error("Hermes integration journal lacks owned routing block");
     }
-    if (!text.includes(routeBlock)) throw new Error("Hermes routing block changed after enable; refusing destructive disable");
-    text = text.replace(routeBlock, previousRouteLines.filter((line): line is string => typeof line === "string").join("\n"));
-    for (const key of ["plugin_block", "mcp_block"] as const) {
-      const block = operation.owned?.[key];
-      if (block === null || block === undefined) continue;
-      if (typeof block !== "string" || !text.includes(block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
-      text = text.replace(block, "");
+    // The blocks are still there verbatim: restore byte for byte, as before.
+    // A reserialised document (#1410) has the same VALUES under different
+    // layout, and the markers are gone with the comments — so prove ownership
+    // by value and then remove the settings by key. Anything that proof does
+    // not cover keeps refusing: a changed owned value, a duplicate key, or a
+    // shape the scoped reader will not decode.
+    if (text.includes(routeBlock)) {
+      text = text.replace(routeBlock, previousRouteLines.filter((line): line is string => typeof line === "string").join("\n"));
+      for (const key of ["plugin_block", "mcp_block"] as const) {
+        const block = operation.owned?.[key];
+        if (block === null || block === undefined) continue;
+        if (typeof block !== "string" || !text.includes(block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
+        text = text.replace(block, "");
+      }
+      return Buffer.from(text);
     }
-    return Buffer.from(text);
+    if (!hermesRouteOwned(text, operation.owned)) throw new Error("Hermes routing block changed after enable; refusing destructive disable");
+    // An absent block is a journal that never wrote one: nothing of ours to
+    // prove and nothing to remove, exactly as the literal loop above skips it.
+    if (operation.owned?.plugin_block !== undefined && !hermesPluginOwned(text, operation.owned)) throw new Error("Hermes plugin block changed after enable; refusing destructive disable");
+    if (operation.owned?.mcp_block !== undefined && !hermesMcpOwned(text, operation.owned)) throw new Error("Hermes mcp block changed after enable; refusing destructive disable");
+    return Buffer.from(hermesRestoreOwnedByValue(text, operation.owned));
   }
   const rootBlock = operation.owned?.root_block;
   const tablesBlock = operation.owned?.tables_block;
@@ -11416,10 +11430,15 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
           const tables = typeof operation.owned?.tables_block === "string" ? codexNativeTables(lines, operation.owned.tables_block) : new Map();
           owned = CODEX_NATIVE_TABLES.every((table) => tables.get(table) === true) && codexNativeRouted(lines) && text.indexOf("\uFEFF", 1) === -1;
         } else if (operation.kind === "hermes-config") {
+          // By name and value, like codex-config above and for the same reason:
+          // a YAML round-trip that changes no value at all drops our marker
+          // comments and renormalises quoting, and a literal read called that
+          // drift (#1410).
           const text = current.toString("utf8");
-          owned = typeof operation.owned?.route_block === "string" && text.includes(operation.owned.route_block)
-            && (operation.owned.plugin_block === null || (typeof operation.owned.plugin_block === "string" && text.includes(operation.owned.plugin_block)))
-            && (operation.owned.mcp_block === null || (typeof operation.owned.mcp_block === "string" && text.includes(operation.owned.mcp_block)));
+          owned = typeof operation.owned?.route_block === "string"
+            && hermesRouteOwned(text, operation.owned)
+            && hermesPluginOwned(text, operation.owned)
+            && hermesMcpOwned(text, operation.owned);
         } else if (operation.kind === "gemini-settings") {
           const root = parseJsonFileObject(operation.file, current);
           const servers = root.mcpServers && typeof root.mcpServers === "object" && !Array.isArray(root.mcpServers) ? root.mcpServers as Record<string, unknown> : {};
@@ -11562,8 +11581,13 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   const own = installed ? agentOwnEndpoint(agent) : null;
   if (own?.routed) warnings.push(ownEndpointRoutedMessage(agent, own));
   const fileText = checks.map((check) => fileBytes(check.file)?.toString("utf8") ?? "").join("\n");
+  // Hermes reads its routing by PARSING the document, so it gets the config
+  // file on its own rather than every journalled file concatenated: a `model:`
+  // or `mcp_servers:` key appearing in the plugin manifest later must not be
+  // able to answer for the one in config.yaml.
+  const hermesRouteFileText = agent === "hermes" && routeOperation ? fileBytes(routeOperation.file)?.toString("utf8") ?? "" : "";
   const components: NativeComponents = {
-    routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? fileText.includes(HERMES_NATIVE_ROUTE_BEGIN) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
+    routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? hermesRouteOwned(hermesRouteFileText, routeOperation?.owned) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
     lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
     core: coreActive,
@@ -13888,7 +13912,8 @@ function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "
     try {
       if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
       // A null block: the user's own caveman-native entry was already there.
-      if (agent === "hermes") return operation.owned?.mcp_block === null || (typeof operation.owned?.mcp_block === "string" && current.toString("utf8").includes(operation.owned.mcp_block));
+      // Read by value, so a reserialised config still counts (#1410).
+      if (agent === "hermes") return hermesMcpOwned(current.toString("utf8"), operation.owned);
       if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
       const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
       return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
@@ -14093,6 +14118,328 @@ function sectionHasChildKey(lines: string[], section: { start: number; end: numb
     if (re.test(lines[i]!)) return true;
   }
   return false;
+}
+
+// #1410: Hermes ownership used to be keyed on the literal comment-delimited
+// blocks we wrote into config.yaml. Any YAML round-trip — an editor, a config
+// manager, `yaml.safe_dump` — drops comments and renormalises quoting and
+// indentation without changing one value, and every check then read the install
+// as gone: `doctor hermes` said `degraded`, and `doctor --fix` and `disable`
+// both refused to touch it, so the user could not uninstall. Codex's branch
+// already compares by name and value for exactly this reason (its own rewrites
+// of the file must not read as drift); the readers below let Hermes do the same.
+//
+// Only the scalar shapes a normaliser emits are decoded. A flow collection, a
+// block scalar, an anchor, an alias or a tag returns null, and every caller
+// reads null as "cannot prove ownership" — so an unparsed shape keeps today's
+// refusal rather than guessing at a destructive restore.
+function decodeYamlDoubleQuoted(body: string): string | null {
+  const simple: Record<string, string> = {
+    "0": "\0", a: "\x07", b: "\b", t: "\t", "\t": "\t", n: "\n", v: "\v", f: "\f",
+    r: "\r", e: "\x1b", " ": " ", '"': '"', "/": "/", "\\": "\\",
+    N: "\u0085", _: " ", L: " ", P: " ",
+  };
+  let out = "";
+  for (let i = 0; i < body.length; i++) {
+    const ch = body[i]!;
+    if (ch !== "\\") { out += ch; continue; }
+    const esc = body[++i];
+    if (esc === undefined) return null;
+    if (esc === "x" || esc === "u" || esc === "U") {
+      const width = esc === "x" ? 2 : esc === "u" ? 4 : 8;
+      const hex = body.slice(i + 1, i + 1 + width);
+      if (hex.length !== width || !/^[0-9a-fA-F]+$/.test(hex)) return null;
+      const code = parseInt(hex, 16);
+      if (code > 0x10ffff) return null;
+      out += String.fromCodePoint(code);
+      i += width;
+      continue;
+    }
+    const mapped = simple[esc];
+    if (mapped === undefined) return null;
+    out += mapped;
+  }
+  return out;
+}
+
+// The scalar of `key:` at lines[index], as a YAML loader would read it, plus the
+// index of the last line it spans. A quoted scalar may be folded across lines:
+// a plain line break folds to one space, a `\` at end of line inside double
+// quotes joins with none — both are shapes PyYAML emits past its 80-column
+// width. `null` means "not a scalar this reader decodes".
+function yamlScalarAfterKey(lines: string[], index: number): { value: string | null; last: number } {
+  const line = lines[index];
+  if (line === undefined) return { value: null, last: index };
+  const raw = line.slice(line.indexOf(":") + 1);
+  const head = raw.replace(/^[ \t]+/, "");
+  // An empty value is YAML's null. Kept as "" so a caller comparing it against
+  // a journalled route simply finds no match (an empty endpoint is restorable,
+  // never owned), without being mistaken for an unreadable shape.
+  if (head === "" || /^#/.test(head)) return { value: "", last: index };
+  if (/^[[{|>&*!]/.test(head)) return { value: null, last: index };
+  const quote = head[0];
+  if (quote !== '"' && quote !== "'") {
+    let plain = head.replace(/\s+#.*$/, "").trimEnd();
+    const keyIndent = line.length - line.replace(/^[ \t]*/, "").length;
+    let row = index;
+    // A long plain scalar is folded onto more-indented continuation lines, each
+    // break folding to one space — what PyYAML emits past its 80-column width
+    // for a value with spaces in it, such as an executable path. A plain scalar
+    // cannot contain ": ", so a line that reads as a key or a sequence item is
+    // the next node and ends this one.
+    while (row + 1 < lines.length) {
+      const next = lines[row + 1]!;
+      if (/^\s*(?:#.*)?$/.test(next)) break;
+      if (next.length - next.replace(/^[ \t]*/, "").length <= keyIndent) break;
+      const body = next.trim();
+      if (/^-(?:\s|$)/.test(body) || /:(?:\s|$)/.test(body)) break;
+      plain = `${plain} ${body.replace(/\s+#.*$/, "").trimEnd()}`;
+      row += 1;
+    }
+    return { value: plain, last: row };
+  }
+  let body = "";
+  let segment = head.slice(1);
+  let at = index;
+  // Bounded: a scalar may not outrun the document.
+  for (;;) {
+    let closed = -1;
+    for (let i = 0; i < segment.length; i++) {
+      if (quote === '"' && segment[i] === "\\") { i++; continue; }
+      if (segment[i] !== quote) continue;
+      if (quote === "'" && segment[i + 1] === "'") { i++; continue; }
+      closed = i;
+      break;
+    }
+    if (closed >= 0) {
+      body += segment.slice(0, closed);
+      break;
+    }
+    if (quote === '"' && /\\$/.test(segment)) body += segment.slice(0, -1);
+    else body += `${segment.replace(/[ \t]+$/, "")}\n`;
+    at += 1;
+    if (at >= lines.length) return { value: null, last: index };
+    segment = lines[at]!.replace(/^[ \t]+/, "");
+  }
+  // A raw newline can only be a fold marker added above: YAML folds it to one
+  // space. Escape decoding runs after, so a `\n` ESCAPE stays a newline.
+  const folded = body.replace(/\n/g, " ");
+  if (quote === "'") return { value: folded.replace(/''/g, "'"), last: at };
+  const decoded = decodeYamlDoubleQuoted(folded);
+  return { value: decoded, last: decoded === null ? index : at };
+}
+
+// Direct children of a block mapping: `{ key → scalar }` at the shallowest
+// indent in the section, so a reindented document reads the same as the one we
+// wrote. `null` when a key repeats (a duplicate key is the ambiguous shape
+// #1410 asks us to keep refusing) or when a child is not a scalar this reader
+// decodes.
+function yamlMappingChildren(lines: string[], start: number, end: number): Map<string, string> | null {
+  let indent: number | null = null;
+  for (let i = start; i < end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (indent === null || width < indent) indent = width;
+  }
+  if (indent === null) return new Map();
+  const children = new Map<string, string>();
+  const key = new RegExp(`^[ \\t]{${indent}}(["']?)([^:"'\\s][^:"']*)\\1\\s*:(?=\\s|$)`);
+  for (let i = start; i < end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (width !== indent) continue;
+    const match = key.exec(line);
+    if (!match) continue;
+    const name = match[2]!;
+    if (children.has(name)) return null;
+    const scalar = yamlScalarAfterKey(lines, i);
+    if (scalar.value === null) return null;
+    children.set(name, scalar.value);
+    i = scalar.last;
+  }
+  return children;
+}
+
+// Span of the direct child `name` inside [start, end): its own line through the
+// last line indented deeper than it.
+function yamlChildSpan(lines: string[], start: number, end: number, name: string): { start: number; end: number } | null {
+  let indent: number | null = null;
+  for (let i = start; i < end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (indent === null || width < indent) indent = width;
+  }
+  if (indent === null) return null;
+  const key = new RegExp(`^[ \\t]{${indent}}(["']?)${escapeRegExp(name)}\\1\\s*:(?=\\s|$)`);
+  for (let i = start; i < end; i++) {
+    if (/^\s*(?:#.*)?$/.test(lines[i]!)) continue;
+    if (!key.test(lines[i]!)) continue;
+    let last = i;
+    for (let j = i + 1; j < end; j++) {
+      const line = lines[j]!;
+      if (/^\s*(?:#.*)?$/.test(line)) continue;
+      const width = line.length - line.replace(/^[ \t]*/, "").length;
+      if (width <= indent) break;
+      last = j;
+    }
+    return { start: i, end: last + 1 };
+  }
+  return null;
+}
+
+// What a Hermes config.yaml actually SAYS about the settings Caveman owns,
+// independent of how it is laid out. `model` and the `caveman-native` MCP entry
+// are read as values; plugin membership already had a layout-independent
+// reader in hermesNamedPluginEnabled.
+function hermesOwnedValues(text: string): { model: Map<string, string> | null; mcp: Map<string, string> | null } {
+  const lines = yamlLines(text);
+  const model = topLevelSection(lines, "model");
+  const servers = topLevelSection(lines, "mcp_servers");
+  const native = servers ? yamlChildSpan(lines, servers.start + 1, servers.end, HERMES_NATIVE_MCP_SERVER) : null;
+  return {
+    model: model ? yamlMappingChildren(lines, model.start + 1, model.end) : null,
+    mcp: native ? yamlMappingChildren(lines, native.start + 1, native.end) : null,
+  };
+}
+
+// The `command` the journalled MCP block registered, read back out of the block
+// itself so no journal format change is needed: an install made before this fix
+// is checked by value too.
+function hermesJournaledMcpCommand(block: string): string | null {
+  const lines = yamlLines(block);
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*command\s*:/.test(lines[i]!)) continue;
+    return yamlScalarAfterKey(lines, i).value;
+  }
+  return null;
+}
+
+// Does this config still carry Caveman's own Hermes routing, by value?
+function hermesRouteOwned(text: string, owned: NativeJournal["operations"][number]["owned"]): boolean {
+  const route = owned?.route;
+  if (typeof route !== "string") return false;
+  // Journals written before #1391 carry no provider; those installs wrote the
+  // generic one, which is what the enable path recorded from then on.
+  const provider = typeof owned?.provider === "string" ? owned.provider : "custom";
+  const values = hermesOwnedValues(text).model;
+  return values?.get("base_url") === route && values.get("provider") === provider;
+}
+
+// Is the journalled `caveman-native` MCP server still registered, by value? A
+// null block means the user's own entry was already there, which disable never
+// owned and so never has to prove.
+function hermesMcpOwned(text: string, owned: NativeJournal["operations"][number]["owned"]): boolean {
+  const block = owned?.mcp_block;
+  if (block === null) return true;
+  if (typeof block !== "string") return false;
+  if (text.includes(block)) return true;
+  const command = hermesJournaledMcpCommand(block);
+  if (command === null) return false;
+  const values = hermesOwnedValues(text).mcp;
+  return values?.get("command") === command && values.get("enabled") === "true";
+}
+
+// Is the journalled `caveman_native` plugin still enabled? Same null rule.
+function hermesPluginOwned(text: string, owned: NativeJournal["operations"][number]["owned"]): boolean {
+  const block = owned?.plugin_block;
+  if (block === null) return true;
+  if (typeof block !== "string") return false;
+  return hermesNamedPluginEnabled(text, HERMES_NATIVE_PLUGIN_NAME);
+}
+
+// Indent shared by the direct children of [start, end), or null when there are
+// none — the width an inserted sibling has to take in THIS document.
+function yamlChildIndent(lines: string[], start: number, end: number): number | null {
+  let indent: number | null = null;
+  for (let i = start; i < end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (indent === null || width < indent) indent = width;
+  }
+  return indent;
+}
+
+// Undo Caveman's Hermes settings on a document whose layout no longer matches
+// the journalled blocks (#1410). Only ever reached once hermesRouteOwned,
+// hermesPluginOwned and hermesMcpOwned have all proved, by value, that what is
+// in the file is still ours — so this removes Caveman's own settings and leaves
+// every unrelated sibling, comment and key where it is. Each removal mirrors
+// the shape of the block that was written: an entry we added to a list the user
+// already had takes the list with it only if we created the list too.
+function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operations"][number]["owned"]): string {
+  const lines = yamlLines(text);
+  const previous = (Array.isArray(owned?.previous_route_lines) ? owned.previous_route_lines : [])
+    .filter((line): line is string => typeof line === "string");
+
+  // --- routing: our provider/base_url go, the user's come back ---
+  const model = topLevelSection(lines, "model");
+  if (!model) throw new Error("Hermes model section is gone; refusing destructive disable");
+  const modelIndent = yamlChildIndent(lines, model.start + 1, model.end);
+  if (modelIndent === null) throw new Error("Hermes model section is empty; refusing destructive disable");
+  const ownedRouteRows: number[] = [];
+  for (let i = model.start + 1; i < model.end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (width !== modelIndent) continue;
+    if (!new RegExp(`^[ \\t]{${modelIndent}}(["']?)(provider|base_url)\\1\\s*:(?=\\s|$)`).test(line)) continue;
+    const scalar = yamlScalarAfterKey(lines, i);
+    for (let row = i; row <= scalar.last; row++) ownedRouteRows.push(row);
+    i = scalar.last;
+  }
+  if (ownedRouteRows.length === 0) throw new Error("Hermes routing keys are gone; refusing destructive disable");
+  const pad = " ".repeat(modelIndent);
+  const restoredRoute = previous.map((line) => {
+    const parsed = /^\s*(["']?)([^:"']+)\1\s*:([\s\S]*)$/.exec(line);
+    if (!parsed) throw new Error("Hermes integration journal holds an unreadable previous routing line");
+    return `${pad}${parsed[2]}:${parsed[3]}`;
+  });
+  const insertAt = ownedRouteRows[0]!;
+  for (const row of [...ownedRouteRows].reverse()) lines.splice(row, 1);
+  lines.splice(insertAt, 0, ...restoredRoute);
+
+  // --- plugin membership ---
+  const pluginBlock = owned?.plugin_block;
+  if (typeof pluginBlock === "string") {
+    const createdSection = /^plugins:/m.test(pluginBlock);
+    const createdEnabled = createdSection || /^\s+enabled:/m.test(pluginBlock);
+    const plugins = topLevelSection(lines, "plugins");
+    if (!plugins) throw new Error("Hermes plugins section is gone; refusing destructive disable");
+    let enabledAt = -1;
+    for (let i = plugins.start + 1; i < plugins.end; i++) {
+      if (/^\s+enabled\s*:(?=\s|$)/.test(lines[i]!)) { enabledAt = i; break; }
+    }
+    if (enabledAt < 0) throw new Error("Hermes plugins.enabled is gone; refusing destructive disable");
+    let itemAt = -1;
+    for (let i = enabledAt + 1; i < plugins.end; i++) {
+      if (new RegExp(`^\\s*-\\s*(["']?)${escapeRegExp(HERMES_NATIVE_PLUGIN_NAME)}\\1\\s*(?:#.*)?$`).test(lines[i]!)) { itemAt = i; break; }
+    }
+    if (itemAt < 0) throw new Error("Hermes plugin entry is gone; refusing destructive disable");
+    lines.splice(itemAt, 1);
+    if (createdEnabled) lines.splice(enabledAt, 1);
+    if (createdSection) lines.splice(plugins.start, 1);
+  }
+
+  // --- MCP registration ---
+  const mcpBlock = owned?.mcp_block;
+  if (typeof mcpBlock === "string") {
+    const createdSection = /^mcp_servers:/m.test(mcpBlock);
+    const servers = topLevelSection(lines, "mcp_servers");
+    if (!servers) throw new Error("Hermes mcp_servers section is gone; refusing destructive disable");
+    const native = yamlChildSpan(lines, servers.start + 1, servers.end, HERMES_NATIVE_MCP_SERVER);
+    if (!native) throw new Error("Hermes MCP entry is gone; refusing destructive disable");
+    lines.splice(native.start, native.end - native.start);
+    if (createdSection) lines.splice(servers.start, 1);
+  }
+
+  // yamlText joins with \n. The literal path edits the raw string and so keeps
+  // whatever the file used; this one must not quietly convert a Windows user's
+  // config to LF on the way out.
+  return text.includes("\r\n") ? yamlText(lines).replace(/\n/g, "\r\n") : yamlText(lines);
 }
 
 function hermesMcpMarkers(serverName: string): { begin: string; end: string } {

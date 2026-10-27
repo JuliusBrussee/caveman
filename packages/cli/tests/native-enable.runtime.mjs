@@ -1740,6 +1740,186 @@ test("enable/disable hermes keeps a %YAML header and two-space list items valid"
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// #1410: ownership used to be keyed on the literal comment-delimited blocks we
+// wrote. A YAML round-trip that changes no value at all — an editor, a config
+// manager, `yaml.safe_dump(yaml.safe_load(...))` — drops those comments and
+// renormalises quoting, and every check read the install as gone: `doctor`
+// reported `degraded` and `disable` refused, so the user could not uninstall.
+//
+// The documents below are what PyYAML 6 actually emits for the config this
+// suite's own `enable` writes; that was confirmed against a real parser, and is
+// reproduced literally here because the CLI ships zero runtime dependencies and
+// neither test runner declares a YAML parser — a parser-backed assertion would
+// silently skip on exactly the runners that matter.
+const HERMES_ROUND_TRIPPED = (command) => [
+  "model:",
+  "  default: gpt-5.5",
+  "  provider: custom",
+  "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+  "platforms:",
+  "  telegram:",
+  "    enabled: false",
+  "plugins:",
+  "  enabled:",
+  "  - caveman_native",
+  "  - herdr-agent-state",
+  "mcp_servers:",
+  "  caveman-native:",
+  `    command: ${command}`,
+  "    enabled: true",
+  "  keep:",
+  "    command: keep-mcp",
+  "    enabled: true",
+  "_config_version: 52",
+  "",
+].join("\n");
+
+const HERMES_USER_CONFIG = [
+  "%YAML 1.1",
+  "---",
+  "# Hermes configuration",
+  "model:",
+  "  default: gpt-5.5",
+  "  provider: openai",
+  "  base_url: https://api.openai.com/v1",
+  "platforms:",
+  "  telegram:",
+  "    enabled: false",
+  "plugins:",
+  "  enabled:",
+  "  - herdr-agent-state",
+  "mcp_servers:",
+  "  keep:",
+  "    command: keep-mcp",
+  "    enabled: true",
+  "_config_version: 52",
+  "",
+].join("\n");
+
+function hermesFixture(extraEnv = {}) {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, HERMES_USER_CONFIG);
+  return { fx, configPath, env: { ...fx.env, HERMES_HOME: hermesHome, ...extraEnv } };
+}
+
+function journalledMcpCommand(home) {
+  const journal = JSON.parse(readFileSync(join(home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  const block = journal.operations.find((operation) => operation.kind === "hermes-config").owned.mcp_block;
+  return JSON.parse(/command: (".*")$/m.exec(block)[1]);
+}
+
+test("hermes ownership survives a YAML round-trip that changes no value", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // Same values, no markers, renormalised quoting — the #1410 report exactly.
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(command));
+
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  const doctor = JSON.parse(status.stdout);
+  assert.equal(doctor.state, "installed", `reserialised config must still read as installed:\n${status.stdout}`);
+  assert.equal(doctor.components.routing, true);
+  assert.equal(doctor.components.mcp_recovery, true);
+
+  // ... and disable must still be able to undo it, removing only what we own.
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  provider: openai$/m);
+  assert.match(restored, /^  base_url: https:\/\/api\.openai\.com\/v1$/m);
+  assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
+  // Every unrelated sibling the user had stays where it was.
+  assert.match(restored, /^  - herdr-agent-state$/m);
+  assert.match(restored, /^    command: keep-mcp$/m);
+  assert.match(restored, /^_config_version: 52$/m);
+  assert.match(restored, /^    enabled: false$/m);
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+});
+
+test("hermes disable still refuses a reserialised config whose owned values moved", async () => {
+  for (const [label, mutate] of [
+    ["an owned value changed", (text) => text.replace("base_url: http://127.0.0.1:8787/w/hermes/v1", "base_url: http://example.invalid/mine")],
+    ["a duplicate owned key", (text) => text.replace("  base_url: http", "  base_url: http://127.0.0.1:8787/w/hermes/v1\n  base_url: http")],
+    ["the plugin entry removed", (text) => text.replace("  - caveman_native\n", "")],
+    ["the MCP command changed", (text) => text.replace(/^    command: (?!keep-mcp).*$/m, "    command: somebody-elses-mcp")],
+  ]) {
+    const { fx, configPath, env } = hermesFixture();
+    assert.equal((await run(["enable", "hermes"], env)).code, 0);
+    const command = journalledMcpCommand(fx.home);
+    const mutated = mutate(HERMES_ROUND_TRIPPED(command));
+    writeFileSync(configPath, mutated);
+
+    const disabled = await run(["disable", "hermes"], env);
+    assert.notEqual(disabled.code, 0, `${label}: disable must refuse\n${disabled.stdout}${disabled.stderr}`);
+    // Refusing is only safe if it is also atomic: the user's file and the
+    // journal that can still undo the install both have to survive it.
+    assert.equal(readFileSync(configPath, "utf8"), mutated, `${label}: config must be untouched`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), true, `${label}: journal must survive`);
+  }
+});
+
+test("hermes value-restore keeps a CRLF config's line endings", async () => {
+  // The literal path edits the raw string, so it never touched line endings.
+  // The value path rebuilds the document from yamlLines/yamlText, which join
+  // with \n — it must not convert a Windows user's file to LF behind them.
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(command).replace(/\n/g, "\r\n"));
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  provider: openai\r$/m);
+  assert.doesNotMatch(restored, /(?<!\r)\n/, `every line must still end CRLF:\n${JSON.stringify(restored)}`);
+});
+
+test("hermes ownership reads the escaped and folded scalars a normaliser emits", async () => {
+  // Two shapes PyYAML produces past its 80-column width, both verified against
+  // the real emitter: a double-quoted scalar carrying `\xNN` escapes and a
+  // `\`-at-end-of-line join, and a plain scalar folded onto a more-indented
+  // continuation line (one space per break).
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+  const cut = command.lastIndexOf("/") + 1;
+  const [head, tail] = [command.slice(0, cut), command.slice(cut)];
+  // "…/\<newline>      \x63aveman-mcp" decodes to the same absolute path.
+  const escaped = `"${head}\\\n      \\x${tail.charCodeAt(0).toString(16).padStart(2, "0")}${tail.slice(1)}"`;
+
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(escaped));
+  let doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(doctor.components.mcp_recovery, true, "escaped + folded double-quoted scalar must read as ours");
+
+  // A plain scalar folded across lines: the break folds to exactly one space.
+  const plainFolded = `${head}folded\n      name/${tail}`;
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(plainFolded));
+  doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(doctor.components.mcp_recovery, false, "a folded plain scalar must read as its folded VALUE, not ours");
+
+  // Same document, but now the journal really does name that folded path — the
+  // binary lives in a directory with a space, which is why a normaliser folds
+  // the scalar there at all.
+  const { fx: fx2, configPath: path2, env: base2 } = hermesFixture();
+  const spacedBin = join(fx2.home, "mcp tools", "caveman-mcp");
+  mkdirSync(dirname(spacedBin), { recursive: true });
+  writeFileSync(spacedBin, readFileSync(join(fx2.home, "bin", "caveman-mcp")), { mode: 0o755 });
+  chmodSync(spacedBin, 0o755);
+  const env2 = { ...base2, CAVEMAN_MCP_BIN: spacedBin };
+  const enabled2 = await run(["enable", "hermes"], env2);
+  assert.equal(enabled2.code, 0, enabled2.stderr);
+  assert.equal(journalledMcpCommand(fx2.home), spacedBin);
+  const cut2 = spacedBin.indexOf("mcp tools");
+  writeFileSync(path2, HERMES_ROUND_TRIPPED(`${spacedBin.slice(0, cut2)}mcp\n      tools/caveman-mcp`));
+  doctor = JSON.parse((await run(["doctor", "hermes"], env2)).stdout);
+  assert.equal(doctor.components.mcp_recovery, true, "a folded plain scalar must read as ours when it IS ours");
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
