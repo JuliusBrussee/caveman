@@ -166,7 +166,8 @@ rerun the install, or uninstall. Failed deregistration retains those files too.
 Two ways in. Pick one: with both, every chat gets the rules twice.
 
 - **Installer.** `npx -y github:JuliusBrussee/caveman -- --only cursor` adds
-  the skills, the Cavecrew agents (`~/.cursor/agents/`) and a session hook
+  the skills, the Cavecrew agents (`~/.cursor/agents/`), a session hook, and
+  tool-dedupe hooks for repeated Read, Grep, Glob, and `git status`
   (`~/.cursor/hooks.json` plus `~/.cursor/caveman/`). The Cursor editor, the
   Agents Window and `cursor-agent` all read these. `--no-hooks` installs the
   agents without the hook; it does not remove a hook an earlier install
