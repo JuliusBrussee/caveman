@@ -102,7 +102,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
@@ -124,7 +124,7 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
@@ -149,7 +149,7 @@ jobs:
         with:
           node-version: 22
       # caveman-sdk 1.1.0 requires Python 3.13.
-      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
       - run: node tests/middleware-e2e/skew.mjs clients
