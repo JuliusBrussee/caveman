@@ -14283,7 +14283,14 @@ function yamlChildSpan(lines: string[], start: number, end: number, name: string
       if (/^\s*(?:#.*)?$/.test(line)) continue;
       const width = line.length - line.replace(/^[ \t]*/, "").length;
       if (width <= indent) break;
-      last = j;
+      // A child's quoted scalar may be folded onto continuation lines, and one
+      // of those can begin with `#`. Reading the value keeps those lines
+      // attributed to their key; skipping them as comments left them outside
+      // the span, so removing the block spliced out everything around an
+      // orphaned fragment and produced a config that no longer parses.
+      const scalar = /:(?:\s|$)/.test(line) ? yamlScalarAfterKey(lines, j) : null;
+      last = scalar ? Math.max(j, scalar.last) : j;
+      if (scalar) j = last;
     }
     return { start: i, end: last + 1 };
   }

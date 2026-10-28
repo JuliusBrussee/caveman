@@ -1920,6 +1920,74 @@ test("hermes ownership reads the escaped and folded scalars a normaliser emits",
   assert.equal(doctor.components.mcp_recovery, true, "a folded plain scalar must read as ours when it IS ours");
 });
 
+// A double-quoted scalar may fold onto a continuation line that begins with
+// `#`. `yamlChildSpan` skipped every comment-looking line when it decided where
+// the owned block ENDED, so such a continuation fell outside the span: disable
+// spliced the block out, left the orphaned fragment behind, and still exited 0.
+// The result is a config that no longer parses, reported as a clean uninstall.
+test("hermes disable removes an owned MCP block whose command folds onto a #-leading line", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, HERMES_USER_CONFIG);
+  // A `#` in the binary path is what lets a fold land immediately before one.
+  const hashBin = join(fx.home, "mcp#tools", "caveman-mcp");
+  mkdirSync(dirname(hashBin), { recursive: true });
+  writeFileSync(hashBin, readFileSync(join(fx.home, "bin", "caveman-mcp")), { mode: 0o755 });
+  chmodSync(hashBin, 0o755);
+  const env = { ...fx.env, HERMES_HOME: hermesHome, CAVEMAN_MCP_BIN: hashBin };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  assert.equal(journalledMcpCommand(fx.home), hashBin);
+
+  const cut = hashBin.indexOf("#");
+  const doc = [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: custom",
+    "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "plugins:",
+    "  enabled:",
+    "  - caveman_native",
+    "  - herdr-agent-state",
+    "mcp_servers:",
+    "  caveman-native:",
+    "    enabled: true",
+    // `\` at end of line joins with no space, so this is the same command.
+    `    command: "${hashBin.slice(0, cut)}\\`,
+    `      ${hashBin.slice(cut)}"`,
+    "  keep:",
+    "    command: keep-mcp",
+    "    enabled: true",
+    "# a comment of the user's own, after the block",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, doc);
+
+  // The value reader already spans the fold, so the install reads as ours.
+  const doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(doctor.components.mcp_recovery, true);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  // Nothing of the folded scalar may survive the removal.
+  assert.doesNotMatch(restored, /caveman-mcp/, `orphaned fold left behind:\n${restored}`);
+  assert.doesNotMatch(restored, /#tools/, `orphaned fold left behind:\n${restored}`);
+  // mcp_servers must go straight from its key to the user's own entry.
+  assert.match(restored, /^mcp_servers:\n {2}keep:$/m, `block removal corrupted the section:\n${restored}`);
+  // Everything the user owns is still there, the trailing comment included.
+  assert.match(restored, /^    command: keep-mcp$/m);
+  assert.match(restored, /^  provider: openai$/m);
+  assert.match(restored, /^  - herdr-agent-state$/m);
+  assert.match(restored, /^# a comment of the user's own, after the block$/m);
+  assert.match(restored, /^_config_version: 52$/m);
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
