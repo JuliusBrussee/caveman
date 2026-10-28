@@ -101,10 +101,10 @@
       "attribution": {
         "header": "x-cave-agent"
       },
-      "tested_agent_version": "0.164.0",
+      "tested_agent_version": "0.165.0",
       "injection_completeness": "code-only",
-      "last_verified_at": "2026-10-24",
-      "verified_by": "local pinned-binary probe (npm package @openai/codex 0.164.0 on Node 26.12.1, agents/probe-installed.mjs: --version exit 0 observed 0.164.0, --help exit 0)",
+      "last_verified_at": "2026-10-28",
+      "verified_by": "Windows x64 route probes (@openai/codex 0.165.0, Node 24.16.0; --version and --help exit 0): actual caveman wrap codex exec from two scratch homes sent POST /w/codex/v1/responses with dummy bearer auth, model gpt-5.5 from config.toml (no CLI model override), stream true; scripted SSE replies consumed, both exit 0. Attribution uses /w/codex; X-Cave-Agent header absent. API-key path with proxy/MCP/shrink/browse disabled; no subscription, compression, live-provider or task-quality verification",
       "fallback": "generic-env",
       "maintainer": null
     },
