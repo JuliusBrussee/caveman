@@ -67,7 +67,7 @@ jobs:
           - id: claude
             install: npm install -g @anthropic-ai/claude-code@2.1.308
           - id: codex
-            install: npm install -g @openai/codex@0.164.0
+            install: npm install -g @openai/codex@0.165.0
           - id: gemini
             install: npm install -g @google/gemini-cli@0.65.0
           - id: hermes
