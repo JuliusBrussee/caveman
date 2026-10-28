@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 	"sort"
+	"time"
 )
 
 const (
@@ -16,77 +17,154 @@ type cacheUsageTurn struct {
 	CacheRead     int
 	CacheCreation int
 	Present       bool
+	Timestamp     time.Time
+	CacheTTL      time.Duration
+	Model         string
+	MissReason    string
+	SessionPath   string
+	Source        string
+	JSONLLine     int
 }
 
 type cacheHygieneTracker struct {
 	turns []cacheUsageTurn
 }
 
+type cacheSpike struct {
+	Classification string    `json:"classification"`
+	SessionPath    string    `json:"session_path"`
+	Source         string    `json:"source"`
+	JSONLLine      int       `json:"jsonl_line"`
+	PriorLine      int       `json:"prior_line"`
+	Timestamp      time.Time `json:"timestamp"`
+	GapSeconds     *float64  `json:"gap_seconds"`
+	TTLSeconds     int64     `json:"ttl_seconds"`
+	Model          string    `json:"model"`
+	PriorModel     string    `json:"prior_model"`
+	MissReason     string    `json:"miss_reason"`
+	CacheCreation  int       `json:"cache_creation_input_tokens"`
+	CacheRead      int       `json:"cache_read_input_tokens"`
+}
+
 type cacheHygieneSession struct {
-	SpikeTokens []int
+	Spikes []cacheSpike
 }
 
 func (t *cacheHygieneTracker) observe(turn cacheUsageTurn) {
 	if !turn.Present || turn.ContextTotal <= 0 || turn.CacheRead < 0 || turn.CacheCreation < 0 {
 		return
 	}
+	// Cache hits refresh the lifetime but may write zero tokens, so their
+	// breakdown cannot restate the known TTL. Carry it across read-only hits
+	// on the same model; never infer a lifetime for unreported new writes.
+	if turn.CacheTTL == 0 && turn.CacheCreation == 0 && turn.CacheRead > 0 && len(t.turns) > 0 {
+		prior := t.turns[len(t.turns)-1]
+		if prior.Model == turn.Model {
+			turn.CacheTTL = prior.CacheTTL
+		}
+	}
 	t.turns = append(t.turns, turn)
 }
 
 func (t cacheHygieneTracker) observation() (cacheHygieneSession, bool) {
-	if len(t.turns) < 2 {
-		return cacheHygieneSession{}, false
-	}
 	observation := cacheHygieneSession{}
-	for _, turn := range t.turns[1:] {
-		if turn.CacheCreation > cacheChurnSpikeTokens && int64(turn.CacheCreation)*4 > int64(turn.ContextTotal) {
-			observation.SpikeTokens = append(observation.SpikeTokens, turn.CacheCreation)
+	for i := 1; i < len(t.turns); i++ {
+		turn, prior := t.turns[i], t.turns[i-1]
+		if turn.CacheCreation <= cacheChurnSpikeTokens || int64(turn.CacheCreation)*4 <= int64(turn.ContextTotal) {
+			continue
 		}
+		spike := cacheSpike{
+			Classification: "unknown", SessionPath: turn.SessionPath, Source: turn.Source,
+			JSONLLine: turn.JSONLLine, PriorLine: prior.JSONLLine, Timestamp: turn.Timestamp,
+			TTLSeconds: int64(prior.CacheTTL / time.Second), Model: turn.Model, PriorModel: prior.Model,
+			MissReason: turn.MissReason, CacheCreation: turn.CacheCreation, CacheRead: turn.CacheRead,
+		}
+		if !turn.Timestamp.IsZero() && !prior.Timestamp.IsZero() && !turn.Timestamp.Before(prior.Timestamp) {
+			gap := turn.Timestamp.Sub(prior.Timestamp).Seconds()
+			spike.GapSeconds = &gap
+		}
+		// A provider tool-change diagnostic confirms invalidation even after idle.
+		// Other reasons are unknown unless the prior cache's known lifetime elapsed.
+		switch turn.MissReason {
+		case "tools_changed":
+			spike.Classification = "invalidation"
+		case "previous_message_not_found":
+			if prior.CacheTTL > 0 && spike.GapSeconds != nil && *spike.GapSeconds >= prior.CacheTTL.Seconds() &&
+				(prior.Model == "" || turn.Model == "" || prior.Model == turn.Model) {
+				spike.Classification = "cold_resume"
+			}
+		}
+		observation.Spikes = append(observation.Spikes, spike)
 	}
-	return observation, len(observation.SpikeTokens) > 0
+	return observation, len(observation.Spikes) > 0
+}
+
+type cacheSpikeBucket struct {
+	Turns          int   `json:"turns"`
+	TokensObserved int64 `json:"tokens_observed"`
 }
 
 func cacheChurnSink(sessions []cacheHygieneSession, perTurnHooks []string) []Sink {
-	var churned []cacheHygieneSession
+	var affected, observed int
 	var spikes []int
+	var locators []cacheSpike
+	buckets := map[string]cacheSpikeBucket{
+		"cold_resume": {}, "invalidation": {}, "unknown": {},
+	}
 	for _, session := range sessions {
-		if len(session.SpikeTokens) < cacheChurnSpikeTurns {
+		// Preserve the original recurrence threshold and measured cohort. Cold
+		// resumes contribute to its volume, but cannot make a session churn alone.
+		if len(session.Spikes) < cacheChurnSpikeTurns {
 			continue
 		}
-		churned = append(churned, session)
-		spikes = append(spikes, session.SpikeTokens...)
+		observed++
+		churn := false
+		for _, spike := range session.Spikes {
+			churn = churn || spike.Classification != "cold_resume"
+			bucket := buckets[spike.Classification]
+			bucket.Turns++
+			bucket.TokensObserved += int64(spike.CacheCreation)
+			buckets[spike.Classification] = bucket
+			spikes = append(spikes, spike.CacheCreation)
+			locators = append(locators, spike)
+		}
+		if churn {
+			affected++
+		}
 	}
-	if len(churned) < cacheChurnMinSessions {
+	if affected < cacheChurnMinSessions {
 		return nil
 	}
 	sort.Ints(spikes)
-	var spikeTotal int64
-	for _, session := range churned {
-		for _, tokens := range session.SpikeTokens {
-			spikeTotal += int64(max(0, tokens))
-		}
-	}
-	// SpikeTokens already excludes turn 1, so their sum is the conservative floor.
-	tokensObserved := spikeTotal
+	tokensObserved := buckets["cold_resume"].TokensObserved + buckets["invalidation"].TokensObserved + buckets["unknown"].TokensObserved
 	evidence := map[string]any{
-		"sessions_affected":   len(churned),
-		"spike_turns_total":   len(spikes),
-		"median_spike_tokens": spikes[len(spikes)/2],
-		"tokens_observed":     tokensObserved,
+		"sessions_affected":    affected,
+		"sessions_with_spikes": observed,
+		"spike_turns_total":    len(spikes),
+		"median_spike_tokens":  spikes[len(spikes)/2],
+		"tokens_observed":      tokensObserved,
+		"attribution":          buckets,
+		"locators":             locators,
 	}
-	// Per-turn hooks are the first place a human should look. They are listed
-	// as CANDIDATES: this detector sees that the prefix was re-written, never
-	// which configured thing wrote it.
-	if len(perTurnHooks) > 0 {
+	// Hooks remain candidates only for unresolved transitions, not a diagnosis.
+	if len(perTurnHooks) > 0 && buckets["unknown"].Turns > 0 {
 		evidence["per_turn_hook_candidates"] = perTurnHooks
+	}
+	suggestion := fmt.Sprintf("%s; %s; %s after the known cache TTL. Creation totals include all three buckets and are not proven avoidable tokens.", plural(buckets["invalidation"].Turns, "tool-change invalidation"), plural(buckets["unknown"].Turns, "unresolved spike"), plural(buckets["cold_resume"].Turns, "likely cold resume"))
+	if buckets["invalidation"].Turns > 0 {
+		suggestion += " Inspect tool definitions around the located tools_changed transitions."
+	}
+	if buckets["unknown"].Turns > 0 {
+		suggestion += " Compare the located unresolved transitions before attributing them to hooks, plugins, model changes, or prompt content."
+	}
+	if buckets["cold_resume"].Turns > 0 {
+		suggestion += " Idle expiry is consistent with the cold resumes; eviction or a cache namespace change remains possible."
 	}
 	return []Sink{{
 		SinkID: "cache_churn",
-		Title:  fmt.Sprintf("%s kept rebuilding a large part of the prompt cache", plural(len(churned), "session")),
+		Title:  fmt.Sprintf("%s had cache invalidations or unresolved rebuilds", plural(affected, "session")),
 		Class:  classBehavioral, Basis: learnBasis, Framing: framingHistorical,
-		TokensObserved: tokensObserved,
-		Evidence:       evidence,
-		Suggestion:     "Something in the setup puts content that changes every message near the top of the prompt (a hook, a plugin, or a timestamp), so the cache can't be reused. It is worth finding. The rebuilds are measured; the cause is not known.",
+		TokensObserved: tokensObserved, Evidence: evidence, Suggestion: suggestion,
 	}}
 }
 
@@ -127,7 +205,7 @@ func cacheEfficiencySink(spend *LearnSpend, perTurnHooks []string) []Sink {
 	suggestion := "Caching already does most of the work here. What input still costs is close to the lowest it can be for this kind of work."
 	if spend.EffectiveInputMultiplier >= cacheEfficiencyPoorMultiplier {
 		class = classBehavioral
-		suggestion = "Most input is billed at full price instead of the cheaper cached price. The usual cause is content that changes every message near the top of the prompt. Hooks that run on every message are the first candidates to check."
+		suggestion = "Most input is billed at full price instead of the cheaper cached price. Idle cache expiry, invalidations, and uncached requests can all contribute. Check cache-miss diagnostics and time gaps before attributing this to prompt content or hooks. Configured hooks remain candidates, not established causes."
 	}
 	evidence := map[string]any{
 		"effective_input_usd_per_mtok": spend.EffectiveInputUSDPerMTok,
