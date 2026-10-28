@@ -645,6 +645,53 @@ test("disable codex keeps a hooks.json BOM when it leaves the installer's hook o
   assert.deepEqual(JSON.parse(after.slice(1)), { hooks: { SessionStart: [foreign] } });
 });
 
+test("doctor accepts reordered managed Codex hook keys", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const path = join(fx.home, ".codex", "hooks.json");
+  const hooks = JSON.parse(readFileSync(path, "utf8"));
+  for (const entries of Object.values(hooks.hooks)) {
+    for (const entry of entries) {
+      entry.hooks = entry.hooks.map(({ type, command, ...rest }) => ({ command, ...rest, type }));
+    }
+  }
+  writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
+
+  const checked = await run(["doctor", "codex"], fx.env);
+  assert.equal(checked.code, 0, checked.stdout + checked.stderr);
+  assert.equal(JSON.parse(checked.stdout).state, "installed");
+});
+
+for (const [field, change] of [
+  ["timeout", (entry) => { entry.hooks[0].timeout = 30; }],
+  ["matcher", (entry) => { entry.matcher = "Bash"; }],
+  ["permissionDecision", (entry) => { entry.hooks[0].permissionDecision = "allow"; }],
+]) {
+  test(`managed Codex hook comparison preserves ${field} drift`, async () => {
+    const fx = fixture();
+    assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+    const path = join(fx.home, ".codex", "hooks.json");
+    const hooks = JSON.parse(readFileSync(path, "utf8"));
+    const native = hooks.hooks.PreToolUse[0];
+    change(native);
+    writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
+    const checked = await run(["doctor", "codex"], fx.env);
+    assert.notEqual(checked.code, 0);
+    assert.equal(JSON.parse(checked.stdout).state, "degraded");
+
+    // Legacy shrink entries must still fail destructive-removal preflight.
+    const shrink = { hooks: [{ command: `${join(fx.home, "bin", "caveman")} shrink-hook`, type: "command" }] };
+    change(shrink);
+    hooks.hooks.PreToolUse.push(shrink);
+    const before = JSON.stringify(hooks, null, 2) + "\n";
+    writeFileSync(path, before);
+    const disabled = await run(["disable", "codex"], fx.env);
+    assert.notEqual(disabled.code, 0);
+    assert.match(disabled.stderr, /Caveman hook changed after enable; refusing destructive disable/);
+    assert.equal(readFileSync(path, "utf8"), before);
+  });
+}
+
 // An install from before carries a shrink-hook entry (a second PreToolUse hook
 // on every Codex tool call that declines it) and a PostToolUseFailure entry
 // Codex never runs. Doctor sends it to --fix, which takes both out.
@@ -655,7 +702,10 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
   const native = hooks.hooks.SessionStart.find((entry) => /native-hook codex/.test(entry.hooks[0].command));
-  hooks.hooks.PreToolUse.push({ hooks: [{ type: "command", command: `${join(fx.home, "bin", "caveman")} shrink-hook` }] });
+  hooks.hooks.PreToolUse.push({ hooks: [{ command: `${join(fx.home, "bin", "caveman")} shrink-hook`, type: "command" }] });
+  native.hooks = native.hooks.map(({ type, command, ...rest }) => ({ command, ...rest, type }));
+  const foreign = { matcher: "Bash", hooks: [{ command: "echo foreign", type: "command", timeout: 15 }] };
+  hooks.hooks.PreToolUse.push(foreign);
   hooks.hooks.PostToolUseFailure = [native];
   writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
 
@@ -665,7 +715,8 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   const after = JSON.parse(readFileSync(hooksPath, "utf8")).hooks;
   assert.equal(after.PostToolUseFailure, undefined);
   assert.doesNotMatch(JSON.stringify(after), /shrink-hook/);
-  assert.equal(after.PreToolUse.length, 1);
+  assert.equal(after.PreToolUse.length, 2);
+  assert.deepEqual(after.PreToolUse[0], foreign);
 });
 
 // The hash Codex records when /hooks trusts a hooks.json SessionStart group:

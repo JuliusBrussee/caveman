@@ -7999,7 +7999,7 @@ function canonicalManagedHookEntry(entry: Record<string, unknown>): string | und
   const clone = JSON.parse(JSON.stringify(entry)) as Record<string, unknown>;
   const hooks = clone.hooks as Array<Record<string, unknown>>;
   hooks[0]!.command = identity;
-  return JSON.stringify(clone);
+  return canonicalize(clone);
 }
 
 // Why: `think.shrink` (and its `CAVEMAN_SHRINK` env form) is the persisted
