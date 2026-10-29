@@ -98,7 +98,7 @@ Already inside a Claude Code session? The same Claude Code install as slash comm
 
 For "auto-activates? No" agents, invoke the Caveman skill using the host's skill menu, `/caveman` where supported (`$caveman` in Codex), or a prompt naming the skill. Enable skills first if your host requires it: Augment has a Skills beta setting; AiderDesk requires Skills Tools in the active agent profile; custom Kiro agents need skill resources.
 
-**Pick the mode new sessions start in.** Put `{"defaultMode": "ultracave"}` (or `"caveman"`, `"megacave"`, `"off"`) in `~/.config/caveman/config.json`, or in a `.caveman.json` at a project root for just that project.
+**Pick the mode new sessions start in.** Put `{"defaultMode": "ultracave"}` (or `"caveman"`, `"megacave"`, `"off"`) in `~/.config/caveman/config.json`, or in a `.caveman.json` at a project root for just that project. Older level names still work: `lite` and `full` mean `caveman`, `ultra` means `ultracave`, and every `wenyan*` means `megacave`.
 
 Scripted Claude Code runs (`claude -p` and the Agent SDK) start with caveman off whatever that file says, so tools that read Claude's reply get plain text. Type `/caveman` in the prompt, or set `CAVEMAN_DEFAULT_MODE=caveman` (or another mode) in their environment, to turn it on.
 
@@ -305,7 +305,7 @@ node installer/install.js --dry-run --all
 # Inspect the agent matrix
 node installer/install.js --list
 
-# Install for everything detected
+# Install for everything detected, plus always-on rule files in this repo
 node installer/install.js --all
 ```
 
@@ -313,7 +313,7 @@ Useful flags:
 
 | Flag | What |
 |---|---|
-| `--all` | Plugin + hooks + statusline + per-repo rule files in `$PWD`. (MCP shrink is opt-in — see `--with-mcp-shrink` below.) |
+| `--all` | The default install plus `--with-init` (per-repo rule files in `$PWD`). Hooks stay on auto. (MCP shrink is opt-in — see `--with-mcp-shrink` below.) |
 | `--minimal` | Plugin / extension only. No hooks, no MCP shrink, no per-repo rules. |
 | `--only <id>` | One agent only. Repeatable: `--only claude --only cursor`. |
 | `--dry-run` | Print every command. Write nothing. |
@@ -321,7 +321,7 @@ Useful flags:
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. Within the value, single or double quotes group paths containing spaces; backslashes stay literal. A JSON array of strings also works when arguments contain quotes. No shell expansion occurs. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer, the Codex SessionStart hook, the Cursor sessionStart hook and the Copilot CLI session hook. (Default: auto. Codex, Cursor and Copilot CLI get their hook; Claude Code gets the hooks only when its plugin did not install, because the plugin already runs them.) |
-| `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
+| `--skip-skills` | Legacy, does nothing. Accepted so old scripts keep working; there is no all-agent fallback anymore. |
 | `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, Codex (`CODEX_HOME`), OMP (`~/.omp/`), opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
 | `--non-interactive` | Never prompt; use defaults. (Auto when stdin is not a TTY.) |
 | `--no-color` | Disable ANSI colors. |
