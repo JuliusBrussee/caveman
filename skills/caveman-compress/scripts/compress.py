@@ -401,11 +401,13 @@ ENV_COMPRESS_API_KEY = "CAVEMAN_COMPRESS_API_KEY"
 PROVIDER_CLAUDE = "claude"
 PROVIDER_ANTHROPIC = "anthropic"
 PROVIDER_OPENCODE = "opencode"
+PROVIDER_CODEX = "codex"
 PROVIDER_OPENAI_COMPAT = "openai-compat"
 SUPPORTED_PROVIDERS = frozenset({
     PROVIDER_CLAUDE,
     PROVIDER_ANTHROPIC,
     PROVIDER_OPENCODE,
+    PROVIDER_CODEX,
     PROVIDER_OPENAI_COMPAT,
 })
 DEFAULT_OPENAI_COMPAT_ENDPOINT = "http://localhost:11434/v1"  # Ollama
@@ -416,6 +418,7 @@ CLAUDE_PRINT_ARG = "--print"
 CLAUDE_SETTING_SOURCES_ARG = "--setting-sources"
 CLAUDE_STRICT_MCP_ARG = "--strict-mcp-config"
 OPENCODE_CLI = "opencode"
+CODEX_CLI = "codex"
 OPENCODE_RUN_ARG = "run"
 OPENCODE_STANDALONE_ARG = "--standalone"
 OPENCODE_FILE_ARG = "--file"
@@ -630,6 +633,53 @@ def call_claude_cli(prompt: str) -> str:
     return run_cli(CLAUDE_CLI, args, prompt)
 
 
+def call_codex_cli(prompt: str) -> str:
+    """Use Codex's saved login and final-message file, never its progress output."""
+    binary = shutil.which(CODEX_CLI)
+    if binary is None:
+        raise RuntimeError("codex CLI not found on PATH. Install Codex CLI, then run `codex login`.")
+    with tempfile.TemporaryDirectory(prefix="caveman-compress-codex-") as tmp:
+        output_path = Path(tmp) / "response.md"
+        args = [
+            binary, "exec", "--sandbox", "read-only", "--skip-git-repo-check",
+            "--output-last-message", str(output_path),
+        ]
+        model = configured_model()
+        if model:
+            args.extend([MODEL_ARG, model])
+        args.append("-")
+        try:
+            subprocess.run(
+                args, input=prompt, text=True, capture_output=True, check=True,
+                encoding="utf-8", errors="replace", timeout=CLAUDE_CALL_TIMEOUT_SECONDS,
+            )
+        except FileNotFoundError:
+            raise RuntimeError(
+                "codex CLI not found on PATH. Install Codex CLI, then run `codex login`."
+            ) from None
+        except subprocess.CalledProcessError as error:
+            # CLI diagnostics can contain prompt text or credentials; don't echo them.
+            raise RuntimeError(
+                f"codex exec failed (exit code {error.returncode}). Run `codex login` "
+                "if unauthenticated; check your Codex model, access, and CLI configuration."
+            ) from None
+        except subprocess.TimeoutExpired:
+            raise RuntimeError(
+                f"codex CLI call timed out after {CLAUDE_CALL_TIMEOUT_SECONDS}s. "
+                "Check your connection and `codex login` session, then retry."
+            ) from None
+        try:
+            response = output_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            raise RuntimeError(
+                "codex exec did not write a readable final response. Check your Codex CLI version and retry."
+            ) from None
+        response = strip_llm_wrapper(response.strip())
+        if not response.strip():
+            raise RuntimeError("codex exec returned an empty final response. Check your Codex session and retry.")
+        return response
+
+
 def call_opencode_cli(prompt: str) -> str:
     args = [OPENCODE_RUN_ARG]
     model = configured_model()
@@ -745,7 +795,8 @@ def call_claude(prompt: str) -> str:
     back to the ``claude --print`` CLI (which handles desktop auth). Set
     ``CAVEMAN_COMPRESS_PROVIDER=opencode`` and ``CAVEMAN_COMPRESS_MODEL`` (or
     ``CAVEMAN_MODEL``) to route compression through opencode instead, or
-    ``openai-compat`` for an OpenAI-compatible server such as local Ollama.
+    ``codex`` for the Codex CLI's saved login, or ``openai-compat`` for an
+    OpenAI-compatible server such as local Ollama.
 
     On Windows the CLI subprocess decoding defaults to the system codepage
     (cp1251 / cp1252) and crashes on UTF-8 output — see issue #152. Pinning
@@ -755,6 +806,8 @@ def call_claude(prompt: str) -> str:
     ``ANTHROPIC_API_KEY`` to route through the SDK and skip the subprocess.
     """
     provider = configured_provider()
+    if provider == PROVIDER_CODEX:
+        return call_codex_cli(prompt)
     if provider == PROVIDER_OPENCODE:
         return call_opencode_cli(prompt)
     if provider == PROVIDER_OPENAI_COMPAT:
