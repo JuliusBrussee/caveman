@@ -76,8 +76,13 @@ for (const surface of surfaces) {
     assert.equal(readFileSync(`${item.settings}.bak`, 'utf8'), original);
     assert.equal(JSON.parse(readFileSync(item.settings, 'utf8')).theme, 'dark');
     assert.ok(JSON.parse(readFileSync(item.settings, 'utf8')).hooks.SessionStart.length);
-    // Re-add comments so uninstall must use the same parser as installation.
-    writeFileSync(item.settings, `// preserved settings\n${readFileSync(item.settings, 'utf8')}`);
+    // Re-add comments so re-install without --force and uninstall must use the same parser as installation.
+    const commentedAfterInstall = `// preserved settings\n${readFileSync(item.settings, 'utf8')}`;
+    writeFileSync(item.settings, commentedAfterInstall);
+    const reinstalled = run(surface, item, 'install');
+    assert.equal(reinstalled.status, 0, reinstalled.stdout + reinstalled.stderr);
+    assert.match(reinstalled.stdout, /Nothing to do\. Hooks are already in place\./);
+    assert.equal(readFileSync(item.settings, 'utf8'), commentedAfterInstall);
     const removed = run(surface, item, 'uninstall');
     assert.equal(removed.status, 0, removed.stdout + removed.stderr);
     assert.equal(existsSync(item.manifest), false);

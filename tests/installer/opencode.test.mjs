@@ -1177,3 +1177,45 @@ test('opencode plugin does not deactivate caveman when the config copy predates 
     fs.rmSync(shimDir, { recursive: true, force: true });
   }
 });
+
+test('opencode plugin resolves repo .caveman.json from ctx directory and skips system transform when defaultMode is off', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const repoDir = freshTmpDir();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = installEnv(xdg, shimDir);
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    process.env.XDG_CONFIG_HOME = xdg;
+    delete process.env.CAVEMAN_DEFAULT_MODE;
+
+    fs.writeFileSync(path.join(repoDir, '.caveman.json'), JSON.stringify({ defaultMode: 'off' }) + '\n');
+
+    const mod = await import(`${pathToFileURL(path.join(pluginDir, 'plugin.js')).href}?repo-optout`);
+    // Even if a prior session left the global flag set, initializing or transforming
+    // inside a repo with defaultMode: "off" must clear the flag and skip injection.
+    fs.writeFileSync(flagPath, 'full');
+    const handlers = await (mod.default || mod.CavemanPlugin)({ directory: repoDir });
+    assert.equal(fs.existsSync(flagPath), false, 'handleSessionCreated should remove flag when repo defaultMode is off');
+
+    // Simulate another concurrent session re-creating the global flag while this
+    // session is open in a repo with defaultMode: "off".
+    fs.writeFileSync(flagPath, 'full');
+    const sys = ['Base system prompt'];
+    await handlers['experimental.chat.system.transform']({}, { system: sys });
+    assert.equal(sys[0], 'Base system prompt', 'system transform should skip injection when repo defaultMode is off');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
