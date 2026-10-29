@@ -98,7 +98,7 @@ Already inside a Claude Code session? The same Claude Code install as slash comm
 
 For "auto-activates? No" agents, invoke the Caveman skill using the host's skill menu, `/caveman` where supported (`$caveman` in Codex), or a prompt naming the skill. Enable skills first if your host requires it: Augment has a Skills beta setting; AiderDesk requires Skills Tools in the active agent profile; custom Kiro agents need skill resources.
 
-**Pick the mode new sessions start in.** Put `{"defaultMode": "ultracave"}` (or `"caveman"`, `"megacave"`, `"off"`) in `~/.config/caveman/config.json`, or in a `.caveman.json` at a project root for just that project. Older level names still work: `lite` and `full` mean `caveman`, `ultra` means `ultracave`, and every `wenyan*` means `megacave`.
+**Pick the mode new sessions start in.** Put `{"defaultMode": "ultracave"}` (or `"caveman"`, `"megacave"`, `"off"`) in `~/.config/caveman/config.json`, or in a `.caveman.json` at a project root for just that project. Older level names still work: `lite` and `full` mean `caveman`, `ultra` means `ultracave`, and `wenyan`, `wenyan-lite`, `wenyan-full` and `wenyan-ultra` mean `megacave`.
 
 Scripted Claude Code runs (`claude -p` and the Agent SDK) start with caveman off whatever that file says, so tools that read Claude's reply get plain text. Type `/caveman` in the prompt, or set `CAVEMAN_DEFAULT_MODE=caveman` (or another mode) in their environment, to turn it on.
 
