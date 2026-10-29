@@ -107,6 +107,33 @@ Requires Python 3.10 or newer.
 
 Default path uses Claude: `ANTHROPIC_API_KEY` + Anthropic SDK when set, else `claude --print`.
 
+To use your existing Codex CLI login, install [Codex CLI](https://learn.chatgpt.com/docs/cli)
+and sign in with ChatGPT:
+
+```bash
+codex login
+export CAVEMAN_COMPRESS_PROVIDER=codex
+```
+
+This uses Codex CLI authentication and your plan's Codex usage limits, rather
+than separately billed OpenAI API authentication. Neither `OPENAI_API_KEY` nor
+`ANTHROPIC_API_KEY` is required. If your CLI is configured for API-key billing
+or a custom provider, that configuration still applies; use a ChatGPT login
+for subscription-backed usage.
+
+Optional: set `CAVEMAN_COMPRESS_MODEL` to a model available in your Codex account:
+
+```bash
+export CAVEMAN_COMPRESS_MODEL=your-codex-model
+```
+
+`CAVEMAN_MODEL` remains the fallback. With neither variable set, Codex chooses
+its configured default model. Compression runs `codex exec` noninteractively
+with `--sandbox read-only`, sends the prompt through stdin, and reads the final
+answer from `--output-last-message`. It also works outside Git repositories.
+Failures stop compression without switching providers. Failed CLI diagnostics
+are withheld because they may contain file contents or credentials.
+
 To use opencode instead (any model opencode can reach, free ones included):
 
 ```bash
