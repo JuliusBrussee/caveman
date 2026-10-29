@@ -39,6 +39,24 @@ set -euo pipefail
 echo "deploying"
 """
 
+DOTENV_BODY = """DATABASE_URL=postgres://app:secret@localhost:5432/app
+API_KEY=sk-test-123
+DEBUG=true
+"""
+
+GITIGNORE_BODY = """node_modules/
+dist/
+*.log
+.DS_Store
+"""
+
+EDITORCONFIG_BODY = """root = true
+
+[*]
+indent_style = space
+indent_size = 2
+"""
+
 PROSE_BODY = """This project collects notes about our deployment process.
 
 The main goal is to keep the steps simple enough that anyone on the
@@ -76,6 +94,46 @@ class DetectFileTypeTests(unittest.TestCase):
             p = self._write(tmp, "CMakeLists.txt", "add_executable(app main.c)\n")
             self.assertEqual(detect_file_type(p), "code")
             self.assertFalse(should_compress(p))
+
+    def test_dotfiles_are_never_prose(self):
+        """A bare dotfile carries its whole name where pathlib expects a suffix.
+
+        `Path(".env").suffix` is `""`, so every extension table was skipped and
+        the file reached the extensionless content sniffer. That sniffer only
+        recognises brace-and-quote code, so `.env`, `.gitignore` and
+        `.editorconfig` all came back `natural_language` and
+        `/caveman-compress .gitignore` rewrote them in place after shipping
+        the bytes to the configured provider.
+        """
+        cases = {
+            ".env": DOTENV_BODY,
+            ".gitignore": GITIGNORE_BODY,
+            ".editorconfig": EDITORCONFIG_BODY,
+            ".dockerignore": GITIGNORE_BODY,
+            ".npmrc": "//registry.npmjs.org/:_authToken=npm_secret\n",
+            ".bashrc": "alias ll='ls -la'\nPS1='$ '\n",
+        }
+        with tempfile.TemporaryDirectory() as tmp:
+            for name, body in cases.items():
+                with self.subTest(name=name):
+                    p = self._write(tmp, name, body)
+                    self.assertNotEqual(detect_file_type(p), "natural_language", name)
+                    self.assertFalse(should_compress(p), name)
+
+    def test_unknown_dotfile_is_not_compressed(self):
+        """An unlisted dotfile fails closed: never sent to a provider, never rewritten."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, ".someneworc", "key = value\n")
+            self.assertNotEqual(detect_file_type(p), "natural_language")
+            self.assertFalse(should_compress(p))
+
+    def test_prose_rule_dotfile_still_compressible(self):
+        """`.cursorrules` is Cursor's legacy rule file — prose, and the one
+        dotfile shape caveman is meant to compress."""
+        with tempfile.TemporaryDirectory() as tmp:
+            p = self._write(tmp, ".cursorrules", PROSE_BODY)
+            self.assertEqual(detect_file_type(p), "natural_language")
+            self.assertTrue(should_compress(p))
 
     def test_shebang_script_is_code(self):
         with tempfile.TemporaryDirectory() as tmp:
