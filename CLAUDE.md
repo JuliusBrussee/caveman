@@ -126,6 +126,7 @@ caveman/
 | `skills/caveman-commit/SKILL.md` | Caveman commit message behavior. Fully independent skill. |
 | `skills/caveman-review/SKILL.md` | Caveman code review behavior. Fully independent skill. |
 | `skills/caveman-help/SKILL.md` | Quick-reference card. One-shot display, not a persistent mode. |
+| `skills/caveman-es/SKILL.md` | Spanish translation of the `caveman` voice. Self-contained, no stored mode: `VALID_MODES` does not include it, so SessionStart, the statusline badge, and SubagentStart propagation never emit it. Activation is a one-shot skill load on Spanish triggers. Its level names map onto the three skills on read: `full` → `caveman`, `ultra` → `ultracave`; there is no `lite` skill, no `es` mode, and `src/hooks/caveman-config.js` stays untouched. |
 | `skills/caveman-compress/SKILL.md` | Compress sub-skill behavior. |
 | `skills/cavecrew/SKILL.md` | Cavecrew decision guide — when to delegate to caveman subagents vs vanilla. Edit only here. |
 | `skills/{caveman-setup,caveman-discover,caveman-learn,caveman-manage,caveman-optimize,caveman-explore,caveman-evidence-review}/SKILL.md` | Engine/proxy driver skills. Ship with the plugin (see the auto-discovery note below). |

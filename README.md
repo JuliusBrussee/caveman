@@ -281,6 +281,7 @@ In your agent:
 | `cavecrew` | Subagents that find, edit, and review code, then report back in caveman |
 | `investigate-first` · `lean-build` · `surgical-patch` · `safe-refactor` · `migration` · `verify-and-stop` | Work patterns that write less code. Your agent picks them up when a task fits |
 | `caveman-setup` · `caveman-discover` · `caveman-learn` · `caveman-manage` · `caveman-optimize` · `caveman-explore` · `caveman-evidence-review` | Drive the proxy from inside your agent |
+| `caveman-es` | Spanish voice: `skills/caveman-es/SKILL.md`, the rules of `caveman` written in Spanish. A skill your agent loads on request (Spanish triggers, `habla breve`); it is not a stored mode, so there is no `/caveman-es` badge, no statusline, no subagent propagation. |
 
 ## Caveman Cloud
 
