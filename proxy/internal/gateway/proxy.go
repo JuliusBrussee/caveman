@@ -2273,7 +2273,7 @@ func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.R
 	counter := &countingWriter{w: w}
 	if _, err := copyFlush(counter, src, completion); err != nil {
 		if r.Context().Err() != nil && completion != nil && completion.terminalDelivered() {
-			// Pi closes the stream as soon as it has consumed response.completed.
+			// Pi and Codex close the stream after consuming response.completed.
 			// That cancellation is safe to accept only after the terminal frame
 			// was fully written to the client; every earlier interruption fails closed.
 			return counter, ""

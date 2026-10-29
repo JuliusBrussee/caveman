@@ -320,13 +320,13 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-caveman-token-count-basis", "estimated_engine_o200k")
 	}
 	respCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
-	piResponsesRoute := rc.AgentSlug == "pi" && r.Method == http.MethodPost && suffix == "/responses"
+	responsesRoute := (rc.AgentSlug == "pi" || rc.AgentSlug == "codex") && r.Method == http.MethodPost && suffix == "/responses"
 	requestBodyComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-	piResponsesStream := piResponsesRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
-	stream := streamingResponse(resp.Header) || piResponsesStream
+	responsesStream := responsesRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
+	stream := streamingResponse(resp.Header) || responsesStream
 	var responseBody io.Reader = resp.Body
 	var completionTracker streamCompletionTracker
-	if piResponsesRoute && stream && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest && (piResponsesStream || isChatGPTEventStream(resp.Header)) {
+	if responsesRoute && stream && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest && (responsesStream || isChatGPTEventStream(resp.Header)) {
 		completionReader := &chatGPTSSECompletionReader{source: responseBody}
 		responseBody = completionReader
 		completionTracker = completionReader
