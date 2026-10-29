@@ -151,7 +151,7 @@ claude plugin marketplace add JuliusBrussee/caveman && claude plugin install cav
 # Gemini CLI
 gemini extensions install https://github.com/JuliusBrussee/caveman
 
-# Every agent on your machine at once, plus the Claude Code statusline badge (Node.js 22.13+)
+# Every agent on your machine at once, plus the Claude Code statusline badge (skills need Node.js 18+, the runtime 22.13+)
 curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.sh | bash
 ```
 
