@@ -93,28 +93,60 @@ func (c *terminalCompressor) Compress(input []byte) ([]byte, bool) {
 	return result, true
 }
 
-// collapseCarriageReturns rewrites each physical line to its final redraw state.
+// collapseCarriageReturns rewrites a physical line to its final redraw state.
 // A bare \r rewinds the cursor to the start of the line, so a progress bar that
 // reprints "10%\r20%\r100% done" was only ever showing "100% done" — the earlier
-// frames are visual history, not content. It keeps the last non-empty \r segment.
+// frames are visual history, not content.
+//
+// But a \r is only a redraw when the frames it overwrote said the same thing. The
+// same byte terminates lines in a classic-Mac document and turns up as a paste
+// artifact in ordinary text, and there the overwritten segments ARE the content:
+// keeping only the last non-empty one collapsed an 84-byte CR-terminated report
+// to its signature line and rewrote "Hello \rWorld" to "World", both with ok=true
+// and no marker (#1294). Detect now withholds the bare-CR classification from
+// LF-less payloads, but an ANSI escape is conclusive for it and `caveman shrink`
+// forces this compressor outright, so the guard has to live here.
+//
+// The decision is ALL OR NOTHING, per line, and that is the load-bearing part. A
+// first cut dropped the segments keepNonRedundant judged redundant and kept the
+// rest, which is the #1294 bug in miniature: "Report\rTotal: 10\rTotal: 20\r
+// Signature" lost `Total: 20` on its own, because digit masking makes two
+// numbered records one class, and a line has nowhere to put an elision marker
+// saying so. So either every overwritten segment is redundant — a real redraw,
+// collapsed to the final frame, which is also what a terminal displays — or the
+// carriage returns are carrying content and the line is returned untouched. Then
+// Compress's not-smaller check passes the payload through and claims nothing.
+//
+// Segments are judged by what the user SAW: Compress strips ANSI only after this
+// runs, so comparing the raw bytes let a frame that merely gained a color read as
+// new content and kept the stale frame beside it.
 func collapseCarriageReturns(b []byte) []byte {
 	if !bytes.Contains(b, []byte("\r")) {
 		return b
 	}
-	lines := bytes.Split(b, []byte("\n"))
-	for i, ln := range lines {
-		if !bytes.Contains(ln, []byte("\r")) {
-			continue
+	segs := bytes.Split(b, []byte("\r"))
+	visible := make([][]byte, len(segs))
+	last := -1
+	for i, seg := range segs {
+		visible[i] = ansiRe.ReplaceAll(seg, nil)
+		if len(visible[i]) > 0 {
+			last = i
 		}
-		chosen := []byte(nil)
-		for _, seg := range bytes.Split(ln, []byte("\r")) {
-			if len(seg) > 0 {
-				chosen = seg
-			}
-		}
-		lines[i] = chosen
 	}
-	return bytes.Join(lines, []byte("\n"))
+	if last < 0 {
+		return b // nothing visible; no final state to choose
+	}
+	// Seed the gate with the frame left on screen and let the earlier ones elide
+	// against what the user actually ended up looking at.
+	keep := make([]bool, len(segs))
+	keep[last] = true
+	keepNonRedundant(visible, keep)
+	for i := range segs {
+		if keep[i] && i != last {
+			return b // an overwritten segment carries content of its own
+		}
+	}
+	return segs[last]
 }
 
 // elideMiddle keeps the head, the tail, and every signal-bearing line, collapsing

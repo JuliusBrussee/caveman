@@ -11,8 +11,9 @@ langchain==1.4.2
 langchain-core==1.6.5
 langgraph==1.2.12
 langgraph-prebuilt==1.1.0
-anthropic==1.8.0
-litellm==1.105.3
+anthropic==2.1.0
+# Newer LiteLLM branches currently require filelock<4; retain the security floor.
+litellm==1.103.10
 google-genai==2.25.0
 strands-agents==1.57.0
 agno==3.0.11

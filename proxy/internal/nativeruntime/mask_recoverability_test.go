@@ -26,7 +26,7 @@ func TestMaskedToolOutputTellsTheAgentHowToRecoverIt(t *testing.T) {
 	runtime := New(store)
 	const session = "session-mask"
 
-	page := strings.Repeat(`{"sku":"SKU-60000","title":"Part SKU-60000 rev 0","active":false}`+"\n", 40)
+	page := strings.Repeat(`{"sku":"SKU-60000","title":"Part SKU-60000 rev 0","active":false}`+"\n", 80)
 	response, err := runtime.afterTool(Request{
 		Session: Session{ID: session},
 		Tool:    &Tool{Name: "taskdata_fetch", Output: []byte(page)},
@@ -42,6 +42,12 @@ func TestMaskedToolOutputTellsTheAgentHowToRecoverIt(t *testing.T) {
 	}
 	if !strings.Contains(response.OutputReplacement, response.RecoveryRef) {
 		t.Errorf("the mask does not carry its own recovery reference:\n%s", response.OutputReplacement)
+	}
+	// "One call returns the entire original" is only true without a query; with
+	// one, caveman_retrieve returns an excerpt, so the mask has to say that.
+	if !strings.Contains(response.OutputReplacement, "only recovery_handle") ||
+		!strings.Contains(response.OutputReplacement, "query returns only a matching excerpt") {
+		t.Errorf("the mask does not say that a query narrows the recovery to an excerpt:\n%s", response.OutputReplacement)
 	}
 
 	// And the reference it prints must actually resolve to the raw bytes.

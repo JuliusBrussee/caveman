@@ -42,6 +42,10 @@ caveman tools mem history <id>
 caveman tools mem forget <id>
 ```
 
+`remember` and `supersede` also accept `--stdin` in place of the text argument,
+which is the only way to store a fact larger than one command-line argument
+allows (about 128 KB on Linux, and a 32 KB whole command line on Windows).
+
 Recall returns current facts by default and has a default inferred-token budget
 of 2,000. Superseded history remains available for inspection. Recalled compact
 records can include recovery references to exact stored source.

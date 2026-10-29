@@ -64,7 +64,7 @@ nothing.
 | Gemini CLI | `~/.gemini/tmp/*/chats/session-*.json` | `~/.gemini/GEMINI.md`, `GEMINI.md` from repo root to cwd | `CAVEMAN_GEMINI_ROOT` |
 | opencode | `~/.local/share/opencode/storage/{session,message,part}` | none | `CAVEMAN_OPENCODE_ROOT` |
 | aider | `.aider.chat.history.md` files under the root | none | `CAVEMAN_AIDER_ROOT` (required; off without it) |
-| Pi | `~/.pi/agent/sessions/**/*.jsonl` | none | `CAVEMAN_PI_ROOT` |
+| Pi | `~/.pi/agent/sessions/**/*.jsonl` | none | `CAVEMAN_PI_ROOT`, then `PI_CODING_AGENT_DIR` (agent dir) and `PI_CODING_AGENT_SESSION_DIR` (sessions dir) |
 
 The memory and rules doctor also reads `.claude/CLAUDE.md`, `CLAUDE.local.md`,
 `.claude/rules/*.md` and `~/.claude/rules/*.md` (path-scoped rules with a

@@ -140,3 +140,108 @@ func TestTerminalIsIdempotent(t *testing.T) {
 		t.Errorf("second pass must be a no-op (ok=false), got further change:\n%s", first)
 	}
 }
+
+// A bare \r is only a redraw when the frame it overwrote said the same thing.
+// The same byte terminates lines in a classic-Mac document and shows up as a
+// paste artifact in ordinary text; there the overwritten segments are the
+// content, not visual history (#1294).
+
+func TestTerminalCRTerminatedDocumentKeepsEveryLine(t *testing.T) {
+	// Reachable with no LF and no ANSI whenever the terminal compressor is
+	// forced rather than detected — what `caveman shrink` does to the output of
+	// the command it wraps.
+	in := []byte("Quarterly Report\rRevenue: $12,400\rExpenses: $9,100\rNet: $3,300\rSignatures: CEO, CFO\r")
+	out, ok := NewTerminal().Compress(in)
+	if ok && !bytes.Equal(out, in) {
+		for _, want := range []string{"Quarterly Report", "Revenue: $12,400", "Expenses: $9,100", "Net: $3,300"} {
+			if !bytes.Contains(out, []byte(want)) {
+				t.Errorf("CR-terminated document lost %q: %q", want, out)
+			}
+		}
+	}
+	if ok && bytes.Equal(out, []byte("Signatures: CEO, CFO\r")) {
+		t.Errorf("document collapsed to its last line with ok=true and no marker: %q", out)
+	}
+}
+
+func TestTerminalCRTerminatedDocumentWithANSIKeepsEveryLine(t *testing.T) {
+	// An ANSI escape is conclusive for Detect, so this routes to the terminal
+	// compressor on the auto-detect path, not just the forced one.
+	in := []byte("\x1b[32mQuarterly Report\r\x1b[0mRevenue: $12,400\rExpenses: $9,100\rNet: $3,300\rSignatures: CEO, CFO\r")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		return // pass-through loses nothing
+	}
+	for _, want := range []string{"Quarterly Report", "Revenue: $12,400", "Expenses: $9,100", "Net: $3,300", "Signatures: CEO, CFO"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("CR-terminated ANSI document lost %q: %q", want, out)
+		}
+	}
+}
+
+func TestTerminalIntraLineCRKeepsDistinctSegments(t *testing.T) {
+	// Three bare CRs alongside LFs is enough for Detect to classify this as
+	// terminal output; every line then got truncated at its last CR.
+	in := []byte("Hello \rWorld\nAlpha \rBeta\nGamma \rDelta\nkeep me\n")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		return // pass-through loses nothing
+	}
+	for _, want := range []string{"Hello", "World", "Alpha", "Beta", "Gamma", "Delta", "keep me"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("distinct CR segment %q dropped silently: %q", want, out)
+		}
+	}
+}
+
+func TestTerminalProgressRedrawStillCollapsesWithoutLF(t *testing.T) {
+	// The guard above must not cost the compressor its reason to exist: frames
+	// that restate the same thing are still visual history.
+	in := []byte("Downloading  10%\rDownloading  20%\rDownloading 100% done\r")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		t.Fatal("expected a genuine progress redraw to collapse")
+	}
+	for _, gone := range []string{"10%", "20%"} {
+		if bytes.Contains(out, []byte(gone)) {
+			t.Errorf("intermediate progress frame %q survived: %q", gone, out)
+		}
+	}
+	if !bytes.Contains(out, []byte("Downloading 100% done")) {
+		t.Errorf("final progress state lost: %q", out)
+	}
+}
+
+// The collapse decision is all or nothing per line. Dropping only the segments
+// the redundancy gate judges redundant reintroduced #1294 at a smaller scale:
+// digit masking makes two numbered records one class, and a line has nowhere to
+// put a marker saying one went missing.
+func TestTerminalCRNumberedRecordsAllSurvive(t *testing.T) {
+	in := []byte("Report\rTotal: 10\rTotal: 20\rSignature\r")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		return // pass-through loses nothing
+	}
+	for _, want := range []string{"Total: 10", "Total: 20"} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("numbered record %q dropped with no marker: %q", want, out)
+		}
+	}
+}
+
+// Compress strips ANSI only after collapsing, so the segments have to be
+// compared by their visible text. Judging the raw bytes let a frame that merely
+// gained a color read as new content and kept the stale frame beside it.
+func TestTerminalColoredFinalFrameCollapses(t *testing.T) {
+	in := []byte("Downloading 10%\r\x1b[32mDownloading 100%\x1b[0m\n")
+	out, ok := NewTerminal().Compress(in)
+	if !ok {
+		t.Fatal("expected a recolored progress redraw to collapse")
+	}
+	if bytes.Contains(out, []byte("10%")) {
+		t.Errorf("stale progress frame survived a recolored redraw: %q", out)
+	}
+	if !bytes.Contains(out, []byte("Downloading 100%")) {
+		t.Errorf("final progress state lost: %q", out)
+	}
+}

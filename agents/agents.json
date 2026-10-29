@@ -64,10 +64,10 @@
       "attribution": {
         "header": "x-cave-agent"
       },
-      "tested_agent_version": "2.1.302",
+      "tested_agent_version": "2.1.308",
       "injection_completeness": "builder-assisted",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary probe (claude 2.1.302 on Node 24.16.0, agents/probe-installed.mjs); route probe from a scratch HOME and CLAUDE_CONFIG_DIR: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true under the injected base URL, the injected ANTHROPIC_AUTH_TOKEN (a dummy value) arriving as Authorization: Bearer with no x-api-key, and the run completed (exit 0, stop_reason end_turn)",
+      "last_verified_at": "2026-10-22",
+      "verified_by": "local pinned-binary probe (claude 2.1.308 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0); route probe from a scratch HOME and CLAUDE_CONFIG_DIR with onboarding pre-accepted in ~/.claude.json: ANTHROPIC_BASE_URL redirection observed reaching POST /v1/messages?beta=true under the injected base URL, the injected ANTHROPIC_AUTH_TOKEN (a dummy value) arriving as Authorization: Bearer with no x-api-key, and the run completed (exit 0, stop_reason end_turn). The unauthenticated HEAD /api/hello reachability preflight first recorded on 2.1.306 is still sent to the same injected base URL before the turn, now with a Bun/1.4.4 user-agent rather than the CLI's own -- a mount that answers /v1/messages but rejects HEAD on an unknown path is worth checking against this. The turn itself is a streaming request (stream: true) carrying anthropic-beta: claude-code-20250219 and user-agent claude-cli/2.1.308 (external, sdk-cli)",
       "fallback": "generic-env",
       "maintainer": null
     },
@@ -101,10 +101,10 @@
       "attribution": {
         "header": "x-cave-agent"
       },
-      "tested_agent_version": "0.163.0",
+      "tested_agent_version": "0.164.0",
       "injection_completeness": "code-only",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary probe (codex 0.163.0 on Node 24.16.0, agents/probe-installed.mjs)",
+      "last_verified_at": "2026-10-24",
+      "verified_by": "local pinned-binary probe (npm package @openai/codex 0.164.0 on Node 26.12.1, agents/probe-installed.mjs: --version exit 0 observed 0.164.0, --help exit 0)",
       "fallback": "generic-env",
       "maintainer": null
     },
@@ -133,10 +133,10 @@
       "attribution": {
         "header": "x-cave-agent"
       },
-      "tested_agent_version": "0.64.0",
+      "tested_agent_version": "0.65.0",
       "injection_completeness": "declarative",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary probe (gemini 0.64.0 on Node 24.16.0, agents/probe-installed.mjs); route probe from a scratch HOME with GEMINI_CLI_TRUST_WORKSPACE=true and security.auth.selectedType gemini-api-key in its settings: GOOGLE_GEMINI_BASE_URL redirection observed reaching POST /v1beta/models/{model}:generateContent (model-router classifier) and POST /v1beta/models/{model}:streamGenerateContent?alt=sse (the turn) under the injected base URL, carrying the key as x-goog-api-key, and the run completed (exit 0). NOT observed: an env-only launch — with no selectedType, 0.64.0 (like 0.63.0) derives the gateway auth type from GOOGLE_GEMINI_BASE_URL and exits 41 \"Invalid auth method selected.\" before sending any request",
+      "last_verified_at": "2026-10-21",
+      "verified_by": "local pinned-binary probe (gemini 0.65.0 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0); route probe from a scratch HOME with GEMINI_CLI_TRUST_WORKSPACE=true and security.auth.selectedType gemini-api-key in its settings: GOOGLE_GEMINI_BASE_URL redirection observed reaching POST /v1beta/models/{model}:generateContent (model-router classifier) and POST /v1beta/models/{model}:streamGenerateContent?alt=sse (the turn) under the injected base URL, carrying the key as x-goog-api-key, and the run completed (exit 0). The classifier's own call was answered by a generic stub rather than a schema-valid classifier response, so it exhausted its retries and fell back to the default model; the route and auth header are what this probe observed, not the classifier's verdict. NOT observed: an env-only launch -- with no selectedType, 0.65.0 (like 0.64.0 and 0.63.0) derives the gateway auth type from GOOGLE_GEMINI_BASE_URL and exits 41 \"Invalid auth method selected.\" before sending any request (re-confirmed on 0.65.0: zero requests reached the recorder)",
       "fallback": "generic-env",
       "maintainer": null
     },
@@ -186,7 +186,7 @@
         "kilocode"
       ],
       "args": [],
-      "install": "npm install -g @kilocode/cli@7.8.12",
+      "install": "npm install -g @kilocode/cli@7.8.15",
       "wire_protocol": "openai-chat",
       "injection": {
         "method": "config-env-content",
@@ -272,10 +272,10 @@
       "attribution": {
         "header": "X-Cave-Agent"
       },
-      "tested_agent_version": "7.8.12",
+      "tested_agent_version": "7.8.15",
       "injection_completeness": "declarative",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary route probe (kilo 7.8.12 on Node 24.16.0, agents/probe-installed.mjs); this profile's own KILO_CONFIG_CONTENT local overlay accepted and applied — `kilo run` sent POST /v1/chat/completions at the injected baseURL carrying X-Cave-Agent: kilo (model gpt-5.5), and the run completed (exit 0)",
+      "last_verified_at": "2026-10-21",
+      "verified_by": "local pinned-binary route probe (kilo 7.8.15 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0); this profile's own KILO_CONFIG_CONTENT local overlay accepted and applied -- `kilo run` sent POST /v1/chat/completions at the injected baseURL carrying X-Cave-Agent: kilo (model gpt-5.5), and the run completed (exit 0). The overlay was rendered from the profile by hand rather than through the CLI's buildWrapEnv, so its base-config merge was not exercised",
       "fallback": "generic-env",
       "maintainer": null
     },
@@ -333,10 +333,10 @@
       "attribution": {
         "header": "x-cave-agent"
       },
-      "tested_agent_version": "2026.10.4",
+      "tested_agent_version": "2026.10.5",
       "injection_completeness": "builder-assisted",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary probe (openclaw 2026.10.4 on Node 24.16.0, agents/probe-installed.mjs); `openclaw config validate` accepts this profile's config_overlay.local passed as OPENCLAW_CONFIG_PATH (a malformed control file is rejected). NOT observed: the ~/.openclaw/workspace SOUL.md and workspace-skill bootstrap, or any model request — both need a live credentialed session",
+      "last_verified_at": "2026-10-21",
+      "verified_by": "local pinned-binary probe (openclaw 2026.10.5 on Node 24.16.0, agents/probe-installed.mjs: --version and --help both exit 0); `openclaw config validate` accepts this profile's injection.config_overlay.local passed as OPENCLAW_CONFIG_PATH (exit 0, \"Config valid\"), and a malformed control file is rejected (exit 1, JSON5 parse error). 2026.10.5 declares engines.node \">=24.16.0 <25 || >=26.1.0\", so it will not install on Node 22 or 25 at all -- the conformance lane's pinned 24.16.0 sits exactly on that floor. NOT observed: the ~/.openclaw/workspace SOUL.md and workspace-skill bootstrap, or any model request -- both need a live credentialed session",
       "fallback": "generic-env",
       "maintainer": null
     },
@@ -347,7 +347,8 @@
       "vendor": "sst",
       "homepage": "https://opencode.ai/docs/config",
       "binary_names": [
-        "opencode"
+        "opencode",
+        "opencode2"
       ],
       "args": [],
       "install": "npm i -g opencode-ai",
@@ -427,10 +428,10 @@
       "attribution": {
         "header": "X-Cave-Agent"
       },
-      "tested_agent_version": "1.19.3",
+      "tested_agent_version": "1.19.4",
       "injection_completeness": "declarative",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary probe (opencode 1.19.3 on Node 24.16.0, agents/probe-installed.mjs); route probe: this profile's own config_content.local overlay loaded and POST /v1/responses reached the injected baseURL twice (title model and turn), each carrying X-Cave-Agent: opencode, run completed (exit 0)",
+      "last_verified_at": "2026-10-24",
+      "verified_by": "local pinned-binary probe (opencode 1.19.4 on Node 26.12.1, agents/probe-installed.mjs); route probe: this profile's own config_content.local overlay loaded and POST /v1/responses reached the injected baseURL twice (title model and turn), each carrying X-Cave-Agent: opencode, run completed (exit 0)",
       "fallback": "generic-env",
       "maintainer": null
     },
@@ -474,7 +475,7 @@
       "args": [
         "--extensions=none"
       ],
-      "install": "npm i -g @qwen-code/qwen-code@0.25.2",
+      "install": "npm i -g @qwen-code/qwen-code@0.25.3",
       "wire_protocol": "openai-chat",
       "injection": {
         "method": "config-file",
@@ -720,10 +721,10 @@
       "attribution": {
         "header": "X-Cave-Agent"
       },
-      "tested_agent_version": "0.25.2",
+      "tested_agent_version": "0.25.3",
       "injection_completeness": "declarative",
-      "last_verified_at": "2026-10-16",
-      "verified_by": "local pinned-binary probe (@qwen-code/qwen-code 0.25.2 on Node 24.16.0, agents/probe-installed.mjs: --version and --help both exit 0) plus route check: this profile's own config_overlay.local, rendered into the file named by QWEN_CODE_SYSTEM_SETTINGS_PATH with ENABLE_WEB_SEARCH=0 and QWEN_CODE_DISABLE_WORKFLOWS=1 as buildWrapEnv sets them, made `qwen --extensions=none -p` send POST /w/qwen/v1/chat/completions (X-Cave-Agent: qwen, model gpt-5.5) to a loopback recorder, and the run completed (exit 0). The overlay was rendered from the profile by hand rather than through the CLI's buildWrapEnv, so its base-config merge was not exercised",
+      "last_verified_at": "2026-10-21",
+      "verified_by": "local pinned-binary probe (@qwen-code/qwen-code 0.25.3 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0) plus route check: this profile's own config_overlay.local, rendered into the file named by QWEN_CODE_SYSTEM_SETTINGS_PATH with ENABLE_WEB_SEARCH=0 and QWEN_CODE_DISABLE_WORKFLOWS=1 as buildWrapEnv sets them, made `qwen --extensions=none -p` send POST /w/qwen/v1/chat/completions (X-Cave-Agent: qwen, model gpt-5.5) to a loopback recorder, and the run completed (exit 0). The overlay was rendered from the profile by hand rather than through the CLI's buildWrapEnv, so its base-config merge was not exercised",
       "fallback": "generic-env",
       "maintainer": null
     }

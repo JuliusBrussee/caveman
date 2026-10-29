@@ -22,7 +22,7 @@ async function fakeBinary() {
   await writeFile(path, `#!/usr/bin/env node
 const { readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
-const input = args[0] === "remember" && args[1] === "--stdin" ? readFileSync(0, "utf8") : "";
+const input = (args[0] === "remember" && args[1] === "--stdin") || (args[0] === "supersede" && args[2] === "--stdin") ? readFileSync(0, "utf8") : "";
 if (args.includes("__fail__") || input.includes("__fail__")) process.exit(17);
 if (Buffer.byteLength(input) > 256 * 1024) process.exit(65);
 if (args.includes("__invalid_json__") || input.includes("__invalid_json__")) process.stdout.write("not json");
@@ -46,7 +46,7 @@ test("JS client forwards every command and preserves JSON response", { skip: !st
   assert.deepEqual(await recall("billing", 4), { args: ["recall", "billing", "4"], basis: "inferred" });
   assert.deepEqual(await recall("billing", 4, 900), { args: ["recall", "billing", "4", "900"], basis: "inferred" });
   assert.deepEqual(await recall("billing", undefined, 0), { args: ["recall", "billing", "0", "0"], basis: "inferred" });
-  assert.deepEqual(await supersede("mem_1", "replacement"), { args: ["supersede", "mem_1", "replacement"], basis: "inferred" });
+  assert.deepEqual(await supersede("mem_1", "replacement"), { args: ["supersede", "mem_1", "--stdin"], basis: "inferred" });
   assert.deepEqual(await history("mem_1"), { args: ["history", "mem_1"], basis: "inferred" });
   assert.deepEqual(await forget("mem_1"), { args: ["forget", "mem_1"], basis: "inferred" });
 });

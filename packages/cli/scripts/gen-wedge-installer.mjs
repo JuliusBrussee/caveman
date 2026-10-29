@@ -2,6 +2,7 @@
 import { existsSync, readFileSync, renameSync, unlinkSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 const cli = join(dirname(fileURLToPath(import.meta.url)), "..");
 const publicRoot = join(cli, "..");
@@ -23,16 +24,27 @@ export const BINARY_SIGNING_PUBKEY = ${JSON.stringify(publicKey)};
 // Every writer produces identical bytes and the outputs are committed, so the
 // normal case is to write nothing; a real change lands through a rename so no
 // concurrent reader sees a half-written file.
-function publish(path, bytes) {
+async function publish(path, bytes) {
   if (existsSync(path) && readFileSync(path).equals(bytes)) return;
   const temp = `${path}.${process.pid}.tmp`;
   writeFileSync(temp, bytes);
   try {
-    renameSync(temp, path);
-  } catch (error) {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        renameSync(temp, path);
+        return;
+      } catch (error) {
+        // Another writer may have published the same bytes while we waited.
+        if (existsSync(path) && readFileSync(path).equals(bytes)) return;
+        const locked = ["EPERM", "EBUSY", "EACCES"].includes(error.code);
+        if (!locked || attempt >= 5) throw error;
+        // Windows can hold the destination open briefly even when no other
+        // generator has finished. Keep our complete temp file for the retry.
+        await delay(25 * 2 ** attempt);
+      }
+    }
+  } finally {
     try { unlinkSync(temp); } catch { /* the temp file is ours alone */ }
-    // Losing the rename is only fatal if the winner wrote something else.
-    if (!(existsSync(path) && readFileSync(path).equals(bytes))) throw error;
   }
 }
 
@@ -45,10 +57,10 @@ for (const target of [
   join(stackRoot, "browse", "bin"),
 ]) {
   if (!existsSync(target)) continue;
-  publish(join(target, "release.generated.mjs"), generatedBytes);
+  await publish(join(target, "release.generated.mjs"), generatedBytes);
   if (target !== join(publicRoot, "shared", "binary-installer")) {
     sourceBytes ??= readFileSync(source);
-    publish(join(target, "binary-installer.generated.mjs"), sourceBytes);
+    await publish(join(target, "binary-installer.generated.mjs"), sourceBytes);
   }
 }
 console.log(`generated standalone wedge installers for ${release}`);

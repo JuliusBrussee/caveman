@@ -9,7 +9,7 @@
     "kilocode"
   ],
   "args": [],
-  "install": "npm install -g @kilocode/cli@7.8.12",
+  "install": "npm install -g @kilocode/cli@7.8.15",
   "wire_protocol": "openai-chat",
   "injection": {
     "method": "config-env-content",
@@ -95,10 +95,10 @@
   "attribution": {
     "header": "X-Cave-Agent"
   },
-  "tested_agent_version": "7.8.12",
+  "tested_agent_version": "7.8.15",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-10-16",
-  "verified_by": "local pinned-binary route probe (kilo 7.8.12 on Node 24.16.0, agents/probe-installed.mjs); this profile's own KILO_CONFIG_CONTENT local overlay accepted and applied — `kilo run` sent POST /v1/chat/completions at the injected baseURL carrying X-Cave-Agent: kilo (model gpt-5.5), and the run completed (exit 0)",
+  "last_verified_at": "2026-10-21",
+  "verified_by": "local pinned-binary route probe (kilo 7.8.15 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0); this profile's own KILO_CONFIG_CONTENT local overlay accepted and applied -- `kilo run` sent POST /v1/chat/completions at the injected baseURL carrying X-Cave-Agent: kilo (model gpt-5.5), and the run completed (exit 0). The overlay was rendered from the profile by hand rather than through the CLI's buildWrapEnv, so its base-config merge was not exercised",
   "fallback": "generic-env",
   "maintainer": null
 }

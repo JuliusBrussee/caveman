@@ -85,6 +85,34 @@ for (const surface of surfaces) {
     assert.equal(JSON.parse(readFileSync(item.settings, 'utf8')).hooks, undefined);
   });
 
+  test(`${surface.command}: uninstall keeps a settings.json.bak it did not make`, options, (t) => {
+    const item = fixture(t);
+    const hook = join(item.hooks, 'caveman-activate.js');
+    writeFileSync(hook, '');
+    const entry = { type: 'command', command: `node ${hook}` };
+    writeFileSync(item.settings, JSON.stringify({ model: 'opus', hooks: { SessionStart: [{ hooks: [entry] }] } }));
+    const mine = '{"model":"my-own-manual-backup"}\n';
+    writeFileSync(`${item.settings}.bak`, mine);
+    const removed = run(surface, item, 'uninstall');
+    assert.equal(removed.status, 0, removed.stdout + removed.stderr);
+    assert.equal(existsSync(hook), false);
+    assert.equal(readFileSync(`${item.settings}.bak`, 'utf8'), mine);
+  });
+
+  test(`${surface.command}: uninstall keeps the only copy of comments it dropped and removes a plain-JSON backup it made`, options, (t) => {
+    const item = fixture(t);
+    const entry = { type: 'command', command: `node ${join(item.hooks, 'caveman-activate.js')}` };
+    const body = JSON.stringify({ model: 'opus', hooks: { SessionStart: [{ hooks: [entry] }] } });
+    writeFileSync(item.settings, `// my model choice\n${body}\n`);
+    const jsonc = run(surface, item, 'uninstall');
+    assert.equal(jsonc.status, 0, jsonc.stdout + jsonc.stderr);
+    assert.match(readFileSync(`${item.settings}.bak`, 'utf8'), /my model choice/);
+    rmSync(`${item.settings}.bak`);
+    writeFileSync(item.settings, body);
+    assert.equal(run(surface, item, 'uninstall').status, 0);
+    assert.equal(existsSync(`${item.settings}.bak`), false);
+  });
+
   test(`${surface.command}: malformed settings fail before overwriting existing hook bytes`, options, (t) => {
     const item = fixture(t);
     const original = '{ "theme": broken JSON }\n';

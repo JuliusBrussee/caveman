@@ -23,9 +23,10 @@ const ElidedKey = "__caveman_elided__"
 const ElidedInvariantsKey = "__caveman_invariants__"
 
 // ElidedNoteKey carries the one-per-payload contract line telling the model how
-// to read an elided view. It rides on the FIRST elision marker of the payload
-// (document order) because a JSON payload has no trailing line to append to, and
-// adding a synthetic root key would change the shape the model parses.
+// to read an elided view. When emitted, it rides on the first elision marker in
+// canonical traversal order (lexicographic object keys, original array order).
+// A JSON payload has no trailing line to append to, and adding a synthetic root
+// key would change the shape the model parses.
 const ElidedNoteKey = "__caveman_note__"
 
 // errorKeyRe matches object keys whose subtrees carry signal the model needs —
@@ -112,8 +113,15 @@ func (c *jsonCompressor) transform(v any, preserve bool, query string, collapsed
 	switch t := v.(type) {
 	case map[string]any:
 		m := make(map[string]any, len(t))
-		for k, val := range t {
-			m[k] = c.transform(val, preserve || errorKeyRe.MatchString(k), query, collapsed)
+		// Siblings share collapsed, so traversal order decides where the one
+		// payload note goes. Canonicalize before transforming, not just marshaling.
+		keys := make([]string, 0, len(t))
+		for k := range t {
+			keys = append(keys, k)
+		}
+		sort.Strings(keys)
+		for _, k := range keys {
+			m[k] = c.transform(t[k], preserve || errorKeyRe.MatchString(k), query, collapsed)
 		}
 		return m
 	case []any:

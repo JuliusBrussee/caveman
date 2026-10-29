@@ -222,12 +222,17 @@ def extract_fenced_spans(lines):
     return spans
 
 
+# Sentence punctuation right after a URL or path ("see docs/a.md.") is matched
+#  by both regexes but is not part of it; compression often moves it.
+TRAILING_PUNCTUATION = ".,;:!?"
+
+
 def extract_urls(text):
-    return set(URL_REGEX.findall(text))
+    return {url.rstrip(TRAILING_PUNCTUATION) for url in URL_REGEX.findall(text)}
 
 
 def extract_paths(text):
-    return set(PATH_REGEX.findall(text))
+    return {path.rstrip(TRAILING_PUNCTUATION) for path in PATH_REGEX.findall(text)}
 
 
 def count_bullets(text):

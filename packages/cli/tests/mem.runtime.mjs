@@ -47,13 +47,14 @@ function echoCavemem() {
   return bin;
 }
 
-// A fake cavemem whose `remember --stdin` echoes what it read on stdin.
+// A fake cavemem whose `remember --stdin` / `supersede <id> --stdin` echoes what
+// it read on stdin, so a test can assert the text never rode on argv.
 function stdinEchoCavemem() {
   const dir = mkdtempSync(join(tmpdir(), "cave-cavemem-stdin-"));
   const bin = join(dir, "cavemem");
   writeFileSync(
     bin,
-    `#!/usr/bin/env bash\nif [ "$1 $2" = "remember --stdin" ] && [ "$#" -eq 2 ]; then cat; else echo "unexpected: $*" 1>&2; exit 2; fi\n`,
+    `#!/usr/bin/env bash\nif [ "$1 $2" = "remember --stdin" ] && [ "$#" -eq 2 ]; then cat; elif [ "$1 $3" = "supersede --stdin" ] && [ "$#" -eq 3 ]; then cat; else echo "unexpected: $*" 1>&2; exit 2; fi\n`,
     { mode: 0o755 },
   );
   chmodSync(bin, 0o755);
@@ -69,6 +70,9 @@ function runCli(argv, env, input = "") {
     child.stderr.on("data", (d) => (stderr += d));
     child.on("exit", (code) => resolve({ code, stdout, stderr }));
     child.on("error", reject);
+    // A CLI that rejects its input closes stdin before we finish writing; that
+    // EPIPE is the symptom under test, so let the assertions report it.
+    child.stdin.on("error", () => {});
     child.stdin.end(input);
   });
 }
@@ -127,6 +131,16 @@ test("mem supersede -- keeps a replacement block that opens with a --- rule (iss
   const out = await runCli(["mem", "supersede", "mem_abc", "--", block], env);
   assert.equal(out.code, 0, out.stderr);
   assert.equal(out.stdout, block, "the leading --- replacement block must reach cavemem verbatim");
+});
+
+test("mem supersede --stdin passes the replacement to cavemem byte for byte (issue #1385)", async () => {
+  const env = { ...process.env, CAVEMEM_BIN: stdinEchoCavemem() };
+  // Larger than one Linux argv element (MAX_ARG_STRLEN, ~128 KB): this
+  // replacement cannot ride on the command line at all.
+  const block = `fact: ${"y".repeat(200 * 1024)}`;
+  const out = await runCli(["mem", "supersede", "mem_abc", "--stdin"], env, block);
+  assert.equal(out.code, 0, out.stderr);
+  assert.equal(out.stdout, block, "stdin must reach cavemem unchanged");
 });
 
 test("mem forget shells through", async () => {

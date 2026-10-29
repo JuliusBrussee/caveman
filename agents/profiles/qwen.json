@@ -6,7 +6,7 @@
   "homepage": "https://github.com/QwenLM/qwen-code",
   "binary_names": ["qwen"],
   "args": ["--extensions=none"],
-  "install": "npm i -g @qwen-code/qwen-code@0.25.2",
+  "install": "npm i -g @qwen-code/qwen-code@0.25.3",
   "wire_protocol": "openai-chat",
   "injection": {
     "method": "config-file",
@@ -128,10 +128,10 @@
     }
   },
   "attribution": { "header": "X-Cave-Agent" },
-  "tested_agent_version": "0.25.2",
+  "tested_agent_version": "0.25.3",
   "injection_completeness": "declarative",
-  "last_verified_at": "2026-10-16",
-  "verified_by": "local pinned-binary probe (@qwen-code/qwen-code 0.25.2 on Node 24.16.0, agents/probe-installed.mjs: --version and --help both exit 0) plus route check: this profile's own config_overlay.local, rendered into the file named by QWEN_CODE_SYSTEM_SETTINGS_PATH with ENABLE_WEB_SEARCH=0 and QWEN_CODE_DISABLE_WORKFLOWS=1 as buildWrapEnv sets them, made `qwen --extensions=none -p` send POST /w/qwen/v1/chat/completions (X-Cave-Agent: qwen, model gpt-5.5) to a loopback recorder, and the run completed (exit 0). The overlay was rendered from the profile by hand rather than through the CLI's buildWrapEnv, so its base-config merge was not exercised",
+  "last_verified_at": "2026-10-21",
+  "verified_by": "local pinned-binary probe (@qwen-code/qwen-code 0.25.3 on Node 22.22.0, agents/probe-installed.mjs: --version and --help both exit 0) plus route check: this profile's own config_overlay.local, rendered into the file named by QWEN_CODE_SYSTEM_SETTINGS_PATH with ENABLE_WEB_SEARCH=0 and QWEN_CODE_DISABLE_WORKFLOWS=1 as buildWrapEnv sets them, made `qwen --extensions=none -p` send POST /w/qwen/v1/chat/completions (X-Cave-Agent: qwen, model gpt-5.5) to a loopback recorder, and the run completed (exit 0). The overlay was rendered from the profile by hand rather than through the CLI's buildWrapEnv, so its base-config merge was not exercised",
   "fallback": "generic-env",
   "maintainer": null
 }
