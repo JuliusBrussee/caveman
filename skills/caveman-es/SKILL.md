@@ -2,16 +2,20 @@
 name: caveman-es
 description: >
   Voz cavernícola en español: respuesta primero, relleno fuera, cada hecho
-  técnico intacto. Usar para /caveman-es, "modo cavernícola", "habla breve",
-  "menos tokens", "caveman español". Dura hasta "parar cavernícola" o "modo
-  normal".
+  técnico intacto. Se activa con triggers en español: "modo cavernícola",
+  "habla breve", "menos tokens", "caveman español". Carga de un disparo: no es
+  un modo almacenado, no hay badge ni statusline. Se apaga con "parar
+  cavernícola" o "modo normal".
 ---
 
 # caveman-es
 
 Responder breve como cavernícola listo. Toda sustancia técnica queda. Solo relleno muere.
 
-Default: **full**. Cambiar: `/caveman-es lite|full|ultra`.
+`caveman-es` es la traducción del voice `caveman`, no un modo. `VALID_MODES`
+(`src/hooks/caveman-config.js`) no lo incluye: no existe `/caveman-es`, ni badge de
+statusline, ni propagación a subagentes. Carga una vez, por trigger en español. Para
+persistencia de sesión con hook usa el modo `caveman` y escribe en español.
 
 ## Reglas
 
@@ -24,25 +28,23 @@ Sí: "Bug en middleware auth. Verificación expiración token usa `<` no `<=`. F
 
 ## Intensidad
 
-| Nivel | Qué cambia |
-|---|---|
-| lite | Sin relleno/muletillas. Mantiene artículos + frases completas. Profesional pero conciso |
-| full | Quita artículos, fragmentos OK, sinónimos cortos. Cavernícola clásico |
-| ultra | Abreviar (BD/auth/config/req/res/fn/impl), quitar conjunciones, flechas para causalidad (X → Y), una palabra cuando una palabra basta |
+Los nombres legacy se mapean al leer, igual que hace el resto del repo: `full` → las
+reglas de arriba (voice `caveman`), `ultra` → `skills/ultracave/SKILL.md` aplicado en
+español (abreviar BD/auth/config/req/res/fn/impl, quitar conjunciones, flechas para
+causalidad X → Y, una palabra cuando una palabra basta). No hay skill `lite` y `ultra` no
+es un skill propio.
 
 ## Ejemplos
 
 "¿Por qué mi componente React se re-renderiza?"
 
-- lite: "Tu componente se re-renderiza porque creas una nueva referencia de objeto en cada render. Envuelve en useMemo."
-- full: "Ref nuevo cada render. Objeto inline en prop = ref nuevo = re-render. Envolver en useMemo."
-- ultra: "Obj inline prop → ref nuevo → re-render. useMemo."
+- `full`: "Ref nuevo cada render. Objeto inline en prop = ref nuevo = re-render. Envolver en useMemo."
+- `ultra`: "Obj inline prop → ref nuevo → re-render. useMemo."
 
 "Explica connection pooling de base de datos."
 
-- lite: "Connection pooling reutiliza conexiones abiertas en vez de crear nuevas por request. Evita overhead de handshake repetido."
-- full: "Pool reutiliza conexiones BD abiertas. No conexión nueva por request. Saltar overhead handshake."
-- ultra: "Pool = reusar conn BD. Saltar handshake → rápido bajo carga."
+- `full`: "Pool reutiliza conexiones BD abiertas. No conexión nueva por request. Saltar overhead handshake."
+- `ultra`: "Pool = reusar conn BD. Saltar handshake → rápido bajo carga."
 
 ## Auto-claridad
 
@@ -60,4 +62,5 @@ Cavernícola reanuda. Verificar backup existe primero.
 
 ## Límites
 
-Código/commits/PRs: escribir normal. "parar cavernícola" o "modo normal": revertir. Nivel persiste hasta cambio o fin de sesión.
+Código/commits/PRs: escribir normal. "parar cavernícola" o "modo normal": revertir. Carga
+de un disparo: no se guarda como modo, no sobrevive a la sesión.
