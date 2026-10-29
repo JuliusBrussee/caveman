@@ -1513,3 +1513,54 @@ func TestChatGPTZstdKeepsTheCacheInvariant(t *testing.T) {
 		}
 	})
 }
+
+func TestChatGPTCodexCancellationAccounting(t *testing.T) {
+	for _, tt := range []struct {
+		name, event, want string
+		maxWrite          int
+	}{
+		{"completed", "response.completed", "", 0},
+		{"interrupted", "response.in_progress", "cave_client_canceled", 0},
+		{"partial terminal write", "response.completed", "cave_client_canceled", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			body := "event: " + tt.event + "\ndata: {\"type\":\"" + tt.event + "\",\"response\":{\"usage\":{\"input_tokens\":111,\"output_tokens\":22}}}\n\n"
+			sink := &captureSink{}
+			srv := New(Config{
+				Auth: stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}}, Sink: sink,
+				ChatGPTUpstream: "https://chatgpt.test/backend-api/codex",
+				HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
+					_, _ = io.Copy(io.Discard, r.Body)
+					return &http.Response{StatusCode: 200, Header: http.Header{"Content-Type": {"application/json"}}, Body: io.NopCloser(&cancelAfterBodyReader{body: []byte(body)}), Request: r}, nil
+				})},
+			})
+			req := httptest.NewRequest(http.MethodPost, "/chatgpt/responses", strings.NewReader(`{"model":"gpt-5.5","stream":true}`)).WithContext(ctx)
+			req.Header.Set("x-cave-agent", "codex")
+			w := &cancelAfterWriteResponseWriter{ResponseRecorder: httptest.NewRecorder(), cancel: cancel, maxWrite: tt.maxWrite}
+			func() {
+				defer func() {
+					if v := recover(); v != nil && v != http.ErrAbortHandler {
+						panic(v)
+					}
+				}()
+				srv.Handler().ServeHTTP(w, req)
+			}()
+			row := sink.last(t)
+			if row.ErrorCode != tt.want {
+				t.Fatalf("error=%q want %q", row.ErrorCode, tt.want)
+			}
+			if tt.want == "" {
+				if !row.Stream || row.InputTokens != 111 || row.OutputTokens != 22 {
+					t.Fatalf("completed usage lost: %+v", row)
+				}
+				if w.Body.String() != body {
+					t.Fatal("completed response bytes changed")
+				}
+			} else if row.InputTokens != 0 || row.OutputTokens != 0 {
+				t.Fatal("interrupted response counted usage")
+			}
+		})
+	}
+}
