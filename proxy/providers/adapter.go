@@ -426,6 +426,14 @@ const (
 	recoveryToolName     = "caveman_retrieve"
 	mcpRecoveryToolName  = "mcp__caveman__caveman_retrieve"
 	kiloRecoveryToolName = "caveman_caveman_retrieve"
+	// `caveman wrap claude` registers the recovery MCP server inside its
+	// ephemeral `caveman-wrap` plugin (buildClaudeEphemeralPlugin in
+	// packages/cli/src/index.ts). Claude Code keys a plugin's MCP server as
+	// `plugin:<plugin>:<server>` and then sanitises every character outside
+	// [A-Za-z0-9_-] to `_` when it builds the tool name, so the server
+	// `caveman` inside plugin `caveman-wrap` is called under this one spelling.
+	// tests/verify_repo.py holds the two sources to each other.
+	claudeWrapRecoveryToolName = "mcp__plugin_caveman-wrap_caveman__caveman_retrieve"
 )
 
 // IsRecoveryToolName reports whether a tool call is a caveman recovery call.
@@ -438,7 +446,8 @@ const (
 // elision it was trying to escape. Measured on 2026-08-06: the agent called
 // retrieve, reported "Same truncation", and re-read the same file seven times.
 func IsRecoveryToolName(name string) bool {
-	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName
+	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName ||
+		name == claudeWrapRecoveryToolName
 }
 
 type Base struct {
