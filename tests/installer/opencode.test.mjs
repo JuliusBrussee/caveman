@@ -1177,3 +1177,51 @@ test('opencode plugin does not deactivate caveman when the config copy predates 
     fs.rmSync(shimDir, { recursive: true, force: true });
   }
 });
+
+// ── Repo-level `defaultMode: "off"` must reach the opencode plugin ───────
+// Claude Code honours a repo `.caveman.json` on both its hooks (#634). The
+// opencode plugin threw its factory context away, so `getDefaultMode()` ran
+// against the plugin process cwd instead of the session's project directory,
+// and `experimental.chat.system.transform` keyed injection purely off the
+// GLOBAL `~/.config/opencode/.caveman-active` flag — so a repo that opted out
+// still got the caveman system prompt whenever any other session had set it.
+test('opencode plugin honors a repo .caveman.json defaultMode=off from its context directory', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const repoDir = freshTmpDir();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = installEnv(xdg, shimDir);
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    process.env.XDG_CONFIG_HOME = xdg;
+    delete process.env.CAVEMAN_DEFAULT_MODE;
+    fs.writeFileSync(path.join(repoDir, '.caveman.json'), JSON.stringify({ defaultMode: 'off' }) + '\n');
+
+    const mod = await import(`${pathToFileURL(path.join(pluginDir, 'plugin.js')).href}?repo-off`);
+    // A stale global flag from another session must not survive session start
+    // in a repo that opted out.
+    fs.writeFileSync(flagPath, 'caveman');
+    const handlers = await (mod.default || mod.CavemanPlugin)({ directory: repoDir });
+    assert.equal(fs.existsSync(flagPath), false, 'session start in an opted-out repo must clear the flag');
+
+    // And a concurrent session re-writing the global flag mid-session must not
+    // get caveman injected into this repo's requests either.
+    fs.writeFileSync(flagPath, 'caveman');
+    const system = ['Base system prompt'];
+    await handlers['experimental.chat.system.transform']({}, { system });
+    assert.deepEqual(system, ['Base system prompt'], 'an opted-out repo must get no caveman system prompt');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
