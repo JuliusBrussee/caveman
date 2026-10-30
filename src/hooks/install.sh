@@ -90,9 +90,12 @@ if [ "$FORCE" -eq 0 ]; then
   HOOKS_WIRED=0
   HAS_STATUSLINE=0
   if [ "$ALL_FILES_PRESENT" -eq 1 ] && [ -f "$SETTINGS" ]; then
-    if CAVEMAN_SETTINGS="$SETTINGS" node -e "
+    if CAVEMAN_SETTINGS="$SETTINGS" CAVEMAN_SETTINGS_HELPER="$SETTINGS_HELPER" node -e "
       const fs = require('fs');
-      const settings = JSON.parse(fs.readFileSync(process.env.CAVEMAN_SETTINGS, 'utf8'));
+      const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+      const settings = helper
+        ? require(helper).readSettings(process.env.CAVEMAN_SETTINGS)
+        : JSON.parse(fs.readFileSync(process.env.CAVEMAN_SETTINGS, 'utf8'));
       // Probe for the exact script we wire for this event, not a bare
       // 'caveman' substring — that also matches user hooks merely mentioning
       // the word in a path (#593), which made us skip wiring and silently
