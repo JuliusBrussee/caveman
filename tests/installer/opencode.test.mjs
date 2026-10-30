@@ -1225,3 +1225,58 @@ test('opencode plugin honors a repo .caveman.json defaultMode=off from its conte
     fs.rmSync(shimDir, { recursive: true, force: true });
   }
 });
+
+// ── A system prompt entry is library input, so its shape is not ours to pick ──
+// The `defaultMode: "off"` branch strips a stale reinforcement block and then
+// trimmed the trailing newlines with /\n+$/. That regex backtracks across any
+// long newline run that is NOT at the end of the string, which is quadratic in
+// the run's length: 20k newlines took 0.5s, 50k took 3.4s, 100k took 14s.
+// CodeQL flagged it high ("polynomial regular expression used on uncontrolled
+// data"). The strip must stay linear and must keep behaving identically —
+// only \n is removed, so a trailing \r is still left alone.
+test('opencode system.transform strips trailing newlines in linear time', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = installEnv(xdg, shimDir);
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+
+    const mod = await import(`${pathToFileURL(path.join(pluginDir, 'plugin.js')).href}?redos`);
+    const handlers = await (mod.default || mod.CavemanPlugin)({});
+
+    // A long newline run followed by ordinary text, so the run does not sit at
+    // the end of the string once our own block is stripped off the tail.
+    const RUN = 100_000;
+    const base = '\n'.repeat(RUN) + 'x';
+    const system = [base];
+
+    // Active: the plugin appends its real reinforcement block after `base`.
+    await handlers['experimental.chat.system.transform']({}, { system });
+    assert.notEqual(system[0], base, 'precondition: a reinforcement block must have been appended');
+
+    // Opted out: the same entry now takes the strip path.
+    process.env.CAVEMAN_DEFAULT_MODE = 'off';
+    const started = process.hrtime.bigint();
+    await handlers['experimental.chat.system.transform']({}, { system });
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+
+    assert.equal(system[0], base, 'the block must be stripped back to exactly the original entry');
+    // 100k newlines cost ~14s through the quadratic regex and under a
+    // millisecond linearly, so this threshold is not load-sensitive.
+    assert.ok(ms < 3000, `trailing-newline strip took ${Math.round(ms)} ms: it is not linear`);
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});

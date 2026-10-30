@@ -169,6 +169,17 @@ const staleBlock = new RegExp(
   escapeRegExp(bannerPrefix) + '[a-z-]+' + escapeRegExp(bannerSuffix) + '[\\s\\S]*$'
 );
 
+// Drop trailing newlines without a regex. `/\n+$/` backtracks across every
+// newline run that is not at the end of the string, which is quadratic in the
+// run's length — 100k newlines took ~14s. A system prompt entry is library
+// input, so its shape is not ours to assume. Only \n is removed, matching what
+// the regex did: a trailing \r is left alone.
+function stripTrailingNewlines(text) {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 10) end--;
+  return end === text.length ? text : text.slice(0, end);
+}
+
 // skills/<mode>/SKILL.md is the single source of truth for each mode, loaded
 // whole the same way caveman-activate.js and caveman-mode-tracker.js do. The
 // loader itself is NOT re-implemented here: it lives in caveman-config.js,
@@ -354,7 +365,7 @@ export const CavemanPlugin = async (ctx) => {
     if (getDefaultMode(projectDir) === 'off') {
       for (let i = 0; i < output.system.length; i++) {
         if (typeof output.system[i] === 'string' && staleBlock.test(output.system[i])) {
-          output.system[i] = output.system[i].replace(staleBlock, '').replace(/\n+$/, '');
+          output.system[i] = stripTrailingNewlines(output.system[i].replace(staleBlock, ''));
         }
       }
       return;
