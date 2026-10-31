@@ -147,12 +147,18 @@ class CompressPromptRuleTests(unittest.TestCase):
         # #1433
         self.assertIn("Output ends where the input ends", self.prompt)
 
+    def test_prompt_keeps_the_instruction_verb(self):
+        # #1434
+        self.assertIn("Keep the verb that carries each instruction", self.prompt)
+        self.assertIn("a verbless noun phrase is not", self.prompt)
+
     def test_rules_are_inside_the_strict_rules_block(self):
         # A rule after the "TEXT:" payload boundary is advice about the text,
         # not a constraint on the reply.
         rules, _, text = self.prompt.partition("\nTEXT:")
         self.assertIn("Output ends where the input ends", rules)
-        self.assertNotIn("Output ends where the input ends", text)
+        self.assertIn("Keep the verb that carries each instruction", rules)
+        self.assertNotIn("Keep the verb that carries each instruction", text)
 
 
 if __name__ == "__main__":
