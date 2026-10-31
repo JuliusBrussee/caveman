@@ -154,6 +154,7 @@ function transformResponse(msg) {
   for (const arrayName of ['tools', 'prompts', 'resources', 'resourceTemplates']) {
     if (Array.isArray(r[arrayName])) {
       for (const item of r[arrayName]) {
+        if (!item || typeof item !== 'object') continue;
         for (const field of fields) {
           if (typeof item[field] === 'string') {
             const before = item[field];
@@ -179,7 +180,7 @@ function transformResponse(msg) {
   for (const arrayName of ['tools', 'prompts', 'resources', 'resourceTemplates']) {
     if (Array.isArray(r[arrayName])) {
       for (const item of r[arrayName]) {
-        if (item.inputSchema) compressDescriptionsInPlace(item.inputSchema, fields);
+        if (item && item.inputSchema) compressDescriptionsInPlace(item.inputSchema, fields);
       }
     }
   }
@@ -201,8 +202,13 @@ const responses = makeLineBuffer(line => {
     writeClient(line + '\n');
     return;
   }
-  const out = transformResponse(msg);
-  writeClient(JSON.stringify(out) + '\n');
+  let out;
+  try { out = JSON.stringify(transformResponse(msg)); } catch {
+    // A response we fail to transform still reaches the client, unchanged.
+    writeClient(line + '\n');
+    return;
+  }
+  writeClient(out + '\n');
 });
 upstream.stdout.on('data', chunk => responses.push(chunk));
 upstream.stdout.on('end', () => responses.end());
