@@ -7999,7 +7999,11 @@ function canonicalManagedHookEntry(entry: Record<string, unknown>): string | und
   const clone = JSON.parse(JSON.stringify(entry)) as Record<string, unknown>;
   const hooks = clone.hooks as Array<Record<string, unknown>>;
   hooks[0]!.command = identity;
-  return JSON.stringify(clone);
+  // Why: other settings.json writers may reorder keys; ownership is the data, not its key order (#1437).
+  return JSON.stringify(clone, (_key, value: unknown) =>
+    value && typeof value === "object" && !Array.isArray(value)
+      ? Object.fromEntries(Object.entries(value).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0)))
+      : value);
 }
 
 // Why: `think.shrink` (and its `CAVEMAN_SHRINK` env form) is the persisted
