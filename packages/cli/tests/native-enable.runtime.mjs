@@ -1306,6 +1306,28 @@ test("doctor --fix transactionally repairs missing owned hooks and preserves unr
   assert.doesNotMatch(JSON.stringify(restored), /native-hook claude|shrink-hook/);
 });
 
+test("reordered keys in an owned hook entry stay owned (#1437)", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const path = join(fx.home, ".claude", "settings.json");
+  const settings = JSON.parse(readFileSync(path, "utf8"));
+  const reversed = (obj) => Object.fromEntries(Object.entries(obj).reverse());
+  settings.hooks.PreToolUse = settings.hooks.PreToolUse.map((entry) => ({
+    ...reversed(entry),
+    hooks: entry.hooks.map(reversed),
+  }));
+  assert.match(JSON.stringify(settings.hooks.PreToolUse), /shrink-hook/);
+  writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+
+  const doctor = await run(["doctor", "claude"], fx.env);
+  assert.equal(doctor.code, 0, doctor.stdout + doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).state, "installed");
+
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook/);
+});
+
 test("doctor --fix refuses owned-value conflicts without partial writes", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
