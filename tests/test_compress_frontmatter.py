@@ -127,6 +127,21 @@ class BodyOnlyTests(unittest.TestCase):
         # same appended commentary and must not slip past the counter.
         self.run_reply(FM + BODY, [GOOD + TRAILER.replace("---", "***")], False)
 
+    def test_crlf_trailing_commentary_rejected(self):
+        # Windows parity: splitlines() drops the \r, so the CRLF trailer must be
+        # caught by the same counter rather than slipping past it.
+        crlf = (FM + BODY).replace("\n", "\r\n")
+        self.run_reply(crlf, [(GOOD + TRAILER).replace("\n", "\r\n")], False)
+
+    def test_break_carried_over_from_the_original_still_passes(self):
+        # The guard refuses an *added* break only. A break the original already
+        # had keeps the count equal and must not cost a false rejection.
+        section = "\n---\n\nSection two prose here.\n"
+        self.run_reply(
+            FM + BODY + section, [GOOD + "\n---\n\nSection two.\n"],
+            True, FM + GOOD + "\n---\n\nSection two.\n",
+        )
+
     def test_plain_body_fix_duplicate_frontmatter_rejected(self):
         original = EXTRA + "Keep the operational guidance clear. " * 40 + "\nRead https://example.com/rules.\n"
         repair = EXTRA + "---\nupdated: 2026-10-22\n---\nKeep guidance. Read https://example.com/rules."
