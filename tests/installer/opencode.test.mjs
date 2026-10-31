@@ -1177,3 +1177,106 @@ test('opencode plugin does not deactivate caveman when the config copy predates 
     fs.rmSync(shimDir, { recursive: true, force: true });
   }
 });
+
+// ── Repo-level `defaultMode: "off"` must reach the opencode plugin ───────
+// Claude Code honours a repo `.caveman.json` on both its hooks (#634). The
+// opencode plugin threw its factory context away, so `getDefaultMode()` ran
+// against the plugin process cwd instead of the session's project directory,
+// and `experimental.chat.system.transform` keyed injection purely off the
+// GLOBAL `~/.config/opencode/.caveman-active` flag — so a repo that opted out
+// still got the caveman system prompt whenever any other session had set it.
+test('opencode plugin honors a repo .caveman.json defaultMode=off from its context directory', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const repoDir = freshTmpDir();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = installEnv(xdg, shimDir);
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    const flagPath = path.join(xdg, 'opencode', '.caveman-active');
+    process.env.XDG_CONFIG_HOME = xdg;
+    delete process.env.CAVEMAN_DEFAULT_MODE;
+    fs.writeFileSync(path.join(repoDir, '.caveman.json'), JSON.stringify({ defaultMode: 'off' }) + '\n');
+
+    const mod = await import(`${pathToFileURL(path.join(pluginDir, 'plugin.js')).href}?repo-off`);
+    // A stale global flag from another session must not survive session start
+    // in a repo that opted out.
+    fs.writeFileSync(flagPath, 'caveman');
+    const handlers = await (mod.default || mod.CavemanPlugin)({ directory: repoDir });
+    assert.equal(fs.existsSync(flagPath), false, 'session start in an opted-out repo must clear the flag');
+
+    // And a concurrent session re-writing the global flag mid-session must not
+    // get caveman injected into this repo's requests either.
+    fs.writeFileSync(flagPath, 'caveman');
+    const system = ['Base system prompt'];
+    await handlers['experimental.chat.system.transform']({}, { system });
+    assert.deepEqual(system, ['Base system prompt'], 'an opted-out repo must get no caveman system prompt');
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(repoDir, { recursive: true, force: true });
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});
+
+// ── A system prompt entry is library input, so its shape is not ours to pick ──
+// The `defaultMode: "off"` branch strips a stale reinforcement block and then
+// trimmed the trailing newlines with /\n+$/. That regex backtracks across any
+// long newline run that is NOT at the end of the string, which is quadratic in
+// the run's length: 20k newlines took 0.5s, 50k took 3.4s, 100k took 14s.
+// CodeQL flagged it high ("polynomial regular expression used on uncontrolled
+// data"). The strip must stay linear and must keep behaving identically —
+// only \n is removed, so a trailing \r is still left alone.
+test('opencode system.transform strips trailing newlines in linear time', async () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const origDefault = process.env.CAVEMAN_DEFAULT_MODE;
+  const origXdg = process.env.XDG_CONFIG_HOME;
+  try {
+    const env = installEnv(xdg, shimDir);
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, `argv error: ${r.stderr}`);
+
+    const pluginDir = path.join(xdg, 'opencode', 'plugins', 'caveman');
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+
+    const mod = await import(`${pathToFileURL(path.join(pluginDir, 'plugin.js')).href}?redos`);
+    const handlers = await (mod.default || mod.CavemanPlugin)({});
+
+    // A long newline run followed by ordinary text, so the run does not sit at
+    // the end of the string once our own block is stripped off the tail.
+    const RUN = 100_000;
+    const base = '\n'.repeat(RUN) + 'x';
+    const system = [base];
+
+    // Active: the plugin appends its real reinforcement block after `base`.
+    await handlers['experimental.chat.system.transform']({}, { system });
+    assert.notEqual(system[0], base, 'precondition: a reinforcement block must have been appended');
+
+    // Opted out: the same entry now takes the strip path.
+    process.env.CAVEMAN_DEFAULT_MODE = 'off';
+    const started = process.hrtime.bigint();
+    await handlers['experimental.chat.system.transform']({}, { system });
+    const ms = Number(process.hrtime.bigint() - started) / 1e6;
+
+    assert.equal(system[0], base, 'the block must be stripped back to exactly the original entry');
+    // 100k newlines cost ~14s through the quadratic regex and under a
+    // millisecond linearly, so this threshold is not load-sensitive.
+    assert.ok(ms < 3000, `trailing-newline strip took ${Math.round(ms)} ms: it is not linear`);
+  } finally {
+    if (origDefault === undefined) delete process.env.CAVEMAN_DEFAULT_MODE;
+    else process.env.CAVEMAN_DEFAULT_MODE = origDefault;
+    if (origXdg === undefined) delete process.env.XDG_CONFIG_HOME;
+    else process.env.XDG_CONFIG_HOME = origXdg;
+    fs.rmSync(xdg, { recursive: true, force: true });
+    fs.rmSync(shimDir, { recursive: true, force: true });
+  }
+});

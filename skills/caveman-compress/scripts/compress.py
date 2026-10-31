@@ -784,6 +784,8 @@ STRICT RULES:
 - Preserve ALL headings exactly
 - Preserve file paths and commands
 - Return ONLY the compressed markdown body, with no preface, commentary, or YAML frontmatter — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
+- Output ends where the input ends: no appended summary, notes, "untouched" section, or trailing commentary, and no new --- or *** break to introduce one
+- Keep the verb that carries each instruction: "Do X", "Run Y", "Never Z" stay orders. A fragment is fine, a verbless noun phrase is not
 
 Only compress natural language prose. Never restructure, add formatting, or improve organization.
 
@@ -923,6 +925,26 @@ def _frontmatter_block_count(masked_body: str) -> int:
     return count
 
 
+_THEMATIC_BREAK_RE = re.compile(r"^(?:-{3,}|\*{3,}|_{3,})$")
+
+
+def _thematic_break_count(masked_body: str) -> int:
+    """Count bare thematic-break lines outside preserved code.
+
+    The head of the body is anchored by its first line, but nothing anchored
+    the tail, so an appended commentary section ("Untouched: ... Risk: ...")
+    under a new ``---`` was accepted and written into the file (#1433). The
+    model is already told not to restructure or add formatting, so a break
+    that was not in the original is an addition either way: counting them
+    needs no classification of what follows, which is the part #1359
+    deliberately declines to do.
+    """
+    return sum(
+        1 for line in masked_body.splitlines()
+        if _THEMATIC_BREAK_RE.match(line.strip())
+    )
+
+
 def _body_candidate_error(original_masked: str, candidate_masked: str) -> str:
     """Use the same body-only structural guards for compression and repair."""
     anchor = first_nonblank_line(original_masked)
@@ -930,6 +952,11 @@ def _body_candidate_error(original_masked: str, candidate_masked: str) -> str:
         return "output does not start with the original body's first line (possible preamble leak)"
     if _frontmatter_block_count(candidate_masked) > _frontmatter_block_count(original_masked):
         return "output added YAML frontmatter to the markdown body"
+    if _thematic_break_count(candidate_masked) > _thematic_break_count(original_masked):
+        return (
+            "output added a thematic break the original did not have "
+            "(possible appended commentary or notes section)"
+        )
     return ""
 
 

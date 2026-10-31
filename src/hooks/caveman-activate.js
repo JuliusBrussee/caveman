@@ -531,6 +531,27 @@ function statuslineScriptOutdated(candidate) {
   }
 }
 
+// The suggested command is a SHELL command string: Claude Code runs statusline
+// and hook commands through bash on every platform, Git Bash included (#835,
+// see installer/lib/platform-paths.js). A raw `"${scriptPath}"` therefore lets
+// the shell expand a literal `$NAME`, a backtick or a `\` that is really part
+// of the path, and the suggested badge setup runs the wrong path or none
+// (#1400). Windows is NOT exempt: the same bash runs it there, and win32 needs
+// `\` -> `/` besides so bash does not eat the separators as escapes.
+//
+// Mirrors hookCommand() in installer/lib/platform-paths.js byte for byte so a
+// nudge suggests exactly what the installer would have registered; the two are
+// pinned together by tests/hooks/statusline-nudge.test.mjs. Kept inline rather
+// than required: src/hooks/ ships without the installer tree beside it.
+function shellCommand(parts, platform = process.platform) {
+  const normalize = platform === 'win32'
+    ? (value) => String(value).replace(/\\/g, '/')
+    : (value) => String(value);
+  return parts
+    .map((value) => `"${normalize(value).replace(/(["\\$`])/g, '\\$1')}"`)
+    .join(' ');
+}
+
 try {
   const isWindows = process.platform === 'win32';
   const scriptName = isWindows ? 'caveman-statusline.ps1' : 'caveman-statusline.sh';
@@ -589,8 +610,8 @@ try {
     else safeWriteFlag(nudgeMarkerPath, '1');
     const scriptPath = stableStatuslinePath(scriptName) || path.join(__dirname, scriptName);
     const command = isWindows
-      ? `powershell -ExecutionPolicy Bypass -File "${scriptPath}"`
-      : `bash "${scriptPath}"`;
+      ? shellCommand(['powershell', '-ExecutionPolicy', 'Bypass', '-File', scriptPath])
+      : shellCommand(['bash', scriptPath]);
     const statusLineSnippet =
       '"statusLine": { "type": "command", "command": ' + JSON.stringify(command) + ' }';
     output += "\n\n" +

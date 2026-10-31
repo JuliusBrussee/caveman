@@ -32,6 +32,19 @@ KNOWN_CODE_FILENAMES = {
     "cmakelists.txt",
 }
 
+# Dotfiles whose entire name sits where pathlib expects a suffix, so
+# `Path(".cursorrules").suffix` is `""` just as it is for `.env`. These are the
+# prose ones — Cursor's and its imitators' legacy single-file rule formats —
+# and the only bare dotfiles that may be compressed. Everything else is
+# treated as config; see the dotfile branch in `detect_file_type`.
+PROSE_DOTFILES = {
+    ".cursorrules", ".windsurfrules", ".clinerules", ".aiderrules",
+    ".goosehints", ".augmentrules",
+}
+
+# Extensions on SKIP_EXTENSIONS that are data/config rather than program text.
+CONFIG_EXTENSIONS = {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env"}
+
 # Patterns that indicate a line is code
 CODE_PATTERNS = [
     re.compile(r"^\s*(import |from .+ import |require\(|const |let |var )"),
@@ -81,16 +94,35 @@ def detect_file_type(filepath: Path) -> str:
         One of: 'natural_language', 'code', 'config', 'unknown'
     """
     ext = filepath.suffix.lower()
+    name = filepath.name.lower()
 
     # Known code filenames win over any extension rule
-    if filepath.name.lower() in KNOWN_CODE_FILENAMES:
+    if name in KNOWN_CODE_FILENAMES:
         return "code"
+
+    # A bare dotfile carries its whole name where pathlib expects a suffix, so
+    # `Path(".env").suffix` is `""` and every table below was skipped. The file
+    # then reached the extensionless content sniffer, which only recognises
+    # brace-and-quote code — so `.env`, `.gitignore` and `.editorconfig` all
+    # came back `natural_language` and `/caveman-compress .gitignore` shipped
+    # the bytes to the configured provider and rewrote the file in place.
+    # Resolve the name against the tables, and treat anything unrecognised as
+    # config rather than prose: a dotfile is an rc/config file by convention,
+    # and guessing wrong is destructive in both directions at once. Guessing
+    # "config" only costs a `Skipping` line on a file that is left untouched.
+    if not ext and name.startswith(".") and name not in {".", ".."}:
+        if name in PROSE_DOTFILES or name in COMPRESSIBLE_EXTENSIONS:
+            return "natural_language"
+        if name in SKIP_EXTENSIONS:
+            ext = name  # fall through to the shared config/code split below
+        else:
+            return "config"
 
     # Extension-based classification
     if ext in COMPRESSIBLE_EXTENSIONS:
         return "natural_language"
     if ext in SKIP_EXTENSIONS:
-        return "code" if ext not in {".json", ".yaml", ".yml", ".toml", ".ini", ".cfg", ".env"} else "config"
+        return "code" if ext not in CONFIG_EXTENSIONS else "config"
 
     # Extensionless files (like CLAUDE.md, TODO) — check content
     if not ext:

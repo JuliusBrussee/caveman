@@ -367,6 +367,43 @@ func TestOpenMigratesLegacyMemorySchema(t *testing.T) {
 	}
 }
 
+func TestRememberStaysIdempotentForARevertedFact(t *testing.T) {
+	s := newStore(t)
+	a, _ := s.Remember("database host is db-a.internal")
+	b, err := s.Supersede(a.ID, "database host is db-b.internal")
+	if err != nil {
+		t.Fatal(err)
+	}
+	reverted, err := s.Supersede(b.ID, a.Text)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// memID(a.Text) names a's expired row, but the identical text is current
+	// again under reverted.ID, so remembering it must return that row rather
+	// than claim the fact exists only as history.
+	got, err := s.Remember(a.Text)
+	if err != nil {
+		t.Fatalf("remember a reverted, currently-stored fact: %v", err)
+	}
+	if got.ID != reverted.ID || got.ValidUntil != nil {
+		t.Fatalf("remember returned %+v, want the current row %s", got, reverted.ID)
+	}
+	// The expired row stays expired: nothing was revived, and recall still
+	// returns exactly one version.
+	hits, err := s.Recall("database host", RecallOptions{})
+	if err != nil || len(hits) != 1 || hits[0].ID != reverted.ID {
+		t.Fatalf("recall after remember = %+v, %v", hits, err)
+	}
+	history, err := s.History(reverted.ID)
+	if err != nil || len(history) != 3 {
+		t.Fatalf("history after remember = %+v, %v", history, err)
+	}
+	// A genuinely historical fact with no current copy is still refused.
+	if _, err := s.Remember(b.Text); err == nil {
+		t.Fatal("remembering a fact that exists only as history must still fail")
+	}
+}
+
 func TestSupersedeCanRevertToAnEarlierValue(t *testing.T) {
 	s := newStore(t)
 	a, _ := s.Remember("database host is db-a.internal")

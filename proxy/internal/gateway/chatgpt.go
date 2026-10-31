@@ -1,6 +1,7 @@
 package gateway
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/sha256"
@@ -320,18 +321,33 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("x-caveman-token-count-basis", "estimated_engine_o200k")
 	}
 	respCapture := &cappedBuffer{limit: chatGPTCaptureLimit}
-	piResponsesRoute := rc.AgentSlug == "pi" && r.Method == http.MethodPost && suffix == "/responses"
+	responsesStreamRoute := (rc.AgentSlug == "pi" || rc.AgentSlug == "codex") &&
+		r.Method == http.MethodPost && suffix == "/responses"
 	requestBodyComplete := chatGPTRequestHashComplete(requestBodyFullyRead, r.ContentLength, reqCapture, requestBodyTracker)
-	piResponsesStream := piResponsesRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
-	stream := streamingResponse(resp.Header) || piResponsesStream
+	responsesStreamRequested := responsesStreamRoute && chatGPTRequestWantsStream(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), reqCapture.truncated, requestBodyComplete)
+	stream := streamingResponse(resp.Header) || responsesStreamRequested
 	var responseBody io.Reader = resp.Body
 	var completionTracker streamCompletionTracker
-	if piResponsesRoute && stream && resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusBadRequest && (piResponsesStream || isChatGPTEventStream(resp.Header)) {
-		completionReader := &chatGPTSSECompletionReader{source: responseBody}
-		responseBody = completionReader
-		completionTracker = completionReader
-		// EOF normalization can append a delimiter; upstream's length no longer applies.
-		w.Header().Del("Content-Length")
+	if responsesStreamRoute && stream && resp.StatusCode >= http.StatusOK &&
+		resp.StatusCode < http.StatusBadRequest {
+		// The request's own stream flag is not proof the RESPONSE is SSE. A 200
+		// carrying a genuine JSON body has no terminal Responses event, so the
+		// completion reader would call it truncated and abort the handler — the
+		// client gets a broken reply instead of its JSON. Trust an SSE
+		// Content-Type; otherwise look at a bounded, non-consuming body prefix.
+		sseBody := isChatGPTEventStream(resp.Header)
+		if !sseBody && responsesStreamRequested {
+			buffered := bufio.NewReaderSize(responseBody, chatGPTSSESniffBuffer)
+			responseBody = buffered
+			sseBody = sniffSSEBody(buffered)
+		}
+		if sseBody {
+			completionReader := &chatGPTSSECompletionReader{source: responseBody}
+			responseBody = completionReader
+			completionTracker = completionReader
+			// EOF normalization can append a delimiter; upstream's length no longer applies.
+			w.Header().Del("Content-Length")
+		}
 	}
 	w.WriteHeader(resp.StatusCode)
 	counter, errCode := s.streamResponse(w, r, io.TeeReader(responseBody, respCapture), stream, requestID, completionTracker)
@@ -564,11 +580,63 @@ type cappedBuffer struct {
 	truncated bool
 }
 
+// chatGPTSSESniffBuffer sizes the reader that makes the peek possible. Only
+// the sniff needs it: bufio.Reader passes a read larger than its buffer
+// straight through, so this does not cap streaming throughput, and a small
+// buffer keeps the wrapper off the 4 MiB event path.
+const chatGPTSSESniffBuffer = 512
+
+// chatGPTSSESniffLimit bounds the body prefix inspected to tell a real SSE
+// stream from a JSON response on a stream-requested route. It holds a BOM,
+// a little leading whitespace and the longest SSE field name with room over.
+const chatGPTSSESniffLimit = 16
+
+// sniffSSEBody reports whether a response body opens as an SSE stream, without
+// consuming it. Staged so a live stream is never held up: the first Peek waits
+// for ONE byte, which every response delivers, and settles the two cases that
+// one byte decides (an SSE comment, a JSON document). Only a body that opens
+// with something else — a BOM, leading whitespace — needs the wider peek, and
+// no SSE producer emits those without the frame behind them. A Peek error is
+// not fatal: the bytes already buffered are what classifies, and an empty
+// prefix simply is not SSE.
+func sniffSSEBody(buffered *bufio.Reader) bool {
+	first, _ := buffered.Peek(1)
+	if len(first) == 1 {
+		switch first[0] {
+		case ':':
+			return true
+		case '{', '[':
+			return false
+		}
+	}
+	prefix, _ := buffered.Peek(chatGPTSSESniffLimit)
+	return looksLikeSSE(prefix)
+}
+
+// looksLikeSSE reports whether a response body prefix opens as an SSE stream:
+// a field line (`event:`, `data:`, `id:`, `retry:`) or a comment (`:`). A JSON
+// document opens with `{` or `[` and never matches.
+func looksLikeSSE(prefix []byte) bool {
+	text := strings.TrimLeft(string(prefix), "\xef\xbb\xbf \t\r\n")
+	if text == "" {
+		return false
+	}
+	if strings.HasPrefix(text, ":") {
+		return true
+	}
+	for _, field := range []string{"event:", "data:", "id:", "retry:"} {
+		if len(text) >= len(field) && strings.EqualFold(text[:len(field)], field) {
+			return true
+		}
+	}
+	return false
+}
+
 const chatGPTSSEEventLimit = 4 << 20
 
 // chatGPTSSECompletionReader keeps streaming response bytes unchanged while
-// confirming that Pi receives a terminal Responses event. Pi's SSE parser only
-// dispatches events terminated by a blank line, so a complete terminal JSON
+// confirming that Pi and Codex receive a terminal Responses event. Their SSE parsers only
+// dispatch events terminated by a blank line, so a complete terminal JSON
 // event at EOF gets the missing delimiter. An EOF without a terminal event is a
 // truncated response, even when the HTTP body closed cleanly.
 type chatGPTSSECompletionReader struct {

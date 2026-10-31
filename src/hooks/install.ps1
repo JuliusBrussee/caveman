@@ -78,36 +78,40 @@ if (-not $Force) {
     $HooksWired = $false
     $HasStatusLine = $false
     if ($AllFilesPresent -and (Test-Path $Settings)) {
-        try {
-            $settingsObj = Get-Content $Settings -Raw | ConvertFrom-Json
-            # Probe for the exact script we wire for this event, not a bare
-            # 'caveman' substring — that also matches user hooks merely
-            # mentioning the word in a path (#593), which made us skip wiring
-            # and silently leave caveman inactive. Mirrors install.sh.
-            $hasCavemanHook = {
-                param([string]$eventName, [string]$script)
-                if (-not $settingsObj.hooks) { return $false }
-                $entries = $settingsObj.hooks.$eventName
-                if (-not $entries) { return $false }
-                foreach ($entry in $entries) {
-                    if ($entry.hooks) {
-                        foreach ($hookDef in $entry.hooks) {
-                            if ($hookDef.command -and $hookDef.command.Contains($script)) {
-                                return $true
-                            }
-                        }
-                    }
-                }
-                return $false
-            }
-            $HooksWired = (& $hasCavemanHook "SessionStart" "caveman-activate.js") `
-                -and (& $hasCavemanHook "SubagentStart" "caveman-activate.js") `
-                -and (& $hasCavemanHook "UserPromptSubmit" "caveman-mode-tracker.js") `
-                -and (& $hasCavemanHook "SessionEnd" "caveman-stats.js")
-            $HasStatusLine = $null -ne $settingsObj.statusLine
-        } catch {
-            $HooksWired = $false
-            $HasStatusLine = $false
+        $env:CAVEMAN_SETTINGS = $Settings
+        $env:CAVEMAN_SETTINGS_HELPER = $SettingsHelper
+        @'
+const fs = require('fs');
+try {
+  const helper = process.env.CAVEMAN_SETTINGS_HELPER;
+  const settings = helper
+    ? require(helper).readSettings(process.env.CAVEMAN_SETTINGS)
+    : JSON.parse(fs.readFileSync(process.env.CAVEMAN_SETTINGS, 'utf8'));
+  // Probe for the exact script we wire for this event, not a bare
+  // 'caveman' substring - that also matches user hooks merely
+  // mentioning the word in a path (#593), which made us skip wiring
+  // and silently leave caveman inactive. Mirrors install.sh.
+  const hasCavemanHook = (event, script) =>
+    Array.isArray(settings.hooks?.[event]) &&
+    settings.hooks[event].some(e =>
+      e.hooks && e.hooks.some(h => h.command && h.command.includes(script))
+    );
+  process.exit(
+    hasCavemanHook('SessionStart', 'caveman-activate.js') &&
+    hasCavemanHook('SubagentStart', 'caveman-activate.js') &&
+    hasCavemanHook('UserPromptSubmit', 'caveman-mode-tracker.js') &&
+    hasCavemanHook('SessionEnd', 'caveman-stats.js') &&
+    !!settings.statusLine
+      ? 0
+      : 1
+  );
+} catch {
+  process.exit(1);
+}
+'@ | node --input-type=commonjs >$null 2>&1
+        if ($LASTEXITCODE -eq 0) {
+            $HooksWired = $true
+            $HasStatusLine = $true
         }
     }
 

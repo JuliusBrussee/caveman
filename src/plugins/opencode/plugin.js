@@ -169,6 +169,17 @@ const staleBlock = new RegExp(
   escapeRegExp(bannerPrefix) + '[a-z-]+' + escapeRegExp(bannerSuffix) + '[\\s\\S]*$'
 );
 
+// Drop trailing newlines without a regex. `/\n+$/` backtracks across every
+// newline run that is not at the end of the string, which is quadratic in the
+// run's length — 100k newlines took ~14s. A system prompt entry is library
+// input, so its shape is not ours to assume. Only \n is removed, matching what
+// the regex did: a trailing \r is left alone.
+function stripTrailingNewlines(text) {
+  let end = text.length;
+  while (end > 0 && text.charCodeAt(end - 1) === 10) end--;
+  return end === text.length ? text : text.slice(0, end);
+}
+
 // skills/<mode>/SKILL.md is the single source of truth for each mode, loaded
 // whole the same way caveman-activate.js and caveman-mode-tracker.js do. The
 // loader itself is NOT re-implemented here: it lives in caveman-config.js,
@@ -273,11 +284,11 @@ function restoreAfterOneShot(setIndependentThisTurn) {
 // Session-start logic — extracted so the `event` dispatcher (opencode >= 1.15)
 // drives one shared implementation. Re-fires on every `session.created` event,
 // so a new session in a long-lived plugin process re-asserts the flag.
-function handleSessionCreated() {
+function handleSessionCreated(projectDir) {
   // Manual startup is currently a Claude Code policy. OpenCode's installer
   // also ships static AGENTS.md activation, so a cleared flag alone cannot
   // promise normal prose here. Preserve its existing caveman-mode default.
-  const configured = getDefaultMode();
+  const configured = getDefaultMode(projectDir);
   const mode = configured === 'manual' ? 'caveman' : configured;
   if (mode === 'off') {
     recordModeChange(opencodeDir, null);
@@ -288,13 +299,14 @@ function handleSessionCreated() {
   safeWriteFlag(flagPath, mode);
 }
 
-export const CavemanPlugin = async (_ctx) => {
+export const CavemanPlugin = async (ctx) => {
+  const projectDir = ctx?.location?.directory || ctx?.directory || ctx?.worktree || undefined;
   // Assert the flag at plugin load as well: in one-shot `opencode run` the
   // first session.created publishes before plugin event dispatch is wired,
   // so the event handler alone misses it. The factory-time write covers that
   // race; the event handler re-asserts on every later session in long-lived
   // TUI processes.
-  handleSessionCreated();
+  handleSessionCreated(projectDir);
 
   return {
   // opencode dispatches session/lifecycle events through a single `event`
@@ -307,7 +319,7 @@ export const CavemanPlugin = async (_ctx) => {
     // properties.info.parentID). Resetting the flag for one would undo the
     // user's "stop caveman" or /ultracave every time the model delegates.
     const parentID = event?.data?.parentID ?? event?.properties?.info?.parentID;
-    if (event && event.type === 'session.created' && !parentID) handleSessionCreated();
+    if (event && event.type === 'session.created' && !parentID) handleSessionCreated(projectDir);
   },
 
   // Intercept user messages to detect /caveman commands and natural-language
@@ -329,7 +341,7 @@ export const CavemanPlugin = async (_ctx) => {
     let statusThisTurn = false;
     for (const part of output.parts) {
       if (part && part.type === 'text' && part.text) {
-        const change = parseModeChange(part.text, { getDefaultMode, expandedTpl: true, unwrapQuotes: true });
+        const change = parseModeChange(part.text, { getDefaultMode: () => getDefaultMode(projectDir), expandedTpl: true, unwrapQuotes: true });
         if (change && change.action === 'status') {
           // readFlag maps a legacy level name to its current mode id.
           const active = readFlag(flagPath);
@@ -350,6 +362,14 @@ export const CavemanPlugin = async (_ctx) => {
   // to mutate output.system (a string[]); the return value is discarded.
   'experimental.chat.system.transform': async (_input, output) => {
     if (!output || !Array.isArray(output.system)) return;
+    if (getDefaultMode(projectDir) === 'off') {
+      for (let i = 0; i < output.system.length; i++) {
+        if (typeof output.system[i] === 'string' && staleBlock.test(output.system[i])) {
+          output.system[i] = stripTrailingNewlines(output.system[i].replace(staleBlock, ''));
+        }
+      }
+      return;
+    }
     const active = readFlag(flagPath);
     if (active && !INDEPENDENT_MODES.has(active)) {
       const line = reinforcementLine(active);

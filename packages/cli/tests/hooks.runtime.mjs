@@ -922,6 +922,47 @@ test("hooks install hermes writes marker-fenced plugin files, idempotent, and un
   assert.ok(!existsSync(join(caveDir, "hooks", "hermes.json")), "uninstall must drop the hook marker");
 });
 
+// #1405 sibling: enableHermesPluginInConfig is the second writer into the
+// user's ~/.hermes/config.yaml and carried the same fixed four-space insert.
+// Hermes writes two-space sequence items, so the entry landed one level deeper
+// than its siblings — "expected <block end>, but found '-'".
+test("hooks install hermes joins an existing two-space plugins.enabled list", async () => {
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const hermesHome = mkdtempSync(join(tmpdir(), "cave-hermes-"));
+  const env = { ...process.env, NO_COLOR: "1", HOME: home, HERMES_HOME: hermesHome, CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")) };
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, ["plugins:", "  enabled:", "  - herdr-agent-state", "_config_version: 52", ""].join("\n"));
+
+  await runCli(["hooks", "install", "hermes"], env);
+  // Twice: the existing idempotency test covers a four-space list only, and
+  // this writer is the one that now reads the sibling indent.
+  await runCli(["hooks", "install", "hermes"], env);
+  const lines = readFileSync(configPath, "utf8").split("\n");
+  const enabledAt = lines.indexOf("  enabled:");
+  assert.ok(enabledAt > 0, lines.join("\n"));
+  const indents = [];
+  for (let i = enabledAt + 1; i < lines.length; i++) {
+    const item = lines[i].match(/^(\s+)- \S/);
+    if (item) { indents.push(item[1].length); continue; }
+    if (/^\s*#/.test(lines[i]) || lines[i].trim() === "") continue;
+    break;
+  }
+  assert.deepEqual(indents, [2, 2], `entry must join its two-space siblings:\n${lines.join("\n")}`);
+  assert.match(readFileSync(configPath, "utf8"), /^  - caveman_shrink$/m);
+  assert.match(readFileSync(configPath, "utf8"), /^_config_version: 52$/m);
+  const after = readFileSync(configPath, "utf8");
+  assert.equal((after.match(/- caveman_shrink/g) || []).length, 1, "entry must stay idempotent");
+  assert.equal((after.match(/caveman:hermes-plugin-enable/g) || []).length, 2, "markers must stay idempotent");
+
+  // A four-space list keeps taking four spaces — no regression for the shape
+  // the older fixtures use.
+  const deep = mkdtempSync(join(tmpdir(), "cave-hermes-deep-"));
+  const deepEnv = { ...env, HERMES_HOME: deep, CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")) };
+  writeFileSync(join(deep, "config.yaml"), ["plugins:", "  enabled:", "    - keep_plugin", ""].join("\n"));
+  await runCli(["hooks", "install", "hermes"], deepEnv);
+  assert.match(readFileSync(join(deep, "config.yaml"), "utf8"), /^    - caveman_shrink$/m);
+});
+
 // ── OpenClaw: plugin (hard tier, tool_result_persist) ───────────────────────
 test("hooks install openclaw writes plugin package and config; uninstall removes only caveman entries", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
