@@ -17,6 +17,7 @@ GOOD = "# Rules\n\nKeep guidance. Read https://example.com/rules.\n"
 BAD = "# Rules\n\nKeep guidance.\n"
 EXTRA = "---\nupdated: 2026-10-21\n---\n"
 PREFACE = "Here is the compressed version of your file:\n"
+TRAILER = "\n\n---\n\nUntouched: the shared/skills/ directory structure. Risk: compression removed polite filler but preserved all instructions intact.\n"
 
 
 class BodyOnlyTests(unittest.TestCase):
@@ -107,10 +108,51 @@ class BodyOnlyTests(unittest.TestCase):
         original = EXTRA + "Keep the operational guidance clear. " * 40 + "\nRead https://example.com/rules.\n"
         self.run_reply(original, ["Keep guidance.", EXTRA + "Keep guidance. Read https://example.com/rules."], False)
 
+    def test_first_pass_trailing_commentary_rejected(self):
+        # #1433: the body guard anchored the head only, so an appended
+        # "Untouched: ... Risk: ..." trailer under a new thematic break was
+        # written into the file with "Validation passed".
+        self.run_reply(FM + BODY, [GOOD + TRAILER], False)
+
+    def test_plain_body_trailing_commentary_rejected(self):
+        # Same leak on a file with no frontmatter to anchor against.
+        self.run_reply(BODY, [GOOD + TRAILER], False)
+
+    def test_fix_trailing_commentary_rejected(self):
+        # The repair pass shares the guard, so it must refuse the trailer too.
+        self.run_reply(FM + BODY, [BAD, GOOD + TRAILER], False)
+
+    def test_trailing_commentary_under_asterisk_break_rejected(self):
+        # A model that introduces the trailer under *** instead of --- is the
+        # same appended commentary and must not slip past the counter.
+        self.run_reply(FM + BODY, [GOOD + TRAILER.replace("---", "***")], False)
+
     def test_plain_body_fix_duplicate_frontmatter_rejected(self):
         original = EXTRA + "Keep the operational guidance clear. " * 40 + "\nRead https://example.com/rules.\n"
         repair = EXTRA + "---\nupdated: 2026-10-22\n---\nKeep guidance. Read https://example.com/rules."
         self.run_reply(original, ["Keep guidance.", repair], False)
+
+
+class CompressPromptRuleTests(unittest.TestCase):
+    """The rules that reach the provider, which is the only place they act.
+
+    SKILL.md's prose rules are never sent to the provider (#1355), so a rule
+    that is not in build_compress_prompt does not exist for the model.
+    """
+
+    def setUp(self):
+        self.prompt = compress.build_compress_prompt("# Title\n\nSome prose.\n")
+
+    def test_prompt_forbids_appended_trailer(self):
+        # #1433
+        self.assertIn("Output ends where the input ends", self.prompt)
+
+    def test_rules_are_inside_the_strict_rules_block(self):
+        # A rule after the "TEXT:" payload boundary is advice about the text,
+        # not a constraint on the reply.
+        rules, _, text = self.prompt.partition("\nTEXT:")
+        self.assertIn("Output ends where the input ends", rules)
+        self.assertNotIn("Output ends where the input ends", text)
 
 
 if __name__ == "__main__":
