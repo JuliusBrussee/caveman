@@ -56,6 +56,21 @@ test('caveman-shrink preserves UTF-8 code points split across upstream chunks', 
   assert.equal(JSON.parse(result.stdout).result.payload, '🙂');
 });
 
+test('caveman-shrink passes a list with a null entry through and keeps running', () => {
+  const upstream = [
+    "console.log(JSON.stringify({jsonrpc:'2.0',id:1,result:{tools:[null,{name:'t'}]}}))",
+    "console.log(JSON.stringify({jsonrpc:'2.0',id:2,result:{}}))",
+  ].join(';');
+  const result = spawnSync(process.execPath, [proxy, process.execPath, '-e', upstream], {
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [first, second] = result.stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(first.result.tools, [null, { name: 't' }]);
+  assert.equal(second.id, 2);
+});
+
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   test(`caveman-shrink forwards ${signal} to its spawned upstream process`, async () => {
     const pidFile = path.join(os.tmpdir(), `caveman-shrink-${signal}-${process.pid}-${Date.now()}.pid`);
