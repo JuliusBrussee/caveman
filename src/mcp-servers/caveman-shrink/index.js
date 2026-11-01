@@ -203,8 +203,18 @@ const responses = makeLineBuffer(line => {
     return;
   }
   let out;
-  try { out = JSON.stringify(transformResponse(msg)); } catch {
+  try { out = JSON.stringify(transformResponse(msg)); } catch (error) {
     // A response we fail to transform still reaches the client, unchanged.
+    // Reachable today: JSON.parse accepts a far deeper inputSchema than
+    // compressDescriptionsInPlace can recurse over, so a ~50k-deep schema
+    // raises RangeError here rather than in the parse above. Staying silent
+    // would turn any future transform fault into "compression quietly
+    // stopped", so name it when debugging is on.
+    if (debug) {
+      process.stderr.write(
+        `[caveman-shrink] transform failed, passing response through: ${error && error.message}\n`
+      );
+    }
     writeClient(line + '\n');
     return;
   }
