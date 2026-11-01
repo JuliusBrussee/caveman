@@ -10208,7 +10208,7 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   const lines = yamlLines(source);
   let model = topLevelSection(lines, "model");
   if (!model) {
-    lines.unshift("model:");
+    lines.splice(yamlDocumentPrefixLength(lines), 0, "model:");
     model = topLevelSection(lines, "model")!;
   }
   const routeIndexes: number[] = [];
@@ -10249,7 +10249,8 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     }
     if (enabled >= 0) {
       if (!hermesNamedPluginEnabled(source, HERMES_NATIVE_PLUGIN_NAME)) {
-        const block = [`    ${HERMES_NATIVE_PLUGIN_BEGIN}`, `    - ${HERMES_NATIVE_PLUGIN_NAME}`, `    ${HERMES_NATIVE_PLUGIN_END}`];
+        const indent = yamlListIndent(lines, enabled + 1, plugins.end);
+        const block = [`${indent}${HERMES_NATIVE_PLUGIN_BEGIN}`, `${indent}- ${HERMES_NATIVE_PLUGIN_NAME}`, `${indent}${HERMES_NATIVE_PLUGIN_END}`];
         lines.splice(enabled + 1, 0, ...block);
         pluginBlock = block.join("\n");
       }
@@ -14022,6 +14023,28 @@ function yamlLines(text: string): string[] {
 function yamlText(lines: string[]): string {
   return lines.length ? `${lines.join("\n")}\n` : "";
 }
+
+function yamlDocumentPrefixLength(lines: string[]): number {
+  let prefix = 0;
+  while (prefix < lines.length) {
+    const line = lines[prefix]!.trim();
+    if (/^%YAML\b/.test(line) || line === "---") {
+      prefix += 1;
+      continue;
+    }
+    break;
+  }
+  return prefix;
+}
+
+function yamlListIndent(lines: string[], start: number, end: number): string {
+  for (let i = start; i < end; i++) {
+    const match = /^(\s*)-\s+/.exec(lines[i]!);
+    if (match) return match[1]!;
+  }
+  return "    ";
+}
+
 
 function stripMarkedBlock(text: string, begin: string, end: string): { text: string; removed: boolean } {
   const kept: string[] = [];

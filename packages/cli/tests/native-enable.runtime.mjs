@@ -1671,6 +1671,33 @@ test("enable/disable hermes rewrites an ordinary provider to the generic Caveman
   assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
 });
 
+test("enable hermes inserts model after YAML directives and reuses plugin sibling indentation", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, [
+    "%YAML 1.1",
+    "---",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "plugins:",
+    "  enabled:",
+    "  - herdr-agent-state",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+  assert.match(installed, /^%YAML 1\.1\n---\nmodel:/, "model block must follow the YAML document markers");
+  assert.match(installed, /\n  - caveman_native\n/, "caveman plugin entry must use the same two-space indentation as its sibling");
+  assert.match(installed, /\n  - herdr-agent-state\n/, "existing plugin sibling must be preserved");
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
