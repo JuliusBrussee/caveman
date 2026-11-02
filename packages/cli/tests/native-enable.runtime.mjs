@@ -1915,6 +1915,42 @@ test("hermes ownership survives a YAML round-trip that changes no value", async 
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
 });
 
+// #1442 adopted an exact, plugins-scoped membership reader with Hermes's own
+// disabled-first precedence. Ownership and loadability are two different
+// questions, though, and must not share one answer. A user who ALSO lists
+// caveman_native under plugins.disabled has not taken OUR entry out of
+// plugins.enabled, so disable still owns it and must still undo the install.
+// Answering the ownership question with the disabled-first reader makes
+// hermesPluginOwned false and disable throw "Hermes plugin block changed after
+// enable; refusing destructive disable" — the #1410 trap again, from the other
+// side: a config the user can no longer uninstall through caveman.
+test("hermes ownership survives a user-added plugins.disabled entry on a reserialised config", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // The #1410 round-trip (markers gone, so ownership is proved by value) plus
+  // the user switching the plugin off the Hermes way.
+  const reserialised = HERMES_ROUND_TRIPPED(command)
+    .replace("plugins:\n  enabled:\n", "plugins:\n  disabled:\n  - caveman_native\n  enabled:\n");
+  assert.match(reserialised, /^  disabled:$/m, "the probe must actually add a disabled list");
+  writeFileSync(configPath, reserialised);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+
+  // Our enabled entry and our MCP server are gone; the user's own disabled
+  // line is theirs and stays, so exactly one mention of the name is left.
+  assert.equal((restored.match(/caveman_native/g) ?? []).length, 1,
+    `only the user's own plugins.disabled entry may remain:\n${restored}`);
+  assert.match(restored, /^  disabled:\n  - caveman_native$/m, "the user's own line must survive untouched");
+  assert.doesNotMatch(restored, /caveman-native/, "our MCP server must be gone");
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+  assert.match(restored, /^  - herdr-agent-state$/m, "the user's other plugin must survive");
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+});
+
 test("hermes disable still refuses a reserialised config whose owned values moved", async () => {
   for (const [label, mutate] of [
     ["an owned value changed", (text) => text.replace("base_url: http://127.0.0.1:8787/w/hermes/v1", "base_url: http://example.invalid/mine")],
