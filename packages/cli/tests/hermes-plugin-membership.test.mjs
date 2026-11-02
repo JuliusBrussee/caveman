@@ -34,6 +34,7 @@ test("Hermes plugin membership uses exact enabled and disabled lists", async () 
   const disabledConfigs = [
     "plugins:\n  enabled: []\n  disabled:\n    - caveman_shrink\n",
     "plugins:\n  enabled:\n    - caveman_shrink\n  disabled:\n    - \"caveman_shrink\"\n",
+    "plugins:\n  enabled: [caveman_shrink]\n  disabled: [\"caveman_shrink\"]\n",
   ];
   for (const config of disabledConfigs) {
     const fx = hermesFixture(config);
