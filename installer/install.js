@@ -1488,8 +1488,13 @@ function installOmp(ctx) {
 }
 
 function opencodeConfigDir() {
-  // opencode uses ~/.config/opencode on every platform (on Windows that's
-  // %USERPROFILE%\.config\opencode via os.homedir()), NOT %APPDATA% (#376).
+  // opencode selects OPENCODE_CONFIG_DIR when it is set to a nonempty value
+  // (#1441 — installing into the unselected root reported success while the
+  // host read nothing). Otherwise ~/.config/opencode on every platform (on
+  // Windows that's %USERPROFILE%\.config\opencode via os.homedir()), NOT
+  // %APPDATA% (#376). Same order as the CLI and the mode plugin.
+  const selected = (process.env.OPENCODE_CONFIG_DIR || '').trim();
+  if (selected) return path.resolve(selected);
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
 }

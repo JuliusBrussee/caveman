@@ -1193,6 +1193,30 @@ test("an undetectable opencode major gets a shrink plugin both majors load", asy
   assert.equal(mod.default.server, mod.CavemanShrink, "default.server must be the same hook map");
 });
 
+// #1441: OpenCode reads OPENCODE_CONFIG_DIR as its config root when set. The
+// CLI's root helper skipped it, so `hooks install opencode` reported the hook
+// installed while writing the plugin into the unselected XDG root.
+test("hooks install opencode honors OPENCODE_CONFIG_DIR", async () => {
+  const fx = opencodeFixture("opencode 2.2.5");
+  const selected = join(mkdtempSync(join(tmpdir(), "cave-oc-sel-")), "selected");
+  const env = { ...fx.env, OPENCODE_CONFIG_DIR: selected };
+
+  await runCli(["hooks", "install", "opencode"], env);
+  const chosen = join(selected, "plugins", "caveman-shrink.js");
+  assert.ok(existsSync(chosen), "the plugin must be written under OPENCODE_CONFIG_DIR");
+  assert.ok(!existsSync(fx.plugin), "nothing may be written to the unselected XDG root");
+
+  // Uninstall must find it in the same place it was installed.
+  await runCli(["hooks", "uninstall", "opencode"], env);
+  assert.ok(!existsSync(chosen), "uninstall must remove the plugin from the selected root");
+});
+
+test("an empty OPENCODE_CONFIG_DIR keeps the default opencode root", async () => {
+  const fx = opencodeFixture("opencode 2.2.5");
+  await runCli(["hooks", "install", "opencode"], { ...fx.env, OPENCODE_CONFIG_DIR: "   " });
+  assert.ok(existsSync(fx.plugin), "an unset-equivalent value must keep the default root");
+});
+
 test("an opencode 1.x host keeps the V1 shrink hook map", async () => {
   const fx = opencodeFixture("opencode 1.19.5");
   await runCli(["hooks", "install", "opencode"], fx.env);

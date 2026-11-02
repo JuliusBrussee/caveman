@@ -129,11 +129,17 @@ function loadParse() {
 }
 const { parseModeChange, INDEPENDENT_MODES } = loadParse();
 
-// opencode resolves its config dir from $XDG_CONFIG_HOME, else ~/.config/opencode
-// on every platform — including Windows, where it uses %USERPROFILE%\.config\opencode
+// opencode resolves its config dir from OPENCODE_CONFIG_DIR when that is set to
+// a nonempty value (#1441), else $XDG_CONFIG_HOME, else ~/.config/opencode on
+// every platform — including Windows, where it uses %USERPROFILE%\.config\opencode
 // (NOT %APPDATA%). os.homedir() is %USERPROFILE% on win32, so the default branch
-// is already correct cross-platform.
+// is already correct cross-platform. The CLI and the installer resolve the same
+// order; a flag written under a root the host does not read is invisible to it.
 function opencodeConfigDir() {
+  const selected = (process.env.OPENCODE_CONFIG_DIR || '').trim();
+  if (selected) {
+    return path.resolve(selected);
+  }
   if (process.env.XDG_CONFIG_HOME) {
     return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
   }

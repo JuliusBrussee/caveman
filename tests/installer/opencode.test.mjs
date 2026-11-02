@@ -1280,3 +1280,61 @@ test('opencode system.transform strips trailing newlines in linear time', async 
     fs.rmSync(shimDir, { recursive: true, force: true });
   }
 });
+
+// ── #1441: OPENCODE_CONFIG_DIR is the host's selected config root ─────────
+// OpenCode 2 reads its global config directory from OPENCODE_CONFIG_DIR when
+// that variable is set, falling back to $XDG_CONFIG_HOME/opencode and then
+// ~/.config/opencode. Caveman kept three separate root helpers (CLI, installer,
+// copied plugin) that all skipped the variable, so with it set the installer
+// reported success while writing into the unselected XDG root and the plugin
+// wrote its mode flag there too — the host read neither.
+test('OPENCODE_CONFIG_DIR selects the installer root and the copied plugin flag path', async () => {
+  const xdg = freshTmpDir();
+  const selected = path.join(freshTmpDir(), 'selected');
+  const shimDir = shimOpencode();
+  const orig = {
+    configDir: process.env.OPENCODE_CONFIG_DIR,
+    xdg: process.env.XDG_CONFIG_HOME,
+    mode: process.env.CAVEMAN_DEFAULT_MODE,
+  };
+  try {
+    const env = { ...installEnv(xdg, shimDir), OPENCODE_CONFIG_DIR: selected };
+    const r = runInstaller(['--only', 'opencode'], env);
+    assert.notEqual(r.status, 2, r.stderr);
+
+    const pluginPath = path.join(selected, 'plugins', 'caveman', 'plugin.js');
+    assert.ok(fs.existsSync(pluginPath), 'the installer must write into OPENCODE_CONFIG_DIR');
+    assert.ok(!fs.existsSync(path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js')),
+      'nothing may be written to the unselected XDG root');
+
+    // The copied plugin resolves its own root the same way, so its runtime mode
+    // state lands where the host looks for it.
+    process.env.OPENCODE_CONFIG_DIR = selected;
+    process.env.XDG_CONFIG_HOME = xdg;
+    process.env.CAVEMAN_DEFAULT_MODE = 'caveman';
+    const mod = await import(pathToFileURL(pluginPath).href);
+    const factory = mod.default || mod.CavemanPlugin;
+    const handlers = await factory({});
+    await handlers['chat.message']({}, { parts: [{ type: 'text', text: '/caveman ultra' }] });
+    assert.equal(fs.readFileSync(path.join(selected, '.caveman-active'), 'utf8'), 'ultracave',
+      'the plugin must write its flag under the selected root');
+    assert.ok(!fs.existsSync(path.join(xdg, 'opencode', '.caveman-active')),
+      'the plugin must not write a flag into the unselected XDG root');
+  } finally {
+    for (const [key, value] of [['OPENCODE_CONFIG_DIR', orig.configDir], ['XDG_CONFIG_HOME', orig.xdg], ['CAVEMAN_DEFAULT_MODE', orig.mode]]) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+// An empty or whitespace-only value is not a selection: the XDG fallback stands.
+test('an empty OPENCODE_CONFIG_DIR falls back to the XDG opencode root', () => {
+  const xdg = freshTmpDir();
+  const shimDir = shimOpencode();
+  const env = { ...installEnv(xdg, shimDir), OPENCODE_CONFIG_DIR: '   ' };
+  const r = runInstaller(['--only', 'opencode'], env);
+  assert.notEqual(r.status, 2, r.stderr);
+  assert.ok(fs.existsSync(path.join(xdg, 'opencode', 'plugins', 'caveman', 'plugin.js')),
+    'an unset-equivalent value must keep the XDG root');
+});

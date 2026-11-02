@@ -9030,9 +9030,14 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
   ];
 }
 
-// OpenCode reads $XDG_CONFIG_HOME/opencode, else ~/.config/opencode on every
-// platform, and opencode.jsonc over opencode.json when both are there.
+// OpenCode reads OPENCODE_CONFIG_DIR when that is set to a nonempty value,
+// else $XDG_CONFIG_HOME/opencode, else ~/.config/opencode on every platform,
+// and opencode.jsonc over opencode.json when both are there. Skipping the
+// variable installed into a root the host never reads, while still reporting
+// success (#1441); the installer and the mode plugin resolve it the same way.
 function opencodeConfigDir(): string {
+  const selected = (process.env.OPENCODE_CONFIG_DIR ?? "").trim();
+  if (selected) return resolve(selected);
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
 }
 
