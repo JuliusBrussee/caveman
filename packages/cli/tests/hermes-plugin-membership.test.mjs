@@ -40,7 +40,7 @@ test("Hermes plugin membership uses exact enabled and disabled lists", async () 
     const fx = hermesFixture(config);
     try {
       const result = await runCli(["tools", "hooks", "install", "hermes"], { env: fx.fixture.env });
-      assert.equal(result.code, 1, result.stderr);
+      assert(result.code === 1, result.stderr);
       assert.match(result.stderr, /explicitly disables caveman_shrink/);
       assert.doesNotMatch(result.stderr, /✓ Hermes Agent:/);
       assert.equal(existsSync(fx.markerPath), false);
