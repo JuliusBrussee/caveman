@@ -3,7 +3,7 @@ import assert from "node:assert";
 import { spawn, spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync, readFileSync, mkdirSync, existsSync, symlinkSync, chmodSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { delimiter, dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { connect as netConnect, createServer } from "node:net";
 import { createHmac } from "node:crypto";
@@ -1101,6 +1101,108 @@ test("the generated opencode plugin rewrites a noisy bash command and is byte-sa
   const o4 = { args: { command: "" } };
   await before({ tool: "bash" }, o4);
   assert.equal(o4.args.command, "", "an empty command must be left unchanged");
+});
+
+// ── #1445: the shrink plugin must load on the host major that is installed ───
+// OpenCode 2 replaced the plugin API: its loader requires `default: { id, …}`
+// with an effect/setup function and REJECTS a bare V1 hook map
+// ("Plugin must export a default definition with an id and an effect or setup
+// function"). The shrink plugin was V1-only — one named `CavemanShrink` export
+// — so on an OpenCode 2 host it never loaded, while the installer still
+// printed "command-output rewrite hook installed". `caveman enable opencode`
+// already solves this for the native plugin by generating per detected major;
+// the shrink plugin now shares that same decision.
+function opencodeFixture(version) {
+  const home = mkdtempSync(join(tmpdir(), "cave-home-"));
+  const bin = join(home, "bin");
+  mkdirSync(bin, { recursive: true });
+  if (version) {
+    writeFileSync(join(bin, "opencode"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${version}'; fi\n`, { mode: 0o755 });
+  }
+  return {
+    home,
+    env: {
+      ...process.env,
+      NO_COLOR: "1",
+      HOME: home,
+      CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")),
+      PATH: `${bin}${delimiter}${process.env.PATH}`,
+    },
+    plugin: join(home, ".config", "opencode", "plugins", "caveman-shrink.js"),
+  };
+}
+
+// A V2 ctx records the hook the plugin registers so the test can drive it.
+function v2Context() {
+  const hooks = new Map();
+  return {
+    ctx: { tool: { hook: async (name, fn) => void hooks.set(name, fn) } },
+    before: () => hooks.get("execute.before"),
+  };
+}
+
+test("the opencode shrink plugin exports an OpenCode 2 default definition and rewrites through it", async () => {
+  const fx = opencodeFixture("opencode 2.2.5");
+  await runCli(["hooks", "install", "opencode"], fx.env);
+  assert.ok(existsSync(fx.plugin), "the plugin must be written");
+
+  const mod = await import(pathToFileURL(fx.plugin).href);
+  // The loader's own requirement: a default definition with an id and setup.
+  assert.equal(typeof mod.default, "object", "OpenCode 2 needs a default export");
+  assert.ok(mod.default, "the default export must not be null");
+  assert.equal(typeof mod.default.id, "string", "the default definition needs an id");
+  assert.ok(mod.default.id, "the id must not be empty");
+  assert.equal(typeof mod.default.setup, "function", "the default definition needs a setup function");
+
+  const { ctx, before } = v2Context();
+  await mod.default.setup(ctx);
+  const hook = before();
+  assert.equal(typeof hook, "function", "setup must register a tool execute.before hook");
+
+  // V2 renamed the shell tool to "shell" and passes event.input (not output.args).
+  const shell = { tool: "shell", input: { command: "git status" } };
+  await hook(shell);
+  assert.match(shell.input.command, /shrink -- git status$/, "a noisy command must be rewritten under V2");
+
+  // V1's "bash" name still works, and a non-shell tool is never touched.
+  const bash = { tool: "bash", input: { command: "git status" } };
+  await hook(bash);
+  assert.match(bash.input.command, /shrink -- git status$/, "the V1 tool name must still rewrite");
+
+  const read = { tool: "read", input: { command: "git status" } };
+  await hook(read);
+  assert.equal(read.input.command, "git status", "a non-shell tool must be left unchanged");
+
+  // byte-safe: a declined command passes through untouched.
+  const piped = { tool: "shell", input: { command: "git status | head" } };
+  await hook(piped);
+  assert.equal(piped.input.command, "git status | head", "a non-eligible command must be left unchanged");
+});
+
+// An unreadable version is evidence of neither major, so the one file both
+// hosts load is written: V1's hook map behind `default.server` for OpenCode
+// 1.4+, and the V2 { id, setup } beside it — the same rule the native plugin
+// already uses for an unknown or doubled major.
+test("an undetectable opencode major gets a shrink plugin both majors load", async () => {
+  const fx = opencodeFixture(null);
+  await runCli(["hooks", "install", "opencode"], fx.env);
+  const mod = await import(pathToFileURL(fx.plugin).href);
+  assert.equal(typeof mod.CavemanShrink, "function", "OpenCode 1.x still needs the named hook map");
+  assert.equal(typeof mod.default?.setup, "function", "OpenCode 2 still needs default.setup");
+  assert.equal(typeof mod.default?.server, "function", "OpenCode 1.4+ loads the V1 map through default.server");
+  assert.equal(mod.default.server, mod.CavemanShrink, "default.server must be the same hook map");
+});
+
+test("an opencode 1.x host keeps the V1 shrink hook map", async () => {
+  const fx = opencodeFixture("opencode 1.19.5");
+  await runCli(["hooks", "install", "opencode"], fx.env);
+  const mod = await import(pathToFileURL(fx.plugin).href);
+  const hooks = await mod.CavemanShrink();
+  const before = hooks["tool.execute.before"];
+  assert.equal(typeof before, "function", "V1 must keep its tool.execute.before hook");
+  const o = { args: { command: "git status" } };
+  await before({ tool: "bash" }, o);
+  assert.match(o.args.command, /shrink -- git status$/, "V1 must still rewrite");
 });
 
 // ── Gemini: shrink-hook emits Gemini's override shape (not Claude's) ──────────
