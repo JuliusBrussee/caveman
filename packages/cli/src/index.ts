@@ -9114,11 +9114,18 @@ const prefix = ${JSON.stringify(pre)};
 const contexts = new Map();
 const pending = new Map();
 
-function call(event, payload = {}) {
+// A host process can serve a project that is not its own launch directory, so
+// the served project travels with every call: in the payload, which
+// nativeRuntimeRequest reads as the session cwd, and as the child's working
+// directory, so anything it resolves relatively resolves there (#1443).
+let projectDir;
+
+function call(event, payload = {}, cwd = projectDir) {
   try {
     const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
-      input: JSON.stringify({ event_name: event, ...payload }),
+      input: JSON.stringify({ event_name: event, ...(cwd ? { cwd } : {}), ...payload }),
       encoding: "utf8",
+      cwd: cwd || undefined,
       timeout: 2000,
       maxBuffer: 2 * 1024 * 1024,
       // A host with no console of its own — OpenCode under a multiplexer or a
@@ -9191,7 +9198,7 @@ function sessionContext(sessionID) {
   return contexts.get(sessionID);
 }
 
-export const CavemanNative = async () => ({
+const hostHooks = {
   event: async ({ event }) => {
     const type = event?.type;
     const props = event?.properties ?? {};
@@ -9245,6 +9252,7 @@ export const CavemanNative = async () => ({
       const raw = execFileSync(command, [...prefix, "shrink-hook"], {
         input: JSON.stringify({ tool_name: "Bash", tool_input: { command: output.args.command } }),
         encoding: "utf8",
+        cwd: projectDir || undefined,
         timeout: 750,
         windowsHide: true,
       });
@@ -9275,7 +9283,15 @@ export const CavemanNative = async () => ({
     contexts.clear();
     pending.clear();
   },
-});
+};
+
+// OpenCode's V1 plugin context names the served project \`directory\`. A host
+// that supplies none (or a caller that supplies no context at all) leaves
+// projectDir unset and every child inherits this process's cwd, as before.
+export const CavemanNative = async (ctx) => {
+  if (typeof ctx?.directory === "string" && ctx.directory) projectDir = ctx.directory;
+  return hostHooks;
+};
 `;
 }
 
@@ -9290,11 +9306,18 @@ import { createHash } from "node:crypto";
 const command = ${JSON.stringify(cmd)};
 const prefix = ${JSON.stringify(pre)};
 
-function call(event, payload = {}) {
+// A host process can serve a project that is not its own launch directory, so
+// the served project travels with every call: in the payload, which
+// nativeRuntimeRequest reads as the session cwd, and as the child's working
+// directory, so anything it resolves relatively resolves there (#1443).
+let projectDir;
+
+function call(event, payload = {}, cwd = projectDir) {
   try {
     const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
-      input: JSON.stringify({ event_name: event, ...payload }),
+      input: JSON.stringify({ event_name: event, ...(cwd ? { cwd } : {}), ...payload }),
       encoding: "utf8",
+      cwd: cwd || undefined,
       timeout: 2000,
       maxBuffer: 2 * 1024 * 1024,
       // A host with no console of its own — OpenCode under a multiplexer or a
@@ -9361,13 +9384,19 @@ export default {
   id: "caveman-native",
   async setup(ctx) {
     // Per-plugin-instance state: one setup() runs per location, so two
-    // projects never share session context through module scope.
+    // projects never share session context through module scope. The served
+    // project directory is per-instance for the same reason, so it is passed
+    // to each child explicitly rather than parked in module scope (#1443).
     const contexts = new Map();
     const pending = new Map();
+    const projectCwd = typeof ctx.location?.directory === "string" && ctx.location.directory
+      ? ctx.location.directory
+      : undefined;
+    const emit = (event, payload = {}) => call(event, payload, projectCwd);
 
     function sessionContext(sessionID) {
       if (!contexts.has(sessionID)) {
-        const out = call("SessionStart", { session_id: sessionID, surface: "cli" });
+        const out = emit("SessionStart", { session_id: sessionID, surface: "cli" });
         const context = out?.hookSpecificOutput?.additionalContext;
         contexts.set(sessionID, typeof context === "string" ? context : "");
       }
@@ -9402,16 +9431,16 @@ export default {
       const sessionID = event.data?.sessionID;
       if (typeof sessionID !== "string" || !sessionID) return;
       if (type === "session.created") sessionContext(sessionID);
-      if (type === "session.idle") call("Stop", { session_id: sessionID });
+      if (type === "session.idle") emit("Stop", { session_id: sessionID });
       // "session.compacted" is the V1 event name; V2 reports compaction
       // through "session.compaction.ended". Handle both.
       if (type === "session.compaction.ended" || type === "session.compacted") {
-        const out = call("PostCompact", { session_id: sessionID });
+        const out = emit("PostCompact", { session_id: sessionID });
         const context = out?.hookSpecificOutput?.additionalContext;
         if (typeof context === "string" && context) contexts.set(sessionID, context);
       }
       if (type === "session.deleted") {
-        call("SessionEnd", { session_id: sessionID });
+        emit("SessionEnd", { session_id: sessionID });
         contexts.delete(sessionID);
         pending.delete(sessionID);
       }
@@ -9419,7 +9448,7 @@ export default {
 
     await ctx.session.hook("prompt", (event) => {
       const prompt = event.prompt ?? {};
-      const decision = call("UserPromptSubmit", {
+      const decision = emit("UserPromptSubmit", {
         session_id: event.sessionID,
         prompt: digest(prompt),
         task_type: taskType(prompt),
@@ -9441,13 +9470,13 @@ export default {
     });
 
     await ctx.session.hook("compaction", (event) => {
-      call("PreCompact", { session_id: event.sessionID });
+      emit("PreCompact", { session_id: event.sessionID });
       const stable = sessionContext(event.sessionID);
       if (stable) event.system.push({ type: "text", text: stable });
     });
 
     await ctx.tool.hook("execute.before", (event) => {
-      const decision = call("PreToolUse", {
+      const decision = emit("PreToolUse", {
         session_id: event.sessionID,
         tool_name: event.tool,
         tool_input: event.input,
@@ -9464,6 +9493,7 @@ export default {
           const raw = execFileSync(command, [...prefix, "shrink-hook"], {
             input: JSON.stringify({ tool_name: "Bash", tool_input: { command: input.command } }),
             encoding: "utf8",
+            cwd: projectCwd || undefined,
             timeout: 750,
             windowsHide: true,
           });
@@ -9475,7 +9505,7 @@ export default {
 
     await ctx.tool.hook("execute.after", (event) => {
       if (event.status !== "completed") return;
-      const decision = call("PostToolUse", {
+      const decision = emit("PostToolUse", {
         session_id: event.sessionID,
         tool_name: event.tool,
         tool_input: event.input,
@@ -9489,7 +9519,7 @@ export default {
 
     return () => {
       controller.abort();
-      for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
+      for (const sessionID of contexts.keys()) emit("SessionEnd", { session_id: sessionID });
       contexts.clear();
       pending.clear();
     };

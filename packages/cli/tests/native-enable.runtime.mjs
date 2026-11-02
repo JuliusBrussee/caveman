@@ -52,6 +52,7 @@ fi
 const fs = require("node:fs");
 const input = fs.readFileSync(0, "utf8");
 if (process.env.CAVE_NATIVE_CAPTURE && input) fs.appendFileSync(process.env.CAVE_NATIVE_CAPTURE, Buffer.from(input).toString("base64") + "\\n");
+if (process.env.CAVE_NATIVE_CWD_CAPTURE) fs.appendFileSync(process.env.CAVE_NATIVE_CWD_CAPTURE, process.cwd() + "\\n");
 const event = process.argv[4];
 if (process.argv[2] === "shrink-hook") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { updatedInput: { command: "caveman shrink -- git status" } } }));
@@ -2553,6 +2554,79 @@ test("the V2 opencode plugin acts on a locationless session.deleted and still ig
     else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
   }
 });
+
+// #1443: a host process can serve a project that is not its own launch
+// directory. Neither generated adapter passed that project directory on, so
+// `native-hook` saw no cwd in its payload and inherited the subprocess's —
+// nativeRuntimeRequest then fell back to process.cwd() and stamped the wrong
+// repository onto the native session. V1 discarded its factory context
+// entirely; V2 received ctx.location.directory and never used it.
+for (const { major, version } of [{ major: 1, version: "opencode 1.19.5" }, { major: 2, version: "opencode 2.0.7" }]) {
+  test(`the generated opencode V${major} plugin carries the host project cwd into native calls`, async () => {
+    const fx = fixture({ opencodeVersion: version });
+    const configDir = join(fx.home, ".config", "opencode");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+    const enabled = await run(["enable", "opencode"], fx.env);
+    assert.equal(enabled.code, 0, enabled.stderr);
+
+    // The project the host serves — deliberately neither this test process's
+    // cwd nor the fixture home the plugin was installed under.
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "cave-oc-project-")));
+    const cwdLog = join(fx.home, "native-cwd.log");
+    const pluginPath = join(configDir, "plugins", "caveman-native.js");
+    const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+
+    const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+      .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+    const readCwds = () => readFileSync(cwdLog, "utf8").trim().split("\n").filter(Boolean);
+    const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+    const previous = [process.env.CAVE_NATIVE_CAPTURE, process.env.CAVE_NATIVE_CWD_CAPTURE];
+    process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+    process.env.CAVE_NATIVE_CWD_CAPTURE = cwdLog;
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    writeFileSync(cwdLog, "");
+    try {
+      if (major === 1) {
+        // The V1 plugin context names the project as `directory`.
+        const hooks = await pluginModule.CavemanNative({ directory: project });
+        await hooks.event({ event: { type: "session.created", properties: { sessionID: "oc-cwd" } } });
+        await hooks["tool.execute.before"]({ tool: "bash", sessionID: "oc-cwd" }, { args: { command: "git status" } });
+      } else {
+        const toolHooks = new Map();
+        const scripted = [{ type: "session.created", location: { directory: project }, data: { sessionID: "oc-cwd" } }];
+        await pluginModule.default.setup({
+          location: { directory: project, workspaceID: undefined },
+          event: { async *subscribe() { for (const event of scripted) yield event; } },
+          session: { hook: async () => ({ dispose: async () => {} }) },
+          tool: { hook: async (name, cb) => { toolHooks.set(name, cb); return { dispose: async () => {} }; } },
+        });
+        await flush();
+        await toolHooks.get("execute.before")({ tool: "shell", sessionID: "oc-cwd", input: { command: "git status" } });
+      }
+
+      const payloads = readCapture();
+      assert.ok(payloads.length >= 1, "the native call must have been recorded");
+      assert.equal(payloads[0].event_name, "SessionStart");
+      assert.equal(payloads[0].cwd, project,
+        "the payload must name the host's project directory, not the subprocess's");
+
+      // And the subprocess itself runs there, so anything it resolves
+      // relatively resolves against the project, not the launch directory.
+      const cwds = readCwds();
+      assert.ok(cwds.length >= 2, `expected a native and a shrink child: ${JSON.stringify(cwds)}`);
+      for (const cwd of cwds) {
+        assert.equal(realpathSync(cwd), project, "every generated child must run in the project directory");
+      }
+      assert.notEqual(project, realpathSync(process.cwd()), "the probe only means something from another cwd");
+    } finally {
+      for (const [key, value] of [["CAVE_NATIVE_CAPTURE", previous[0]], ["CAVE_NATIVE_CWD_CAPTURE", previous[1]]]) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+}
 
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
