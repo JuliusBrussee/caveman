@@ -10252,6 +10252,10 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   for (const marker of [HERMES_NATIVE_ROUTE_BEGIN, HERMES_NATIVE_ROUTE_END, HERMES_NATIVE_PLUGIN_BEGIN, HERMES_NATIVE_PLUGIN_END, HERMES_NATIVE_MCP_BEGIN, HERMES_NATIVE_MCP_END]) {
     if (source.includes(marker)) throw new Error("existing Hermes Caveman native block is unjournaled; run `caveman doctor hermes`");
   }
+  const nativePluginMembership = hermesNamedPluginMembership(source, HERMES_NATIVE_PLUGIN_NAME);
+  if (nativePluginMembership === "disabled") {
+    throw new Error(`Hermes plugin ${HERMES_NATIVE_PLUGIN_NAME} is explicitly disabled in plugins.disabled; remove that entry before enabling Caveman`);
+  }
   const lines = yamlLines(source);
   let model = topLevelSection(lines, "model");
   if (!model) {
@@ -10295,7 +10299,7 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
       if (/^  enabled:\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
     }
     if (enabled >= 0) {
-      if (!hermesNamedPluginEnabled(source, HERMES_NATIVE_PLUGIN_NAME)) {
+      if (nativePluginMembership !== "enabled") {
         const pad = " ".repeat(yamlListItemIndent(lines, enabled, plugins.end) ?? 4);
         const block = [`${pad}${HERMES_NATIVE_PLUGIN_BEGIN}`, `${pad}- ${HERMES_NATIVE_PLUGIN_NAME}`, `${pad}${HERMES_NATIVE_PLUGIN_END}`];
         lines.splice(enabled + 1, 0, ...block);
@@ -14342,8 +14346,8 @@ function yamlChildSpan(lines: string[], start: number, end: number, name: string
 
 // What a Hermes config.yaml actually SAYS about the settings Caveman owns,
 // independent of how it is laid out. `model` and the `caveman-native` MCP entry
-// are read as values; plugin membership already had a layout-independent
-// reader in hermesNamedPluginEnabled.
+// are read as values; plugin membership has its own layout-independent reader
+// in hermesPluginListContains.
 function hermesOwnedValues(text: string): { model: Map<string, string> | null; mcp: Map<string, string> | null } {
   const lines = yamlLines(text);
   const model = topLevelSection(lines, "model");
@@ -14393,11 +14397,19 @@ function hermesMcpOwned(text: string, owned: NativeJournal["operations"][number]
 }
 
 // Is the journalled `caveman_native` plugin still enabled? Same null rule.
+//
+// This asks whether OUR entry is still in plugins.enabled, which is a different
+// question from whether Hermes would load the plugin: a user who ALSO lists the
+// name under plugins.disabled has not taken our entry away, and disable still
+// has to reverse it. So this reads the enabled list directly rather than going
+// through hermesNamedPluginMembership, whose disabled-first precedence answers
+// the load question. It inherits the exact-scalar, plugins-scoped matching
+// either way, so a `caveman_native_extra` entry no longer passes for ours.
 function hermesPluginOwned(text: string, owned: NativeJournal["operations"][number]["owned"]): boolean {
   const block = owned?.plugin_block;
   if (block === null) return true;
   if (typeof block !== "string") return false;
-  return hermesNamedPluginEnabled(text, HERMES_NATIVE_PLUGIN_NAME);
+  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME);
 }
 
 // Indent shared by the direct children of [start, end), or null when there are
@@ -18868,14 +18880,144 @@ def register(ctx):
 `;
 }
 
-function hermesNamedPluginEnabled(text: string, name: string): boolean {
-  const escaped = escapeRegExp(name);
-  return new RegExp(`(^|\\n)\\s*-\\s*["']?${escaped}["']?\\s*(?:#.*)?(?=\\n|$)`).test(text)
-    || new RegExp(`enabled:\\s*\\[[^\\]]*["']?${escaped}["']?`).test(text);
+type HermesPluginMembership = "enabled" | "disabled" | "not-enabled";
+
+function hermesFlowSequenceItems(raw: string): string[] | null {
+  const start = raw.indexOf("[");
+  if (start < 0) return null;
+  const items: string[] = [];
+  let item = "";
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let depth = 0;
+  for (let i = start + 1; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (quote) {
+      if (quote === "'" && char === "'" && raw[i + 1] === "'") {
+        item += "''";
+        i++;
+        continue;
+      }
+      item += char;
+      if (quote === '"' && escaped) {
+        escaped = false;
+        continue;
+      }
+      if (quote === '"' && char === "\\") {
+        escaped = true;
+        continue;
+      }
+      if (char === quote) quote = null;
+      continue;
+    }
+    if (char === "#" && (i === start + 1 || /\s/.test(raw[i - 1]!))) {
+      while (i < raw.length && raw[i] !== "\n") i++;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      quote = char;
+      item += char;
+      continue;
+    }
+    if (char === "[" || char === "{") {
+      depth++;
+      item += char;
+      continue;
+    }
+    if (char === "]") {
+      if (depth === 0) {
+        items.push(item);
+        return items.map(configValue).filter((value): value is string => value !== undefined);
+      }
+      depth--;
+      item += char;
+      continue;
+    }
+    if (char === "}" && depth > 0) {
+      depth--;
+      item += char;
+      continue;
+    }
+    if (char === "," && depth === 0) {
+      items.push(item);
+      item = "";
+      continue;
+    }
+    item += char;
+  }
+  return null;
 }
 
-function hermesPluginEnabled(text: string): boolean {
-  return hermesNamedPluginEnabled(text, HERMES_PLUGIN_NAME);
+function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean {
+  const lines = yamlLines(text);
+  const plugins = topLevelSection(lines, "plugins");
+  if (!plugins) return false;
+  for (let i = plugins.start + 1; i < plugins.end; i++) {
+    const match = lines[i]!.match(/^  (enabled|disabled):(?:\s*(.*))?$/);
+    if (!match || match[1] !== listName) continue;
+    const raw = (match[2] ?? "").replace(/\s+#.*$/, "").trim();
+    if (raw.startsWith("[")) {
+      let flow = raw;
+      let items = hermesFlowSequenceItems(flow);
+      for (let next = i + 1; items === null && next < plugins.end; next++) {
+        flow += `\n${lines[next]}`;
+        items = hermesFlowSequenceItems(flow);
+      }
+      return items?.includes(name) ?? false;
+    }
+    if (raw && !raw.startsWith("#")) return false;
+    let sequenceIndent: number | null = null;
+    for (let next = i + 1; next < plugins.end; next++) {
+      const line = lines[next]!;
+      if (/^  [A-Za-z0-9_-]+:\s*/.test(line)) break;
+      if (!line.trim() || /^\s*#/.test(line)) continue;
+      const item = line.match(/^(\s*)-\s*(.*?)\s*$/);
+      if (!item) {
+        if (sequenceIndent !== null && line.search(/\S/) > sequenceIndent) continue;
+        break;
+      }
+      const indent = item[1]!.length;
+      if (sequenceIndent === null) sequenceIndent = indent;
+      if (indent === sequenceIndent && configValue(item[2]) === name) return true;
+    }
+    return false;
+  }
+  return false;
+}
+
+function hermesNamedPluginMembership(text: string, name: string): HermesPluginMembership {
+  if (hermesPluginListContains(text, "disabled", name)) return "disabled";
+  if (hermesPluginListContains(text, "enabled", name)) return "enabled";
+  return "not-enabled";
+}
+
+function hermesEnabledListIsInline(text: string): boolean {
+  const lines = yamlLines(text);
+  const plugins = topLevelSection(lines, "plugins");
+  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => /^  enabled:\s*\[/.test(line)));
+}
+
+function hermesPluginInstallConfigReady(): boolean {
+  const path = hermesConfigPath();
+  let existing = "";
+  try {
+    existing = readFileSync(path, "utf8");
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      console.error(`${mark("warn")} cannot read ${path}: ${(error as Error).message}`);
+      return false;
+    }
+  }
+  const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "disabled") {
+    console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; no hook was installed`);
+    return false;
+  }
+  if (membership !== "enabled" && hermesEnabledListIsInline(existing)) {
+    console.error(`${mark("warn")} ${path} uses inline plugins.enabled; refusing to claim the Hermes plugin is installed`);
+    return false;
+  }
+  return true;
 }
 
 function enableHermesPluginInConfig(): boolean {
@@ -18889,7 +19031,12 @@ function enableHermesPluginInConfig(): boolean {
       return false;
     }
   }
-  if (hermesPluginEnabled(existing)) return true;
+  const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "disabled") {
+    console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; remove that entry before installing`);
+    return false;
+  }
+  if (membership === "enabled") return true;
   const stripped = stripMarkedBlock(existing, HERMES_PLUGIN_ENABLE_BEGIN, HERMES_PLUGIN_ENABLE_END).text;
   const lines = yamlLines(stripped);
   const plugins = topLevelSection(lines, "plugins");
@@ -18988,6 +19135,7 @@ function disableHermesPluginInConfig(): boolean {
 }
 
 function installShrinkPluginHermes(): boolean {
+  if (!hermesPluginInstallConfigReady()) return false;
   try {
     mkdirSync(hermesPluginDir(), { recursive: true });
     writeFileSync(hermesPluginManifestPath(), hermesPluginManifestSource());
@@ -18998,6 +19146,7 @@ function installShrinkPluginHermes(): boolean {
   }
   if (!enableHermesPluginInConfig()) {
     process.stderr.write(`${mark("warn")} Hermes plugin written to ${hermesPluginDir()}, but plugins.enabled was not updated; run ${cyan(`hermes plugins enable ${HERMES_PLUGIN_NAME}`)}\n`);
+    return false;
   }
   return true;
 }
