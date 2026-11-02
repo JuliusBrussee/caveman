@@ -2488,6 +2488,72 @@ test("status agrees with doctor on MCP recovery when only Gemini or only Pi is w
   }
 });
 
+// #1444: OpenCode keeps routing metadata separate from the public event. Its
+// bus resolves a locationless session event through that session's owner and
+// then filters each location subscription using the routing snapshot, so an
+// event delivered to THIS plugin instance without a public `location` is
+// already ours — `session.deleted` publishes only `{ sessionID }`. Dropping it
+// skipped SessionEnd and left the session's context cached until the plugin was
+// disposed. A MISMATCHED location is still somebody else's and stays dropped.
+test("the V2 opencode plugin acts on a locationless session.deleted and still ignores another project", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+
+  const sessionHooks = new Map();
+  const scripted = [
+    { type: "session.created", location: { directory: fx.home }, data: { sessionID: "oc2-del" } },
+    // Routed here by the host with no public location — ours.
+    { type: "session.deleted", data: { sessionID: "oc2-del" } },
+    // Another project's session, located elsewhere — never ours.
+    { type: "session.created", location: { directory: "/elsewhere" }, data: { sessionID: "oc2-other" } },
+    { type: "session.deleted", location: { directory: "/elsewhere" }, data: { sessionID: "oc2-other" } },
+  ];
+  const fakeCtx = {
+    location: { directory: fx.home, workspaceID: undefined },
+    event: { async *subscribe() { for (const event of scripted) yield event; } },
+    session: { hook: async (name, cb) => { sessionHooks.set(name, cb); return { dispose: async () => {} }; } },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+  };
+  const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+  const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    const cleanup = await pluginModule.default.setup(fakeCtx);
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["SessionStart", "oc2-del"],
+      ["SessionEnd", "oc2-del"],
+    ], "the locationless deletion must end the session; the other project must be untouched");
+
+    // The cached context went with it: asking for context again re-runs
+    // SessionStart rather than replaying a deleted session's stale text.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("context")({ sessionID: "oc2-del", system: [] });
+    assert.deepEqual(readCapture().map((item) => item.event_name), ["SessionStart"],
+      "the deleted session's cached context must be gone");
+
+    // Disposal must not send a second SessionEnd for a session already ended.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await cleanup?.();
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["SessionEnd", "oc2-del"],
+    ], "only the session re-created by the context call remains to end");
+  } finally {
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+});
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");

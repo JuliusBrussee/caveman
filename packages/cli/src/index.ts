@@ -9384,8 +9384,16 @@ export default {
     });
 
     function sameLocation(event) {
-      return event.location?.directory === ctx.location.directory &&
-        event.location?.workspaceID === ctx.location.workspaceID;
+      // OpenCode keeps routing metadata separate from the public event: the bus
+      // resolves a locationless session event through that session's owner and
+      // then filters each location subscription with the routing snapshot. So
+      // an event delivered to THIS instance with no public location is already
+      // ours — session.deleted publishes only { sessionID } — and dropping it
+      // skipped SessionEnd and leaked the cached context until disposal
+      // (#1444). A location that is present and different is somebody else's.
+      if (!event.location) return true;
+      return event.location.directory === ctx.location.directory &&
+        event.location.workspaceID === ctx.location.workspaceID;
     }
 
     function handleEvent(event) {
