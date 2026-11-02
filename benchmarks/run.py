@@ -85,7 +85,7 @@ def call_api(client, model, system, prompt, max_retries=3):
             response = client.messages.create(
                 model=model,
                 max_tokens=4096,
-                temperature=0,
+                extra_body={"temperature": 0},
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )

@@ -3,6 +3,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from pathlib import Path
 
 
@@ -14,6 +15,33 @@ SPEC.loader.exec_module(BENCHMARK)
 
 
 class BenchmarkContractTests(unittest.TestCase):
+    def test_call_api_preserves_temperature_with_sdk_v2_signature(self):
+        requests = []
+
+        # SDK 2 removed temperature from the generated method signature. The
+        # benchmark still needs the same wire setting for every comparison arm.
+        def create(*, model, max_tokens, system, messages, extra_body):
+            requests.append({
+                "model": model, "max_tokens": max_tokens, "system": system,
+                "messages": messages, **extra_body,
+            })
+            return SimpleNamespace(
+                usage=SimpleNamespace(input_tokens=3, output_tokens=2),
+                content=[SimpleNamespace(text="fixture reply")],
+                stop_reason="end_turn",
+            )
+
+        client = SimpleNamespace(messages=SimpleNamespace(create=create))
+        result = BENCHMARK.call_api(client, "claude-sonnet-4-6", "system", "prompt")
+        self.assertEqual(requests, [{
+            "model": "claude-sonnet-4-6", "max_tokens": 4096, "system": "system",
+            "messages": [{"role": "user", "content": "prompt"}], "temperature": 0,
+        }])
+        self.assertEqual(result, {
+            "input_tokens": 3, "output_tokens": 2,
+            "text": "fixture reply", "stop_reason": "end_turn",
+        })
+
     def test_dry_run_defaults_to_supported_model(self):
         result = subprocess.run(
             [sys.executable, str(ROOT / "benchmarks" / "run.py"), "--dry-run", "--trials", "1"],
