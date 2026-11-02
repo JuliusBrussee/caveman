@@ -102,14 +102,23 @@ test("Hermes plugin membership uses exact enabled and disabled lists", async () 
   ].join("\n"));
   const originalNativeConfig = readFileSync(native.configPath, "utf8");
   const proxy = join(native.fixture.home, "bin", isWindows ? "caveman-proxy.cmd" : "caveman-proxy");
+  const mcp = join(native.fixture.home, "bin", isWindows ? "caveman-mcp.cmd" : "caveman-mcp");
   writeFileSync(
     proxy,
     isWindows
       ? "@echo off\r\nif \"%~1\"==\"version\" if \"%~2\"==\"--json\" echo {\"version\":\"1.0.0\",\"capabilities\":[\"run_state\",\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}\r\nexit /b 0\r\n"
       : "#!/bin/sh\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"--json\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"run_state\",\"native_runtime_v1\",\"native_hook_bridge_v1\",\"typed_ccr\"]}'; fi\nexit 0\n",
   );
+  writeFileSync(
+    mcp,
+    isWindows
+      ? "@echo off\r\nif \"%~1\"==\"version\" if \"%~2\"==\"--json\" echo {\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}\r\nexit /b 0\r\n"
+      : "#!/bin/sh\nif [ \"$1\" = \"version\" ] && [ \"$2\" = \"--json\" ]; then printf '%s\\n' '{\"version\":\"1.0.0\",\"capabilities\":[\"mcp_recovery\"]}'; fi\nexit 0\n",
+  );
   if (!isWindows) chmodSync(proxy, 0o755);
+  if (!isWindows) chmodSync(mcp, 0o755);
   native.fixture.env.CAVEMAN_PROXY_BIN = proxy;
+  native.fixture.env.CAVEMAN_MCP_BIN = mcp;
   native.fixture.env.CAVEMAN_LISTEN = "127.0.0.1:48767";
   try {
     const result = await runCli(["enable", "hermes"], { env: native.fixture.env });
