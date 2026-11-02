@@ -87,3 +87,15 @@ Plain prose, then resume:
 2. Last sentence recaps or offers help? Delete.
 3. Every not/never/no/only present? Every code span, path, number, error verbatim?
 4. Any sentence with two readings? Make it a full sentence.
+
+## Semantic code tools
+
+When TokenSave tools are available in this session and the target project is
+indexed, prefer suitable targeted semantic queries for code understanding.
+Use `tokensave_status` when readiness is uncertain. Reuse sufficient results;
+do not repeat broad file exploration or delegate the same research to Cavecrew.
+If unavailable or unindexed, use the normal workflow. Explicit user instructions
+win. This does not change unrelated delegation, models, providers, or routing.
+Optimize your own prose only. Keep tool results, code, identifiers, paths,
+signatures, errors, numbers, and semantic relationships exact. Instructions do
+not enforce proxy preservation; that requires the operator's preservation policy.

@@ -17,6 +17,7 @@ import (
 	"github.com/JuliusBrussee/caveman/engine/ccr"
 	"github.com/JuliusBrussee/caveman/engine/compressors"
 	"github.com/JuliusBrussee/caveman/engine/tokens"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 )
 
 // schemaType forces the engine to route to the tool-schema compressor.
@@ -32,8 +33,14 @@ const schemaType = "toolschema"
 type Option func(*config)
 
 type config struct {
-	store *ccr.Store // caller-supplied store; its lifecycle is the caller's
-	path  string     // else open this path (":memory:" for an ephemeral store)
+	preserve toolpolicy.Policy
+	store    *ccr.Store // caller-supplied store; its lifecycle is the caller's
+	path     string     // else open this path (":memory:" for an ephemeral store)
+}
+
+// WithPreservedTools preserves complete matching tool envelopes and schemas.
+func WithPreservedTools(p toolpolicy.Policy) Option {
+	return func(c *config) { c.preserve = append(toolpolicy.Policy(nil), p...) }
 }
 
 // WithStore uses a caller-owned recovery store. The caller keeps ownership and
@@ -120,7 +127,16 @@ func Shrink(input []byte, opts ...Option) (Result, error) {
 		return Result{}, err
 	}
 	defer cleanup()
-	eng := engine.New(store, nil)
+	var cfg config
+	for _, option := range opts {
+		option(&cfg)
+	}
+	if err := cfg.preserve.Validate(); err != nil {
+		return Result{}, err
+	}
+	registry := compressors.Default()
+	registry.Register(compressors.NewToolSchemaWithPreservedTools(cfg.preserve))
+	eng := engine.NewWithRegistry(store, nil, registry)
 	res, err := eng.Compress(input, engine.Options{Mode: engine.ModeCompress, Type: schemaType})
 	out := Result{
 		Output:         res.Output,
@@ -173,13 +189,20 @@ type Report struct {
 // Lint measures the inferred per-tool and overall token reduction of a catalog
 // without committing to it. Token counts use the engine's default (offline)
 // counter; every number is `inferred`.
-func Lint(input []byte) (Report, error) {
+func Lint(input []byte, opts ...Option) (Report, error) {
+	var cfg config
+	for _, option := range opts {
+		option(&cfg)
+	}
+	if err := cfg.preserve.Validate(); err != nil {
+		return Report{}, err
+	}
 	entries, err := extractTools(input)
 	if err != nil {
 		return Report{}, err
 	}
 	counter := tokens.Default()
-	comp := compressors.NewToolSchema()
+	comp := compressors.NewToolSchemaWithPreservedTools(cfg.preserve)
 	rep := Report{Basis: engine.BasisInferred}
 	for _, e := range entries {
 		before := counter.Count(e.raw)

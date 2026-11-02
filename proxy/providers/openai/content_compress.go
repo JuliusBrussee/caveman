@@ -138,12 +138,12 @@ func rewritableZones(body []byte, meta providers.RequestMetadata, liveOnly bool)
 		return nil, false
 	}
 	if strings.Contains(meta.Endpoint, "responses") {
-		return responsesZones(body, root, liveOnly)
+		return responsesZones(body, root, liveOnly, meta)
 	}
-	return chatZones(body, root, liveOnly)
+	return chatZones(body, root, liveOnly, meta)
 }
 
-func chatZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate, bool) {
+func chatZones(body []byte, root jsonSpan, liveOnly bool, meta providers.RequestMetadata) ([]zoneCandidate, bool) {
 	messagesSpan, ok := findObjectField(body, root, "messages")
 	if !ok || messagesSpan.start >= len(body) || body[messagesSpan.start] != '[' {
 		return nil, false
@@ -153,7 +153,7 @@ func chatZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate, bool
 		return nil, false
 	}
 	live := latestOpenAITargets(body, messageSpans)
-	recovered := chatRecoveryCallIDs(body, messageSpans)
+	recovered := chatRecoveryCallIDs(body, messageSpans, meta)
 	var out []zoneCandidate
 	for i, msg := range messageSpans {
 		if liveOnly && !live[i] {
@@ -166,7 +166,7 @@ func chatZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate, bool
 		// Recovered bytes are never a compression candidate — see
 		// providers.IsRecoveryToolName.
 		if role == "tool" {
-			if id, ok := objectStringField(body, msg, "tool_call_id"); ok && recovered[id] {
+			if id, _ := objectStringField(body, msg, "tool_call_id"); providers.ProtectedResult(recovered, id, meta.PreserveTools.Enabled()) {
 				continue
 			}
 		}
@@ -181,7 +181,7 @@ func chatZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate, bool
 	return out, true
 }
 
-func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate, bool) {
+func responsesZones(body []byte, root jsonSpan, liveOnly bool, meta providers.RequestMetadata) ([]zoneCandidate, bool) {
 	input, ok := findObjectField(body, root, "input")
 	if !ok {
 		return nil, false
@@ -212,10 +212,8 @@ func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate,
 			latestTool = i
 		case typ == "function_call" || typ == "custom_tool_call":
 			name, _ := objectStringField(body, item, "name")
-			if providers.IsRecoveryToolName(name) {
-				if id, ok := objectStringField(body, item, "call_id"); ok && id != "" {
-					recovered[id] = true
-				}
+			if id, ok := objectStringField(body, item, "call_id"); ok && id != "" {
+				recovered[id] = recovered[id] || providers.IsRecoveryToolName(name) || meta.PreserveTools.Matches(name) || (name == "" && meta.PreserveTools.Enabled())
 			}
 		case role == "user":
 			latestUser = i
@@ -237,7 +235,7 @@ func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate,
 		case typ == "function_call_output" || typ == "custom_tool_call_output":
 			// Recovered bytes are never a compression candidate — see
 			// providers.IsRecoveryToolName.
-			if id, ok := objectStringField(body, item, "call_id"); ok && recovered[id] {
+			if id, _ := objectStringField(body, item, "call_id"); providers.ProtectedResult(recovered, id, meta.PreserveTools.Enabled()) {
 				continue
 			}
 			output, found := findObjectField(body, item, "output")
@@ -272,7 +270,7 @@ func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate,
 
 // chatRecoveryCallIDs collects the tool_call ids of every caveman recovery call
 // in the chat grammar, so the tool message answering one can be left alone.
-func chatRecoveryCallIDs(body []byte, messages []jsonSpan) map[string]bool {
+func chatRecoveryCallIDs(body []byte, messages []jsonSpan, meta providers.RequestMetadata) map[string]bool {
 	ids := make(map[string]bool)
 	for _, msg := range messages {
 		if messageRole(body, msg) != "assistant" {
@@ -295,11 +293,12 @@ func chatRecoveryCallIDs(body []byte, messages []jsonSpan) map[string]bool {
 				continue
 			}
 			name, _ := objectStringField(body, fn, "name")
-			if !providers.IsRecoveryToolName(name) {
+			protected := providers.IsRecoveryToolName(name) || meta.PreserveTools.Matches(name) || (name == "" && meta.PreserveTools.Enabled())
+			if !protected && !meta.PreserveTools.Enabled() {
 				continue
 			}
 			if id, ok := objectStringField(body, call, "id"); ok && id != "" {
-				ids[id] = true
+				ids[id] = ids[id] || protected
 			}
 		}
 	}

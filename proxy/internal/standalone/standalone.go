@@ -353,6 +353,7 @@ func New(cfg config.Config, sink gateway.TelemetrySink, opts Options) *gateway.S
 		PrefixCache:          opts.PrefixCache,
 		RecoveryViaMCP:       opts.RecoveryViaMCP || env.String("CAVEMAN_RECOVERY", "") == "mcp",
 		ObserveEstimate:      opts.ObserveEstimate || cfg.ObserveEstimate,
+		PreserveTools:        cfg.PreserveTools,
 		SubscriptionCompress: cfg.SubscriptionCompress,
 		SessionMarkerKey:     opts.SessionMarkerKey,
 		SessionFallback:      opts.SessionFallback,

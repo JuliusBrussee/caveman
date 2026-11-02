@@ -63,3 +63,15 @@ No "文言模式啟", no modern answer plus classical copy. 文言 not shorter t
 ## Pre-send check
 
 Identifiers verbatim, original script? Negations present? Two readings? 白話. Flavor character? Cut.
+
+## Semantic code tools
+
+When TokenSave tools are available in this session and the target project is
+indexed, prefer suitable targeted semantic queries for code understanding.
+Use `tokensave_status` when readiness is uncertain. Reuse sufficient results;
+do not repeat broad file exploration or delegate the same research to Cavecrew.
+If unavailable or unindexed, use the normal workflow. Explicit user instructions
+win. This does not change unrelated delegation, models, providers, or routing.
+Optimize your own prose only. Keep tool results, code, identifiers, paths,
+signatures, errors, numbers, and semantic relationships exact. Instructions do
+not enforce proxy preservation; that requires the operator's preservation policy.

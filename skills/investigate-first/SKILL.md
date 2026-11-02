@@ -14,3 +14,7 @@ Gather evidence before changing product code.
 - Stop exploration when evidence is sufficient to name cause or exact blocker.
 
 Report cause and proof. Make no fix unless task authorizes implementation.
+
+Use available TokenSave tools for indexed projects when suitable. Reuse sufficient
+semantic findings before broad reads or repeated delegation. User instructions win.
+Keep technical payloads exact. Otherwise use the normal workflow.

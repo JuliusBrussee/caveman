@@ -18,6 +18,7 @@ import (
 	"github.com/JuliusBrussee/caveman/proxy/providers/openaicompat"
 	"github.com/JuliusBrussee/caveman/shared/platform/cabundle"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 	"golang.org/x/net/http/httpproxy"
 	"gopkg.in/yaml.v3"
 )
@@ -31,6 +32,8 @@ const DefaultBedrockRegion = "us-east-1"
 
 // Config is the parsed caveman.yaml plus its defaults.
 type Config struct {
+	// PreserveTools excludes matching protocol tool results from all adapter rewrite zones.
+	PreserveTools toolpolicy.Policy `yaml:"preserve_tools"`
 	// Label tags local telemetry rows. Trial runs set this through CAVEMAN_LABEL
 	// (e.g. "trial:trial_...") so reports can isolate one wrapped session.
 	Label string `yaml:"label"`
@@ -194,6 +197,15 @@ func Load(path string) (Config, error) {
 		// Never echo the value: it reached a file on disk, but this error reaches
 		// the proxy log.
 		return Config{}, fmt.Errorf("auth_token: in %s is ignored — the inbound token is read only from the CAVEMAN_AUTH_TOKEN environment variable; remove the key", path)
+	}
+	if raw, present := os.LookupEnv("CAVEMAN_PRESERVE_TOOLS"); present {
+		cfg.PreserveTools, err = toolpolicy.Parse(raw)
+		if err != nil {
+			return Config{}, err
+		}
+	}
+	if err := cfg.PreserveTools.Validate(); err != nil {
+		return Config{}, err
 	}
 	cfg = cfg.withDefaults()
 	if err := validateAuthToken(cfg.AuthToken); err != nil {

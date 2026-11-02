@@ -63,7 +63,7 @@ func helperCommand(t *testing.T, dbPath string, args ...string) *exec.Cmd {
 	cmd := exec.Command(os.Args[0], commandArgs...)
 	environment := make([]string, 0, len(os.Environ())+2)
 	for _, entry := range os.Environ() {
-		if strings.HasPrefix(entry, "CAVEMAN_SHRINK_HELPER=") || strings.HasPrefix(entry, "CAVEMAN_CCR_DB=") {
+		if strings.HasPrefix(entry, "CAVEMAN_SHRINK_HELPER=") || strings.HasPrefix(entry, "CAVEMAN_CCR_DB=") || strings.HasPrefix(entry, "CAVEMAN_PRESERVE_TOOLS=") {
 			continue
 		}
 		environment = append(environment, entry)
@@ -89,4 +89,22 @@ func TestShrinkCLIHelperProcess(t *testing.T) {
 	os.Args = append([]string{"caveman-shrink"}, os.Args[separator:]...)
 	main()
 	os.Exit(0)
+}
+
+func TestMalformedPreservationPolicyPassesThrough(t *testing.T) {
+	cmd := helperCommand(t, filepath.Join(t.TempDir(), "ccr.db"), "shrink")
+	cmd.Env = append(cmd.Env, `CAVEMAN_PRESERVE_TOOLS=["*"]`)
+	cmd.Stdin = strings.NewReader(cliRoundTripCatalog)
+	var output, diagnostics bytes.Buffer
+	cmd.Stdout = &output
+	cmd.Stderr = &diagnostics
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != cliRoundTripCatalog {
+		t.Fatal("invalid policy must preserve the original catalog")
+	}
+	if !strings.Contains(diagnostics.String(), "preserve_tools") {
+		t.Fatalf("missing policy diagnostic: %s", &diagnostics)
+	}
 }

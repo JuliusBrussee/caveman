@@ -55,7 +55,7 @@
       ],
       "entry_condition": "cause is ambiguous",
       "stop_condition": "cause or exact blocker is evidence-backed",
-      "instructions": "# Investigate first\n\nGather evidence before changing product code.\n\n- Separate observed symptom from inferred cause.\n- Trace inputs, state transitions, ownership boundaries, and failure output.\n- Rank hypotheses by evidence and cheap falsification value.\n- Do not edit until one credible mechanism explains evidence.\n- Stop exploration when evidence is sufficient to name cause or exact blocker.\n\nReport cause and proof. Make no fix unless task authorizes implementation."
+      "instructions": "# Investigate first\n\nGather evidence before changing product code.\n\n- Separate observed symptom from inferred cause.\n- Trace inputs, state transitions, ownership boundaries, and failure output.\n- Rank hypotheses by evidence and cheap falsification value.\n- Do not edit until one credible mechanism explains evidence.\n- Stop exploration when evidence is sufficient to name cause or exact blocker.\n\nReport cause and proof. Make no fix unless task authorizes implementation.\n\nUse available TokenSave tools for indexed projects when suitable. Reuse sufficient\nsemantic findings before broad reads or repeated delegation. User instructions win.\nKeep technical payloads exact. Otherwise use the normal workflow."
     },
     {
       "id": "lean-build",

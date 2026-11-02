@@ -50,7 +50,7 @@ func (s *Server) toolSchemaStripAllowed(adapter providers.Adapter, body []byte, 
 // toolSchemaStripApplies is toolSchemaStripAllowed without the ledger: the
 // strip would run here if the session's harm tripwire had not frozen it.
 func (s *Server) toolSchemaStripApplies(adapter providers.Adapter, body []byte) bool {
-	if s.toolSchemaStrip != toolSchemaStripMode || s.compressor == nil {
+	if len(s.preserveTools) > 0 || s.toolSchemaStrip != toolSchemaStripMode || s.compressor == nil {
 		return false
 	}
 	if _, ok := s.compressor.(ToolSchemaStripper); !ok {

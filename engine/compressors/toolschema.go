@@ -10,6 +10,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/JuliusBrussee/caveman/engine/safety"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 )
 
 // maxDescLen caps the non-constraint *lead* sentence of a kept description at this
@@ -78,7 +79,13 @@ var userDefinedKeys = map[string]bool{
 //
 // It is S4 (lossy): dropped descriptive prose and metadata are recoverable through
 // CCR. On any parse problem it reports !ok and the caller forwards bytes unchanged.
-type toolSchemaCompressor struct{}
+type toolSchemaCompressor struct{ preserve toolpolicy.Policy }
+
+// NewToolSchemaWithPreservedTools keeps matching tool envelopes and schemas whole.
+// The caller must validate policy before constructing the compressor.
+func NewToolSchemaWithPreservedTools(p toolpolicy.Policy) Compressor {
+	return &toolSchemaCompressor{preserve: append(toolpolicy.Policy(nil), p...)}
+}
 
 // NewToolSchema returns the tool-schema / tool-catalog compressor. It is selected
 // by forcing the "toolschema" content type (engine.Options.Type); Detect never
@@ -142,6 +149,18 @@ func (c *toolSchemaCompressor) compressToolEnvelope(v any) any {
 		}
 		return out
 	case map[string]any:
+		name, _ := envelope["name"].(string)
+		if c.preserve.Matches(name) {
+			return envelope
+		}
+		// OpenAI Chat catalogs put identity inside function, but preservation
+		// covers the whole tool entry, including metadata on its outer wrapper.
+		if function, ok := envelope["function"].(map[string]any); ok {
+			name, _ := function["name"].(string)
+			if c.preserve.Matches(name) {
+				return envelope
+			}
+		}
 		out := cloneJSONMap(envelope)
 		for key, value := range envelope {
 			switch {

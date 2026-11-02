@@ -18,6 +18,7 @@ import (
 	"io"
 	"os"
 
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 	"github.com/JuliusBrussee/caveman/shrink"
 )
 
@@ -69,7 +70,11 @@ func runShrink() {
 	if err != nil {
 		fatal("read stdin: %v", err)
 	}
-	res, err := shrink.Shrink(input)
+	option, err := preservationOption()
+	var res shrink.Result
+	if err == nil {
+		res, err = shrink.Shrink(input, option)
+	}
 	if err != nil {
 		// Byte-safe: forward the original unchanged rather than fail.
 		_, _ = os.Stdout.Write(input)
@@ -102,7 +107,11 @@ func runLint(args []string) {
 	if err != nil {
 		fatal("read %s: %v", args[0], err)
 	}
-	rep, err := shrink.Lint(input)
+	option, err := preservationOption()
+	if err != nil {
+		fatal("preserve_tools: %v", err)
+	}
+	rep, err := shrink.Lint(input, option)
 	if err != nil {
 		fatal("lint: %v", err)
 	}
@@ -129,4 +138,18 @@ func runRecover(args []string) {
 func fatal(format string, args ...any) {
 	fmt.Fprintf(os.Stderr, format+"\n", args...)
 	os.Exit(1)
+}
+
+// Invalid policy refuses compression rather than silently dropping protection.
+func preservationOption() (shrink.Option, error) {
+	raw, present := os.LookupEnv("CAVEMAN_PRESERVE_TOOLS")
+	if !present {
+		return shrink.WithPreservedTools(nil), nil
+	}
+	policy, err := toolpolicy.Parse(raw)
+	if err != nil {
+		return nil, err
+	}
+	fmt.Fprintln(os.Stderr, "tool catalog preservation enabled; matching complete envelopes and schemas are retained")
+	return shrink.WithPreservedTools(policy), nil
 }

@@ -132,7 +132,7 @@ func rewritableZones(body []byte, meta providers.RequestMetadata, liveOnly bool)
 		if role != "user" {
 			continue
 		}
-		for _, candidate := range collectUserCandidates(body, item) {
+		for _, candidate := range collectUserCandidates(body, item, meta) {
 			out = append(out, zoneCandidate{
 				Candidate: candidate.Candidate,
 				live:      i == latestUser,
@@ -143,7 +143,7 @@ func rewritableZones(body []byte, meta providers.RequestMetadata, liveOnly bool)
 	return out, true
 }
 
-func collectUserCandidates(body []byte, item jsonsplice.Span) []typedCandidate {
+func collectUserCandidates(body []byte, item jsonsplice.Span, meta providers.RequestMetadata) []typedCandidate {
 	partsSpan, ok := jsonsplice.Field(body, item, "parts")
 	if !ok {
 		return nil
@@ -165,7 +165,14 @@ func collectUserCandidates(body []byte, item jsonsplice.Span) []typedCandidate {
 		// providers.IsRecoveryToolName. Gemini names the tool on the response
 		// itself, so no call-id mapping is needed.
 		if nameSpan, found := jsonsplice.Field(body, response, "name"); found {
-			if name, ok := jsonsplice.String(body, nameSpan); ok && providers.IsRecoveryToolName(name) {
+			if name, ok := jsonsplice.String(body, nameSpan); ok && (providers.IsRecoveryToolName(name) || meta.PreserveTools.Matches(name)) {
+				continue
+			}
+		}
+		if meta.PreserveTools.Enabled() {
+			nameSpan, found := jsonsplice.Field(body, response, "name")
+			name, valid := jsonsplice.String(body, nameSpan)
+			if !found || !valid || name == "" {
 				continue
 			}
 		}

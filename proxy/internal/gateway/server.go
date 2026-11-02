@@ -32,6 +32,7 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/cacheguard"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
 	"github.com/JuliusBrussee/caveman/shared/platform/httpx"
+	"github.com/JuliusBrussee/caveman/shared/toolpolicy"
 )
 
 // RequestContext is the per-request policy the lifecycle needs. It is the slim,
@@ -385,6 +386,7 @@ type Server struct {
 	// DefaultChatGPTUpstream in production). Eligible /responses calls may take
 	// live-zone compression before forwarding.
 	chatGPTUpstream      string
+	preserveTools        toolpolicy.Policy
 	subscriptionCompress string
 	// toolSchemaStrip selects the tool-schema annotation strip. Only "annotations"
 	// enables it; every other value (including the empty default) is off.
@@ -526,6 +528,7 @@ type Config struct {
 	// compression: empty/"live_zone" allow it, "off" (and any unknown value) fail
 	// closed to S0 passthrough. It is the ONLY policy input — there is no account
 	// gate.
+	PreserveTools        toolpolicy.Policy
 	SubscriptionCompress string
 	// ToolSchemaStrip enables the tool-schema annotation strip when it is exactly
 	// "annotations". It is default OFF and additionally requires the same
@@ -613,7 +616,12 @@ func New(cfg Config) *Server {
 	if upstream == "" {
 		upstream = DefaultChatGPTUpstream
 	}
-	if cfg.ToolSchemaStrip == toolSchemaStripMode && cfg.Logger != nil {
+	if len(cfg.PreserveTools) > 0 && cfg.Logger != nil {
+		cfg.Logger.Info("tool preservation enabled", "rules", cfg.PreserveTools,
+			"supported", "anthropic-messages,openai-chat,openai-responses,gemini-generatecontent",
+			"unresolved_results", "kept raw", "pixel", "disabled while preserve_tools is configured", "catalog_annotation_strip", "disabled while preserve_tools is configured")
+	}
+	if cfg.ToolSchemaStrip == toolSchemaStripMode && len(cfg.PreserveTools) == 0 && cfg.Logger != nil {
 		// One startup line, because this lever rewrites the head of the provider
 		// cache prefix: the operator should be able to date the one-time cold write
 		// to a config change rather than to the provider.
@@ -638,6 +646,7 @@ func New(cfg Config) *Server {
 		recoveryViaMCP:       cfg.RecoveryViaMCP,
 		observeEstimate:      cfg.ObserveEstimate,
 		chatGPTUpstream:      strings.TrimSuffix(upstream, "/"),
+		preserveTools:        append(toolpolicy.Policy(nil), cfg.PreserveTools...),
 		subscriptionCompress: cfg.SubscriptionCompress,
 		toolSchemaStrip:      cfg.ToolSchemaStrip,
 		breakpointPlan:       cfg.BreakpointPlan,
