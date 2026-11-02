@@ -154,6 +154,19 @@ func collectUserCandidates(body []byte, item jsonsplice.Span) []typedCandidate {
 	}
 	var candidates []typedCandidate
 	for _, part := range parts {
+		// Thought signatures belong to their original part, and thought content
+		// must be replayed unchanged. This also excludes memo substitution: a
+		// coincidentally equal unsigned text is not authority to rewrite a signed
+		// part. Google documents this at /gemini-api/docs/generate-content/thought-signatures.
+		if _, signed := jsonsplice.Field(body, part, "thoughtSignature"); signed {
+			continue
+		}
+		if _, signed := jsonsplice.Field(body, part, "thought_signature"); signed {
+			continue
+		}
+		if thought, exists := jsonsplice.Field(body, part, "thought"); exists && string(body[thought.Start:thought.End]) != "false" {
+			continue
+		}
 		if text, found := jsonsplice.Field(body, part, "text"); found {
 			appendCandidate(body, text, "history", &candidates)
 		}

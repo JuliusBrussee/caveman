@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert";
 import { spawn } from "node:child_process";
-import { mkdtempSync, mkdirSync, writeFileSync } from "node:fs";
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,16 +11,19 @@ const cli = join(dirname(fileURLToPath(import.meta.url)), "..", "dist", "index.j
 // The missing-binary panels tell users to build into ~/.caveman/bin — so the CLI
 // must actually find binaries there without a PATH edit. `caveman stats` shells to
 // caveman-proxy; a stub in $CAVEMAN_HOME/bin (NOT on PATH) must be what runs.
-test("caveman binaries resolve from ~/.caveman/bin without a PATH entry", async () => {
+test("caveman binaries resolve from ~/.caveman/bin without a PATH entry", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "cave-binres-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const binDir = join(home, "bin");
   mkdirSync(binDir, { recursive: true });
   writeFileSync(join(binDir, "caveman-proxy"), `#!/bin/sh\nif [ "$1" = "stats" ]; then printf '{"resolved_from":"caveman-home-bin"}'; fi\n`, { mode: 0o755 });
 
-  const env = { ...process.env, NO_COLOR: "1", CAVEMAN_HOME: home };
+  // PATH has precedence over the home fallback. An installed developer proxy
+  // must not replace this fixture, which specifically exercises no PATH entry.
+  const env = { ...process.env, NO_COLOR: "1", CAVEMAN_HOME: home, PATH: join(home, "empty-path") };
   delete env.CAVEMAN_PROXY_BIN;
   const out = await new Promise((resolve, reject) => {
-    const child = spawn("node", [cli, "stats"], { env });
+    const child = spawn(process.execPath, [cli, "stats"], { env });
     let stdout = "";
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d));
@@ -33,8 +36,9 @@ test("caveman binaries resolve from ~/.caveman/bin without a PATH entry", async 
 });
 
 // The explicit env override must still win over ~/.caveman/bin.
-test("CAVEMAN_PROXY_BIN overrides the ~/.caveman/bin fallback", async () => {
+test("CAVEMAN_PROXY_BIN overrides the ~/.caveman/bin fallback", async (t) => {
   const home = mkdtempSync(join(tmpdir(), "cave-binres2-"));
+  t.after(() => rmSync(home, { recursive: true, force: true }));
   const binDir = join(home, "bin");
   mkdirSync(binDir, { recursive: true });
   writeFileSync(join(binDir, "caveman-proxy"), `#!/bin/sh\nprintf 'WRONG'\n`, { mode: 0o755 });
@@ -43,7 +47,7 @@ test("CAVEMAN_PROXY_BIN overrides the ~/.caveman/bin fallback", async () => {
 
   const env = { ...process.env, NO_COLOR: "1", CAVEMAN_HOME: home, CAVEMAN_PROXY_BIN: override };
   const out = await new Promise((resolve, reject) => {
-    const child = spawn("node", [cli, "stats"], { env });
+    const child = spawn(process.execPath, [cli, "stats"], { env });
     let stdout = "";
     child.stdout.on("data", (d) => (stdout += d));
     child.on("exit", (code) => resolve({ code, stdout }));

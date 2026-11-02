@@ -17,6 +17,12 @@ function fixture({ opencodeVersion = "opencode 1.0.0", opencode2Version = null }
   const home = mkdtempSync(join(tmpdir(), "cave-native-enable-"));
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
+  // Probe only the fixture's agents. The real machine can carry opencode2
+  // beside opencode; inheriting that PATH silently changes the API selection.
+  // Keep the runtime separate: Node-path regressions create their own bin/node.
+  const runtimeBin = join(home, "runtime-bin");
+  mkdirSync(runtimeBin);
+  symlinkSync(process.execPath, join(runtimeBin, "node"));
   for (const agent of ["claude", "codex", "hermes", "gemini", "aider"]) {
     writeFileSync(join(bin, agent), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${agent} 1.0.0'; fi\n`, { mode: 0o755 });
   }
@@ -86,7 +92,7 @@ if (process.argv[2] === "shrink-hook") {
     CAVEMAN_TELEMETRY: "0",
     CAVE_NATIVE_CAPTURE: join(home, "native-capture.jsonl"),
     NO_COLOR: "1",
-    PATH: `${bin}:${process.env.PATH}`,
+    PATH: `${bin}:${runtimeBin}:/usr/bin:/bin`,
   };
   // Codex auth mode comes from auth.json alone; still keep the runner's own
   // OPENAI_API_KEY out so no fixture depends on the shell it runs from.
@@ -2098,6 +2104,139 @@ test("status agrees with doctor on MCP recovery when only Gemini or only Pi is w
   }
 });
 
+for (const major of [1, 2]) {
+  test(`OpenCode ${major} prompt hints persist with their user turn without changing the system prefix`, async () => {
+    const fx = fixture({ opencodeVersion: `opencode ${major}.0.0` });
+    const configDir = join(fx.home, ".config", "opencode");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "opencode.json"), "{}\n");
+    const enabled = await run(["enable", "opencode"], fx.env);
+    assert.equal(enabled.code, 0, enabled.stderr);
+    writeFileSync(join(fx.home, "bin", "caveman"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+const event = process.argv[4];
+const hint = event === "SessionStart" ? "Stable Caveman context"
+  : event === "UserPromptSubmit" ? { bugfix: "Investigate the failing cache", feature: "Keep prior cache entries", general: "Inspect the supplied image" }[input.task_type]
+  : event === "PreToolUse" ? "Advisory reuse hint from an older runtime"
+  : undefined;
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: hint } }));
+`, { mode: 0o755 });
+    const pluginURL = pathToFileURL(join(configDir, "plugins", "caveman-native.js")).href;
+    const connect = async (tag) => {
+      const mod = await import(`${pluginURL}?cache-prefix=${tag}`);
+      if (major === 1) {
+        const hooks = await mod.CavemanNative();
+        return {
+          prompt: async (messageID, text) => {
+            const message = { message: { id: messageID }, parts: [
+              { id: "prt_f00000000000aaaaaaaaaaaaaa", type: "text", text },
+              { id: "prt_f00000000001bbbbbbbbbbbbbb", type: "file", mime: "image/png", url: "data:image/png;base64,AAAA" },
+            ] };
+            await hooks["chat.message"]({ sessionID: "cache-session", messageID }, message);
+            assert.equal(message.parts[0].text, text, "the original user text stays intact");
+            assert.equal(message.parts[1].type, "file", "multimodal parts stay intact");
+            return message;
+          },
+          replay: async (message) => hooks["chat.message"]({ sessionID: "cache-session" }, message),
+          tool: async (failed) => {
+            const input = { tool: "read", sessionID: "cache-session", callID: failed ? "failed-read" : "read" };
+            const before = { args: { filePath: "source.ts" } };
+            await hooks["tool.execute.before"](input, before);
+            assert.deepEqual(before.args, { filePath: "source.ts" });
+            if (failed) return; // V1 does not invoke execute.after for errors.
+            const after = { title: "Read source", output: "exact tool output", metadata: { keep: true } };
+            await hooks["tool.execute.after"]({ ...input, args: before.args }, after);
+            assert.deepEqual(after, { title: "Read source", output: "exact tool output", metadata: { keep: true } });
+          },
+          system: async () => {
+            const output = { system: ["Host system"] };
+            await hooks["experimental.chat.system.transform"]({ sessionID: "cache-session" }, output);
+            return output.system;
+          },
+          cleanup: hooks.dispose,
+        };
+      }
+      const hooks = new Map();
+      const toolHooks = new Map();
+      const cleanup = await mod.default.setup({
+        location: { directory: fx.home },
+        event: { async *subscribe() {} },
+        session: { hook: async (name, cb) => { hooks.set(name, cb); } },
+        tool: { hook: async (name, cb) => { toolHooks.set(name, cb); } },
+      });
+      return {
+        prompt: async (messageID, text) => {
+          const message = { sessionID: "cache-session", messageID, metadata: { keep: true }, prompt: { text, files: [{ uri: "file:///image.png" }] } };
+          await hooks.get("prompt")(message);
+          assert.ok(message.prompt.text.startsWith(text));
+          assert.deepEqual(message.prompt.files, [{ uri: "file:///image.png" }]);
+          assert.equal(message.metadata.keep, true);
+          return message;
+        },
+        replay: hooks.get("prompt"),
+        tool: async (failed) => {
+          const input = { tool: "read", sessionID: "cache-session", id: failed ? "failed-read" : "read", input: { filePath: "source.ts" } };
+          await toolHooks.get("execute.before")(input);
+          assert.deepEqual(input.input, { filePath: "source.ts" });
+          const after = failed ? { ...input, status: "error", error: { message: "exact tool error" } }
+            : { ...input, status: "completed", result: { content: "exact tool output", metadata: { keep: true } } };
+          const original = JSON.stringify(after);
+          await toolHooks.get("execute.after")(after);
+          assert.equal(JSON.stringify(after), original);
+        },
+        system: async () => {
+          const event = { sessionID: "cache-session", system: [{ type: "text", text: "Host system" }] };
+          await hooks.get("context")(event);
+          return event.system;
+        },
+        cleanup,
+      };
+    };
+    const initial = await connect("initial");
+    const system = await initial.system();
+    const first = await initial.prompt("msg_first", "fix cache");
+    assert.match(JSON.stringify(first), /Investigate the failing cache/);
+    if (major === 1) {
+      assert.equal(first.parts[2].synthetic, true);
+      assert.equal(first.parts[2].messageID, "msg_first");
+      assert.equal(first.parts[2].sessionID, "cache-session");
+      assert.match(first.parts[2].id, /^prt_/);
+      assert.deepEqual([...first.parts].sort((a, b) => a.id.localeCompare(b.id)), first.parts,
+        "persisted part ordering must keep guidance after all existing parts, even with clock skew");
+    }
+    assert.deepEqual(await initial.system(), system, "a fresh hint must not change the system prefix");
+    assert.deepEqual(await initial.system(), system, "a repeated request must keep the same prefix");
+    const firstBytes = JSON.stringify(first);
+    await initial.replay(first);
+    assert.equal(JSON.stringify(first), firstBytes, "duplicate hook admission cannot append another hint");
+    const second = await initial.prompt("msg_second", "add test coverage");
+    assert.match(JSON.stringify(second), /Keep prior cache entries/);
+    assert.equal(JSON.stringify(first), firstBytes, "new hints cannot replace earlier history");
+    assert.deepEqual(await initial.system(), system);
+    const quiet = await initial.prompt("msg_quiet", "verify cache");
+    assert.doesNotMatch(JSON.stringify(quiet), /Investigate the failing cache|Keep prior cache entries/);
+    assert.equal(JSON.stringify(first), firstBytes, "a missing hint cannot remove earlier history");
+    assert.deepEqual(await initial.system(), system);
+    const imageOnly = await initial.prompt("msg_image", "");
+    assert.match(JSON.stringify(imageOnly), /Inspect the supplied image/,
+      "the documented empty-text file prompt still receives guidance");
+    for (const failed of [false, true]) {
+      await initial.tool(failed);
+      assert.deepEqual(await initial.system(), system, "tool hints cannot invalidate the system prefix");
+      assert.deepEqual(await initial.system(), system, "a missing tool hint cannot change a repeated request");
+    }
+    const savedHistory = JSON.parse(JSON.stringify([first, second, quiet, imageOnly]));
+    await initial.cleanup();
+    const resumed = await connect("reload");
+    assert.deepEqual(await resumed.system(), system);
+    await resumed.replay(savedHistory[0]);
+    assert.deepEqual([first, second, quiet, imageOnly], savedHistory,
+      "saved hook output retains its hints without duplicate admission after plugin reload");
+    await resumed.cleanup();
+  });
+}
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");
@@ -2153,8 +2292,14 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
     ]);
 
     writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
-    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "Yes, add billing support" } });
-    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "fix that" } });
+    const firstPrompt = { sessionID: "oc2-2", prompt: { text: "Yes, add billing support" } };
+    const secondPrompt = { sessionID: "oc2-2", prompt: { text: "fix that" } };
+    await sessionHooks.get("prompt")(firstPrompt);
+    await sessionHooks.get("prompt")(secondPrompt);
+    assert.match(firstPrompt.prompt.text, /^Yes, add billing support\n\n/);
+    assert.match(firstPrompt.prompt.text, /prompt hint fixture/);
+    assert.match(secondPrompt.prompt.text, /^fix that\n\n/);
+    assert.match(secondPrompt.prompt.text, /prompt hint fixture/);
     const profiles = readCapture();
     assert.equal(profiles.length, 2, JSON.stringify(profiles));
     assert.equal(profiles[0].task_continuation, false);
@@ -2164,7 +2309,6 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
     await sessionHooks.get("context")(system);
     assert.deepEqual(system.system, [
       { type: "text", text: "Caveman Core fixture" },
-      { type: "text", text: "prompt hint fixture" },
     ]);
     const once = { sessionID: "oc2-2", system: [] };
     await sessionHooks.get("context")(once);
@@ -2228,7 +2372,7 @@ test("enable opencode with an unreadable version writes a plugin both majors loa
   assert.equal(syntax.status, 0, syntax.stderr);
   const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
   assert.equal(plugin.default.id, "caveman-native");
-  assert.equal(plugin.default.server, plugin.CavemanNative, "OpenCode 1.4+ loads default.server, the V1 hook map");
+  assert.equal(plugin.default.server, plugin.CavemanNative, "OpenCode 1.18.29+ loads default.server, the V1 hook map");
   assert.equal(typeof plugin.default.setup, "function", "OpenCode 2 loads default.setup");
   assert.equal(await plugin.default.setup({}), undefined, "OpenCode 1.x calls setup with no session API; it must do nothing");
   // On OpenCode 2 setup runs on the V1 helpers it shares, regex escapes included.
@@ -2325,6 +2469,44 @@ test("enable opencode emits the dual-major plugin when two opencode majors are i
   const doctor = await run(["doctor", "opencode"], fx.env);
   assert.equal(doctor.code, 0, doctor.stderr);
   assert.equal(JSON.parse(doctor.stdout).state, "installed");
+});
+
+for (const versions of [
+  { opencodeVersion: "version unreadable", opencode2Version: "opencode 2.0.26" },
+  { opencodeVersion: "opencode 1.19.3", opencode2Version: "version unreadable" },
+]) {
+  test(`enable opencode preserves both APIs when one installed binary has no readable version (${versions.opencodeVersion})`, async () => {
+    const fx = fixture(versions);
+    try {
+      assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+      const pluginPath = join(fx.home, ".config", "opencode", "plugins", "caveman-native.js");
+      const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+      assert.equal(typeof plugin.CavemanNative, "function", "the unreadable binary may be 1.x");
+      assert.equal(plugin.default?.server, plugin.CavemanNative);
+      assert.equal(typeof plugin.default?.setup, "function", "the unreadable binary may be 2.x");
+      assert.equal(await plugin.default.setup({}), undefined, "V1's context must not call V2 hooks");
+      const hooks = await plugin.CavemanNative();
+      assert.equal(typeof hooks["tool.execute.before"], "function");
+      assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+    } finally { rmSync(fx.home, { recursive: true, force: true }); }
+  });
+}
+
+test("doctor repairs a single-API opencode plugin when an unreadable second binary appears", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 1.19.3" });
+  try {
+    assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+    writeFileSync(join(fx.home, "bin", "opencode2"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const doctor = await run(["doctor", "opencode"], fx.env);
+    assert.notEqual(doctor.code, 0, "the unreadable binary cannot vouch for a V1-only file");
+    assert.equal(JSON.parse(doctor.stdout).components.lifecycle_hooks, false);
+    assert.equal((await run(["doctor", "opencode", "--fix"], fx.env)).code, 0);
+    const pluginPath = join(fx.home, ".config", "opencode", "plugins", "caveman-native.js");
+    const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+    assert.equal(plugin.default.server, plugin.CavemanNative);
+    assert.equal(typeof plugin.default.setup, "function");
+    assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+  } finally { rmSync(fx.home, { recursive: true, force: true }); }
 });
 
 // With only `opencode2` on PATH, binOf fell back to binary_names[0] ("opencode"),

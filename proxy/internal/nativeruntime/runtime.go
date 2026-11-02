@@ -1153,6 +1153,15 @@ func (r *Runtime) beforeTool(request Request, response Response) (Response, erro
 	if request.Tool == nil {
 		return response, nil
 	}
+	// OpenCode V1 cannot persist guidance on failed tool calls. Transient
+	// system injection invalidates the provider cache prefix, so both native
+	// adapters omit these advisory-only reuse/loop hints. Record that choice
+	// instead of claiming a delivered optimization. Execution and recovery
+	// remain independent of reuse hints.
+	if request.Agent.ID == "opencode" {
+		response.decisionReason = "reuse_hint_skipped_cache_safety"
+		return response, nil
+	}
 	typeName, source, dependency := classifyTool(request.Tool)
 	inputState := firstNonEmptyValue(request.Tool.InputState, request.Session.RepositoryState)
 	if !reuseHintEligible(typeName, source, dependency, inputState) {

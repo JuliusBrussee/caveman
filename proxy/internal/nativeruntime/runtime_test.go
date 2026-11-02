@@ -1337,6 +1337,44 @@ func TestRepeatLoopHintsOnceEscalatesOnceAndNeverFloods(t *testing.T) {
 	}
 }
 
+func TestOpenCodeSkipsEphemeralReuseHintsAndRecordsWhy(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	runtime := New(store)
+	session := Session{ID: "opencode-cache-safe"}
+	original := []byte("exact current observation")
+	after, err := runtime.Handle(context.Background(), Request{
+		ProtocolVersion: 1, Agent: Agent{ID: "opencode"}, Session: session, Event: Event{Type: "tool.after"},
+		Tool: &Tool{Name: "read_file", InputState: "sha256:auth-v1", Input: json.RawMessage(`{"path":"src/auth.go"}`), Output: original},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := range 4 {
+		before, err := runtime.Handle(context.Background(), Request{
+			ProtocolVersion: 1, Agent: Agent{ID: "opencode"}, Session: session, Event: Event{Type: "tool.before", TimestampMS: int64(i + 1)},
+			Tool: &Tool{Name: "read_file", InputState: "sha256:auth-v1", Input: json.RawMessage(`{"path":"src/auth.go"}`)},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if before.Action != "allow" || before.Context != "" || before.RecoveryRef != "" || !before.FailOpen {
+			t.Fatalf("OpenCode tools must proceed without ephemeral system guidance: %+v", before)
+		}
+		explanation, err := ExplainDecision(store, before.DecisionID)
+		if err != nil || explanation.Reason != "reuse_hint_skipped_cache_safety" {
+			t.Fatalf("cache-safety skip must remain visible in the decision ledger: explanation=%+v err=%v", explanation, err)
+		}
+	}
+	object, err := store.GetObject(trimCCRReference(after.RecoveryRef))
+	if err != nil || !bytes.Equal(object.Data, original) {
+		t.Fatalf("exact tool recovery must remain available: object=%+v err=%v", object, err)
+	}
+}
+
 func TestExplainDecisionReturnsDeterministicBasisWithoutRawOutput(t *testing.T) {
 	store, err := ccr.OpenMemory()
 	if err != nil {

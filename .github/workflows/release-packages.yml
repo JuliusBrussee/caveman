@@ -19,7 +19,11 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  reliability:
+    uses: ./.github/workflows/proxy-reliability.yml
+
   build:
+    needs: reliability
     runs-on: ubuntu-latest
     # The CLI suite alone takes a large share of engine-ci's 45-minute budget.
     timeout-minutes: 45

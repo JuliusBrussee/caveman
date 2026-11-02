@@ -14,6 +14,7 @@ import (
 	"math"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -392,6 +393,13 @@ type MetadataRequestMatcher interface {
 	MatchMetadataRequest(r *http.Request) bool
 }
 
+// OAuthTokenRouter declares exact token exchange routes that carry a grant,
+// not an inference request. The gateway relays them without a provider key,
+// transforms, captures, or usage accounting.
+type OAuthTokenRouter interface {
+	MatchOAuthTokenRoute(method, path string) bool
+}
+
 // TokenCounter is an optional provider capability for projecting an original
 // inference request onto that provider's token-count endpoint. Implementations
 // only shape and parse bytes; the gateway owns all network I/O so credentials,
@@ -470,6 +478,8 @@ type Base struct {
 	// stays fail-closed. The gateway forwards these unchanged: no request body,
 	// no transform, no usage accounting and no spend row.
 	MetadataRoutes []string
+	// OAuthTokenRoutes is POST-only. A missing allowlist keeps token routes closed.
+	OAuthTokenRoutes []string
 }
 
 // usageParseProvider is the provider key usage accounting parses with.
@@ -526,6 +536,13 @@ func (b Base) MatchMetadataRoute(method, path string) bool {
 	return false
 }
 
+func (b Base) MatchOAuthTokenRoute(method, path string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	return slices.Contains(b.OAuthTokenRoutes, path)
+}
+
 func (b Base) ResolveUpstreamURL(ctx context.Context, req *http.Request, route RouteContext) (*url.URL, error) {
 	baseURL := b.BaseURL
 	if route.BaseURL != "" {
@@ -569,6 +586,9 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 	}
 	copyIfPresent(out, req.Header, "anthropic-version")
 	copyIfPresent(out, req.Header, "anthropic-beta")
+	// Organization-scoped keys require the caller's workspace selection.
+	// Dropping it makes otherwise valid provider requests fail with HTTP 400.
+	copyIfPresent(out, req.Header, "anthropic-workspace-id")
 	copyIfPresent(out, req.Header, "api-version")
 	if env.Bool("CAVE_PROPAGATE_TRACE_HEADERS_UPSTREAM", false) {
 		copyIfPresent(out, req.Header, "traceparent")

@@ -2026,28 +2026,84 @@ function privateTmpDir() {
 }
 
 // ── HTTPS download via stdlib ─────────────────────────────────────────────
+const DOWNLOAD_MAX_BYTES = 8 * 1024 * 1024;
+const DOWNLOAD_TIMEOUT_MS = 60_000;
+const DOWNLOAD_MAX_REDIRECTS = 5;
+
 function downloadTo(url, dest) {
-  // Prefer curl/wget when available (better proxy + cert handling on legacy
-  // systems); fall back to Node https.
+  const initial = new URL(url);
+  if (initial.protocol !== 'https:') throw new Error('hook downloads require HTTPS');
+  // Prefer curl for the host's proxy/certificate support. Capture bounded bytes
+  // before writing: curl <8.4 ignores --max-filesize on unknown-length bodies.
   if (hasCmd('curl')) {
-    const r = child_process.spawnSync('curl', ['-fsSL', '-o', dest, url], { stdio: 'inherit' });
-    if (r.status === 0) return;
-    throw new Error(`curl failed for ${url}`);
+    const r = child_process.spawnSync('curl', ['-fsSL', '--proto', '=https',
+      '--proto-redir', '=https', '--max-redirs', String(DOWNLOAD_MAX_REDIRECTS),
+      '--max-time', String(DOWNLOAD_TIMEOUT_MS / 1000), '--max-filesize', String(DOWNLOAD_MAX_BYTES),
+      '-o', '-', initial.href], {
+      stdio: ['ignore', 'pipe', 'inherit'], maxBuffer: DOWNLOAD_MAX_BYTES,
+      timeout: DOWNLOAD_TIMEOUT_MS, killSignal: 'SIGKILL',
+    });
+    if (r.error || r.status !== 0) throw new Error(`curl failed for ${url}`);
+    fs.writeFileSync(dest, r.stdout);
+    return;
   }
   const https = require('https');
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        resolve(downloadTo(res.headers.location, dest));
-        return;
+    let req, res, settled = false;
+    // request.setTimeout only reports inactivity, and does not abort. A single
+    // deadline covers DNS/TLS, every redirect, and even a body that keeps dripping.
+    const timer = setTimeout(() => finish(new Error('hook download timed out')), DOWNLOAD_TIMEOUT_MS);
+    function finish(error, bytes) {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      if (error) {
+        if (res) res.destroy();
+        if (req) req.destroy();
+        reject(error);
+      } else {
+        try { fs.writeFileSync(dest, bytes); resolve(); }
+        catch (writeError) { reject(writeError); }
       }
-      if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return; }
-      const out = fs.createWriteStream(dest);
-      res.pipe(out);
-      out.on('finish', () => out.close(resolve));
-      out.on('error', reject);
-    });
-    req.on('error', reject);
+    }
+    function fetch(current, redirects) {
+      try {
+        if (current.protocol !== 'https:') throw new Error('hook downloads require HTTPS');
+        req = https.get(current.href, (response) => {
+          res = response;
+          if (response.statusCode >= 300 && response.statusCode < 400 && response.headers.location) {
+            response.on('error', () => {}); // This redirect's socket is deliberately closed below.
+            response.destroy();
+            res = undefined;
+            if (redirects >= DOWNLOAD_MAX_REDIRECTS) {
+              finish(new Error('too many hook download redirects'));
+              return;
+            }
+            try { fetch(new URL(response.headers.location, current), redirects + 1); }
+            catch (error) { finish(error); }
+            return;
+          }
+          response.on('error', finish);
+          if (response.statusCode !== 200) {
+            finish(new Error(`HTTP ${response.statusCode} for ${current.href}`));
+            return;
+          }
+          let size = 0;
+          const chunks = [];
+          response.on('data', (chunk) => {
+            size += chunk.length;
+            if (size > DOWNLOAD_MAX_BYTES) {
+              finish(new Error(`hook download exceeds ${DOWNLOAD_MAX_BYTES} bytes`));
+              return;
+            }
+            chunks.push(chunk);
+          });
+          response.on('end', () => finish(null, Buffer.concat(chunks, size)));
+        });
+        req.on('error', finish);
+      } catch (error) { finish(error); }
+    }
+    fetch(initial, 0);
   });
 }
 

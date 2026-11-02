@@ -98,7 +98,12 @@ func (s *Server) metadataPassthrough(w http.ResponseWriter, r *http.Request, ada
 
 	copySafeResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, resp.Body); err != nil && s.logger != nil {
-		s.logger.Warn("provider metadata relay failed", "error", redact.Error(err), "request_id", requestID)
+	if _, err := io.Copy(w, resp.Body); err != nil {
+		if s.logger != nil {
+			s.logger.Warn("provider metadata relay failed", "error", redact.Error(err), "request_id", requestID)
+		}
+		// Headers may already be committed. Abort HTTP framing so a truncated
+		// catalog cannot look like a complete successful provider response.
+		panic(http.ErrAbortHandler)
 	}
 }

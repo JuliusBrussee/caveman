@@ -4,6 +4,10 @@ Audited 2026-09-05. Scope: the standalone proxy, shared provider adapters, and
 local CLI wrapper. This is an engineering verification record, not an uptime
 SLA or a claim that every provider endpoint has been certified.
 
+Shutdown and launcher signals were re-audited on 2026-10-25 using isolated local
+HTTP fixtures and subprocesses. Native Windows signal behavior remains a
+separate host verification requirement.
+
 ## Findings and changes
 
 | Failure mechanism | Changed behavior | Regression evidence |
@@ -16,6 +20,8 @@ SLA or a claim that every provider endpoint has been certified.
 | Interrupted upstream streams became a clean downstream EOF, while telemetry showed no error. | The copy error is recorded; HTTP framing is aborted after committed headers. No fabricated completion or replay of a partial stream. | `TestInterruptedStreamsAbortClientFramingWithoutReplay`: Anthropic and ChatGPT routes, HTTP/1.1 and HTTP/2. |
 | Transport and response-read failures were retried on the assumption that no response meant no inference occurred. | Explicit proxy retries only cover connection-setup failures: the TCP dial, and the connection to an outbound HTTP proxy, which Go reports as `proxyconnect` rather than `dial`. Ambiguous upload/header failures and truncated bodies are not silently replayed. A complete transformed-request 4xx can still fall back once to original bytes. | Dial retry, proxy-connect retry, ambiguous failure/no replay (including a refused `CONNECT` tunnel), and truncated gzip/no replay tests; existing original-body fallback tests. |
 | A nil telemetry sink could panic after forwarding a successful response. | An omitted sink skips recording, matching the existing ChatGPT path. | Streaming and encoded-request regressions run without a sink. |
+| Shutdown stopped waiting after five seconds, then exited with active provider streams and stores still in use. Repeated stop signals remained intercepted. | The first SIGINT/SIGTERM closes the listener and drains accepted requests without a new generation deadline. A second stop signal uses normal OS termination. | `TestServeShutdown`: accepted SSE response remains alive beyond five seconds and finishes intact; a second signal interrupts a blocked drain. |
+| A process-directed SIGINT was swallowed by the non-interactive native agent launcher; `caveman start` abandoned its proxy on supervisor termination and reported a signal-killed proxy as success. A TTY-attached `start` also swallowed process-directed SIGINT. | Non-interactive agent launchers forward stop signals. On POSIX, `start` owns a separate proxy process group and forwards signals once, waits for drain, and propagates signal failures as nonzero exit codes. | `agent-shortcut.runtime.mjs` and `start-lifecycle.runtime.mjs`: real stub processes, targeted SIGINT/SIGTERM, drain completion, and signal failure status. Real PTY fixtures verify both PID-directed and group-directed SIGINT, exactly one delivery, and no surviving proxy. |
 
 Request-body read failures also receive a distinct error instead of being
 misreported as oversized requests. Old native correlation entries are pruned
@@ -64,7 +70,11 @@ rather than inventing provider events or hiding provider errors.
 [Go's HTTP client contract](https://pkg.go.dev/net/http#Client) explains that a
 client timeout remains active while reading the response body.
 
-## Validation
+## Original validation — 2026-09-05
+
+For the current patch's full-suite results, skips, and remaining work, see the
+[2026-10-25 maintenance audit](maintenance-audit-2026-10-25.md). The results below
+describe the earlier audit and are retained as historical evidence.
 
 - `go test -json ./proxy/...`: 1,331 passing test cases/subtests, 22 passing
   packages; one existing optional local-fixture diagnostic skipped, two packages
@@ -92,12 +102,48 @@ non-streaming response buffer is 64 MiB. The ChatGPT route reads a
 compress-eligible request whole up to the same request limit (a zstd body
 decodes up to it too) and streams a larger one through untransformed.
 
+On POSIX hosts, SIGINT or SIGTERM initiates graceful shutdown: new connections
+stop, accepted requests finish, then persistence closes. Send a second stop
+signal to terminate immediately if a request does not complete. This follows
+[Go's HTTP shutdown contract](https://pkg.go.dev/net/http#Server.Shutdown).
+The returned stop function from [Go's signal context](https://pkg.go.dev/os/signal#NotifyContext)
+is called before draining so a second stop signal restores normal OS termination.
+On POSIX, `caveman start` uses [Node's detached child process group](https://nodejs.org/api/child_process.html#optionsdetached)
+without unreferencing the child: the launcher still waits, and terminal broadcasts
+cannot deliver the same interrupt directly and through the forwarding handler.
+POSIX wrapped agents also receive terminal broadcasts directly, so the launcher
+does not forward TTY SIGINT/SIGQUIT a second time. Noninteractive launchers still
+forward process-directed signals. Wrappers retain their existing ten-second
+and second-stop escape, cleaning temporary credentials before forced exit.
+On Windows, `start`, native agent shortcuts, and wrapped agents retain the shared
+console and wait for the child after Ctrl+C, Ctrl+Break, or console close. Windows
+[broadcasts console events to attached processes](https://learn.microsoft.com/en-us/windows/console/ctrl-c-and-ctrl-break-signals),
+including when stdin is redirected; forwarding them with
+[Node's signal emulation](https://nodejs.org/api/process.html#signal-events)
+could force-terminate the child. Local tests exercise this dispatch policy with
+an injected Windows platform; native Windows console execution remains unverified.
+Console close has an OS-imposed cleanup deadline. A supervisor or OS force-kill
+can interrupt requests on every platform.
+
 Provider outages, DNS/network loss, sleep-induced socket loss, invalid or expired
 provider credentials, provider context/rate limits, process termination, and
 unsupported routes can still produce errors. Explicit route/auth/security
-allowlists remain enforced; this proxy does not promise every provider API,
-WebSocket upgrade, or future wire extension. Unknown routes
-remain closed. Explicit request deadlines still take effect when configured.
+allowlists remain enforced. Native OpenAI Responses WebSocket upgrades are
+supported on exact `GET /v1/responses` and `GET /openai/v1/responses`, including
+normalized `/w` paths. They use local authentication, provider credentials, and
+the guarded upstream transport; frames pass through without optimization,
+capture, or usage accounting. Server shutdown closes upgraded connections.
+Browser-originated handshakes are refused so a webpage cannot spend a configured
+local provider key. See [OpenAI's Responses connection contract](https://developers.openai.com/api/reference/resources/responses/methods/connect)
+and [RFC 6455's origin considerations](https://www.rfc-editor.org/rfc/rfc6455#section-10.2).
+Other provider and compatible-mount WebSocket routes remain unsupported. Unknown
+routes remain closed. Explicit request deadlines still take effect when configured.
+
+Switching a conversation between optimized HTTP requests and opaque WebSocket
+passthrough can replay raw history instead of the memoized transformed bytes.
+Cross-transport cache-prefix equivalence is unsupported and unverified. The
+WebSocket tests prove byte relay within that transport, not cache continuity
+when changing transports.
 
 An already-running agent cannot switch away from a process that the OS killed
 without client cooperation. Native prompt hooks can revive a missing local proxy;

@@ -118,6 +118,14 @@ func TransformGemini(body []byte, opts TransformOptions) (out []byte, info Trans
 		info.Reason = "parse_error: " + err.Error()
 		return nil, info, err
 	}
+	// Rendering and history collapse replace whole parts. A signature must
+	// remain attached to its exact original part, and unknown metadata may
+	// impose the same constraint. Keep the original request byte-for-byte when
+	// any part carries fields this transform cannot preserve semantically.
+	if geminiHasOpaquePartMetadata(req) {
+		info.Reason = "opaque_part_metadata"
+		return body, info, nil
+	}
 	mediaResolution, supported := geminiGlobalMediaResolution(req.extra)
 	if !supported || (mediaResolution != "default" && mediaResolution != "high") {
 		info.Reason = "unsupported_media_resolution"
@@ -180,6 +188,30 @@ func TransformGemini(body []byte, opts TransformOptions) (out []byte, info Trans
 		info.PassthroughReasons = nil
 	}
 	return out, info, nil
+}
+
+func geminiHasOpaquePartMetadata(req geminiGenerateContent) bool {
+	opaque := func(parts []geminiPart) bool {
+		for _, part := range parts {
+			for field := range part.Extra {
+				switch field {
+				case "text", "inline_data", "inlineData", "functionResponse", "functionCall":
+				default:
+					return true
+				}
+			}
+		}
+		return false
+	}
+	if req.SystemInstruction != nil && opaque(req.SystemInstruction.Parts) {
+		return true
+	}
+	for _, content := range req.Contents {
+		if opaque(content.Parts) {
+			return true
+		}
+	}
+	return false
 }
 
 func mergeGeminiOptions(opts TransformOptions) TransformOptions {

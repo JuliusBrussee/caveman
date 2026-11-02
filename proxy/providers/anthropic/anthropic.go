@@ -35,7 +35,8 @@ func New(baseURL string) providers.Adapter {
 		// GET /v1/models and /v1/models/{id} are part of the Anthropic wire
 		// protocol, so the bare and prefixed mounts carry them for the same
 		// reason the inference routes are doubled up.
-		MetadataRoutes: []string{"/anthropic/v1/models", "/v1/models"},
+		MetadataRoutes:   []string{"/anthropic/v1/models", "/v1/models"},
+		OAuthTokenRoutes: []string{"/anthropic/v1/oauth/token", "/v1/oauth/token"},
 	}}
 }
 

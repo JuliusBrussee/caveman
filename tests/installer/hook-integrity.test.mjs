@@ -41,7 +41,7 @@ out=""; url=""
 while [ $# -gt 0 ]; do
   case "$1" in -o) out="$2"; shift 2 ;; -*) shift ;; *) url="$1"; shift ;; esac
 done
-case "$url" in */src/hooks/*|*/src/tools/*) f="${served}/\${url##*/}"; [ -f "$f" ] && cp "$f" "$out" && exit 0 ;; esac
+case "$url" in */src/hooks/*|*/src/tools/*) f="${served}/\${url##*/}"; [ -f "$f" ] && { if [ "$out" = - ]; then cat "$f"; else cp "$f" "$out"; fi; } && exit 0 ;; esac
 exit 22
 `, { mode: 0o755 });
   const configDir = path.join(root, 'claude');

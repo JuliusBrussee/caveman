@@ -139,7 +139,11 @@ func (a Adapter) ExtractCompressible(body []byte, meta providers.RequestMetadata
 	var candidates []spliceCandidate
 	for i, span := range messageSpans {
 		if live[i] {
-			candidates = append(candidates, collectAnthropicCandidates(body, span, recovered)...)
+			for _, c := range collectAnthropicCandidates(body, span, recovered) {
+				if newCompressionEligible(c.original) {
+					candidates = append(candidates, c)
+				}
+			}
 		}
 	}
 	if len(candidates) == 0 {
@@ -169,6 +173,8 @@ func (a Adapter) ExtractCompressible(body []byte, meta providers.RequestMetadata
 // stored replacement and the prefix stays byte-stable for the whole conversation.
 // Assistant blocks are never collected: the proxy never compresses them, so a
 // substitution could never exist for them.
+// Small tool JSON remains replayable when TOON is disabled, but is not Live:
+// changing the flag must suppress new compression without withdrawing old bytes.
 func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]providers.RewritableBlock, func([][]byte) ([]byte, error), bool) {
 	messageSpans, live, ok := messageZones(body, meta)
 	if !ok {
@@ -189,7 +195,7 @@ func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata
 			candidates = append(candidates, c)
 			blocks = append(blocks, providers.RewritableBlock{
 				Content: append([]byte(nil), c.original...),
-				Live:    live[i],
+				Live:    live[i] && newCompressionEligible(c.original),
 				Kind:    c.kind,
 			})
 		}
@@ -377,10 +383,13 @@ func collectStringCandidate(
 	*out = append(*out, spliceCandidate{jsonSpan: span, original: original, kind: kind})
 }
 
+// Discovery must survive configuration changes: a small tool JSON block may
+// already have a durable replacement that the provider cached on an earlier run.
 func forcedTOONCandidate(original []byte) bool {
-	if !strings.EqualFold(os.Getenv("CAVE_ENGINE_TOON"), "best-of") {
-		return false
-	}
 	trimmed := bytes.TrimSpace(original)
 	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
+}
+
+func newCompressionEligible(original []byte) bool {
+	return len(original) >= minCompressBlockBytes || strings.EqualFold(os.Getenv("CAVE_ENGINE_TOON"), "best-of")
 }

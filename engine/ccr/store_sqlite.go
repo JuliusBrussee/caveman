@@ -6,7 +6,9 @@ package ccr
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,9 +18,10 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"modernc.org/sqlite"
 )
 
 // Store is a SQLite-backed recovery store.
@@ -186,16 +189,22 @@ func openWithBudgetHooks(path string, maxBytes int64, afterPrepare, afterOpen fu
 	if err != nil {
 		return nil, err
 	}
-	dsn := SQLiteDSN(canonicalPath)
+	// Writers must acquire SQLite's cross-connection write lock before the
+	// dedup lookup and budget check. A deferred read transaction cannot safely
+	// upgrade after another writer commits. Keep this local to CCR: SQLiteDSN
+	// is also used by stores with different transaction behavior.
+	dsn := SQLiteDSN(canonicalPath) + "&_txlock=immediate"
 	if canonicalPath != ":memory:" {
 		// PrepareSQLitePathCanonical already created the file. Never recreate
 		// it if it vanishes between preparation and the driver's open.
 		dsn += "&mode=rw"
 	}
-	db, err := sql.Open("sqlite", dsn)
+	connector, err := sqlite.NewConnector(dsn)
 	if err != nil {
 		return nil, fmt.Errorf("open sqlite %q: %w", canonicalPath, err)
 	}
+	budgetConnector := &storageBudgetConnector{Connector: connector, persistent: canonicalPath != ":memory:"}
+	db := sql.OpenDB(budgetConnector)
 	// One writer connection. With a single connection every statement serializes
 	// in-process (no self-contention) while busy_timeout absorbs cross-process
 	// contention; it is also mandatory for an in-memory DSN, where a second
@@ -232,10 +241,21 @@ func openWithBudgetHooks(path string, maxBytes int64, afterPrepare, afterOpen fu
 		return nil, fmt.Errorf("migrate sqlite metadata %q: %w", canonicalPath, err)
 	}
 	if err := RetryOnBusy(func() error { return ensureDataRefColumn(db) }); err != nil {
-		_ = db.Close()
+		closeSQLiteAfterOpenFailure(db, canonicalPath)
 		return nil, fmt.Errorf("migrate sqlite data_ref %q: %w", canonicalPath, err)
 	}
-	if err := configureStorageBudget(db, maxBytes); err != nil {
+	// Preserve migration access to old recoveries even when a pre-existing
+	// database exceeds the new budget. Then activate the cap for both the
+	// current connection and every replacement the pool may open later.
+	budgetConnector.maxBytes.Store(maxBytes)
+	conn, err := db.Conn(context.Background())
+	if err == nil {
+		err = conn.Raw(func(raw any) error {
+			return configureStorageBudget(context.Background(), raw.(sqlite.ExecQuerierContext), maxBytes)
+		})
+		_ = conn.Close()
+	}
+	if err != nil {
 		closeSQLiteAfterOpenFailure(db, canonicalPath)
 		return nil, fmt.Errorf("configure sqlite storage budget %q: %w", canonicalPath, err)
 	}
@@ -384,9 +404,69 @@ func secureSQLiteFile(path string, create bool) error {
 	return nil
 }
 
-func configureStorageBudget(db *sql.DB, maxBytes int64) error {
-	var pageSize int64
-	if err := db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
+// SQLite's page and journal limits belong to a physical connection. A pool
+// replacing a broken/expired connection must not silently lose those limits.
+// NewConnector retains the package-level driver hooks used by other callers.
+type storageBudgetConnector struct {
+	driver.Connector
+	maxBytes   atomic.Int64
+	persistent bool
+}
+
+func (c *storageBudgetConnector) Connect(ctx context.Context) (driver.Conn, error) {
+	conn, err := c.Connector.Connect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	queries, ok := conn.(sqlite.ExecQuerierContext)
+	if !ok {
+		err = errors.New("sqlite driver lacks connection query support")
+	} else if maxBytes := c.maxBytes.Load(); maxBytes > 0 {
+		err = configureStorageBudget(ctx, queries, maxBytes)
+	}
+	if err == nil && c.persistent {
+		control, ok := conn.(sqlite.FileControl)
+		if !ok {
+			err = errors.New("sqlite driver lacks persistent journal control")
+		} else {
+			_, err = control.FileControlPersistWAL("main", 1)
+		}
+	}
+	if err != nil {
+		// As in closeSQLiteAfterOpenFailure, a disk connection may already
+		// reference replaced journals. Closing it could checkpoint stale data.
+		if !c.persistent {
+			_ = conn.Close()
+		}
+		return nil, fmt.Errorf("configure sqlite storage connection: %w", err)
+	}
+	return conn, nil
+}
+
+func sqliteConnectionInt(ctx context.Context, conn sqlite.ExecQuerierContext, query string) (n int64, err error) {
+	rows, err := conn.QueryContext(ctx, query, nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() {
+		if closeErr := rows.Close(); err == nil {
+			err = closeErr
+		}
+	}()
+	value := make([]driver.Value, 1)
+	if err := rows.Next(value); err != nil {
+		return 0, err
+	}
+	n, ok := value[0].(int64)
+	if !ok {
+		return 0, fmt.Errorf("sqlite integer pragma returned %T", value[0])
+	}
+	return n, nil
+}
+
+func configureStorageBudget(ctx context.Context, conn sqlite.ExecQuerierContext, maxBytes int64) error {
+	pageSize, err := sqliteConnectionInt(ctx, conn, `PRAGMA page_size`)
+	if err != nil {
 		return fmt.Errorf("read page size: %w", err)
 	}
 	if pageSize <= 0 {
@@ -396,8 +476,8 @@ func configureStorageBudget(db *sql.DB, maxBytes int64) error {
 	if maxPages < minimumStoragePages {
 		return fmt.Errorf("budget %d is below CCR storage minimum %d", maxBytes, minimumStoragePages*pageSize)
 	}
-	var applied int64
-	if err := db.QueryRow(fmt.Sprintf(`PRAGMA max_page_count=%d`, maxPages)).Scan(&applied); err != nil {
+	applied, err := sqliteConnectionInt(ctx, conn, fmt.Sprintf(`PRAGMA max_page_count=%d`, maxPages))
+	if err != nil {
 		return err
 	}
 	if applied < maxPages {
@@ -407,10 +487,10 @@ func configureStorageBudget(db *sql.DB, maxBytes int64) error {
 	if autoCheckpoint < 1 {
 		autoCheckpoint = 1
 	}
-	if _, err := db.Exec(fmt.Sprintf(`PRAGMA wal_autocheckpoint=%d`, autoCheckpoint)); err != nil {
+	if _, err := conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA wal_autocheckpoint=%d`, autoCheckpoint), nil); err != nil {
 		return err
 	}
-	_, err := db.Exec(fmt.Sprintf(`PRAGMA journal_size_limit=%d`, maxBytes/8))
+	_, err = conn.ExecContext(ctx, fmt.Sprintf(`PRAGMA journal_size_limit=%d`, maxBytes/8), nil)
 	return err
 }
 
@@ -480,17 +560,22 @@ func OpenMemory() (*Store, error) { return OpenWithBudget(":memory:", DefaultMax
 // with identical content and returns the same handle.
 func (s *Store) put(rec Recovery) (string, error) {
 	handle := Handle(rec.Original)
-	unchanged, err := s.recoveryUnchanged(handle, rec)
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("ccr put begin: %w", err)
+	}
+	defer tx.Rollback()
+	unchanged, err := s.recoveryUnchanged(tx, handle, rec)
 	if err != nil {
 		return "", fmt.Errorf("ccr put: %w", err)
 	}
 	if unchanged {
 		return handle, nil
 	}
-	if err := s.checkRecoveryBudget(handle, int64(len(rec.Original)+len(rec.Metadata))); err != nil {
+	if err := s.checkRecoveryBudget(tx, handle, int64(len(rec.Original)+len(rec.Metadata))); err != nil {
 		return "", fmt.Errorf("ccr put: %w", err)
 	}
-	_, err = s.db.Exec(
+	_, err = tx.Exec(
 		`INSERT INTO recoveries (handle, created_at, content_type, compressor, tokens_before, tokens_after, original, metadata)
 		 VALUES (?,?,?,?,?,?,?,?)
 		 ON CONFLICT(handle) DO UPDATE SET
@@ -513,14 +598,27 @@ func (s *Store) put(rec Recovery) (string, error) {
 		}
 		return "", fmt.Errorf("ccr put: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		if isFull(err) {
+			return "", fmt.Errorf("ccr put commit: %w", ErrBudgetExceeded)
+		}
+		return "", fmt.Errorf("ccr put commit: %w", err)
+	}
 	return handle, nil
 }
 
-func (s *Store) recoveryUnchanged(handle string, rec Recovery) (bool, error) {
+// Both sql.DB and sql.Tx implement rowQuerier. Budget and dedup reads inside
+// a write transaction must use that transaction: asking s.db for a second
+// connection would deadlock the single-connection pool.
+type rowQuerier interface {
+	QueryRow(query string, args ...any) *sql.Row
+}
+
+func (s *Store) recoveryUnchanged(q rowQuerier, handle string, rec Recovery) (bool, error) {
 	var contentType, compressor string
 	var tokensBefore, tokensAfter int
 	var original, metadata []byte
-	err := s.db.QueryRow(
+	err := q.QueryRow(
 		`SELECT content_type, compressor, tokens_before, tokens_after, original, metadata
 		 FROM recoveries WHERE handle=?`,
 		handle,
@@ -539,13 +637,13 @@ func (s *Store) recoveryUnchanged(handle string, rec Recovery) (bool, error) {
 		bytes.Equal(metadata, rec.Metadata), nil
 }
 
-func (s *Store) checkRecoveryBudget(handle string, newBytes int64) error {
-	used, err := s.storageBytes()
+func (s *Store) checkRecoveryBudget(q rowQuerier, handle string, newBytes int64) error {
+	used, err := s.storageBytes(q)
 	if err != nil {
 		return err
 	}
 	var existing int64
-	err = s.db.QueryRow(`SELECT COALESCE(length(original),0)+COALESCE(length(metadata),0) FROM recoveries WHERE handle=?`, handle).Scan(&existing)
+	err = q.QueryRow(`SELECT COALESCE(length(original),0)+COALESCE(length(metadata),0) FROM recoveries WHERE handle=?`, handle).Scan(&existing)
 	if errors.Is(err, sql.ErrNoRows) {
 		existing = 0
 	} else if err != nil {
@@ -557,9 +655,9 @@ func (s *Store) checkRecoveryBudget(handle string, newBytes int64) error {
 	return nil
 }
 
-func (s *Store) storageBytes() (int64, error) {
+func (s *Store) storageBytes(q rowQuerier) (int64, error) {
 	var used int64
-	err := s.db.QueryRow(`SELECT
+	err := q.QueryRow(`SELECT
 	  COALESCE((SELECT SUM(length(original)+COALESCE(length(metadata),0)) FROM recoveries),0) +
 	  COALESCE((SELECT SUM(length(data)+length(dependencies_json)) FROM typed_objects),0)`).Scan(&used)
 	return used, err
@@ -631,6 +729,11 @@ func (s *Store) putObject(input Object) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ccr typed object dependencies: %w", err)
 	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return "", fmt.Errorf("ccr typed object begin: %w", err)
+	}
+	defer tx.Rollback()
 	storedData := obj.Data
 	var dataRef string
 	if obj.Type == ObjectRepositoryMap {
@@ -643,7 +746,7 @@ func (s *Store) putObject(input Object) (string, error) {
 		// itself is often unchanged, so a long session re-stores the same
 		// multi-MB map per commit even though the session never changed
 		// (issue #1023).
-		err = s.db.QueryRow(
+		err = tx.QueryRow(
 			`SELECT object_id FROM typed_objects
 			 WHERE object_type = ? AND content_hash = ?
 			   AND data_ref = '' AND object_id != ?
@@ -660,12 +763,12 @@ func (s *Store) putObject(input Object) (string, error) {
 			storedData = []byte{}
 		}
 	}
-	used, err := s.storageBytes()
+	used, err := s.storageBytes(tx)
 	if err != nil {
 		return "", fmt.Errorf("ccr typed object budget: %w", err)
 	}
 	var existingBytes int64
-	err = s.db.QueryRow(`SELECT length(data)+length(dependencies_json) FROM typed_objects WHERE object_id=?`, obj.ID).Scan(&existingBytes)
+	err = tx.QueryRow(`SELECT length(data)+length(dependencies_json) FROM typed_objects WHERE object_id=?`, obj.ID).Scan(&existingBytes)
 	if errors.Is(err, sql.ErrNoRows) {
 		existingBytes = 0
 	} else if err != nil {
@@ -674,7 +777,7 @@ func (s *Store) putObject(input Object) (string, error) {
 	if used-existingBytes+int64(len(storedData)+len(deps)) > s.maxBytes {
 		return "", fmt.Errorf("ccr typed object put: %w", ErrBudgetExceeded)
 	}
-	result, err := s.db.Exec(
+	result, err := tx.Exec(
 		`INSERT INTO typed_objects (
 		 object_id, object_type, content_hash, source, created_at, repository_state,
 		 session_id, transform_version, currentness, lifecycle, dependencies_json,
@@ -695,7 +798,15 @@ func (s *Store) putObject(input Object) (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("ccr typed object put rows: %w", err)
 	}
+	if err := tx.Commit(); err != nil {
+		if isFull(err) {
+			return "", fmt.Errorf("ccr typed object commit: %w", ErrBudgetExceeded)
+		}
+		return "", fmt.Errorf("ccr typed object commit: %w", err)
+	}
 	if inserted == 0 {
+		// Object payloads are immutable, so collision verification can safely
+		// happen after commit and release of the single pooled connection.
 		existing, err := s.getObject(obj.ID)
 		if err != nil {
 			return "", fmt.Errorf("ccr typed object collision lookup: %w", err)
@@ -887,12 +998,24 @@ func (s *Store) summary() (Stats, error) {
 		return out, fmt.Errorf("ccr summary close: %w", err)
 	}
 	out.Totals.Ratio = ratio(out.Totals.TokensBefore, out.Totals.TokensAfter)
-	used, err := s.storageBytes()
+	used, err := s.storageBytes(s.db)
 	if err != nil {
 		return out, fmt.Errorf("ccr summary storage: %w", err)
 	}
 	out.StorageBytes = used
 	out.MaxStorageBytes = s.maxBytes
 	out.StorageFull = used >= s.maxBytes
+	// Payload accounting excludes SQLite tables/indexes. The physical cap can
+	// therefore stop writes sooner. Free-list pages remain reusable even when
+	// the database has reached max_page_count, so they are not exhaustion.
+	var pages, maxPages, freePages int64
+	for pragma, value := range map[string]*int64{
+		"page_count": &pages, "max_page_count": &maxPages, "freelist_count": &freePages,
+	} {
+		if err := s.db.QueryRow("PRAGMA " + pragma).Scan(value); err != nil {
+			return out, fmt.Errorf("ccr summary %s: %w", pragma, err)
+		}
+	}
+	out.StorageFull = out.StorageFull || (pages >= maxPages && freePages == 0)
 	return out, nil
 }

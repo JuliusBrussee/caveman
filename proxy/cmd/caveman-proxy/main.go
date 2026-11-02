@@ -410,9 +410,17 @@ func runServe(logger *slog.Logger) {
 		}
 	}()
 	<-ctx.Done()
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer shutdownCancel()
-	_ = srv.Shutdown(shutdownCtx)
+	// Stop intercepting signals before draining. A second interrupt/termination
+	// must retain its normal force-exit behavior if a provider never completes.
+	cancel()
+	logger.Info("draining active proxy requests; send another interrupt to force exit")
+	// Shutdown closes listeners and idle sockets, then waits for accepted requests.
+	// A fixed deadline here silently truncates long provider streams and closes
+	// persistence while their handlers are still running. Client cancellation and
+	// explicit upstream deadlines remain effective during the drain.
+	if err := srv.Shutdown(context.Background()); err != nil {
+		logger.Warn("proxy shutdown failed", "error", err)
+	}
 	_ = server.Close() // saves what cache warming learned, writes the last rows
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)

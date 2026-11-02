@@ -421,6 +421,8 @@ type Server struct {
 	routes routeSessions
 	// recorder finishes rows off the request path (Config.AsyncRecord).
 	recorder *recorder
+	// websockets owns upgraded streams, which http.Server.Shutdown cannot drain.
+	websockets websocketSessions
 	// fanout staggers sibling children on one new prefix (route_cache.go).
 	fanout fanout
 	// warmer keeps Anthropic prompt-cache entries warm while a session pauses

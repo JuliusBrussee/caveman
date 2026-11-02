@@ -38,7 +38,9 @@ google = ["google-genai>=2.18,<3"]
 langchain = ["langchain>=1.1,<2", "langchain-core>=1.1,<2", "langgraph>=1.0.2,<2"]
 # filelock <=4.2.0 has lock-file and timeout vulnerabilities. Keep the floor in
 # wheel metadata so fresh installs backtrack to a compatible LiteLLM release.
-litellm = ["litellm>=1.95,<2", "filelock>=4.2.1"]
+# 1.106.0-1.106.2 break base SDK tool calls (BerriAI/litellm#45961).
+# 1.107.0 was compromised: https://docs.litellm.ai/blog/security-incident-oct-21-2026-attack-chain
+litellm = ["litellm>=1.95,<2,!=1.106.0,!=1.106.1,!=1.106.2,!=1.107.0", "filelock>=4.2.1"]
 strands = ["strands-agents>=1.43,<2"]
 agno = ["agno>=3.0,<4"]
 asgi = []  # pure ASGI 3: no framework dependency

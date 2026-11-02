@@ -139,6 +139,16 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		s.metadataPassthrough(w, r, adapter, s.creds.Resolve(adapter.Name(), r), requestID)
 		return
 	}
+	// SDK credential refresh uses the same base URL as inference. Its grant
+	// authenticates itself and must never enter transforms or prompt capture.
+	if adapter := s.matchOAuthTokenAdapter(r); adapter != nil {
+		s.oauthTokenPassthrough(w, r, adapter, requestID)
+		return
+	}
+	if adapter := s.matchResponsesWebSocket(r); adapter != nil {
+		s.responsesWebSocket(w, r, adapter, requestID)
+		return
+	}
 	adapter := s.matchAdapter(r)
 	if adapter == nil {
 		// fail-closed routing: an unrecognized path is a 404, never a blind pass-through.
