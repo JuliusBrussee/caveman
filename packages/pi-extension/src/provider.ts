@@ -66,6 +66,20 @@ export class ProviderRouter {
     if (!model) return;
     const gateGeneration = this.gateGeneration;
     const key = `${model.provider}/${model.id}`;
+    // A pi-virtual model (router/auto) never sends an HTTP request: pi resolves
+    // it to a physical model before any transport. There is no upstream to mount
+    // and no compat.<provider>.base_url that could make it routable, so a
+    // pass-through warning names a fix that cannot exist and claims "no
+    // compression" for a request that never leaves the process (#1449). Restore
+    // any live route first — silence with a stale routed baseUrl would leave the
+    // previous model's endpoint on an object the host still dispatches on. The
+    // guard keys on the virtual API, never the provider name: "router" is also a
+    // legitimately mountable compat name, and a provider called router with a
+    // real HTTP baseUrl must keep routing as it does today.
+    if (model.api === "pi-virtual") {
+      await this.restoreCurrentModel(ctx);
+      return;
+    }
     // Repeated events can contain our routed object. Restore only its endpoint
     // for the gate check; a different model or externally changed endpoint owns
     // its own URL. The registry remains untouched, including same-provider
