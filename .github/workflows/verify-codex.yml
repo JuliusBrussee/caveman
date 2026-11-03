@@ -1,14 +1,29 @@
 name: Verify Codex 0.166.0 profile
 on:
-  push:
-    branches: [chore/1417-codex-01650]
+  pull_request:
+    paths:
+      - "agents/profiles/codex.json"
+      - "packages/cli/**"
+      - "installer/lib/portable-process.js"
+      - ".github/scripts/verify-codex-route.mjs"
+      - ".github/workflows/verify-codex.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-codex-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# profiles.yml owns PR scope validation using event base/head SHAs and full history.
 jobs:
   route:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: '24.16.0'
       - name: Install isolated upstream binary and CLI build dependencies
@@ -35,47 +50,4 @@ jobs:
         if: always()
         with:
           name: windows-codex-01660
-          path: evidence/
-  profiles:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '24.16.0'
-      - name: Validate the actual candidate's commit scope and generated data
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p evidence
-          node agents/check-profile-scope.mjs 9b68f7ed12b05e7efaff18e65c5a3fc2849fd0a4 bdbe282faa0946b5e6d00b223585cc98a38bcc0d | tee evidence/scope.log
-          node agents/compile.mjs
-          git diff --exit-code -- agents/agents.json packages/cli/src/agents.generated.ts packages/cli/src/reserved-verbs.generated.ts
-      - run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock --prefix packages/cli
-      - name: Build and typecheck CLI
-        shell: bash
-        run: |
-          set -euo pipefail
-          npm --prefix packages/cli run build 2>&1 | tee evidence/build.log
-          npm --prefix packages/cli run lint 2>&1 | tee evidence/typecheck.log
-      - name: Required profile runtime suites and Codex compatibility
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --import ./packages/cli/tests/fixtures/sanitize-host-env.mjs --test --test-force-exit packages/cli/tests/agent-registry.runtime.mjs packages/cli/tests/agent-shortcut.runtime.mjs packages/cli/tests/kilo-wrap.runtime.mjs packages/cli/tests/qwen-wrap.runtime.mjs packages/cli/tests/porcelain.runtime.mjs packages/cli/tests/codex-subscription-wrap.runtime.mjs packages/cli/tests/codex-mcp-environment.runtime.mjs 2>&1 | tee evidence/runtime.log
-      - name: Compiler and scope regression tests
-        shell: bash
-        run: |
-          set -euo pipefail
-          node --test tests/installer/agent-registry-compile.test.mjs tests/installer/agent-registry-scope.test.mjs 2>&1 | tee evidence/compiler.log
-          python3 tests/verify_repo.py 2>&1 | tee evidence/repository.log
-          git diff --check
-          git diff --exit-code -- agents/agents.json packages/cli/src/agents.generated.ts packages/cli/src/reserved-verbs.generated.ts
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: profile-validation-01660
           path: evidence/
