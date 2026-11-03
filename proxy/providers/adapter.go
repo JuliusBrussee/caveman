@@ -1220,6 +1220,16 @@ func mergeUsage(provider string, obj map[string]any, usage *UsageObservation) {
 		mergePricingQualifiers(resp, usage)
 		mergeProviderOutcomeQualifiers(provider, resp, usage)
 	}
+	// Anthropic's streaming message_start carries its usage object one level
+	// down, on message.usage — the only place streaming input_tokens ever
+	// appear, which is why usageObjects() reaches it. The outcome-qualifier
+	// guard has to reach the same object, or a separately-billed iteration kind
+	// riding it is never inspected and a token-only subtotal is presented as the
+	// exact bill (#1453). message_start carries no stop_reason, so the refusal
+	// arm inside stays inert for it.
+	if msg, ok := obj["message"].(map[string]any); ok {
+		mergeProviderOutcomeQualifiers(provider, msg, usage)
+	}
 	for _, u := range usageObjects(obj) {
 		if hasGeminiUsageKeys(u) {
 			mergeGeminiUsage(u, usage)

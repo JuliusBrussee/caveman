@@ -632,3 +632,41 @@ func TestAnthropicInferenceGeoNotAvailableIsNoGeography(t *testing.T) {
 		t.Fatalf("a named geography was dropped: %+v", usage)
 	}
 }
+
+// #1453: the counter parser and the outcome-qualifier guard read the same field
+// from two different positions. usageObjects() has a dedicated add(msg["usage"])
+// branch because streaming Anthropic input_tokens appear only on message_start's
+// message.usage, but mergeUsage merged outcome qualifiers from the outer obj and
+// obj["response"] alone. A separately-billed iteration kind riding that object
+// was therefore never inspected, and the response was priced as an exact token
+// subtotal — what mergePricingQualifiers' own contract forbids.
+func TestAnthropicStreamingIterationsOnMessageStartAreNotPriced(t *testing.T) {
+	const start = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"iterations\":[{\"type\":\"compaction\",\"input_tokens\":9,\"output_tokens\":3}]}}}\n\n"
+	var usage UsageObservation
+	ParseUsageBytes("anthropic", []byte(start), &usage)
+	// The counters prove this object reaches the parser.
+	if usage.InputTokens != 2 || !usage.InputTokensReported {
+		t.Fatalf("message.usage did not reach the counter parser: %+v", usage)
+	}
+	if usage.PricingUnsupportedReason != "unsupported_model_fallback_pricing" {
+		t.Errorf("reason = %q, want %q (%+v)", usage.PricingUnsupportedReason, "unsupported_model_fallback_pricing", usage)
+	}
+
+	// The same object's "message"-only iterations must stay priced, so the guard
+	// cannot be satisfied by refusing every message_start.
+	const plain = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"stop_reason\":null,\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"iterations\":[{\"type\":\"message\",\"input_tokens\":2,\"output_tokens\":1}]}}}\n\n"
+	var priced UsageObservation
+	ParseUsageBytes("anthropic", []byte(plain), &priced)
+	if priced.PricingUnsupportedReason != "" {
+		t.Errorf("message iterations on message_start lost pricing: %+v", priced)
+	}
+
+	// message_start carries no stop_reason, so the refusal arm must stay inert
+	// for it even when the message object reports zero output.
+	const zeroOutput = "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"type\":\"message\",\"usage\":{\"input_tokens\":2,\"output_tokens\":0}}}\n\n"
+	var refusal UsageObservation
+	ParseUsageBytes("anthropic", []byte(zeroOutput), &refusal)
+	if refusal.PricingUnsupportedReason != "" {
+		t.Errorf("message_start wrongly read as a no-charge refusal: %+v", refusal)
+	}
+}
