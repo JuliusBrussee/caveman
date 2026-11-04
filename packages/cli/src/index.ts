@@ -4548,11 +4548,22 @@ function nestedCapabilityValue(doc: Record<string, unknown>, key: CapabilityKey)
   return objectValue(block[first!])[second];
 }
 
+// proxyYamlMode reads the proxy's own TOP-LEVEL `mode:` out of caveman.yaml.
+// The pattern is anchored at column 0 on purpose (#1457). `^\s*mode\s*:` with
+// /m matched the key at ANY indentation, and caveman.yaml legitimately carries
+// a second, nested one — `middleware.mode`, the documented "proxy records while
+// the middleware compresses" shape — so the nested value was read as the
+// proxy's. The proxy itself resolves keys by name (yaml.v3), which made the two
+// disagree about one file in both directions: a nested-only mode was adopted as
+// the proxy's, and a nested key written ABOVE a real top-level one won on
+// textual order, which also surfaced as a `caveman status` mode mismatch that
+// was not real. yamlScopedBaseUrl() below tracks indentation deliberately and
+// is unaffected; this key is top-level or it is not ours to read.
 function proxyYamlMode(): unknown {
   const path = process.env.CAVEMAN_CONFIG ?? join(cavemanHome(), "caveman.yaml");
   try {
     const raw = readFileSync(path, "utf8");
-    const match = raw.match(/^\s*mode\s*:\s*["']?([^#\s"']+)/m);
+    const match = raw.match(/^mode[ \t]*:[ \t]*["']?([^#\s"']+)/m);
     return match?.[1];
   } catch {
     return undefined;
