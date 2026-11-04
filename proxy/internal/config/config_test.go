@@ -782,3 +782,62 @@ func TestLoad_AuthTokenIsEnvironmentOnly(t *testing.T) {
 		t.Fatalf("withDefaults kept a non-environment AuthToken %q", got.AuthToken)
 	}
 }
+
+// Header forwarding is a compat-mount contract: `forward_headers` exists on
+// `compat.<name>` and is validated there. Written under a `providers.<name>`
+// block it parsed into nothing — yaml.v3 drops keys a struct does not declare —
+// so an operator who pointed `providers.anthropic.base_url` at a gateway and
+// listed the header that gateway authenticates with got no error, no log line
+// and no forwarding, and the failure surfaced as upstream 401s (#1458). Same
+// shape as `auth_token:` above: a key the operator wrote, silently dropped.
+func TestLoad_ForwardHeadersUnderAProviderIsRefused(t *testing.T) {
+	for _, provider := range []string{"anthropic", "openai", "gemini"} {
+		t.Run(provider, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "caveman.yaml")
+			body := "providers:\n  " + provider + ":\n    base_url: https://gateway.example\n    forward_headers:\n      - x-litellm-api-key\n"
+			if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			_, err := Load(path)
+			if err == nil {
+				t.Fatal("Load accepted forward_headers under a provider block")
+			}
+			for _, want := range []string{"forward_headers", provider, "compat"} {
+				if !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %q must name %q: the key, the block it is in, and where the contract lives", err, want)
+				}
+			}
+		})
+	}
+}
+
+// The remedy the error names must itself load, or the error is a dead end.
+func TestLoad_ForwardHeadersRemedyOnACompatMountLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	body := "compat:\n  gateway:\n    base_url: https://gateway.example\n    wire_dialect: anthropic\n    forward_headers:\n      - x-litellm-api-key\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("the documented remedy must load: %v", err)
+	}
+	if got := cfg.Compat["gateway"].ForwardHeaders; len(got) != 1 || got[0] != "x-litellm-api-key" {
+		t.Fatalf("forward_headers = %v, want the configured header", got)
+	}
+}
+
+// A provider block that does not mention the key is untouched.
+func TestLoad_ProviderBaseURLWithoutForwardHeadersStillLoads(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "caveman.yaml")
+	if err := os.WriteFile(path, []byte("providers:\n  anthropic:\n    base_url: https://gateway.example\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("an ordinary provider override must load: %v", err)
+	}
+	if got := cfg.BaseURL("anthropic", ""); got != "https://gateway.example" {
+		t.Fatalf("base_url = %q, want the override", got)
+	}
+}

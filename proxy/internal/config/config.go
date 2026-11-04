@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -148,6 +149,16 @@ type ProviderConfig struct {
 	BaseURL     string `yaml:"base_url"`
 	BillingTier string `yaml:"billing_tier"`
 	Region      string `yaml:"region"`
+	// ForwardHeadersYAML exists only to catch `forward_headers:` written under
+	// a provider block. Header forwarding is a COMPAT-MOUNT contract
+	// (CompatConfig.ForwardHeaders, validated by
+	// openaicompat.ValidateForwardHeaders): a provider route forwards the
+	// wire-protocol headers its adapter declares and nothing else. Undeclared,
+	// yaml.v3 dropped this key without a word, so an operator who pointed
+	// providers.<name>.base_url at a gateway and listed the header that
+	// gateway authenticates with got no error, no log line and no forwarding —
+	// only upstream 401s (#1458). Declaring it makes the mistake loud.
+	ForwardHeadersYAML []string `yaml:"forward_headers"`
 }
 
 // CompatConfig is one named OpenAI-compatible upstream in caveman.yaml.
@@ -208,6 +219,9 @@ func Load(path string) (Config, error) {
 		return Config{}, fmt.Errorf("tls: cert_file and key_file go together, and client_ca_file needs both")
 	}
 	if err := validateListen(cfg.Listen, cfg.InboundAuthenticated()); err != nil {
+		return Config{}, err
+	}
+	if err := cfg.validateProviders(); err != nil {
 		return Config{}, err
 	}
 	if err := cfg.validateCompat(); err != nil {
@@ -502,6 +516,23 @@ func (c Config) BedrockBaseURL() string {
 		return configured
 	}
 	return fmt.Sprintf("https://bedrock-runtime.%s.amazonaws.com", c.BedrockRegion())
+}
+
+// validateProviders refuses provider-block keys that look like they do
+// something and do not. Like `auth_token:`, the failure mode being prevented is
+// silence: the operator believes a contract is in force that was never read.
+func (c Config) validateProviders() error {
+	names := make([]string, 0, len(c.Providers))
+	for name := range c.Providers {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	for _, name := range names {
+		if len(c.Providers[name].ForwardHeadersYAML) > 0 {
+			return fmt.Errorf("providers.%s: forward_headers: is not read on a provider route — a provider forwards the headers its wire protocol declares and nothing else; configure the upstream as a compat mount instead (compat.<name> with base_url and forward_headers, plus wire_dialect: anthropic for an Anthropic-shape upstream) and remove the key", name)
+		}
+	}
+	return nil
 }
 
 func (c Config) validateCompat() error {
