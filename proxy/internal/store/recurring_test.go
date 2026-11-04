@@ -78,3 +78,38 @@ func TestRecurringMinerKeepsHumanBlocksThatOnlyMentionInjectedText(t *testing.T)
 		t.Fatalf("repaste entries = %d, want 1: a human block is not injected context", got)
 	}
 }
+
+// The predicate's contract, stated directly: every rule is anchored at the
+// payload start, so a human block that quotes one of these is still mined.
+func TestInjectedContextPayload(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"system-reminder envelope", "<system-reminder>\nmemory\n</system-reminder>", true},
+		{"claude md preamble", "Codebase and user instructions are shown below. Be sure to adhere to these instructions.", true},
+		{"caveman banner", "CAVEMAN MODE ACTIVE — mode: ultracave. Behavior defined by /caveman-ultracave skill.", true},
+		{"caveman sentinel", "Respond terse like smart caveman. All technical substance stay. Only fluff die.", true},
+		{"session start hook result", "SessionStart:startup hook success: rules", true},
+		{"pre tool use hook result", "PreToolUse:Bash hook failed: boom", true},
+		{"hook result with no source", "Stop hook completed: nothing to do", true},
+		{"leading blank lines", "\n\n  <system-reminder>\nmemory\n</system-reminder>", true},
+		{"crlf payload", "<system-reminder>\r\nmemory\r\n</system-reminder>", true},
+		{"quoted reminder mid-sentence", "The <system-reminder> block is what I mean.", false},
+		{"quoted banner mid-sentence", "It prints CAVEMAN MODE ACTIVE at startup.", false},
+		{"prose about hooks", "The hook success path is the one I care about.", false},
+		{"hook words without the colon", "Stop hook completed, finally, after three tries.", false},
+		{"lower-case event word", "sessionstart:startup hook success: rules", false},
+		{"ordinary paste", "Here is the architecture note I keep re-explaining.", false},
+		{"empty", "", false},
+		{"whitespace only", "   \n\t", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := injectedContextPayload(c.in); got != c.want {
+				t.Fatalf("injectedContextPayload(%q) = %v, want %v", c.in, got, c.want)
+			}
+		})
+	}
+}

@@ -39,10 +39,16 @@ var (
 
 	// reHookResultPreamble matches the host's own hook-result preamble, which
 	// opens a payload the host injected: "SessionStart:startup hook success:",
-	// "PreToolUse:Bash hook failed:", and the same shape from other hosts. It
-	// is anchored at the payload start because a human's paste does not begin
-	// that way, while a human may well QUOTE one mid-sentence (#1459).
-	reHookResultPreamble = regexp.MustCompile(`^(?i)[a-z][a-z0-9_]*(?::[a-z0-9_.\-]+)?[ \t]+hook[ \t]+(?:success|succeeded|completed|failed|error)\b`)
+	// "PreToolUse:Bash hook failed:", and the same shape from other events and
+	// hosts. Anchored at the payload start, because a human may well QUOTE one
+	// mid-sentence and that block is still theirs (#1459).
+	//
+	// The trailing colon is load-bearing, and so is the capitalised event name
+	// and the lower-case verb: without the colon this also matched an ordinary
+	// English sentence whose first word happens to precede the words "hook
+	// success" ("The hook success path is the one I care about"), which would
+	// have suppressed a real finding to hide a false one.
+	reHookResultPreamble = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*(?::[A-Za-z0-9_.\-]+)?[ \t]+hook[ \t]+(?:success|succeeded|completed|failed|error)[ \t]*:`)
 )
 
 // injectedContextOpeners are literal payload openings that only the host or
