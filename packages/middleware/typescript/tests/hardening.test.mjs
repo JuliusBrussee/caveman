@@ -65,6 +65,20 @@ test('TS-2/#1206: the Mastra proxy forwards native call options verbatim apart f
   // is checked below instead: the option is present on both calls, in the same state, and the caller's
   // cancellation still reaches the signal the native model was handed — which is exactly what a
   // narrowed, cloned or disconnected signal would not survive.
+  // What "the same signal" means has to be stated against the caller, because whether the framework
+  // forwards the caller's own signal or mints a per-call one that it links (or does not link) to the
+  // caller is @mastra/core's decision and has changed twice: 1.65.0 left the option undefined unless
+  // the caller passed a signal, 1.77.0 began minting one per call (#1264), and by 1.82.0 the minted
+  // one is no longer linked to the caller at all, so `caller.abort()` leaves it unaborted (#1463).
+  // None of those are caveman's doing — `native()` is a type assertion and `prepare()` spreads the
+  // params — so asserting propagation pinned the framework's choice, not the adapter's, and the
+  // nightly canary failed on an upstream release. The adapter's claim is the comparison: the wrapped
+  // call's signal stands in the same relation to the caller as the bare call's does, before and after
+  // the caller cancels. A narrowed, cloned or disconnected signal still fails, in either regime.
+  const linkage = options => ({
+    isCallerSignal: options.abortSignal === caller.signal,
+    aborted: options.abortSignal.aborted,
+  });
   const live = ['abortSignal'];
   assert.deepEqual(Object.keys(wrapped.options).sort(), Object.keys(bare.options).sort(),
     'the proxy neither introduces nor drops a call option');
@@ -74,12 +88,15 @@ test('TS-2/#1206: the Mastra proxy forwards native call options verbatim apart f
   assert.equal(wrapped.options.abortSignal instanceof AbortSignal, bare.options.abortSignal instanceof AbortSignal,
     'the proxy neither invents nor drops the call-level AbortSignal');
   if (bare.options.abortSignal) {
-    assert.equal(wrapped.options.abortSignal.aborted, bare.options.abortSignal.aborted,
+    assert.deepEqual(linkage(wrapped.options), linkage(bare.options),
       'the forwarded signal reaches the native model in the state the caller left it');
     caller.abort(new Error('caller cancelled'));
     await tick();
-    assert.ok(bare.options.abortSignal.aborted && wrapped.options.abortSignal.aborted,
-      'cancelling the caller still cancels the signal the native model was handed');
+    assert.deepEqual(linkage(wrapped.options), linkage(bare.options),
+      'the proxy neither connects the native model to the caller nor disconnects it');
+    // Which regime the installed release implements is reported rather than asserted, so a passing
+    // canary run still says which of the two it observed.
+    t.diagnostic(`@mastra/core links the caller's cancellation to the per-call signal: ${bare.options.abortSignal.aborted}`);
   }
   // And `tools` differs by exactly the recovery executor, not by a reshape of whatever the caller sent.
   const names = list => (list ?? []).map(tool => tool.name);
