@@ -18055,7 +18055,8 @@ async function nativeHook(argv: string[]) {
     }), () => {
       if (learnNudge && !relayedToken) confirmLearnNudge(learnNudgeToken);
     });
-  } else if (normalizedEvent === "PostCompact" && agent !== "hermes" && compactContext) {
+  } else if (normalizedEvent === "PostCompact" && agent !== "hermes" && agent !== "codex" && compactContext) {
+    // Codex PostCompact accepts only common fields; SessionStart source=compact restores Core.
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: compactContext },
     }));
