@@ -15,7 +15,7 @@ const frameworks = {
   '@langchain/core': { floor: '1.2.9', high: '2', tested: ['1.2.9', '1.2.12'], entry: '@langchain/core/messages' },
   '@strands-agents/sdk': { floor: '1.17.0', high: '2', tested: ['1.17.0', '1.19.0'], entry: '@strands-agents/sdk' },
   '@mastra/core': { floor: '1.65.0', high: '2', tested: ['1.65.0', '1.70.0'], entry: '@mastra/core/agent' },
-  '@modelcontextprotocol/sdk': { floor: '1.30.0', high: '2', tested: ['1.30.0', '1.30.1'], entry: '@modelcontextprotocol/sdk/client/index.js' },
+  '@modelcontextprotocol/sdk': { floor: '1.32.0', high: '2', tested: ['1.32.0'], entry: '@modelcontextprotocol/sdk/client/index.js' },
 } as const;
 
 type Framework = keyof typeof frameworks;
