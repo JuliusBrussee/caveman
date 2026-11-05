@@ -1879,9 +1879,36 @@ func tokenOnlyProviderTool(provider, toolType string) bool {
 	switch toolType {
 	case "web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318":
 		return true
-	default:
+	}
+	// Claude Code declares the server-side advisor on every agent turn once the
+	// feature flag is on for the account, whether or not it is ever invoked
+	// (#1465). The declaration alone carries no charge: an advisor that runs
+	// reports its own model as a non-"message" entry in usage.iterations, and
+	// mergeProviderOutcomeQualifiers already fails pricing closed on that
+	// (pinned by TestAnthropicMessageIterationsStayPriced's advisor_message case). Gating
+	// on the declaration instead left every agent request unpriced, so a whole
+	// install reported "Unknown" API cost.
+	//
+	// Matched as a dated revision of that one hosted tool, not as any type
+	// beginning "advisor": Anthropic version-stamps these, so a date bump must
+	// not reintroduce the bug, while a differently shaped advisor tool is a new
+	// billing question and still fails closed.
+	return isAnthropicDatedToolRevision(toolType, "advisor_")
+}
+
+// isAnthropicDatedToolRevision reports whether toolType is prefix plus
+// Anthropic's eight-digit YYYYMMDD version stamp, e.g. "advisor_20260301".
+func isAnthropicDatedToolRevision(toolType, prefix string) bool {
+	stamp, ok := strings.CutPrefix(toolType, prefix)
+	if !ok || len(stamp) != 8 {
 		return false
 	}
+	for _, r := range stamp {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func mergePricingQualifiers(obj map[string]any, usage *UsageObservation) {
