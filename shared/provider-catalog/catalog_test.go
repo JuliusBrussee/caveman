@@ -74,14 +74,17 @@ func TestCurrentBedrockCatalogUsesExactModelAndSourceRegionPrices(t *testing.T) 
 		// dates was a capability commit. The 2026-07-31 review reverted all 21
 		// to their real price-provenance dates. capabilities_verified_at stays
 		// at 2026-07-30, which is the date that was actually earned.
-		{"global.anthropic.claude-opus-4-8", "2026-07-23", 5.00, 25.00, 0.50, 6.25, 10.00},
-		{"global.anthropic.claude-sonnet-4-6", "2026-07-23", 3.00, 15.00, 0.30, 3.75, 6.00},
-		{"global.anthropic.claude-haiku-4-5-20251001-v1:0", "2026-07-23", 1.00, 5.00, 0.10, 1.25, 2.00},
-		{"global.amazon.nova-2-lite-v1:0", "2026-07-23", 0.30, 2.50, 0.075, 0, 0},
-		{"us.meta.llama4-maverick-17b-instruct-v1:0", "2026-07-23", 0.24, 0.97, 0, 0, 0},
-		{"us.meta.llama4-scout-17b-instruct-v1:0", "2026-07-23", 0.17, 0.66, 0, 0, 0},
-		{"mistral.mistral-large-3-675b-instruct", "2026-07-23", 0.50, 1.50, 0, 0, 0},
-		{"mistral.ministral-3-8b-instruct", "2026-07-23", 0.15, 0.15, 0, 0, 0},
+		// 2026-11-06: all eight prices genuinely re-checked (AWS Price List
+		// API for us-east-1 and the Mistral tables on aws.amazon.com/bedrock/
+		// pricing); no price changed, so only verified_at moved.
+		{"global.anthropic.claude-opus-4-8", "2026-11-06", 5.00, 25.00, 0.50, 6.25, 10.00},
+		{"global.anthropic.claude-sonnet-4-6", "2026-11-06", 3.00, 15.00, 0.30, 3.75, 6.00},
+		{"global.anthropic.claude-haiku-4-5-20251001-v1:0", "2026-11-06", 1.00, 5.00, 0.10, 1.25, 2.00},
+		{"global.amazon.nova-2-lite-v1:0", "2026-11-06", 0.30, 2.50, 0.075, 0, 0},
+		{"us.meta.llama4-maverick-17b-instruct-v1:0", "2026-11-06", 0.24, 0.97, 0, 0, 0},
+		{"us.meta.llama4-scout-17b-instruct-v1:0", "2026-11-06", 0.17, 0.66, 0, 0, 0},
+		{"mistral.mistral-large-3-675b-instruct", "2026-11-06", 0.50, 1.50, 0, 0, 0},
+		{"mistral.ministral-3-8b-instruct", "2026-11-06", 0.15, 0.15, 0, 0, 0},
 	}
 
 	for _, tc := range tests {
@@ -150,15 +153,17 @@ func TestCurrentMistralRegionalPricingAndCapabilities(t *testing.T) {
 		{"mistral.ministral-3-8b-instruct", "ap-southeast-2", 0.1545, 0.1545},
 	}
 	// Every row this test covers (mistral-large-3's 6 non-us-east-1 regions,
-	// and all of ministral-3-8b) had capability data filled in by task C6 but
-	// its *price* was not independently re-checked against AWS's pricing page,
-	// so verified_at (price provenance) stays at its prior date — see the
-	// capabilities_verified_at split explained in catalog.go.
+	// and all of ministral-3-8b) had capability data filled in by task C6
+	// without a price re-check, so verified_at stayed at 2026-07-23 — see the
+	// capabilities_verified_at split explained in catalog.go. On 2026-11-06
+	// every one of these prices was re-checked against the regional Mistral
+	// tables on AWS's pricing page; none changed, so verified_at moved and
+	// capabilities_verified_at did not.
 	for _, tc := range tests {
 		t.Run(tc.model+"@"+tc.region, func(t *testing.T) {
 			price, version := catalog.PriceForRegion("bedrock", tc.model, tc.region)
-			if version != "2026-07-23" || price.InputPerMillion != tc.input || price.OutputPerMillion != tc.output {
-				t.Fatalf("price/version = %+v/%q, want %v/%v/2026-07-23", price, version, tc.input, tc.output)
+			if version != "2026-11-06" || price.InputPerMillion != tc.input || price.OutputPerMillion != tc.output {
+				t.Fatalf("price/version = %+v/%q, want %v/%v/2026-11-06", price, version, tc.input, tc.output)
 			}
 		})
 	}

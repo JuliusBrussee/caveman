@@ -91,7 +91,7 @@ func (s *Server) metadataPassthrough(w http.ResponseWriter, r *http.Request, ada
 		if s.logger != nil {
 			s.logger.Warn("provider metadata read failed", "error", redact.Error(err), "request_id", requestID)
 		}
-		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
+		httpx.Error(w, r, http.StatusBadGateway, upstreamFailureCode(err), "Upstream provider unavailable.")
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()

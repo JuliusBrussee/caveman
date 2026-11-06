@@ -292,7 +292,7 @@ Classes (the report's label in brackets):
 | `cross_provider:repaste` | behavioral | One recurring block seen in two or more agents | none | No |
 | `learning_loop:error_loop:<session>:<hash>` | behavioral | Same tool call ≥3 times in one session, at least half failing | none | No |
 | `learning_loop:refetch_loop:<session>:<hash>` | behavioral | Same call ≥3 times with only pagination/limit variants, no errors | none | No |
-| `cache_churn` | behavioral | ≥2 sessions with ≥3 turns that each re-wrote >10k tokens and >25% of context to cache | none | No |
+| `cache_churn` | behavioral | ≥2 sessions with ≥3 turns that each re-wrote >10k tokens and >25% of context to cache, at least one of them not a likely cold resume (`previous_message_not_found` after the reported cache TTL). Evidence splits the writes into `cold_resume` / `invalidation` (`tools_changed`) / `unknown`, with up to 5 locators per bucket | none | No |
 | `cache_efficiency` | load_bearing, or behavioral when multiplier ≥ 0.6 | Effective input cost per million tokens after cache reuse (needs ≥200k input tokens). A rate, not a volume. | none | No |
 | `reread_waste` | behavioral | Repeated full reads of the same file (≥5k tokens) | none | No |
 | `compaction_churn` | behavioral | Files re-fetched after compaction (≥2k tokens). May overlap `reread_waste`; never sum them. | none | No |

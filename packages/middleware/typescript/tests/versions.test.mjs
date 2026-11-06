@@ -94,6 +94,26 @@ test('the version gate never throws at wrap time: warn once, decline for strict 
   } finally { console.warn = warn; }
 });
 
+test('a version below the floor is told to upgrade; one above the range is not', () => {
+  const lines = [], warn = console.warn;
+  console.warn = line => lines.push(line);
+  try {
+    const { runtime } = runtimeFixture({ strict: true });
+    // 1.30.x was the floor before GHSA-6prh-2h8m-c8cw; it now declines, and a line says what to install.
+    assert.equal(frameworkGate('mcp', { runtime }, undefined, { '@modelcontextprotocol/sdk': '1.30.1' }), 'unsupported_version');
+    assert.equal(frameworkGate('mcp', { runtime }, undefined, { '@modelcontextprotocol/sdk': '1.30.1' }), 'unsupported_version');
+    const advice = lines.filter(line => line.includes('upgrade @modelcontextprotocol/sdk'));
+    assert.deepEqual(advice, ['Caveman middleware: @modelcontextprotocol/sdk 1.30.1 is older than the supported floor; upgrade @modelcontextprotocol/sdk to 1.32.0 or later (earlier HTTP transports re-send custom headers, such as credentials, and request bodies across cross-origin redirects (GHSA-6prh-2h8m-c8cw)). Until then the mcp adapter passes content through unchanged.'], 'advised once');
+    // The standard pass-through line keeps its shape and still appears exactly once.
+    assert.equal(lines.filter(line => line.includes('adapter=mcp reason=unsupported_version')).length, 1, lines.join('\n'));
+    assert.equal(frameworkGate('mcp', { runtime }, undefined, { '@modelcontextprotocol/sdk': '1.32.0' }), null, 'the patched floor runs');
+    // Above the range there is nothing to upgrade to: the decline keeps the generic pass-through line.
+    assert.equal(frameworkGate('openai', { runtime }, undefined, { openai: '9.0.0' }), 'unsupported_version');
+    assert.ok(!lines.some(line => line.includes('upgrade openai')), lines.join('\n'));
+    runtime.close();
+  } finally { console.warn = warn; }
+});
+
 test('a missing or unparseable version is never in range', () => {
   assert.equal(inRange(null, '1.0', '2'), false);
   assert.equal(inRange('', '1.0', '2'), false);
