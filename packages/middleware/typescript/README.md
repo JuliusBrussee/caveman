@@ -49,6 +49,7 @@ In a workspace (npm, pnpm, Yarn), `@caveman-ai/middleware` can be hoisted to the
 `inspectFrameworkCompatibility(adapter)` from `@caveman-ai/middleware/compatibility` reports the version of the copy this package resolves, supported range, tested releases and tier without importing a framework (it has no client, so for `openai` and `anthropic` it can differ from what the wrapped client reports). `package.json` lists the same data in `supportedFrameworkVersions` and `testedFrameworkVersions`.
 
 - **Out of range** (including every prerelease, such as `7.1.0-canary.3`): calls pass through unchanged, reporting `unsupported_version`, with one warning. After testing that version, set `acceptFrameworkVersion: true` in the adapter options.
+- **Older than the floor**: the same pass-through, plus one warning naming the release to upgrade to. For `@modelcontextprotocol/sdk` the floor is 1.32.0, because earlier HTTP transports re-send custom headers, such as credentials, and request bodies across cross-origin redirects ([GHSA-6prh-2h8m-c8cw](https://github.com/advisories/GHSA-6prh-2h8m-c8cw)); upgrade rather than accepting an older version.
 - **Unreadable** (a deploy bundle with no `node_modules`): the adapter checks that the framework hooks it needs exist and runs, with one `version_unverified` warning. If a hook is missing it passes through with `version_unavailable`.
 - Nothing throws when you wrap a client. With `strict: true`, the version decision surfaces from `runtime.ready()` / `preflight()`.
 
