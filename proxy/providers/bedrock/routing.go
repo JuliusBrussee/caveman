@@ -177,6 +177,9 @@ func (a Adapter) ResolveUpstreamURL(ctx context.Context, req *http.Request, rout
 		if !modelAllowed(modelID) {
 			return nil, fmt.Errorf("bedrock model %q is not on the allowlist", modelID)
 		}
+		// Join the escaped form too: Path alone is decoded, so an ARN's %2F
+		// would go upstream as a path separator.
+		base.RawPath = strings.TrimRight(base.EscapedPath(), "/") + strings.TrimPrefix(req.URL.EscapedPath(), "/bedrock")
 		base.Path = strings.TrimRight(base.Path, "/") + strings.TrimPrefix(req.URL.Path, "/bedrock")
 	case endpointMantle:
 		if !env.Bool("CAVE_BEDROCK_MANTLE_ENABLED", false) {
