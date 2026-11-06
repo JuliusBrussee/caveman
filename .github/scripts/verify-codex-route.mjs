@@ -8,6 +8,10 @@ import { createRequire } from 'node:module';
 const require = createRequire(import.meta.url);
 const { portableInvocation, resolveWindowsCommand } = require('../../installer/lib/portable-process.js');
 const root = process.cwd();
+// The profile pin is the version under test; compile.mjs keeps it equal to the
+// agent-conformance matrix pin, so this lane never needs its own edit per bump.
+const pinned = JSON.parse(readFileSync(resolve('agents/profiles/codex.json'), 'utf8')).tested_agent_version;
+assert.match(pinned, /^\d+\.\d+\.\d+$/, 'agents/profiles/codex.json must pin a release version');
 const evidence = resolve('evidence');
 mkdirSync(evidence, { recursive: true });
 
@@ -61,7 +65,7 @@ function reply(response, marker, model) {
 
 const results = [];
 for (let number = 1; number <= 2; number++) {
-  const home = mkdtempSync(join(tmpdir(), `cave-codex-01660-${number}-`));
+  const home = mkdtempSync(join(tmpdir(), `cave-codex-route-${number}-`));
   const env = environment(home);
   const workspace = join(home, 'workspace');
   mkdirSync(workspace);
@@ -76,7 +80,7 @@ for (let number = 1; number <= 2; number++) {
   const versionInvocation = portableInvocation(binary, ['--version'], { env });
   const version = await run(versionInvocation.command, versionInvocation.args, env, workspace);
   assert.equal(version.code, 0, version.stderr);
-  assert.match(version.stdout, /0\.166\.0/);
+  assert.match(version.stdout, new RegExp(`(^|[^0-9.])${pinned.replaceAll('.', '\\.')}($|[^0-9.])`));
   // Have the real binary create its own credential schema, with a dummy key
   // and file storage inside this scratch home (never the Windows keychain).
   const loginInvocation = portableInvocation(binary, ['login', '--with-api-key'], { env });
@@ -121,4 +125,4 @@ for (let number = 1; number <= 2; number++) {
 }
 assert.notEqual(results[0].home, results[1].home);
 assert.notEqual(results[0].port, results[1].port);
-writeFileSync(join(evidence, 'route-summary.json'), JSON.stringify({ passed: 2, platform: process.platform, node: process.version, version: '0.166.0', model: 'gpt-5.5', method: 'POST', path: '/w/codex/v1/responses', bearer: 'dummy-only', xCaveAgent: null, attribution: 'URL /w/codex', reply: 'scripted SSE consumed', exits: results.map(result => result.output.code), scope: 'actual CLI wrap; API-key path; proxy/MCP/shrink/browse disabled' }, null, 2));
+writeFileSync(join(evidence, 'route-summary.json'), JSON.stringify({ passed: 2, platform: process.platform, node: process.version, version: pinned, model: 'gpt-5.5', method: 'POST', path: '/w/codex/v1/responses', bearer: 'dummy-only', xCaveAgent: null, attribution: 'URL /w/codex', reply: 'scripted SSE consumed', exits: results.map(result => result.output.code), scope: 'actual CLI wrap; API-key path; proxy/MCP/shrink/browse disabled' }, null, 2));
