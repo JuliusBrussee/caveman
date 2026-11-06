@@ -20,8 +20,8 @@ workflow rejects a tag whose version differs from the package metadata.
 |---|---|---|---|---|
 | `sdk-ts-v*` | npm `@caveman-ai/sdk` | `1.2.0` | `1.2.0` | Yes |
 | `sdk-python-v*` | PyPI `caveman-sdk` | `1.2.0` | `1.2.0` | Yes |
-| `middleware-ts-v*` | npm `@caveman-ai/middleware` | `1.0.1` | `1.0.1` | Yes |
-| `middleware-python-v*` | PyPI `caveman-middleware` | `1.0.0` | `1.0.0` | Yes |
+| `middleware-ts-v*` | npm `@caveman-ai/middleware` | `1.0.1` | `1.1.0` | Yes |
+| `middleware-python-v*` | PyPI `caveman-middleware` | `1.0.0` | `1.0.1` | Yes |
 | `contracts-v*` | npm `@caveman-ai/contracts` | `2.0.0` | `2.1.0` | Yes |
 | `pi-v*` | npm `@caveman-ai/pi` | `0.3.1` | `0.3.2` | No |
 | `bin-v*` | Go binaries and container image | `bin-v4.0.2` | `bin-v4.1.0` (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
