@@ -36,6 +36,31 @@ curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/instal
 
 ## Per-agent install
 
+### Bun-only machines (experimental)
+
+The installer source supports Bun when Node.js is absent. Both shell shims
+prefer Node >=18 when it is installed; an old Node version still needs an
+upgrade. Bun does not require a separate `bunx` command. Nested skill downloads
+use `bun x --bun` so a Node shebang does not try to start a missing Node.
+
+From a checkout containing this change, run `bash install.sh --only codex`
+or `pwsh install.ps1 --only codex`; alternatively run
+`bun installer/install.js --only codex`. The release-pinned one-liners above
+will gain this behavior when a release includes the change.
+
+This is support for the installer, not a claim that every agent runs on Bun.
+Skills and file-based integrations can install, but automatic Node hooks are
+skipped. The Claude Code plugin, explicit `--with-hooks`, and
+`--with-mcp-shrink` still require Node >=18 and report that requirement before
+making changes. Each agent keeps its own runtime requirements.
+
+The compression/routing CLI and its first-run setup still need Node 22.13+.
+Bun installs print that next step instead of launching it. Uninstall can clean
+up owned files with Bun, but will not run the Node CLI to disable native routing;
+remaining routing is reported as incomplete with instructions to finish under Node.
+
+### Commands by agent
+
 If you want to install for one agent (or want to know exactly what command runs under the hood), use the table below. Every row also works as `--only <id>` to the unified installer.
 
 > **On npm 12 or newer, add `--allow-git=root` to any bare `npx -y github:...` command below.** npm 12 turns off git package fetches by default, so a plain `npx -y github:JuliusBrussee/caveman` stops with `npm error code EALLOWGIT`. The flag opts in just the one package you asked for: `npx --allow-git=root -y github:JuliusBrussee/caveman -- --only <id>`. Check with `npx --version`. `install.sh` and `install.ps1` detect the npm major and add the flag themselves starting with `v3.2.0`, so the one-liners above (pinned to `v4.0.1`) work on npm 12. **One-liners pinned to `v3.1.0` or older download shims that predate that change and keep failing on npm 12**: switch the tag to `v4.0.1`, or install with the flag directly: `npx --allow-git=root -y github:JuliusBrussee/caveman#v4.0.1 -- --only <id>`.
@@ -102,6 +127,8 @@ For "auto-activates? No" agents, invoke the Caveman skill using the host's skill
 
 Scripted Claude Code runs (`claude -p` and the Agent SDK) start with caveman off whatever that file says, so tools that read Claude's reply get plain text. Type `/caveman` in the prompt, or set `CAVEMAN_DEFAULT_MODE=caveman` (or another mode) in their environment, to turn it on.
 
+**Drop the per-prompt reminder.** In Claude Code, caveman adds a one-line reminder to every prompt so the style holds against other plugins' instructions. To drop it but keep caveman on, add `"reinforce": false` to the same file (for example `{"defaultMode": "caveman", "reinforce": false}`), or set `CAVEMAN_REINFORCE=0` in the environment. The full rules still load when a session starts and when you switch modes.
+
 **Subagents.** Some agents hand parts of a job to helper agents ("subagents"). Whether the helpers talk caveman depends on the host:
 
 - **Claude Code**: yes. Each subagent starts in the mode of the window that spawned it. Say "stop caveman" and new subagents start normal too. Cavecrew agents keep their own caveman voice.
@@ -138,6 +165,9 @@ Codex and trust the caveman one. Hooks are on by default in current Codex; if
 The hook files live in `$CODEX_HOME/caveman/` (default `~/.codex/caveman/`) and
 one entry is added to `$CODEX_HOME/hooks.json`. Re-running never duplicates it.
 `--no-hooks` keeps the skills-only, per-session behavior: type `$caveman`.
+The entry runs Node by its absolute install-time path; add `--hook-node node`
+to have it follow whatever `node` is on Codex's `PATH` instead (see the flags
+table below).
 `--uninstall` removes only caveman's entry and files. Use the same `CODEX_HOME`
 for install and uninstall.
 
@@ -321,6 +351,7 @@ Useful flags:
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. Within the value, single or double quotes group paths containing spaces; backslashes stay literal. A JSON array of strings also works when arguments contain quotes. No shell expansion occurs. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer, the Codex SessionStart hook, the Cursor sessionStart hook and the Copilot CLI session hook. (Default: auto. Codex, Cursor and Copilot CLI get their hook; Claude Code gets the hooks only when its plugin did not install, because the plugin already runs them.) |
+| `--hook-node <node\|path>` | Which Node the installed hooks run with. Default: Node's absolute path, found at install time, so agents started from the Dock or Start menu (which may not see your shell's `PATH`) still find it. `--hook-node node` writes plain `node` instead, looked up on the agent's `PATH` every run: switching or pruning Node versions (mise, nvm, fnm, asdf) then needs no reinstall, but the agent must see `node` on its `PATH`. An absolute path pins that Node. Windows Codex, Cursor and Copilot hooks always use plain `node`. |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
 | `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, Codex (`CODEX_HOME`), OMP (`~/.omp/`), opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
 | `--non-interactive` | Never prompt; use defaults. (Auto when stdin is not a TTY.) |
@@ -439,7 +470,7 @@ What it removes:
 - Caveman hook entries from `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/`; matched by the substring `caveman`).
 - Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
 - The Claude Code plugin and the Gemini CLI extension (if installed).
-- The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
+- The opencode native plugin (`$OPENCODE_CONFIG_DIR/plugins/caveman/`, default `~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The Codex SessionStart entry from `$CODEX_HOME/hooks.json` (default `~/.codex/`; other hooks, including the caveman CLI's own, stay) and the hook files under `$CODEX_HOME/caveman/`. The file goes away only if caveman's entry was all it held.
 - The Oh My Pi plugin (`omp plugin uninstall caveman`) and Caveman's managed OMP plugin package at `~/.omp/caveman-plugin/`.
 - The Antigravity CLI plugin (`agy plugin uninstall caveman`).
@@ -540,7 +571,7 @@ The profile slug must exist in [vercel-labs/skills](https://github.com/vercel-la
 The installer doesn't phone home. It writes to:
 
 - `$CLAUDE_CONFIG_DIR` (default `~/.claude/`) — hooks, flag file, `settings.json` merge.
-- Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `~/.config/opencode/`, etc.
+- Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `$OPENCODE_CONFIG_DIR` (default `~/.config/opencode/`), etc.
 - Your current working directory (only with `--with-init`) — repo-local rule files.
 - `$CODEX_HOME` (default `~/.codex/`; only when Codex is detected or selected, and not with `--no-hooks`) — the caveman hook files in `caveman/`, one entry in `hooks.json`, and an ownership record.
 - `~/.omp/caveman-plugin/` (only with `--only omp`, or auto-detect when `omp` is on `PATH`) — managed OMP plugin package installed through `omp plugin install`.

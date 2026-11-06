@@ -23,6 +23,11 @@ func TestDetect(t *testing.T) {
 		{"search results", "src/a.go:10:match\nsrc/b.go:11:match\nsrc/c.go:12:match\nsrc/d.go:13:match\nsrc/e.go:14:match\nsrc/f.go:15:match\n", engine.TypeSearchResult},
 		{"csv table", "name,region,revenue,status\nalpha,eu,120,ok\nbravo,us,140,ok\ncharlie,apac,90,ok\ndelta,eu,180,ok\necho,us,160,ok\nfoxtrot,apac,110,ok\ngolf,eu,200,ok\nhotel,us,170,ok\nindia,apac,130,ok\n", engine.TypeTabular},
 		{"markdown table", "| name | region | revenue |\n| --- | --- | ---: |\n| alpha | eu | 120 |\n| bravo | us | 140 |\n| charlie | apac | 90 |\n| delta | eu | 180 |\n| echo | us | 160 |\n| foxtrot | apac | 110 |\n", engine.TypeTabular},
+		// A GFM cell writes a literal pipe as \|. Splitting rows on every pipe
+		// gave that one row an extra cell, so parseTable rejected the table and
+		// LooksTabular — the detector's own gate — routed the payload to the
+		// text compressor instead of the table one (#1456).
+		{"markdown table with an escaped pipe", "| name | filter | revenue |\n| --- | --- | ---: |\n| alpha | eu | 120 |\n| bravo | `eu\\|us` | 140 |\n| charlie | apac | 90 |\n| delta | eu | 180 |\n| echo | us | 160 |\n| foxtrot | apac | 110 |\n", engine.TypeTabular},
 		{"yaml config", "service:\n  name: api\n  port: 8080\n  database:\n    host: db.internal\n    port: 5432\n    pool: 20\n  cache:\n    host: cache.internal\n    ttl: 300\n  limits:\n    requests: 1000\n    burst: 50\n  telemetry:\n    enabled: true\n    endpoint: http://otel.internal\n", engine.TypeConfig},
 		{"toml config", "[service]\nname = \"api\"\nport = 8080\n[database]\nhost = \"db.internal\"\nport = 5432\npool = 20\n[cache]\nhost = \"cache.internal\"\nttl = 300\n[limits]\nrequests = 1000\nburst = 50\n[telemetry]\nenabled = true\nendpoint = \"http://otel.internal\"\n", engine.TypeConfig},
 		{"prose", "The quick brown fox jumps over the lazy dog. Nothing structured here at all.", engine.TypeText},

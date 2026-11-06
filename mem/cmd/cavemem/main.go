@@ -44,7 +44,12 @@ func runVersion(args []string, stdout io.Writer) {
 		_ = json.NewEncoder(stdout).Encode(map[string]any{
 			"version":      version,
 			"schema":       "caveman.mem.version.v1",
-			"capabilities": []string{"mcp", "remember", "recall", "supersede", "history", "forget", "recover"},
+			// supersede-stdin is listed separately from "supersede" on purpose:
+			// a build without it treats supersede's second argument as the
+			// replacement TEXT, so a caller that sends "--stdin" to one stores
+			// the literal flag and expires the real memory. Callers must see
+			// this before sending a replacement over stdin.
+			"capabilities": []string{"mcp", "remember", "recall", "supersede", "supersede-stdin", "history", "forget", "recover"},
 		})
 		return
 	}

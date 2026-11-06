@@ -32,6 +32,8 @@ const HOST_HOOKS = require('./lib/host-hooks');
 const PORTABLE = require('./lib/portable-process');
 const PLATFORM_PATHS = require('./lib/platform-paths');
 const { parseCommandArgs } = require('./lib/command-args');
+const { packageInvocation } = require('./lib/package-runner');
+const IS_BUN = Boolean(process.versions.bun);
 
 const REPO = 'JuliusBrussee/caveman';
 // Mirrors the `engines.node` floor in package.json. Hardcoded rather than read
@@ -91,7 +93,7 @@ function parseArgs(argv) {
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
-    configDir: null, help: false,
+    configDir: null, hookNode: null, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -146,6 +148,18 @@ function parseArgs(argv) {
         const v = argv[++i];
         if (!v || v.startsWith('--')) die('error: --config-dir requires a path');
         opts.configDir = expandHome(v);
+        break;
+      }
+      case '--hook-node': {
+        const v = argv[++i];
+        if (!v || v.startsWith('--')) die('error: --hook-node requires `node` or an absolute path to node');
+        const pinned = expandHome(v);
+        // Bare `node`, or an absolute path whose basename is node: settings.js
+        // recognizes (and replaces in place) only hook commands run by node.
+        if (v !== 'node' && !(path.isAbsolute(pinned) && /^node(\.exe)?$/i.test(path.basename(pinned)))) {
+          die(`error: --hook-node takes \`node\` (found through PATH when the hook runs) or an absolute path to node, not: ${v}`);
+        }
+        opts.hookNode = v === 'node' ? 'node' : pinned;
         break;
       }
       default:
@@ -217,6 +231,8 @@ function checkWslWindowsNode() {
 }
 
 function checkNodeVersion() {
+  // Bun reports a compatibility Node version; it is not a Node installation.
+  if (IS_BUN) return;
   const major = parseInt(process.versions.node.split('.')[0], 10);
   if (major < 18) die(`caveman: Node ${process.versions.node} too old. Need Node ≥18. https://nodejs.org`);
 }
@@ -518,17 +534,36 @@ function absoluteNodePath() {
       const candidate = (r.stdout || '').trim().split(/\r?\n/, 1)[0];
       if (r.status === 0 && candidate && path.isAbsolute(candidate)) {
         const resolved = path.resolve(candidate);
-        const probe = child_process.spawnSync(resolved, ['--version'], { encoding: 'utf8' });
-        const major = /^v(\d+)\./.exec((probe.stdout || '').trim());
-        // Running is necessary but not sufficient: a PATH node below the
-        // package's `engines` floor would be persisted into settings.json and
-        // run every hook on an unsupported runtime. process.execPath already
-        // satisfies the floor, since it is running this installer.
-        if (spawnOk(probe) && major && Number(major[1]) >= MIN_NODE_MAJOR) return resolved;
+        if (nodeMeetsFloor(resolved)) return resolved;
       }
     } catch (_) {}
   }
   return process.execPath;
+}
+
+// Running is necessary but not sufficient: a node below the package's
+// `engines` floor would be persisted into a hook command and run every hook on
+// an unsupported runtime. process.execPath already satisfies the floor, since
+// it is running this installer.
+function nodeMeetsFloor(executable) {
+  try {
+    const probe = child_process.spawnSync(executable, ['--version'], { encoding: 'utf8' });
+    const major = /^v(\d+)\./.exec((probe.stdout || '').trim());
+    return spawnOk(probe) && !!major && Number(major[1]) >= MIN_NODE_MAJOR;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The node every hook command this installer writes runs with (#1452). The
+// default pins the install-time node by absolute path, because GUI-launched
+// hosts start without the shell PATH (#249, #805). `--hook-node node` trades
+// that for bare `node`, resolved through the hook process's PATH when it runs,
+// so a version-manager switch or prune needs no reinstall — but the host must
+// then see node on its PATH. `--hook-node <path>` pins a node of your choice.
+// Windows Codex, Cursor and Copilot hooks write bare `node` regardless.
+function hookNode(opts) {
+  return (opts && opts.hookNode) || absoluteNodePath();
 }
 
 // writeSettings re-serializes plain JSON, so comments and trailing commas go.
@@ -885,16 +920,17 @@ function installViaSkills(ctx, prov) {
   // workspace-wide library is managed in the UI, not a home-directory scan.
   // Other adapters resolve their user directories and supported home overrides.
   // `#ref` pins skill content to this release, like the hook downloads.
-  const args = ['-y', 'skills', 'add', `${REPO}#${PINNED_REF}`, '--skill', '*', '-a', prov.profile, '--yes'];
+  const args = ['skills', 'add', `${REPO}#${PINNED_REF}`, '--skill', '*', '-a', prov.profile, '--yes'];
   if (prov.skillsScope === 'project') note(`  Installing into this project: ${process.cwd()}`);
   else args.push('-g');
-  const r = runSpawn('npx', args, null, opts.dryRun);
+  const runner = packageInvocation(args);
+  const r = runSpawn(runner.command, runner.args, null, opts.dryRun);
   if (spawnOk(r)) {
     results.installed.push(prov.id);
     if (prov.id === 'codex' && opts.withHooks !== false) installCodexHook(ctx);
     if (prov.id === 'cursor') installCursorNative(ctx);
     if (prov.id === 'copilot') installCopilotCliHook(ctx);
-  } else results.failed.push([prov.id, `npx skills add (${prov.profile}) failed`]);
+  } else results.failed.push([prov.id, `skills add (${prov.profile}) failed`]);
   process.stdout.write('\n');
 }
 
@@ -1000,10 +1036,12 @@ function installCodexHook(ctx) {
     list.splice(at === -1 ? list.length : Math.min(at, list.length), 0, {
       // compact: Codex 0.160 sends it, and compaction prunes the injected ruleset.
       matcher: 'startup|resume|clear|compact',
-      // Absolute node on POSIX: the native codex binary does not run a login
-      // shell, so bare `node` can miss PATH. Windows keeps bare `node`: a quoted
-      // leading path is a string, not a command, in PowerShell (host-hooks.js).
-      hooks: [{ type: 'command', command: IS_WIN ? 'node ' + PLATFORM_PATHS.hookCommand(script, []) : PLATFORM_PATHS.hookCommand(absoluteNodePath(), [script]), timeout: 5, statusMessage: 'Loading caveman mode' }],
+      // Absolute node on POSIX by default: the native codex binary does not
+      // run a login shell, so bare `node` can miss PATH. `--hook-node node`
+      // opts into that lookup anyway (#1452). Windows keeps bare `node`: a
+      // quoted leading path is a string, not a command, in PowerShell
+      // (host-hooks.js).
+      hooks: [{ type: 'command', command: IS_WIN ? 'node ' + PLATFORM_PATHS.hookCommand(script, []) : PLATFORM_PATHS.hookCommand(hookNode(opts), [script]), timeout: 5, statusMessage: 'Loading caveman mode' }],
     });
     doc.hooks.SessionStart = list;
     if (JSON.stringify(doc) === before) {
@@ -1066,7 +1104,7 @@ function installCursorNative(ctx) {
   try {
     CURSOR_NATIVE.installCursorNative({
       repoRoot,
-      node: absoluteNodePath(),
+      node: hookNode(opts),
       withHooks: opts.withHooks !== false,
       force: opts.force,
       dryRun: opts.dryRun,
@@ -1098,7 +1136,7 @@ function installCopilotCliHook(ctx) {
     note('  Copilot CLI hook needs the caveman package files; skipped.');
     return;
   }
-  const node = absoluteNodePath();
+  const node = hookNode(opts);
   const hook = {
     version: 1,
     hooks: {
@@ -1488,8 +1526,13 @@ function installOmp(ctx) {
 }
 
 function opencodeConfigDir() {
-  // opencode uses ~/.config/opencode on every platform (on Windows that's
-  // %USERPROFILE%\.config\opencode via os.homedir()), NOT %APPDATA% (#376).
+  // opencode selects OPENCODE_CONFIG_DIR when it is set to a nonempty value
+  // (#1441 — installing into the unselected root reported success while the
+  // host read nothing). Otherwise ~/.config/opencode on every platform (on
+  // Windows that's %USERPROFILE%\.config\opencode via os.homedir()), NOT
+  // %APPDATA% (#376). Same order as the CLI and the mode plugin.
+  const selected = (process.env.OPENCODE_CONFIG_DIR || '').trim();
+  if (selected) return path.resolve(selected);
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
 }
@@ -1886,7 +1929,7 @@ async function installHooks(ctx) {
     warn(`        Your original (with comments) is preserved at ${bak}`);
   }
 
-  const node = absoluteNodePath();
+  const node = hookNode(opts);
   const activate = path.join(hooksDir, 'caveman-activate.js');
   const tracker  = path.join(hooksDir, 'caveman-mode-tracker.js');
   const stats = path.join(hooksDir, 'caveman-stats.js');
@@ -2026,28 +2069,74 @@ function privateTmpDir() {
 }
 
 // ── HTTPS download via stdlib ─────────────────────────────────────────────
-function downloadTo(url, dest) {
+const DOWNLOAD_MAX_REDIRECTS = 5;
+const DOWNLOAD_TIMEOUT_MS    = 60_000;
+const DOWNLOAD_MAX_BYTES     = 8 * 1024 * 1024; // 8 MiB
+
+function downloadTo(url, dest, _https) {
   // Prefer curl/wget when available (better proxy + cert handling on legacy
   // systems); fall back to Node https.
-  if (hasCmd('curl')) {
-    const r = child_process.spawnSync('curl', ['-fsSL', '-o', dest, url], { stdio: 'inherit' });
+  if (!_https && hasCmd('curl')) {
+    // --proto-redir =https  reject any redirect that downgrades off https
+    // --max-redirs 5        cap redirect chain length
+    // --max-time 60         hard wall-clock limit
+    // --max-filesize 8M     refuse oversized responses before writing
+    const r = child_process.spawnSync('curl', [
+      '-fsSL', '--proto-redir', '=https',
+      '--max-redirs', String(DOWNLOAD_MAX_REDIRECTS),
+      '--max-time', String(DOWNLOAD_TIMEOUT_MS / 1000),
+      '--max-filesize', String(DOWNLOAD_MAX_BYTES),
+      '-o', dest, url,
+    ], { stdio: 'inherit' });
     if (r.status === 0) return;
     throw new Error(`curl failed for ${url}`);
   }
-  const https = require('https');
+  const https = _https || require('https');
   return new Promise((resolve, reject) => {
-    const req = https.get(url, (res) => {
-      if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
-        resolve(downloadTo(res.headers.location, dest));
+    let redirects = 0;
+    function fetch(target) {
+      if (!target.startsWith('https://')) {
+        reject(new Error(`download refused non-https URL: ${target}`));
         return;
       }
-      if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return; }
-      const out = fs.createWriteStream(dest);
-      res.pipe(out);
-      out.on('finish', () => out.close(resolve));
-      out.on('error', reject);
-    });
-    req.on('error', reject);
+      const req = https.get(target, (res) => {
+        if (res.statusCode && res.statusCode >= 300 && res.statusCode < 400 && res.headers.location) {
+          if (++redirects > DOWNLOAD_MAX_REDIRECTS) {
+            reject(new Error(`too many redirects for ${url}`));
+            return;
+          }
+          fetch(res.headers.location);
+          return;
+        }
+        if (res.statusCode !== 200) { reject(new Error(`HTTP ${res.statusCode} for ${url}`)); return; }
+        let received = 0;
+        let out = null;
+        const unlinkDest = () => { try { fs.unlinkSync(dest); } catch (_) { /* best-effort */ } };
+        // openSync so the file exists before any data event fires; unlinkSync
+        // can then remove it synchronously on the oversized-body or error paths.
+        const fd = fs.openSync(dest, 'w');
+        out = fs.createWriteStream(dest, { fd });
+        res.on('data', (chunk) => {
+          received += chunk.length;
+          if (received > DOWNLOAD_MAX_BYTES) {
+            out.destroy();
+            res.destroy();
+            unlinkDest();
+            reject(new Error(`download exceeded ${DOWNLOAD_MAX_BYTES} bytes for ${url}`));
+          }
+        });
+        res.pipe(out);
+        out.on('finish', () => out.close(resolve));
+        out.on('error', (err) => { unlinkDest(); reject(err); });
+      });
+      req.setTimeout(DOWNLOAD_TIMEOUT_MS, () => {
+        req.destroy();
+        try { fs.unlinkSync(dest); } catch (_) { /* best-effort */ }
+        reject(new Error(`download timed out for ${url}`));
+      });
+      req.on('error', reject);
+    }
+    fetch(url);
   });
 }
 
@@ -2129,6 +2218,8 @@ function newerBundledCli() {
 // that CLI is also the `caveman` first on PATH. Null when there is no bundled
 // CLI or its floor is met.
 function bundledCliNodeFloorUnmet() {
+  // The CLI is Node-only even when Bun emulates a sufficiently new Node.
+  if (IS_BUN) return '22.13';
   try {
     const pkg = JSON.parse(fs.readFileSync(require.resolve('@caveman-ai/cli/package.json'), 'utf8'));
     const floor = /^>=\s*(\d+)(?:\.(\d+))?(?:\.(\d+))?\s*$/.exec((pkg.engines && pkg.engines.node) || '');
@@ -2194,7 +2285,7 @@ function uninstall(ctx) {
     const stranded = remainingNativeIntegrations();
     if (stranded.length > 0) cleanupFailed = true;
     for (const agent of stranded) warn(`  ${agent}: native Caveman routing is still installed and was not removed here.`);
-    if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${process.version}. Upgrade Node first.`);
+    if (stranded.length > 0 && cliNodeFloor) warn(`  The Caveman CLI needs Node ${cliNodeFloor} or newer; this is ${IS_BUN ? `Bun ${process.versions.bun}` : process.version}. Upgrade Node first.`);
     if (stranded.length > 0) warn('  Run `caveman disable --all` (reinstall @caveman-ai/cli first if needed) to restore the host settings.');
   }
 
@@ -2674,8 +2765,14 @@ function printHelp() {
 USAGE
   npx -y github:JuliusBrussee/caveman -- [flags]
   node installer/install.js [flags]
-  bash install.sh [flags]              # shim → npx
-  pwsh install.ps1 [flags]             # shim → npx
+  bun installer/install.js [flags]    # experimental skills-only fallback
+  bash install.sh [flags]              # Node first, Bun when Node is absent
+  pwsh install.ps1 [flags]             # same runtime selection on Windows
+
+RUNTIMES
+  Node >=18, or Bun for skills and file-based integrations. With Bun,
+  automatic hooks are skipped; Claude's plugin, --with-hooks and
+  --with-mcp-shrink still require Node. The runtime CLI needs Node 22.13+.
 
 FLAGS
   --dry-run             Print what would run, do nothing.
@@ -2694,6 +2791,15 @@ FLAGS
                         plugin did not install, because the plugin already
                         runs them; --with-hooks wires them anyway.)
   --no-hooks            Skip the hooks installer.
+  --hook-node <node|path>
+                        Node the hooks run with. Default: node's absolute path,
+                        found at install time, so apps started outside a
+                        terminal still find it.
+                        \`node\` looks node up on the agent's PATH each run, so
+                        switching Node versions needs no reinstall, but the
+                        agent must see node on its PATH. A path pins that node.
+                        (Windows Codex, Cursor and Copilot hooks always use
+                        \`node\`.)
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"
                         Claude Code (and opencode): register caveman-shrink MCP
@@ -2732,8 +2838,32 @@ async function main() {
   if (opts.help) { printHelp(); return 0; }
   if (opts.listOnly) { printList(opts.noColor); return 0; }
 
+  // Reject explicit unsupported work before any host command or file write.
+  // Automatically installed hooks are optional; never persist commands that
+  // will later ask the user's host for an absent Node executable.
+  if (IS_BUN) {
+    if (opts.withHooks === true || opts.withMcpShrink) {
+      die('caveman: --with-hooks and --with-mcp-shrink require Node >=18; Bun supports skills-only installation.');
+    }
+    if (opts.only.includes('claude')) {
+      die('caveman: the Claude Code plugin requires Node >=18 for its hooks. Install Node and retry.');
+    }
+    opts.withHooks = false;
+  }
+
   checkWslWindowsNode();
   checkNodeVersion();
+
+  // A pinned --hook-node lands in every hook command: refuse one that does not
+  // run as a supported node before anything is written. Bare `node` is looked
+  // up on the HOOK's PATH later, which may differ from this one, so it is only
+  // flagged here.
+  if (opts.hookNode && opts.withHooks !== false && !nodeMeetsFloor(opts.hookNode)) {
+    if (opts.hookNode !== 'node') {
+      die(`caveman: --hook-node ${opts.hookNode} does not run as Node >=${MIN_NODE_MAJOR}; nothing changed.`);
+    }
+    process.stderr.write(`caveman: no Node >=${MIN_NODE_MAJOR} named \`node\` on this PATH; hooks written with --hook-node node fail unless the agent's PATH has one.\n`);
+  }
 
   const configDir = opts.configDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   const repoRoot = detectRepoRoot();
@@ -2752,6 +2882,7 @@ async function main() {
   ctx.say('🪨 caveman installer');
   ctx.note(`  ${REPO}`);
   if (opts.dryRun) ctx.note('  (dry run — nothing will be written)');
+  if (IS_BUN) ctx.note('  Bun: installing skills without Node-only hooks. Install Node >=18 for automatic activation.');
   process.stdout.write('\n');
 
   // Detect everything once
@@ -2770,6 +2901,7 @@ async function main() {
   // are auto-skipped — user must opt in via `--only <id>`. Stops the installer
   // from firing `npx skills add ...` against agents the user never installed
   // just because some other tool created `~/.foo` along the way.
+  let unsupportedSkips = 0;
   for (const prov of PROVIDERS) {
     if (!want(prov.id)) continue;
     if (prov.soft && !explicit(prov.id)) continue;
@@ -2779,6 +2911,11 @@ async function main() {
     // no repo clone is available; openclaw bails when the workspace dir is
     // missing without --force).
     if (!explicit(prov.id) && !detectMatch(prov.detect)) continue;
+    if (IS_BUN && prov.id === 'claude') {
+      ctx.results.skipped.push(['claude', 'plugin hooks require Node >=18; install Node and retry']);
+      unsupportedSkips++;
+      continue;
+    }
     if (prov.id === 'claude')   { await installClaude(ctx); continue; }
     if (prov.id === 'gemini')   { installGemini(ctx); continue; }
     if (prov.id === 'opencode') { installOpencode(ctx); continue; }
@@ -2830,10 +2967,15 @@ async function main() {
   ctx.note('  verified team savings coming soon — join waitlist: https://caveman.so');
   ctx.note(`  uninstall: npx -y github:${REPO} -- --uninstall`);
 
-  // Exit code: nonzero only if every detected agent failed
-  if (ctx.results.detected > 0 && !ctx.results.installed.length && !ctx.results.skipped.length) return 1;
+  // Unsupported providers are not successful skips: they must not hide a
+  // failure of every attempted install. Preserve Node skip accounting.
+  if (ctx.results.detected > 0 && !ctx.results.installed.length && ctx.results.skipped.length === unsupportedSkips) return 1;
   return 0;
 }
 
-main().then(code => process.exit(code || 0))
-      .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
+if (require.main === module) {
+  main().then(code => process.exit(code || 0))
+        .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
+}
+
+module.exports = { downloadTo, DOWNLOAD_MAX_REDIRECTS, DOWNLOAD_TIMEOUT_MS, DOWNLOAD_MAX_BYTES };

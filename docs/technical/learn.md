@@ -282,7 +282,7 @@ Classes (the report's label in brackets):
 | `claude_md_weight:{user,project,codex}` | reducible | A `CLAUDE.md` (or `~/.codex/AGENTS.md` for `codex`) over 150 lines or 2000 tokens | `claude_md_weight` | Yes, via skill |
 | `claude_md_sections:{user,project}` | reducible | `CLAUDE.md` sections with no distinctive-line echo in ≥5 sessions. Emitted only if at least one other section did echo. | `claude_md_sections` | Yes, via skill |
 | `dead_load:skills` | reducible | Skills whose descriptions load every turn with no use detected in the window | `dead_load` | Yes, via skill |
-| `recurring_context:repaste:<fingerprint>` | recurring_context | A block of ≥180 tokens re-established in ≥3 sessions. Top 24 listed; the rest still count in the score. | `cavemem_offload` | Yes, via skill |
+| `recurring_context:repaste:<fingerprint>` | recurring_context | A block of ≥180 tokens re-established in ≥3 sessions. Context the host or caveman's own hook re-injects is excluded — the system-reminder envelope carrying `CLAUDE.md`/auto-memory, a hook result, the caveman ruleset — because offloading it saves nothing and it is already counted as always-loaded setup. Top 24 listed; the rest still count in the score. | `cavemem_offload` | Yes, via skill |
 | `context_dumbzone` | behavioral | Turns over 50% of the model window, if ≥10% of turns | `dumbzone_advice` | No |
 | `subagent_overuse` | behavioral | Subagent spawn counts | none | No |
 | `subagent_spend` | behavioral | Share of provider-counted context in subagent sidechains (≥100k tokens, ≥3 sessions). Visibility only. | none | No |
@@ -292,7 +292,7 @@ Classes (the report's label in brackets):
 | `cross_provider:repaste` | behavioral | One recurring block seen in two or more agents | none | No |
 | `learning_loop:error_loop:<session>:<hash>` | behavioral | Same tool call ≥3 times in one session, at least half failing | none | No |
 | `learning_loop:refetch_loop:<session>:<hash>` | behavioral | Same call ≥3 times with only pagination/limit variants, no errors | none | No |
-| `cache_churn` | behavioral | ≥2 sessions with ≥3 turns that each re-wrote >10k tokens and >25% of context to cache | none | No |
+| `cache_churn` | behavioral | ≥2 sessions with ≥3 turns that each re-wrote >10k tokens and >25% of context to cache, at least one of them not a likely cold resume (`previous_message_not_found` after the reported cache TTL). Evidence splits the writes into `cold_resume` / `invalidation` (`tools_changed`) / `unknown`, with up to 5 locators per bucket | none | No |
 | `cache_efficiency` | load_bearing, or behavioral when multiplier ≥ 0.6 | Effective input cost per million tokens after cache reuse (needs ≥200k input tokens). A rate, not a volume. | none | No |
 | `reread_waste` | behavioral | Repeated full reads of the same file (≥5k tokens) | none | No |
 | `compaction_churn` | behavioral | Files re-fetched after compaction (≥2k tokens). May overlap `reread_waste`; never sum them. | none | No |

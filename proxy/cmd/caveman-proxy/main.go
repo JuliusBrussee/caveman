@@ -289,6 +289,9 @@ func runServe(logger *slog.Logger) {
 	if recovery != nil {
 		usage := usageAfterFlush{flush: func() { flushRows() }, spend: spend}
 		nativeRuntime = nativeruntime.NewWithReceiptsAndUsage(recovery, filepath.Join(home, "receipts"), usage)
+		// A request the runtime closes unanswered fails open at the host; say so
+		// here, or a runtime that answers nothing looks healthy (#1279).
+		nativeRuntime.Logger = logger
 		opts.SessionFallback = func(now time.Time, provider, model string) (string, string) {
 			return nativeRuntime.UniqueRecentSession(now, 5*time.Second, provider, model)
 		}

@@ -36,7 +36,8 @@ import { writeFileSync } from "node:fs";
 writeFileSync(${JSON.stringify(capture)}, JSON.stringify({
   mode: process.env.CAVEMAN_MODE || "<unset>",
   entitled: process.env.CAVEMAN_WRAP_ENTITLED || "<unset>",
-  recovery: process.env.CAVEMAN_RECOVERY || "<unset>"
+  recovery: process.env.CAVEMAN_RECOVERY || "<unset>",
+  toon: process.env.CAVE_ENGINE_TOON ?? "<unset>"
 }));
 `, { mode: 0o755 });
   isolated.env.CAVEMAN_PROXY_BIN = proxy;
@@ -293,5 +294,45 @@ test("config surface rejects account and consent keys without writing", async ()
     }
   } finally {
     isolated.cleanup();
+  }
+});
+
+// #1457: proxyYamlMode() read the proxy's top-level `mode:` with
+// /^\s*mode\s*:/m. Under /m, `^` matches the start of EVERY line and `\s*`
+// eats the indentation, so the pattern meant "`mode:` at any depth", not "a
+// top-level key". caveman.yaml legitimately carries a second, nested one --
+// `middleware.mode` (proxy/internal/config/middleware.go) -- and the proxy
+// resolves keys by NAME (yaml.v3), so a textual first match let the two
+// disagree about one file.
+//
+// `modeSource === "proxy-yaml"` is deliberately not stamped into CAVEMAN_MODE
+// (the proxy reads the same file itself), so the resolved mode is observed
+// through CAVE_ENGINE_TOON, which start derives from it at index.ts:2745.
+test("start reads only the top-level proxy mode, never a nested middleware.mode", async () => {
+  // Key order must not decide. yaml.v3 resolves by name -> compress; the
+  // textual-first-match regex answered "record" off the nested key above it,
+  // which also made `caveman status` report a mode mismatch that was not real.
+  const nestedFirst = startEnvHarness({}, { yaml: "middleware:\n  mode: record\nmode: compress\n" });
+  // A nested-only mode is not the proxy's mode, so it must not override the
+  // resolved default (think.mode defaults to compress). Today it does: the
+  // CLI resolves `pixel` from a key the proxy reads as middleware config.
+  const nestedOnly = startEnvHarness({}, { yaml: "listen: 127.0.0.1:8787\nmiddleware:\n  mode: pixel\n" });
+  // Guard against over-correcting to "first indented key wins": a real
+  // top-level key still wins over a nested one that follows it.
+  const topLevelFirst = startEnvHarness({}, { yaml: "mode: compress\nmiddleware:\n  mode: record\n" });
+  try {
+    const first = await runStart(nestedFirst);
+    const only = await runStart(nestedOnly);
+    const top = await runStart(topLevelFirst);
+    assert.equal(first.code, 0, first.stderr);
+    assert.equal(only.code, 0, only.stderr);
+    assert.equal(top.code, 0, top.stderr);
+    assert.equal(first.proxyEnv.toon, "best-of");
+    assert.equal(only.proxyEnv.toon, "best-of");
+    assert.equal(top.proxyEnv.toon, "best-of");
+  } finally {
+    nestedFirst.isolated.cleanup();
+    nestedOnly.isolated.cleanup();
+    topLevelFirst.isolated.cleanup();
   }
 });

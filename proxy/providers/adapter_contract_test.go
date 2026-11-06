@@ -71,6 +71,18 @@ func TestInspectRequestFailsPricingClosedForNonTokenCharges(t *testing.T) {
 		{"anthropic fast mode", "anthropic", `{"speed":"fast"}`, "unsupported_speed_tier"},
 		{"anthropic web fetch is token only", "anthropic", `{"tools":[{"type":"web_fetch_20260318","name":"web_fetch"}]}`, ""},
 		{"anthropic web search has per-call fee", "anthropic", `{"tools":[{"type":"web_search_20260318","name":"web_search"}]}`, "unsupported_provider_tool_charge"},
+		// #1465: Claude Code declares the server-side advisor on every agent
+		// turn. Declaring it is not a charge — an invoked advisor reports its
+		// own model as a non-"message" usage iteration, which
+		// mergeProviderOutcomeQualifiers already rejects. Blocking on the
+		// declaration left every agent request unpriced.
+		{"anthropic advisor declaration is token only", "anthropic", `{"tools":[{"type":"advisor_20260301","name":"advisor"}]}`, ""},
+		{"anthropic advisor date revision is token only", "anthropic", `{"tools":[{"type":"advisor_20271115","name":"advisor"}]}`, ""},
+		{"anthropic advisor without a date stamp fails closed", "anthropic", `{"tools":[{"type":"advisor","name":"advisor"}]}`, "unsupported_provider_tool_charge"},
+		{"anthropic advisor with a non-date revision fails closed", "anthropic", `{"tools":[{"type":"advisor_v2","name":"advisor"}]}`, "unsupported_provider_tool_charge"},
+		{"anthropic advisory lookalike fails closed", "anthropic", `{"tools":[{"type":"advisory_20260301","name":"advisory"}]}`, "unsupported_provider_tool_charge"},
+		{"openai advisor-shaped tool is not anthropic's", "openai", `{"tools":[{"type":"advisor_20260301","name":"advisor"}]}`, "unsupported_provider_tool_charge"},
+		{"anthropic advisor alongside a function tool stays priced", "anthropic", `{"tools":[{"type":"function","function":{"name":"lookup"}},{"type":"advisor_20260301","name":"advisor"}]}`, ""},
 		{"anthropic fallback", "anthropic", `{"fallbacks":["claude-haiku-4-5"]}`, "unsupported_model_fallback_pricing"},
 		{"nested audio", "gemini", `{"contents":[{"parts":[{"inlineData":{"mimeType":"audio/wav","data":"AA=="}}]}]}`, "unsupported_audio_tokens"},
 		{"custom function stays token priced", "openai", `{"tools":[{"type":"function","function":{"name":"lookup"}}]}`, ""},
@@ -281,10 +293,16 @@ func TestSanitizeAndMapHeaders_AnthropicBearerSchemePreserved(t *testing.T) {
 	b := Base{Provider: "anthropic"}
 	req, _ := http.NewRequest(http.MethodPost, "/v1/messages", nil)
 	req.Header.Set("anthropic-beta", "oauth-2025-04-20")
+	req.Header.Set("anthropic-workspace-id", "wrkspc_test")
 
 	out, err := b.SanitizeAndMapHeaders(req.Context(), req, Credential{Key: "OAUTH-TOKEN", Scheme: "bearer"}, nil)
 	if err != nil {
 		t.Fatalf("sanitize: %v", err)
+	}
+	// A user OAuth token is org-scoped; the workspace the agent named must
+	// reach the provider or the call lands in a different workspace.
+	if got := out.Get("anthropic-workspace-id"); got != "wrkspc_test" {
+		t.Errorf("anthropic-workspace-id = %q, want wrkspc_test", got)
 	}
 	if got := out.Get("authorization"); got != "Bearer OAUTH-TOKEN" {
 		t.Errorf("authorization = %q, want Bearer OAUTH-TOKEN", got)

@@ -23,14 +23,76 @@ async function fakeBinary() {
 const { readFileSync } = require("node:fs");
 const args = process.argv.slice(2);
 const input = (args[0] === "remember" && args[1] === "--stdin") || (args[0] === "supersede" && args[2] === "--stdin") ? readFileSync(0, "utf8") : "";
+if (args[0] === "version") { process.stdout.write(JSON.stringify({ version: "test", capabilities: (process.env.FAKE_CAPS ?? "supersede-stdin").split(",") })); process.exit(0); }
 if (args.includes("__fail__") || input.includes("__fail__")) process.exit(17);
 if (Buffer.byteLength(input) > 256 * 1024) process.exit(65);
 if (args.includes("__invalid_json__") || input.includes("__invalid_json__")) process.stdout.write("not json");
-else process.stdout.write(JSON.stringify({ args, basis: "inferred" }));
+else process.stdout.write(JSON.stringify(process.env.FAKE_REPORT_INPUT ? { args, input, basis: "inferred" } : { args, basis: "inferred" }));
 `, { mode: 0o700 });
   await chmod(path, 0o700);
   return { directory, path };
 }
+
+test("JS client never sends --stdin to a cavemem that would store it as the text", { skip: !stubExecutable }, async (t) => {
+  const previous = process.env.CAVEMEM_BIN;
+  const previousCaps = process.env.FAKE_CAPS;
+  const { path } = await fakeBinary();
+  process.env.CAVEMEM_BIN = path;
+  // A build predating `supersede --stdin`: it still lists "supersede".
+  process.env.FAKE_CAPS = "mcp,remember,recall,supersede,history,forget,recover";
+  t.after(() => {
+    if (previous === undefined) delete process.env.CAVEMEM_BIN; else process.env.CAVEMEM_BIN = previous;
+    if (previousCaps === undefined) delete process.env.FAKE_CAPS; else process.env.FAKE_CAPS = previousCaps;
+  });
+
+  // Small enough for argv: works against any build, and the text itself is sent.
+  assert.deepEqual(await supersede("mem_1", "replacement"), { args: ["supersede", "mem_1", "replacement"], basis: "inferred" });
+
+  // Too large for argv and the build cannot read stdin: refuse rather than hand
+  // it "--stdin", which such a build stores as the replacement text while
+  // expiring the real memory.
+  await assert.rejects(
+    () => supersede("mem_1", "x".repeat(200 * 1024)),
+    /supersede-stdin/,
+    "an old binary must be refused, not sent --stdin",
+  );
+
+  // The same large replacement goes over stdin once the build advertises it.
+  process.env.FAKE_CAPS = "supersede,supersede-stdin";
+  const big = await supersede("mem_1", "y".repeat(200 * 1024));
+  assert.deepEqual(big.args, ["supersede", "mem_1", "--stdin"]);
+});
+
+test("JS client sends a replacement argv cannot carry over stdin", { skip: !stubExecutable }, async (t) => {
+  const previous = { bin: process.env.CAVEMEM_BIN, caps: process.env.FAKE_CAPS, report: process.env.FAKE_REPORT_INPUT };
+  const { path } = await fakeBinary();
+  process.env.CAVEMEM_BIN = path;
+  process.env.FAKE_REPORT_INPUT = "1";
+  t.after(() => {
+    for (const [key, value] of [["CAVEMEM_BIN", previous.bin], ["FAKE_CAPS", previous.caps], ["FAKE_REPORT_INPUT", previous.report]]) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  });
+
+  // Three replacements argv cannot carry, each for a different reason. On argv
+  // the binary would read "--stdin" as the flag (and then take whatever OUR
+  // stdin holds), and a NUL cannot be passed in an argument at all.
+  for (const [reason, text] of [
+    ["literal --stdin", "--stdin"],
+    ["embedded NUL", "alpha\0beta"],
+    ["over the argv limit", "z".repeat(200 * 1024)],
+  ]) {
+    process.env.FAKE_CAPS = "supersede,supersede-stdin";
+    const sent = await supersede("mem_1", text);
+    assert.deepEqual(sent.args, ["supersede", "mem_1", "--stdin"], `${reason}: must use the stdin form`);
+    assert.equal(sent.input, text, `${reason}: the text itself must arrive on stdin`);
+
+    // Without the capability there is no safe way to send it: refuse, never
+    // hand the binary an argument it would misread.
+    process.env.FAKE_CAPS = "mcp,remember,recall,supersede,history,forget,recover";
+    await assert.rejects(() => supersede("mem_1", text), /supersede-stdin/, `${reason}: must refuse on an old binary`);
+  }
+});
 
 test("JS client forwards every command and preserves JSON response", { skip: !stubExecutable }, async (t) => {
   const previous = process.env.CAVEMEM_BIN;
@@ -46,7 +108,8 @@ test("JS client forwards every command and preserves JSON response", { skip: !st
   assert.deepEqual(await recall("billing", 4), { args: ["recall", "billing", "4"], basis: "inferred" });
   assert.deepEqual(await recall("billing", 4, 900), { args: ["recall", "billing", "4", "900"], basis: "inferred" });
   assert.deepEqual(await recall("billing", undefined, 0), { args: ["recall", "billing", "0", "0"], basis: "inferred" });
-  assert.deepEqual(await supersede("mem_1", "replacement"), { args: ["supersede", "mem_1", "--stdin"], basis: "inferred" });
+  // Small replacements ride argv, which every cavemem build reads correctly.
+  assert.deepEqual(await supersede("mem_1", "replacement"), { args: ["supersede", "mem_1", "replacement"], basis: "inferred" });
   assert.deepEqual(await history("mem_1"), { args: ["history", "mem_1"], basis: "inferred" });
   assert.deepEqual(await forget("mem_1"), { args: ["forget", "mem_1"], basis: "inferred" });
 });

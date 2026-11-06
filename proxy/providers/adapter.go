@@ -392,6 +392,14 @@ type MetadataRequestMatcher interface {
 	MatchMetadataRequest(r *http.Request) bool
 }
 
+// OAuthTokenRouter is an optional provider capability: the provider's OAuth
+// token endpoint, which a client reaches through the same base URL as its
+// inference. Base implements it for every embedder, and an adapter with no
+// OAuthTokenRoutes declared matches nothing.
+type OAuthTokenRouter interface {
+	MatchOAuthTokenRoute(method string, path string) bool
+}
+
 // TokenCounter is an optional provider capability for projecting an original
 // inference request onto that provider's token-count endpoint. Implementations
 // only shape and parse bytes; the gateway owns all network I/O so credentials,
@@ -426,6 +434,14 @@ const (
 	recoveryToolName     = "caveman_retrieve"
 	mcpRecoveryToolName  = "mcp__caveman__caveman_retrieve"
 	kiloRecoveryToolName = "caveman_caveman_retrieve"
+	// `caveman wrap claude` registers the recovery MCP server inside its
+	// ephemeral `caveman-wrap` plugin (buildClaudeEphemeralPlugin in
+	// packages/cli/src/index.ts). Claude Code keys a plugin's MCP server as
+	// `plugin:<plugin>:<server>` and then sanitises every character outside
+	// [A-Za-z0-9_-] to `_` when it builds the tool name, so the server
+	// `caveman` inside plugin `caveman-wrap` is called under this one spelling.
+	// tests/verify_repo.py holds the two sources to each other.
+	claudeWrapRecoveryToolName = "mcp__plugin_caveman-wrap_caveman__caveman_retrieve"
 )
 
 // IsRecoveryToolName reports whether a tool call is a caveman recovery call.
@@ -438,7 +454,8 @@ const (
 // elision it was trying to escape. Measured on 2026-08-06: the agent called
 // retrieve, reported "Same truncation", and re-read the same file seven times.
 func IsRecoveryToolName(name string) bool {
-	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName
+	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName ||
+		name == claudeWrapRecoveryToolName
 }
 
 type Base struct {
@@ -470,6 +487,14 @@ type Base struct {
 	// stays fail-closed. The gateway forwards these unchanged: no request body,
 	// no transform, no usage accounting and no spend row.
 	MetadataRoutes []string
+	// OAuthTokenRoutes lists this provider's OAuth token endpoint mounts. An
+	// SDK signed in with a user OAuth profile refreshes its access token at
+	// {base URL}/v1/oauth/token, so with the base URL pointed at the proxy the
+	// refresh arrives here; answering 404 cave_route_not_found broke the agent
+	// as soon as its access token expired. Exact paths, POST only. The gateway
+	// relays them byte-for-byte with no provider credential attached: the body
+	// is the grant, and it carries no inference to inspect, price or record.
+	OAuthTokenRoutes []string
 }
 
 // usageParseProvider is the provider key usage accounting parses with.
@@ -526,6 +551,20 @@ func (b Base) MatchMetadataRoute(method, path string) bool {
 	return false
 }
 
+// MatchOAuthTokenRoute reports whether this is a request to the provider's
+// OAuth token endpoint (see Base.OAuthTokenRoutes).
+func (b Base) MatchOAuthTokenRoute(method, path string) bool {
+	if method != http.MethodPost {
+		return false
+	}
+	for _, route := range b.OAuthTokenRoutes {
+		if path == route {
+			return true
+		}
+	}
+	return false
+}
+
 func (b Base) ResolveUpstreamURL(ctx context.Context, req *http.Request, route RouteContext) (*url.URL, error) {
 	baseURL := b.BaseURL
 	if route.BaseURL != "" {
@@ -569,6 +608,10 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 	}
 	copyIfPresent(out, req.Header, "anthropic-version")
 	copyIfPresent(out, req.Header, "anthropic-beta")
+	// A user OAuth token is scoped to an organization, not a workspace; the
+	// client names the workspace on every request, and dropping the header
+	// bills and rate-limits the call against a workspace the user did not pick.
+	copyIfPresent(out, req.Header, "anthropic-workspace-id")
 	copyIfPresent(out, req.Header, "api-version")
 	if env.Bool("CAVE_PROPAGATE_TRACE_HEADERS_UPSTREAM", false) {
 		copyIfPresent(out, req.Header, "traceparent")
@@ -1210,6 +1253,16 @@ func mergeUsage(provider string, obj map[string]any, usage *UsageObservation) {
 		// response.completed.response, beside (not inside) response.usage.
 		mergePricingQualifiers(resp, usage)
 		mergeProviderOutcomeQualifiers(provider, resp, usage)
+	}
+	// Anthropic's streaming message_start carries its usage object one level
+	// down, on message.usage — the only place streaming input_tokens ever
+	// appear, which is why usageObjects() reaches it. The outcome-qualifier
+	// guard has to reach the same object, or a separately-billed iteration kind
+	// riding it is never inspected and a token-only subtotal is presented as the
+	// exact bill (#1453). message_start carries no stop_reason, so the refusal
+	// arm inside stays inert for it.
+	if msg, ok := obj["message"].(map[string]any); ok {
+		mergeProviderOutcomeQualifiers(provider, msg, usage)
 	}
 	for _, u := range usageObjects(obj) {
 		if hasGeminiUsageKeys(u) {
@@ -1860,9 +1913,36 @@ func tokenOnlyProviderTool(provider, toolType string) bool {
 	switch toolType {
 	case "web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318":
 		return true
-	default:
+	}
+	// Claude Code declares the server-side advisor on every agent turn once the
+	// feature flag is on for the account, whether or not it is ever invoked
+	// (#1465). The declaration alone carries no charge: an advisor that runs
+	// reports its own model as a non-"message" entry in usage.iterations, and
+	// mergeProviderOutcomeQualifiers already fails pricing closed on that
+	// (pinned by TestAnthropicMessageIterationsStayPriced's advisor_message case). Gating
+	// on the declaration instead left every agent request unpriced, so a whole
+	// install reported "Unknown" API cost.
+	//
+	// Matched as a dated revision of that one hosted tool, not as any type
+	// beginning "advisor": Anthropic version-stamps these, so a date bump must
+	// not reintroduce the bug, while a differently shaped advisor tool is a new
+	// billing question and still fails closed.
+	return isAnthropicDatedToolRevision(toolType, "advisor_")
+}
+
+// isAnthropicDatedToolRevision reports whether toolType is prefix plus
+// Anthropic's eight-digit YYYYMMDD version stamp, e.g. "advisor_20260301".
+func isAnthropicDatedToolRevision(toolType, prefix string) bool {
+	stamp, ok := strings.CutPrefix(toolType, prefix)
+	if !ok || len(stamp) != 8 {
 		return false
 	}
+	for _, r := range stamp {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func mergePricingQualifiers(obj map[string]any, usage *UsageObservation) {

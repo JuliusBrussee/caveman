@@ -157,4 +157,24 @@ process.exit(result.status ?? 1);`);
     assert.doesNotMatch(installed.stdout, /Done!/);
     assert.equal(JSON.parse(readFileSync(item.settings, 'utf8')).theme, 'dark');
   });
+
+  test(`${surface.command}: an idempotent re-run over JSONC settings changes nothing`, options, (t) => {
+    const item = fixture(t);
+    writeFileSync(item.settings, '{"theme":"dark"}\n');
+    const installed = run(surface, item, 'install');
+    assert.equal(installed.status, 0, installed.stdout + installed.stderr);
+    // The user edits their own settings after install. The ALREADY_INSTALLED
+    // probe reads the same file the merge step does, so it has to use the same
+    // JSONC parser: a bare JSON.parse throws here, the probe reports "not
+    // installed", and the merge step rewrites the file through JSON.stringify
+    // -- dropping the comment and the trailing comma without a fresh backup.
+    const edited = `{ // my theme\n "theme":"dark",\n ${readFileSync(item.settings, 'utf8').slice(1)}`;
+    writeFileSync(item.settings, edited);
+    const backup = readFileSync(`${item.settings}.bak`, 'utf8');
+    const reran = run(surface, item, 'install');
+    assert.equal(reran.status, 0, reran.stdout + reran.stderr);
+    assert.match(reran.stdout, /Nothing to do\. Hooks are already in place\./);
+    assert.equal(readFileSync(item.settings, 'utf8'), edited, 'a no-op re-run must not rewrite user settings');
+    assert.equal(readFileSync(`${item.settings}.bak`, 'utf8'), backup, 'a no-op re-run must not touch the backup');
+  });
 }

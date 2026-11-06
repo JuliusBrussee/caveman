@@ -30,6 +30,7 @@ import (
 	"github.com/JuliusBrussee/caveman/shared/platform/httpx"
 	"github.com/JuliusBrussee/caveman/shared/platform/id"
 	"github.com/JuliusBrussee/caveman/shared/platform/redact"
+	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
 
 // doUpstream retries only connection-setup failures: the provider has not received a request.
@@ -46,6 +47,18 @@ func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, er
 		if err == nil {
 			return resp, nil
 		}
+		if ssrf.IsBlocked(err) {
+			// The dial guard refused the destination: nothing left the
+			// machine, a retry would be refused the same way, and the caller
+			// only sees a 502. Without this line a refused upstream (a compat
+			// mount on a loopback relay, #1440) looked exactly like an outage.
+			// The guard's message names the host and, where an allowlist can
+			// help, the CAVE_SSRF_ALLOWLIST entry.
+			if s.logger != nil {
+				s.logger.Warn("upstream destination refused by the SSRF guard; this is policy, not an outage", "host", req.URL.Host, "error", redact.Error(err))
+			}
+			return nil, err
+		}
 		if attempt >= 2 || ctx.Err() != nil || !connectionSetupFailure(err) {
 			return nil, err
 		}
@@ -58,6 +71,16 @@ func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, er
 		case <-time.After(time.Duration(attempt+1) * 200 * time.Millisecond):
 		}
 	}
+}
+
+// upstreamFailureCode is the error code for an upstream attempt that returned
+// no response: a guard refusal is named as one, so neither the client nor the
+// spend row reads it as the provider being down (#1440).
+func upstreamFailureCode(err error) string {
+	if ssrf.IsBlocked(err) {
+		return "cave_upstream_blocked"
+	}
+	return "cave_upstream_unavailable"
 }
 
 // connectionSetupFailure reports whether err ended the attempt while the
@@ -137,6 +160,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// and before matchAdapter because that allowlist is POST-only (issue #1187).
 	if adapter := s.matchMetadataAdapter(r); adapter != nil {
 		s.metadataPassthrough(w, r, adapter, s.creds.Resolve(adapter.Name(), r), requestID)
+		return
+	}
+	// The OAuth token refresh shares the agent's base URL but is no inference
+	// either, so it gets the same treatment, without a provider credential.
+	if adapter := s.matchOAuthTokenAdapter(r); adapter != nil {
+		s.oauthTokenPassthrough(w, r, adapter, requestID)
 		return
 	}
 	adapter := s.matchAdapter(r)
@@ -666,9 +695,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if meta.Model != modelRequested && r.Context().Err() == nil {
 			evidence.route.reject(false) // the agent's own retry goes to the asked model
 		}
-		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
+		code := upstreamFailureCode(err)
+		httpx.Error(w, r, http.StatusBadGateway, code, "Upstream provider unavailable.")
 		estimateWG.Wait() // join the observe estimate before record() reads it
-		s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, "cave_upstream_unavailable", transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
+		s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, transformedHash, code, transform.OptimizerIDs, providers.UsageObservation{CacheStatus: "unknown"}, comp, toolSchemaHandle, false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 		return
 	}
 	// A 400 naming the thinking binding or the per-message marks earns one heal
@@ -788,10 +818,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		retryResp, derr := s.doUpstream(r.Context(), buildUpstream(original, retryHeaders))
 		s.inflight.Add(-1)
 		if derr != nil {
-			httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unavailable", "Upstream provider unavailable.")
+			code := upstreamFailureCode(derr)
+			httpx.Error(w, r, http.StatusBadGateway, code, "Upstream provider unavailable.")
 			estimateWG.Wait() // join the observe estimate; passed uniformly (zeroed at Record on this failed status)
 			evidence.acceptedBody = original
-			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, "cave_upstream_unavailable", []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
+			s.record(start, 0, requestID, traceID, rc, meta, authMode, http.StatusBadGateway, 0, len(body), rawHash, originalHash, code, []string{}, providers.UsageObservation{CacheStatus: "unknown"}, nil, "", false, estimate, evidence, providerCachePrefixSHA256, providerCacheComponentSHA256, cacheBoundaryKnown, cacheBustCause, compressionEligible)
 			return
 		}
 		retryServed := retryResp.StatusCode >= 200 && retryResp.StatusCode < 300
@@ -2273,7 +2304,7 @@ func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.R
 	counter := &countingWriter{w: w}
 	if _, err := copyFlush(counter, src, completion); err != nil {
 		if r.Context().Err() != nil && completion != nil && completion.terminalDelivered() {
-			// Pi closes the stream as soon as it has consumed response.completed.
+			// Pi or Codex closes the stream as soon as it has consumed response.completed.
 			// That cancellation is safe to accept only after the terminal frame
 			// was fully written to the client; every earlier interruption fails closed.
 			return counter, ""

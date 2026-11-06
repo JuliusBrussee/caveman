@@ -54,7 +54,22 @@ function stdinEchoCavemem() {
   const bin = join(dir, "cavemem");
   writeFileSync(
     bin,
-    `#!/usr/bin/env bash\nif [ "$1 $2" = "remember --stdin" ] && [ "$#" -eq 2 ]; then cat; elif [ "$1 $3" = "supersede --stdin" ] && [ "$#" -eq 3 ]; then cat; else echo "unexpected: $*" 1>&2; exit 2; fi\n`,
+    `#!/usr/bin/env bash\nif [ "$1" = "version" ]; then printf '%s' '{"version":"test","capabilities":["supersede","supersede-stdin"]}'; elif [ "$1 $2" = "remember --stdin" ] && [ "$#" -eq 2 ]; then cat; elif [ "$1 $3" = "supersede --stdin" ] && [ "$#" -eq 3 ]; then cat; else echo "unexpected: $*" 1>&2; exit 2; fi\n`,
+    { mode: 0o755 },
+  );
+  chmodSync(bin, 0o755);
+  return bin;
+}
+
+// A fake cavemem predating `supersede --stdin`: it lists "supersede" but not
+// the stdin capability, and (like the real old binary) would store argument two
+// verbatim as the replacement text.
+function legacyCavemem() {
+  const dir = mkdtempSync(join(tmpdir(), "cave-cavemem-legacy-"));
+  const bin = join(dir, "cavemem");
+  writeFileSync(
+    bin,
+    `#!/usr/bin/env bash\nif [ "$1" = "version" ]; then printf '%s' '{"version":"old","capabilities":["supersede"]}'; else printf '%s' "$3"; fi\n`,
     { mode: 0o755 },
   );
   chmodSync(bin, 0o755);
@@ -141,6 +156,16 @@ test("mem supersede --stdin passes the replacement to cavemem byte for byte (iss
   const out = await runCli(["mem", "supersede", "mem_abc", "--stdin"], env, block);
   assert.equal(out.code, 0, out.stderr);
   assert.equal(out.stdout, block, "stdin must reach cavemem unchanged");
+});
+
+test("mem supersede --stdin refuses a cavemem that would store the flag as the text", async () => {
+  const env = { ...process.env, CAVEMEM_BIN: legacyCavemem() };
+  const out = await runCli(["mem", "supersede", "mem_abc", "--stdin"], env, "the corrected fact");
+  assert.equal(out.code, 1, out.stdout + out.stderr);
+  assert.match(out.stderr, /supersede-stdin/);
+  // The point of refusing: such a build stores "--stdin" and expires the real
+  // memory, so nothing may be written at all.
+  assert.doesNotMatch(out.stdout, /--stdin/);
 });
 
 test("mem forget shells through", async () => {

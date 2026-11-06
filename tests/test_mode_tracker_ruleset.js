@@ -46,15 +46,15 @@ function test(name, fn) {
 
 // One temp CLAUDE_CONFIG_DIR per case: mode state is per session, and a leaked
 // flag from a previous case would decide the next one's switch detection.
-function runTracker(prompt, seedMode) {
+function runTracker(prompt, seedMode, { env = {}, cwd = REPO_ROOT } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-ruleset-'));
   const sessionId = 'ruleset-probe';
   if (seedMode !== undefined) writeSessionMode(dir, sessionId, seedMode);
-  const payload = JSON.stringify({ session_id: sessionId, cwd: REPO_ROOT, prompt });
+  const payload = JSON.stringify({ session_id: sessionId, cwd, prompt });
   const res = spawnSync(process.execPath, [HOOK_PATH], {
     input: payload,
     encoding: 'utf8',
-    env: { ...process.env, CLAUDE_CONFIG_DIR: dir },
+    env: { ...process.env, CLAUDE_CONFIG_DIR: dir, ...env },
   });
   assert.strictEqual(res.status, 0, `hook exited ${res.status}: ${res.stderr}`);
   const out = (res.stdout || '').trim();
@@ -140,6 +140,37 @@ test('independent modes get no prose ruleset', () => {
   const ctx = runTracker(slash('caveman-commit', ''), 'caveman');
   assert.ok(!ctx.includes(FULL_ROW) && !ctx.includes(ULTRA_ROW),
     `independent mode received a prose ruleset:\n${ctx}`);
+});
+
+// #1468: reinforcement can be switched off on its own. The once-per-session
+// ruleset and a mid-session switch's ruleset are not reinforcement: a switch
+// must still deliver the new mode's rules, or #975 comes back.
+const isolatedUser = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-reinforce-xdg-'));
+const reinforceOff = { XDG_CONFIG_HOME: isolatedUser, CAVEMAN_REINFORCE: '0' };
+
+test('reinforce off: an ordinary prompt emits nothing', () => {
+  const ctx = runTracker('why is this test failing', 'ultracave', { env: reinforceOff });
+  assert.strictEqual(ctx, '', `reinforcement still emitted:\n${ctx}`);
+});
+
+test('reinforce off: a switch still injects the new ruleset, without the reminder', () => {
+  const ctx = runTracker(slash('caveman', 'ultra'), 'caveman', { env: reinforceOff });
+  assert.ok(ctx.includes(ULTRA_ROW), `switch lost its ruleset:\n${ctx}`);
+  assert.ok(!/CAVEMAN MODE ACTIVE \(ultracave\)/.test(ctx), `reminder still emitted:\n${ctx}`);
+});
+
+test('reinforce off: activating from off still injects the ruleset', () => {
+  const ctx = runTracker(slash('caveman', 'ultra'), null, { env: reinforceOff });
+  assert.ok(ctx.includes(ULTRA_ROW), `activation sent no ruleset:\n${ctx}`);
+});
+
+test('reinforce:false in the session cwd repo config turns it off', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-reinforce-repo-'));
+  fs.writeFileSync(path.join(project, '.caveman.json'), JSON.stringify({ reinforce: false }));
+  const env = { XDG_CONFIG_HOME: isolatedUser, CAVEMAN_REINFORCE: '' };
+  assert.strictEqual(runTracker('why is this test failing', 'caveman', { env, cwd: project }), '');
+  const control = runTracker('why is this test failing', 'caveman', { env });
+  assert.ok(/CAVEMAN MODE ACTIVE \(caveman\)/.test(control), `control lost the reminder:\n${control}`);
 });
 
 // A caveman-config.js from before the loaders loads fine and passes the tracker's

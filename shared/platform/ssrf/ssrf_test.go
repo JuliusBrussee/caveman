@@ -878,3 +878,27 @@ func TestNewHTTPClient_ProxyDirectFallbackKeepsGuardAndRefusesProxyAddress(t *te
 		}
 	}
 }
+
+// IsBlocked separates the guard's policy refusal from a network failure, so a
+// caller can say "refused" instead of "upstream down" (#1440). It has to see
+// through the *url.Error an http.Client wraps a dial error in.
+func TestIsBlockedSeparatesRefusalFromNetworkFailure(t *testing.T) {
+	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {}))
+	defer stub.Close()
+	_, err := ssrf.NewHTTPClient(ssrf.SelfHostedConfig()).Get(stub.URL)
+	if err == nil || !ssrf.IsBlocked(err) {
+		t.Fatalf("loopback refusal through http.Client: IsBlocked(%v) = false", err)
+	}
+	if !strings.Contains(err.Error(), "CAVE_SSRF_ALLOWLIST") {
+		t.Fatalf("self-hosted refusal no longer names its escape hatch: %v", err)
+	}
+	if err := ssrf.ValidateURL(context.Background(), "https://169.254.169.254/latest", managedCfg); !ssrf.IsBlocked(err) {
+		t.Fatalf("metadata pre-flight refusal: IsBlocked(%v) = false", err)
+	}
+	if err := ssrf.ValidateURL(context.Background(), "https://localhost/", managedCfg); !ssrf.IsBlocked(err) {
+		t.Fatalf("localhost refusal: IsBlocked(%v) = false", err)
+	}
+	if ssrf.IsBlocked(errors.New("dial tcp 203.0.113.9:443: connect: connection refused")) || ssrf.IsBlocked(nil) {
+		t.Fatal("a network failure is not a refusal")
+	}
+}

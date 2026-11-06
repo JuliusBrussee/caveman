@@ -29,6 +29,10 @@
 //   4. 'caveman'
 // Config files may carry a BOM, be UTF-16LE, or hold comments and trailing
 // commas (see parseConfigFile).
+//
+// The per-turn reinforcement switch (`reinforce`, #1468) resolves through the
+// same sources in the same order: CAVEMAN_REINFORCE → repo-local config →
+// user config → on. See getReinforce.
 
 const fs = require('fs');
 const path = require('path');
@@ -165,33 +169,70 @@ function readModeFromConfigFile(configPath) {
   return null;
 }
 
+// One precedence for every setting: the env value, else the nearest repo
+// config that names the setting, else the user config, else null. `readFile`
+// returns null for a file that does not name it (missing, unreadable, invalid
+// JSON, unrecognized value), so such a file never hides a farther one.
+//
 // startDir overrides the cwd the repo-config walk starts from (default
 // process.cwd(), same as findRepoConfigPath's own fallback) — lets a caller
-// resolve the mode for a directory other than its own process cwd (#634:
+// resolve a setting for a directory other than its own process cwd (#634:
 // the UserPromptSubmit hook's stdin carries the session's cwd, which can
 // differ from the hook process's cwd). Every other resolution step is
 // cwd-independent, so only the repo-config walk takes it.
-function getDefaultMode(startDir) {
+function resolveSetting(envValue, readFile, startDir) {
   // 1. Environment variable (highest priority)
-  const envMode = canonicalDefaultMode(process.env.CAVEMAN_DEFAULT_MODE);
-  if (envMode) return envMode;
+  if (envValue !== null) return envValue;
 
-  // 2. Repo-local config (checked-in, per-project default). The first file
-  //    that names a mode wins: .caveman/config.json is also the CLI's project
-  //    overlay, and one without defaultMode must not hide a .caveman.json.
-  const repoConfigPath = findRepoConfigPath(startDir, (p) => readModeFromConfigFile(p) !== null);
-  if (repoConfigPath) return readModeFromConfigFile(repoConfigPath);
+  // 2. Repo-local config (checked-in, per-project). The first file that names
+  //    the setting wins: .caveman/config.json is also the CLI's project
+  //    overlay, and one without it must not hide a .caveman.json.
+  const repoConfigPath = findRepoConfigPath(startDir, (p) => readFile(p) !== null);
+  if (repoConfigPath) return readFile(repoConfigPath);
 
   // 3. User config file. Windows also reads ~/.config/caveman/config.json,
   //    the path the docs give for every platform, after %APPDATA%.
-  const userMode = readModeFromConfigFile(getConfigPath())
-    || (process.platform === 'win32' && !process.env.XDG_CONFIG_HOME
-      ? readModeFromConfigFile(path.join(os.homedir(), '.config', 'caveman', 'config.json'))
-      : null);
-  if (userMode) return userMode;
+  const user = readFile(getConfigPath());
+  if (user !== null) return user;
+  if (process.platform === 'win32' && !process.env.XDG_CONFIG_HOME) {
+    return readFile(path.join(os.homedir(), '.config', 'caveman', 'config.json'));
+  }
+  return null;
+}
 
-  // 4. Default
-  return 'caveman';
+function getDefaultMode(startDir) {
+  return resolveSetting(canonicalDefaultMode(process.env.CAVEMAN_DEFAULT_MODE),
+    readModeFromConfigFile, startDir) || 'caveman';
+}
+
+// true/false, or null for anything else. Accepts a JSON boolean and the usual
+// env spellings, so `"reinforce": "off"` and CAVEMAN_REINFORCE=0 both work.
+function parseSwitch(raw) {
+  if (typeof raw === 'boolean') return raw;
+  if (typeof raw !== 'string') return null;
+  const v = raw.trim().toLowerCase();
+  if (v === '1' || v === 'true' || v === 'on' || v === 'yes') return true;
+  if (v === '0' || v === 'false' || v === 'off' || v === 'no') return false;
+  return null;
+}
+
+function readReinforceFromConfigFile(configPath) {
+  try {
+    const config = parseConfigFile(configPath);
+    return config && typeof config === 'object' ? parseSwitch(config.reinforce) : null;
+  } catch (e) {
+    return null;
+  }
+}
+
+// Whether the UserPromptSubmit hook adds its one-line per-turn reminder
+// (#1468). Off keeps caveman itself on: SessionStart still injects the ruleset
+// and a mid-session switch still injects the new mode's ruleset; only the
+// repeat on every prompt goes. Same sources and order as getDefaultMode.
+function getReinforce(startDir) {
+  const value = resolveSetting(parseSwitch(process.env.CAVEMAN_REINFORCE),
+    readReinforceFromConfigFile, startDir);
+  return value !== false;
 }
 
 // Symlink-safe flag file write.
@@ -863,7 +904,7 @@ function rulesetBanner(mode) {
 }
 
 module.exports = {
-  getDefaultMode, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
+  getDefaultMode, getReinforce, getConfigDir, getConfigPath, findRepoConfigPath, VALID_MODES,
   parseConfigFile,
   canonicalMode,
   safeWriteFlag, safeDeleteFlag, readFlag, appendFlag, readHistory,

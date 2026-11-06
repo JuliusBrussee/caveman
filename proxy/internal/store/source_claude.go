@@ -80,8 +80,9 @@ func (s claudeSessionSource) scanSession(ref sessionRef, since time.Time, emit f
 		emit(turnEvent{
 			Timestamp: ts, ContextTotal: ctx, ContextUsagePresent: hasUsage,
 			CacheReadInputTokens: cacheRead, CacheCreationInputTokens: cacheCreation,
-			CacheUsagePresent: hasCacheUsage,
-			InputFreshTokens:  fresh, OutputTokens: out, BillingUsagePresent: hasBilling,
+			CacheUsagePresent: hasCacheUsage, CacheTTL: claudeCacheTTL(obj),
+			CacheMissReason:  claudeCacheMissReason(obj),
+			InputFreshTokens: fresh, OutputTokens: out, BillingUsagePresent: hasBilling,
 			UsageMessageID: claudeUsageMessageID(obj), Model: model, ProviderKey: provider,
 			ToolCalls: claudeTurnToolCalls(obj, pendingTools), TextPayloads: claudeTextPayloads(obj),
 			TaskSpawns: claudeTaskSpawns(obj), SkillUses: claudeStructuredSkillReferences(obj),
@@ -138,6 +139,29 @@ func claudeCacheUsage(obj map[string]any) (read, creation int, present bool) {
 		return 0, 0, false
 	}
 	return int(read64), int(creation64), true
+}
+
+func claudeCacheMissReason(obj map[string]any) string {
+	diagnostics := asMap(asMap(obj["message"])["diagnostics"])
+	return firstString(asMap(diagnostics["cache_miss_reason"])["type"])
+}
+
+// claudeCacheTTL uses the longest reported write lifetime. Mixed writes cannot
+// be treated as fully expired after only five minutes. Missing breakdowns stay
+// unknown; a generic cache-creation count does not establish a TTL.
+func claudeCacheTTL(obj map[string]any) time.Duration {
+	usage := asMap(asMap(obj["message"])["usage"])
+	if len(usage) == 0 {
+		usage = asMap(obj["usage"])
+	}
+	creation := asMap(usage["cache_creation"])
+	if int64FromAny(creation["ephemeral_1h_input_tokens"]) > 0 {
+		return time.Hour
+	}
+	if int64FromAny(creation["ephemeral_5m_input_tokens"]) > 0 {
+		return 5 * time.Minute
+	}
+	return 0
 }
 
 // Real Claude Code transcripts on this machine carry one compaction as two

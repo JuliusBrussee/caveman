@@ -190,6 +190,17 @@ func (s *Store) Remember(text string) (Memory, error) {
 		return Memory{}, fmt.Errorf("read back memory: %w", err)
 	}
 	if stored.ValidUntil != nil {
+		// A revert (A -> B -> A) stores the text again under a version-derived
+		// id, so the content-addressed id can name an expired row while an
+		// identical current one exists. Remembering a fact that IS current has
+		// to stay idempotent, and the message below would be false. Return that
+		// current row; the expired one is never revived.
+		var current Memory
+		if err := scanMemory(s.db.QueryRow(memorySelect+` WHERE text = ? AND valid_until IS NULL LIMIT 1`, text), &current); err == nil {
+			return current, nil
+		} else if !errors.Is(err, sql.ErrNoRows) {
+			return Memory{}, fmt.Errorf("read back memory: %w", err)
+		}
 		return Memory{}, fmt.Errorf("memory %s exists only as an expired historical version and cannot be re-remembered as current", stored.ID)
 	}
 	return stored, nil

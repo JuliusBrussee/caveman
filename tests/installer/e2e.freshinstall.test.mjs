@@ -308,6 +308,37 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
   }
 });
 
+// #1452: `--hook-node node` writes every Claude hook with bare `node`, found
+// through the hook's PATH when it runs. Re-running without the flag goes back
+// to the absolute install-time node, replacing each entry in place.
+test('--hook-node node writes PATH-resolved Claude hooks; a plain re-run pins again', () => {
+  const dir = freshTmpDir();
+  const configDir = path.join(dir, 'claude');
+  const env = isolatedInstallEnv(dir);
+  const events = [['SessionStart', 'caveman-activate'], ['SubagentStart', 'caveman-activate'],
+    ['UserPromptSubmit', 'caveman-mode-tracker'], ['SessionEnd', 'caveman-stats']];
+  try {
+    const portable = runInstaller(['--only', 'claude', '--with-hooks', '--hook-node', 'node'], configDir, env);
+    assert.equal(portable.status, 0, portable.stderr || portable.stdout);
+    let settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    for (const [event, marker] of events) {
+      const commands = cavemanHookCommands(settings, event, marker);
+      assert.equal(commands.length, 1, `${event}: ${JSON.stringify(commands)}`);
+      assert.ok(commands[0].command.startsWith('"node" "'), `${event}: ${commands[0].command}`);
+    }
+    const pinned = runInstaller(['--only', 'claude', '--with-hooks'], configDir, env);
+    assert.equal(pinned.status, 0, pinned.stderr || pinned.stdout);
+    settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
+    for (const [event, marker] of events) {
+      const commands = cavemanHookCommands(settings, event, marker);
+      assert.equal(commands.length, 1, `${event} duplicated: ${JSON.stringify(commands)}`);
+      assert.ok(!commands[0].command.startsWith('"node" "'), `${event} stayed bare: ${commands[0].command}`);
+    }
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
 // Preferring the PATH node over process.execPath is only an improvement while
 // that node RUNS. `command -v node` names stale version-manager shims and
 // dangling symlinks just as readily as real binaries, and baking one of those
