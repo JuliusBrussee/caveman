@@ -152,7 +152,7 @@ claude plugin marketplace add JuliusBrussee/caveman && claude plugin install cav
 gemini extensions install https://github.com/JuliusBrussee/caveman
 
 # Every agent on your machine at once, plus the Claude Code statusline badge (Node.js 22.13+)
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.sh | bash
 ```
 
 Already inside Claude Code? Same rock, slash form. Type these where you talk to Claude:
@@ -165,11 +165,11 @@ Already inside Claude Code? Same rock, slash form. Type these where you talk to 
 Windows, PowerShell 5.1+:
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.ps1 | iex
 ```
 
 On npm 12 or newer, new npm block git install. One-liners above handle it themselves from v3.2.0 on. Old one-liner pinned to v3.1.0 or older still fail there: use one above, or this:
-`npx --allow-git=root -y github:JuliusBrussee/caveman#v4.0.1`
+`npx --allow-git=root -y github:JuliusBrussee/caveman#v4.1.0`
 
 Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall` (on npm 12+, add `--allow-git=root` too)
 
