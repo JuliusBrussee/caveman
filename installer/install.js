@@ -93,7 +93,7 @@ function parseArgs(argv) {
     withHooks: 'auto', withInit: false, withMcpShrink: false,
     all: false, minimal: false, listOnly: false, noColor: false,
     only: [], uninstall: false, nonInteractive: false,
-    configDir: null, help: false,
+    configDir: null, hookNode: null, help: false,
   };
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
@@ -148,6 +148,18 @@ function parseArgs(argv) {
         const v = argv[++i];
         if (!v || v.startsWith('--')) die('error: --config-dir requires a path');
         opts.configDir = expandHome(v);
+        break;
+      }
+      case '--hook-node': {
+        const v = argv[++i];
+        if (!v || v.startsWith('--')) die('error: --hook-node requires `node` or an absolute path to node');
+        const pinned = expandHome(v);
+        // Bare `node`, or an absolute path whose basename is node: settings.js
+        // recognizes (and replaces in place) only hook commands run by node.
+        if (v !== 'node' && !(path.isAbsolute(pinned) && /^node(\.exe)?$/i.test(path.basename(pinned)))) {
+          die(`error: --hook-node takes \`node\` (found through PATH when the hook runs) or an absolute path to node, not: ${v}`);
+        }
+        opts.hookNode = v === 'node' ? 'node' : pinned;
         break;
       }
       default:
@@ -522,17 +534,36 @@ function absoluteNodePath() {
       const candidate = (r.stdout || '').trim().split(/\r?\n/, 1)[0];
       if (r.status === 0 && candidate && path.isAbsolute(candidate)) {
         const resolved = path.resolve(candidate);
-        const probe = child_process.spawnSync(resolved, ['--version'], { encoding: 'utf8' });
-        const major = /^v(\d+)\./.exec((probe.stdout || '').trim());
-        // Running is necessary but not sufficient: a PATH node below the
-        // package's `engines` floor would be persisted into settings.json and
-        // run every hook on an unsupported runtime. process.execPath already
-        // satisfies the floor, since it is running this installer.
-        if (spawnOk(probe) && major && Number(major[1]) >= MIN_NODE_MAJOR) return resolved;
+        if (nodeMeetsFloor(resolved)) return resolved;
       }
     } catch (_) {}
   }
   return process.execPath;
+}
+
+// Running is necessary but not sufficient: a node below the package's
+// `engines` floor would be persisted into a hook command and run every hook on
+// an unsupported runtime. process.execPath already satisfies the floor, since
+// it is running this installer.
+function nodeMeetsFloor(executable) {
+  try {
+    const probe = child_process.spawnSync(executable, ['--version'], { encoding: 'utf8' });
+    const major = /^v(\d+)\./.exec((probe.stdout || '').trim());
+    return spawnOk(probe) && !!major && Number(major[1]) >= MIN_NODE_MAJOR;
+  } catch (_) {
+    return false;
+  }
+}
+
+// The node every hook command this installer writes runs with (#1452). The
+// default pins the install-time node by absolute path, because GUI-launched
+// hosts start without the shell PATH (#249, #805). `--hook-node node` trades
+// that for bare `node`, resolved through the hook process's PATH when it runs,
+// so a version-manager switch or prune needs no reinstall — but the host must
+// then see node on its PATH. `--hook-node <path>` pins a node of your choice.
+// Windows Codex, Cursor and Copilot hooks write bare `node` regardless.
+function hookNode(opts) {
+  return (opts && opts.hookNode) || absoluteNodePath();
 }
 
 // writeSettings re-serializes plain JSON, so comments and trailing commas go.
@@ -1005,10 +1036,12 @@ function installCodexHook(ctx) {
     list.splice(at === -1 ? list.length : Math.min(at, list.length), 0, {
       // compact: Codex 0.160 sends it, and compaction prunes the injected ruleset.
       matcher: 'startup|resume|clear|compact',
-      // Absolute node on POSIX: the native codex binary does not run a login
-      // shell, so bare `node` can miss PATH. Windows keeps bare `node`: a quoted
-      // leading path is a string, not a command, in PowerShell (host-hooks.js).
-      hooks: [{ type: 'command', command: IS_WIN ? 'node ' + PLATFORM_PATHS.hookCommand(script, []) : PLATFORM_PATHS.hookCommand(absoluteNodePath(), [script]), timeout: 5, statusMessage: 'Loading caveman mode' }],
+      // Absolute node on POSIX by default: the native codex binary does not
+      // run a login shell, so bare `node` can miss PATH. `--hook-node node`
+      // opts into that lookup anyway (#1452). Windows keeps bare `node`: a
+      // quoted leading path is a string, not a command, in PowerShell
+      // (host-hooks.js).
+      hooks: [{ type: 'command', command: IS_WIN ? 'node ' + PLATFORM_PATHS.hookCommand(script, []) : PLATFORM_PATHS.hookCommand(hookNode(opts), [script]), timeout: 5, statusMessage: 'Loading caveman mode' }],
     });
     doc.hooks.SessionStart = list;
     if (JSON.stringify(doc) === before) {
@@ -1071,7 +1104,7 @@ function installCursorNative(ctx) {
   try {
     CURSOR_NATIVE.installCursorNative({
       repoRoot,
-      node: absoluteNodePath(),
+      node: hookNode(opts),
       withHooks: opts.withHooks !== false,
       force: opts.force,
       dryRun: opts.dryRun,
@@ -1103,7 +1136,7 @@ function installCopilotCliHook(ctx) {
     note('  Copilot CLI hook needs the caveman package files; skipped.');
     return;
   }
-  const node = absoluteNodePath();
+  const node = hookNode(opts);
   const hook = {
     version: 1,
     hooks: {
@@ -1896,7 +1929,7 @@ async function installHooks(ctx) {
     warn(`        Your original (with comments) is preserved at ${bak}`);
   }
 
-  const node = absoluteNodePath();
+  const node = hookNode(opts);
   const activate = path.join(hooksDir, 'caveman-activate.js');
   const tracker  = path.join(hooksDir, 'caveman-mode-tracker.js');
   const stats = path.join(hooksDir, 'caveman-stats.js');
@@ -2758,6 +2791,15 @@ FLAGS
                         plugin did not install, because the plugin already
                         runs them; --with-hooks wires them anyway.)
   --no-hooks            Skip the hooks installer.
+  --hook-node <node|path>
+                        Node the hooks run with. Default: node's absolute path,
+                        found at install time, so apps started outside a
+                        terminal still find it.
+                        \`node\` looks node up on the agent's PATH each run, so
+                        switching Node versions needs no reinstall, but the
+                        agent must see node on its PATH. A path pins that node.
+                        (Windows Codex, Cursor and Copilot hooks always use
+                        \`node\`.)
   --with-init           Write per-repo IDE rule files into \$PWD.
   --with-mcp-shrink="<upstream cmd>"
                         Claude Code (and opencode): register caveman-shrink MCP
@@ -2811,6 +2853,17 @@ async function main() {
 
   checkWslWindowsNode();
   checkNodeVersion();
+
+  // A pinned --hook-node lands in every hook command: refuse one that does not
+  // run as a supported node before anything is written. Bare `node` is looked
+  // up on the HOOK's PATH later, which may differ from this one, so it is only
+  // flagged here.
+  if (opts.hookNode && opts.withHooks !== false && !nodeMeetsFloor(opts.hookNode)) {
+    if (opts.hookNode !== 'node') {
+      die(`caveman: --hook-node ${opts.hookNode} does not run as Node >=${MIN_NODE_MAJOR}; nothing changed.`);
+    }
+    process.stderr.write(`caveman: no Node >=${MIN_NODE_MAJOR} named \`node\` on this PATH; hooks written with --hook-node node fail unless the agent's PATH has one.\n`);
+  }
 
   const configDir = opts.configDir || process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   const repoRoot = detectRepoRoot();

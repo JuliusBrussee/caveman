@@ -165,6 +165,9 @@ Codex and trust the caveman one. Hooks are on by default in current Codex; if
 The hook files live in `$CODEX_HOME/caveman/` (default `~/.codex/caveman/`) and
 one entry is added to `$CODEX_HOME/hooks.json`. Re-running never duplicates it.
 `--no-hooks` keeps the skills-only, per-session behavior: type `$caveman`.
+The entry runs Node by its absolute install-time path; add `--hook-node node`
+to have it follow whatever `node` is on Codex's `PATH` instead (see the flags
+table below).
 `--uninstall` removes only caveman's entry and files. Use the same `CODEX_HOME`
 for install and uninstall.
 
@@ -348,6 +351,7 @@ Useful flags:
 | `--with-mcp-shrink="<upstream cmd>"` | Register `caveman-shrink` MCP proxy wrapping the given upstream MCP server. **Off by default.** A value is required — caveman-shrink is a proxy and exits immediately without one. Example: `--with-mcp-shrink="npx @modelcontextprotocol/server-filesystem /tmp"`. Within the value, single or double quotes group paths containing spaces; backslashes stay literal. A JSON array of strings also works when arguments contain quotes. No shell expansion occurs. |
 | `--no-mcp-shrink` | Skip MCP-shrink registration. (Default.) |
 | `--with-hooks` / `--no-hooks` | Force-on or force-off the Claude Code hook installer, the Codex SessionStart hook, the Cursor sessionStart hook and the Copilot CLI session hook. (Default: auto. Codex, Cursor and Copilot CLI get their hook; Claude Code gets the hooks only when its plugin did not install, because the plugin already runs them.) |
+| `--hook-node <node\|path>` | Which Node the installed hooks run with. Default: Node's absolute path, found at install time, so agents started from the Dock or Start menu (which may not see your shell's `PATH`) still find it. `--hook-node node` writes plain `node` instead, looked up on the agent's `PATH` every run: switching or pruning Node versions (mise, nvm, fnm, asdf) then needs no reinstall, but the agent must see `node` on its `PATH`. An absolute path pins that Node. Windows Codex, Cursor and Copilot hooks always use plain `node`. |
 | `--skip-skills` | Don't run the npx-skills auto-detect fallback when nothing else matched. |
 | `--config-dir <path>` | Claude Code config dir for hook files + `settings.json`. **Does NOT scope** `claude plugin install`, `gemini extensions install`, Codex (`CODEX_HOME`), OMP (`~/.omp/`), opencode (`XDG_CONFIG_HOME`), or openclaw (`OPENCLAW_WORKSPACE`) — those use their own paths. Default: `$CLAUDE_CONFIG_DIR` or `~/.claude`. `~` is expanded. |
 | `--non-interactive` | Never prompt; use defaults. (Auto when stdin is not a TTY.) |
