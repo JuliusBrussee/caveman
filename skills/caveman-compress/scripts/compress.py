@@ -419,6 +419,13 @@ CLAUDE_SETTING_SOURCES_ARG = "--setting-sources"
 CLAUDE_STRICT_MCP_ARG = "--strict-mcp-config"
 OPENCODE_CLI = "opencode"
 CODEX_CLI = "codex"
+# Compression input is untrusted prose, not a task allowed to use local tools.
+CODEX_DISABLED_FEATURES = (
+    "shell_tool", "hooks", "plugins", "apps", "view_image", "multi_agent",
+    "code_mode", "code_mode_host", "skill_search", "skill_mcp_dependency_install",
+    "goals", "memories", "browser_use", "computer_use", "artifact",
+    "workspace_dependencies",
+)
 OPENCODE_RUN_ARG = "run"
 OPENCODE_STANDALONE_ARG = "--standalone"
 OPENCODE_FILE_ARG = "--file"
@@ -639,11 +646,23 @@ def call_codex_cli(prompt: str) -> str:
     if binary is None:
         raise RuntimeError("codex CLI not found on PATH. Install Codex CLI, then run `codex login`.")
     with tempfile.TemporaryDirectory(prefix="caveman-compress-codex-") as tmp:
-        output_path = Path(tmp) / "response.md"
+        workdir = Path(tmp).resolve()
+        output_path = workdir / "response.md"
         args = [
-            binary, "exec", "--sandbox", "read-only", "--skip-git-repo-check",
+            binary, "exec", "--ignore-user-config", "--strict-config", "--ephemeral",
+            "--skip-git-repo-check",
             "--output-last-message", str(output_path),
+            "-c", 'approval_policy="never"',
+            "-c", 'default_permissions="caveman-compress"',
+            "-c", 'permissions.caveman-compress.filesystem={":root"="deny"}',
+            "-c", "permissions.caveman-compress.network.enabled=false",
+            "-c", "project_doc_max_bytes=0",
+            "-c", 'web_search="disabled"',
         ]
+        # --sandbox would override this profile. stdin already contains the input;
+        # no user files need to be readable by sandboxed commands.
+        for feature in CODEX_DISABLED_FEATURES:
+            args.extend(["--disable", feature])
         model = configured_model()
         if model:
             args.extend([MODEL_ARG, model])
@@ -652,6 +671,7 @@ def call_codex_cli(prompt: str) -> str:
             subprocess.run(
                 args, input=prompt, text=True, capture_output=True, check=True,
                 encoding="utf-8", errors="replace", timeout=CLAUDE_CALL_TIMEOUT_SECONDS,
+                cwd=str(workdir),
             )
         except FileNotFoundError:
             raise RuntimeError(
@@ -661,7 +681,8 @@ def call_codex_cli(prompt: str) -> str:
             # CLI diagnostics can contain prompt text or credentials; don't echo them.
             raise RuntimeError(
                 f"codex exec failed (exit code {error.returncode}). Run `codex login` "
-                "if unauthenticated; check your Codex model, access, and CLI configuration."
+                "if unauthenticated; check your model and access, and use Codex CLI 0.166.0 or newer. "
+                "Compression requires isolated configuration and permission-profile support."
             ) from None
         except subprocess.TimeoutExpired:
             raise RuntimeError(

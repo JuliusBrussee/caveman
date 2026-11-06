@@ -22,6 +22,20 @@
 
 ### Auth behavior
 
+Codex uses saved login but ignores user configuration and project instructions.
+It disables commands, hooks, plugins, apps, image reads, subagents, code mode,
+skill search/install, goals, memories, browser/computer use, artifacts, workspace
+dependencies, and web search. Input arrives through stdin in an empty temporary
+directory; the final-message file is deleted with that directory after the call.
+
+Its permission profile denies sandboxed filesystem and network access, with no
+exceptions. Do not add `--sandbox`: it overrides the profile. CLI parent-process
+I/O, including authentication, is outside this sandbox. Managed configuration
+remains authoritative; administrator-provided integrations are not isolated by
+these controls. See [Codex permissions](https://learn.chatgpt.com/docs/permissions).
+Verified on macOS with CLI 0.166.0, a local dummy model endpoint, and filesystem
+canaries. Rejected controls never trigger a retry with weaker settings.
+
 Default path uses Claude. If `ANTHROPIC_API_KEY` is set, the skill uses the Anthropic Python SDK directly (no subprocess). If not set, it falls back to the `claude` CLI, which uses the user's existing Claude desktop authentication.
 
 Set `CAVEMAN_COMPRESS_PROVIDER=opencode` to use `opencode run` instead. Set `CAVEMAN_COMPRESS_MODEL=provider/model` for compress-specific model selection. `CAVEMAN_MODEL` is the fallback when `CAVEMAN_COMPRESS_MODEL` is unset.

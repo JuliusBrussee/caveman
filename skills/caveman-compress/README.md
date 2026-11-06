@@ -115,11 +115,9 @@ codex login
 export CAVEMAN_COMPRESS_PROVIDER=codex
 ```
 
-This uses Codex CLI authentication and your plan's Codex usage limits, rather
-than separately billed OpenAI API authentication. Neither `OPENAI_API_KEY` nor
-`ANTHROPIC_API_KEY` is required. If your CLI is configured for API-key billing
-or a custom provider, that configuration still applies; use a ChatGPT login
-for subscription-backed usage.
+ChatGPT login uses your plan's Codex allowance; a saved API-key login uses API
+billing. Neither `OPENAI_API_KEY` nor `ANTHROPIC_API_KEY` is required. User CLI
+configuration, including custom providers and configured models, is ignored.
 
 Optional: set `CAVEMAN_COMPRESS_MODEL` to a model available in your Codex account:
 
@@ -127,12 +125,15 @@ Optional: set `CAVEMAN_COMPRESS_MODEL` to a model available in your Codex accoun
 export CAVEMAN_COMPRESS_MODEL=your-codex-model
 ```
 
-`CAVEMAN_MODEL` remains the fallback. With neither variable set, Codex chooses
-its configured default model. Compression runs `codex exec` noninteractively
-with `--sandbox read-only`, sends the prompt through stdin, and reads the final
-answer from `--output-last-message`. It also works outside Git repositories.
-Failures stop compression without switching providers. Failed CLI diagnostics
-are withheld because they may contain file contents or credentials.
+`CAVEMAN_MODEL` is the fallback; otherwise Codex uses its built-in default.
+Requires CLI 0.166.0 or newer, with isolation verified on 0.166.0. Unsupported
+controls fail the call without weaker settings or switching providers.
+
+Runs `codex exec` in an empty temporary directory, including outside Git repos.
+The prompt goes through stdin; `--output-last-message` supplies the answer.
+Commands and other tool surfaces are disabled; a custom profile denies all
+sandboxed filesystem and network access. Raw failure diagnostics are withheld.
+See [security details and limits](./SECURITY.md#auth-behavior).
 
 To use opencode instead (any model opencode can reach, free ones included):
 
