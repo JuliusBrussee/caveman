@@ -45,7 +45,14 @@ func TestProviderStreamsFlushBeforeCompletion(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Setenv("CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS", "")
 			allowBody, allowEnd := make(chan struct{}), make(chan struct{})
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			// A safety net so a hung stream fails instead of hanging, not a
+			// behavioural bound: the body below normally completes in
+			// milliseconds. At 3s a loaded macOS runner missed it, the stub's
+			// r.Context().Done() branch returned before writing the final
+			// event, and the aborted frame surfaced as the client's
+			// "unexpected EOF" — a real abort (correct per the streaming
+			// invariant) measuring the runner, not the proxy.
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancel()
 			const ping = "event: ping\ndata: {\"type\":\"ping\"}\n\n"
 			const end = "event: future_provider_event\ndata: {}\n\n"

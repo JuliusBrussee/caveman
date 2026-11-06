@@ -52,6 +52,7 @@ fi
 const fs = require("node:fs");
 const input = fs.readFileSync(0, "utf8");
 if (process.env.CAVE_NATIVE_CAPTURE && input) fs.appendFileSync(process.env.CAVE_NATIVE_CAPTURE, Buffer.from(input).toString("base64") + "\\n");
+if (process.env.CAVE_NATIVE_CWD_CAPTURE) fs.appendFileSync(process.env.CAVE_NATIVE_CWD_CAPTURE, process.cwd() + "\\n");
 const event = process.argv[4];
 if (process.argv[2] === "shrink-hook") {
   process.stdout.write(JSON.stringify({ hookSpecificOutput: { updatedInput: { command: "caveman shrink -- git status" } } }));
@@ -645,6 +646,53 @@ test("disable codex keeps a hooks.json BOM when it leaves the installer's hook o
   assert.deepEqual(JSON.parse(after.slice(1)), { hooks: { SessionStart: [foreign] } });
 });
 
+test("doctor accepts reordered managed Codex hook keys", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+  const path = join(fx.home, ".codex", "hooks.json");
+  const hooks = JSON.parse(readFileSync(path, "utf8"));
+  for (const entries of Object.values(hooks.hooks)) {
+    for (const entry of entries) {
+      entry.hooks = entry.hooks.map(({ type, command, ...rest }) => ({ command, ...rest, type }));
+    }
+  }
+  writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
+
+  const checked = await run(["doctor", "codex"], fx.env);
+  assert.equal(checked.code, 0, checked.stdout + checked.stderr);
+  assert.equal(JSON.parse(checked.stdout).state, "installed");
+});
+
+for (const [field, change] of [
+  ["timeout", (entry) => { entry.hooks[0].timeout = 30; }],
+  ["matcher", (entry) => { entry.matcher = "Bash"; }],
+  ["permissionDecision", (entry) => { entry.hooks[0].permissionDecision = "allow"; }],
+]) {
+  test(`managed Codex hook comparison preserves ${field} drift`, async () => {
+    const fx = fixture();
+    assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
+    const path = join(fx.home, ".codex", "hooks.json");
+    const hooks = JSON.parse(readFileSync(path, "utf8"));
+    const native = hooks.hooks.PreToolUse[0];
+    change(native);
+    writeFileSync(path, JSON.stringify(hooks, null, 2) + "\n");
+    const checked = await run(["doctor", "codex"], fx.env);
+    assert.notEqual(checked.code, 0);
+    assert.equal(JSON.parse(checked.stdout).state, "degraded");
+
+    // Legacy shrink entries must still fail destructive-removal preflight.
+    const shrink = { hooks: [{ command: `${join(fx.home, "bin", "caveman")} shrink-hook`, type: "command" }] };
+    change(shrink);
+    hooks.hooks.PreToolUse.push(shrink);
+    const before = JSON.stringify(hooks, null, 2) + "\n";
+    writeFileSync(path, before);
+    const disabled = await run(["disable", "codex"], fx.env);
+    assert.notEqual(disabled.code, 0);
+    assert.match(disabled.stderr, /Caveman hook changed after enable; refusing destructive disable/);
+    assert.equal(readFileSync(path, "utf8"), before);
+  });
+}
+
 // An install from before carries a shrink-hook entry (a second PreToolUse hook
 // on every Codex tool call that declines it) and a PostToolUseFailure entry
 // Codex never runs. Doctor sends it to --fix, which takes both out.
@@ -655,7 +703,10 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   assert.equal((await run(["enable", "codex"], fx.env)).code, 0);
   const hooks = JSON.parse(readFileSync(hooksPath, "utf8"));
   const native = hooks.hooks.SessionStart.find((entry) => /native-hook codex/.test(entry.hooks[0].command));
-  hooks.hooks.PreToolUse.push({ hooks: [{ type: "command", command: `${join(fx.home, "bin", "caveman")} shrink-hook` }] });
+  hooks.hooks.PreToolUse.push({ hooks: [{ command: `${join(fx.home, "bin", "caveman")} shrink-hook`, type: "command" }] });
+  native.hooks = native.hooks.map(({ type, command, ...rest }) => ({ command, ...rest, type }));
+  const foreign = { matcher: "Bash", hooks: [{ command: "echo foreign", type: "command", timeout: 15 }] };
+  hooks.hooks.PreToolUse.push(foreign);
   hooks.hooks.PostToolUseFailure = [native];
   writeFileSync(hooksPath, JSON.stringify(hooks, null, 2) + "\n");
 
@@ -665,7 +716,8 @@ test("doctor --fix takes the shrink-hook and PostToolUseFailure entries out of a
   const after = JSON.parse(readFileSync(hooksPath, "utf8")).hooks;
   assert.equal(after.PostToolUseFailure, undefined);
   assert.doesNotMatch(JSON.stringify(after), /shrink-hook/);
-  assert.equal(after.PreToolUse.length, 1);
+  assert.equal(after.PreToolUse.length, 2);
+  assert.deepEqual(after.PreToolUse[0], foreign);
 });
 
 // The hash Codex records when /hooks trusts a hooks.json SessionStart group:
@@ -1306,6 +1358,28 @@ test("doctor --fix transactionally repairs missing owned hooks and preserves unr
   assert.doesNotMatch(JSON.stringify(restored), /native-hook claude|shrink-hook/);
 });
 
+test("reordered keys in an owned hook entry stay owned (#1437)", async () => {
+  const fx = fixture();
+  assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
+  const path = join(fx.home, ".claude", "settings.json");
+  const settings = JSON.parse(readFileSync(path, "utf8"));
+  const reversed = (obj) => Object.fromEntries(Object.entries(obj).reverse());
+  settings.hooks.PreToolUse = settings.hooks.PreToolUse.map((entry) => ({
+    ...reversed(entry),
+    hooks: entry.hooks.map(reversed),
+  }));
+  assert.match(JSON.stringify(settings.hooks.PreToolUse), /shrink-hook/);
+  writeFileSync(path, JSON.stringify(settings, null, 2) + "\n");
+
+  const doctor = await run(["doctor", "claude"], fx.env);
+  assert.equal(doctor.code, 0, doctor.stdout + doctor.stderr);
+  assert.equal(JSON.parse(doctor.stdout).state, "installed");
+
+  const disabled = await run(["disable", "claude"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  assert.doesNotMatch(readFileSync(path, "utf8"), /native-hook claude|shrink-hook/);
+});
+
 test("doctor --fix refuses owned-value conflicts without partial writes", async () => {
   const fx = fixture();
   assert.equal((await run(["enable", "claude"], fx.env)).code, 0);
@@ -1669,6 +1743,359 @@ test("enable/disable hermes rewrites an ordinary provider to the generic Caveman
   assert.match(restored, /provider: openai/);
   assert.match(restored, /base_url: https:\/\/api\.openai\.com\/v1/);
   assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
+});
+
+// #1405: Hermes itself writes a `%YAML 1.1` / `---` document header and
+// two-space sequence items. Every fixture above uses neither, which is why
+// both writer defects shipped. A config in Hermes's own shape must survive.
+//
+// Asserted structurally rather than through a YAML library: the CLI ships
+// zero runtime dependencies and no parser is declared for the test runners
+// either, so a parser-backed assertion would silently skip where it matters.
+// These are the two exact rules the reported parser errors name.
+test("enable/disable hermes keeps a %YAML header and two-space list items valid", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = [
+    "%YAML 1.1",
+    "---",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "plugins:",
+    "  enabled:",
+    "  - herdr-agent-state",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+  const lines = installed.split("\n");
+
+  // Defect 1: `model:` was unshifted to index 0, putting it ABOVE the
+  // directive. A directive after content is a second document —
+  // "ComposerError: expected a single document in the stream".
+  assert.equal(lines[0], "%YAML 1.1", `%YAML must stay first:\n${installed}`);
+  assert.equal(lines[1], "---", `--- must stay second:\n${installed}`);
+  const modelAt = lines.indexOf("model:");
+  assert.ok(modelAt > 1, `model: must be inserted after the header:\n${installed}`);
+
+  // Defect 2: the entry took a fixed four-space indent in a list whose
+  // siblings use two — "ParserError: expected <block end>, but found '-'".
+  const enabledAt = lines.indexOf("  enabled:");
+  assert.ok(enabledAt > 0, installed);
+  const indents = [];
+  for (let i = enabledAt + 1; i < lines.length; i++) {
+    const line = lines[i];
+    const item = line.match(/^(\s+)- \S/);
+    if (item) { indents.push(item[1].length); continue; }
+    if (/^\s*#/.test(line) || line.trim() === "") continue;
+    break; // a key at any depth ends the sequence under `enabled:`
+  }
+  assert.equal(indents.length, 2, `both plugin entries expected under enabled:\n${installed}`);
+  assert.equal(new Set(indents).size, 1, `sibling items must share one indent, got ${indents}:\n${installed}`);
+
+  // The routing values still have to land where Hermes reads them.
+  assert.match(installed, /^  provider: "custom"$/m);
+  assert.match(installed, /^  base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m);
+  assert.match(installed, /^    - caveman_native$|^  - caveman_native$/m);
+  // Unrelated user content is untouched.
+  assert.match(installed, /^_config_version: 52$/m);
+  assert.match(installed, /^  - herdr-agent-state$/m);
+
+  // Reversible: disable restores the user's document exactly.
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1410: ownership used to be keyed on the literal comment-delimited blocks we
+// wrote. A YAML round-trip that changes no value at all — an editor, a config
+// manager, `yaml.safe_dump(yaml.safe_load(...))` — drops those comments and
+// renormalises quoting, and every check read the install as gone: `doctor`
+// reported `degraded` and `disable` refused, so the user could not uninstall.
+//
+// The documents below are what PyYAML 6 actually emits for the config this
+// suite's own `enable` writes; that was confirmed against a real parser, and is
+// reproduced literally here because the CLI ships zero runtime dependencies and
+// neither test runner declares a YAML parser — a parser-backed assertion would
+// silently skip on exactly the runners that matter.
+const HERMES_ROUND_TRIPPED = (command) => [
+  "model:",
+  "  default: gpt-5.5",
+  "  provider: custom",
+  "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+  "platforms:",
+  "  telegram:",
+  "    enabled: false",
+  "plugins:",
+  "  enabled:",
+  "  - caveman_native",
+  "  - herdr-agent-state",
+  "mcp_servers:",
+  "  caveman-native:",
+  `    command: ${command}`,
+  "    enabled: true",
+  "  keep:",
+  "    command: keep-mcp",
+  "    enabled: true",
+  "_config_version: 52",
+  "",
+].join("\n");
+
+const HERMES_USER_CONFIG = [
+  "%YAML 1.1",
+  "---",
+  "# Hermes configuration",
+  "model:",
+  "  default: gpt-5.5",
+  "  provider: openai",
+  "  base_url: https://api.openai.com/v1",
+  "platforms:",
+  "  telegram:",
+  "    enabled: false",
+  "plugins:",
+  "  enabled:",
+  "  - herdr-agent-state",
+  "mcp_servers:",
+  "  keep:",
+  "    command: keep-mcp",
+  "    enabled: true",
+  "_config_version: 52",
+  "",
+].join("\n");
+
+function hermesFixture(extraEnv = {}) {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, HERMES_USER_CONFIG);
+  return { fx, configPath, env: { ...fx.env, HERMES_HOME: hermesHome, ...extraEnv } };
+}
+
+function journalledMcpCommand(home) {
+  const journal = JSON.parse(readFileSync(join(home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  const block = journal.operations.find((operation) => operation.kind === "hermes-config").owned.mcp_block;
+  return JSON.parse(/command: (".*")$/m.exec(block)[1]);
+}
+
+test("hermes ownership survives a YAML round-trip that changes no value", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // Same values, no markers, renormalised quoting — the #1410 report exactly.
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(command));
+
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  const doctor = JSON.parse(status.stdout);
+  assert.equal(doctor.state, "installed", `reserialised config must still read as installed:\n${status.stdout}`);
+  assert.equal(doctor.components.routing, true);
+  assert.equal(doctor.components.mcp_recovery, true);
+
+  // ... and disable must still be able to undo it, removing only what we own.
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  provider: openai$/m);
+  assert.match(restored, /^  base_url: https:\/\/api\.openai\.com\/v1$/m);
+  assert.doesNotMatch(restored, /caveman:native-hermes|caveman_native|caveman-native/);
+  // Every unrelated sibling the user had stays where it was.
+  assert.match(restored, /^  - herdr-agent-state$/m);
+  assert.match(restored, /^    command: keep-mcp$/m);
+  assert.match(restored, /^_config_version: 52$/m);
+  assert.match(restored, /^    enabled: false$/m);
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+});
+
+// #1442 adopted an exact, plugins-scoped membership reader with Hermes's own
+// disabled-first precedence. Ownership and loadability are two different
+// questions, though, and must not share one answer. A user who ALSO lists
+// caveman_native under plugins.disabled has not taken OUR entry out of
+// plugins.enabled, so disable still owns it and must still undo the install.
+// Answering the ownership question with the disabled-first reader makes
+// hermesPluginOwned false and disable throw "Hermes plugin block changed after
+// enable; refusing destructive disable" — the #1410 trap again, from the other
+// side: a config the user can no longer uninstall through caveman.
+test("hermes ownership survives a user-added plugins.disabled entry on a reserialised config", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // The #1410 round-trip (markers gone, so ownership is proved by value) plus
+  // the user switching the plugin off the Hermes way.
+  const reserialised = HERMES_ROUND_TRIPPED(command)
+    .replace("plugins:\n  enabled:\n", "plugins:\n  disabled:\n  - caveman_native\n  enabled:\n");
+  assert.match(reserialised, /^  disabled:$/m, "the probe must actually add a disabled list");
+  writeFileSync(configPath, reserialised);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+
+  // Our enabled entry and our MCP server are gone; the user's own disabled
+  // line is theirs and stays, so exactly one mention of the name is left.
+  assert.equal((restored.match(/caveman_native/g) ?? []).length, 1,
+    `only the user's own plugins.disabled entry may remain:\n${restored}`);
+  assert.match(restored, /^  disabled:\n  - caveman_native$/m, "the user's own line must survive untouched");
+  assert.doesNotMatch(restored, /caveman-native/, "our MCP server must be gone");
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+  assert.match(restored, /^  - herdr-agent-state$/m, "the user's other plugin must survive");
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+});
+
+test("hermes disable still refuses a reserialised config whose owned values moved", async () => {
+  for (const [label, mutate] of [
+    ["an owned value changed", (text) => text.replace("base_url: http://127.0.0.1:8787/w/hermes/v1", "base_url: http://example.invalid/mine")],
+    ["a duplicate owned key", (text) => text.replace("  base_url: http", "  base_url: http://127.0.0.1:8787/w/hermes/v1\n  base_url: http")],
+    ["the plugin entry removed", (text) => text.replace("  - caveman_native\n", "")],
+    ["the MCP command changed", (text) => text.replace(/^    command: (?!keep-mcp).*$/m, "    command: somebody-elses-mcp")],
+  ]) {
+    const { fx, configPath, env } = hermesFixture();
+    assert.equal((await run(["enable", "hermes"], env)).code, 0);
+    const command = journalledMcpCommand(fx.home);
+    const mutated = mutate(HERMES_ROUND_TRIPPED(command));
+    writeFileSync(configPath, mutated);
+
+    const disabled = await run(["disable", "hermes"], env);
+    assert.notEqual(disabled.code, 0, `${label}: disable must refuse\n${disabled.stdout}${disabled.stderr}`);
+    // Refusing is only safe if it is also atomic: the user's file and the
+    // journal that can still undo the install both have to survive it.
+    assert.equal(readFileSync(configPath, "utf8"), mutated, `${label}: config must be untouched`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), true, `${label}: journal must survive`);
+  }
+});
+
+test("hermes value-restore keeps a CRLF config's line endings", async () => {
+  // The literal path edits the raw string, so it never touched line endings.
+  // The value path rebuilds the document from yamlLines/yamlText, which join
+  // with \n — it must not convert a Windows user's file to LF behind them.
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(command).replace(/\n/g, "\r\n"));
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  provider: openai\r$/m);
+  assert.doesNotMatch(restored, /(?<!\r)\n/, `every line must still end CRLF:\n${JSON.stringify(restored)}`);
+});
+
+test("hermes ownership reads the escaped and folded scalars a normaliser emits", async () => {
+  // Two shapes PyYAML produces past its 80-column width, both verified against
+  // the real emitter: a double-quoted scalar carrying `\xNN` escapes and a
+  // `\`-at-end-of-line join, and a plain scalar folded onto a more-indented
+  // continuation line (one space per break).
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+  const cut = command.lastIndexOf("/") + 1;
+  const [head, tail] = [command.slice(0, cut), command.slice(cut)];
+  // "…/\<newline>      \x63aveman-mcp" decodes to the same absolute path.
+  const escaped = `"${head}\\\n      \\x${tail.charCodeAt(0).toString(16).padStart(2, "0")}${tail.slice(1)}"`;
+
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(escaped));
+  let doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(doctor.components.mcp_recovery, true, "escaped + folded double-quoted scalar must read as ours");
+
+  // A plain scalar folded across lines: the break folds to exactly one space.
+  const plainFolded = `${head}folded\n      name/${tail}`;
+  writeFileSync(configPath, HERMES_ROUND_TRIPPED(plainFolded));
+  doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(doctor.components.mcp_recovery, false, "a folded plain scalar must read as its folded VALUE, not ours");
+
+  // Same document, but now the journal really does name that folded path — the
+  // binary lives in a directory with a space, which is why a normaliser folds
+  // the scalar there at all.
+  const { fx: fx2, configPath: path2, env: base2 } = hermesFixture();
+  const spacedBin = join(fx2.home, "mcp tools", "caveman-mcp");
+  mkdirSync(dirname(spacedBin), { recursive: true });
+  writeFileSync(spacedBin, readFileSync(join(fx2.home, "bin", "caveman-mcp")), { mode: 0o755 });
+  chmodSync(spacedBin, 0o755);
+  const env2 = { ...base2, CAVEMAN_MCP_BIN: spacedBin };
+  const enabled2 = await run(["enable", "hermes"], env2);
+  assert.equal(enabled2.code, 0, enabled2.stderr);
+  assert.equal(journalledMcpCommand(fx2.home), spacedBin);
+  const cut2 = spacedBin.indexOf("mcp tools");
+  writeFileSync(path2, HERMES_ROUND_TRIPPED(`${spacedBin.slice(0, cut2)}mcp\n      tools/caveman-mcp`));
+  doctor = JSON.parse((await run(["doctor", "hermes"], env2)).stdout);
+  assert.equal(doctor.components.mcp_recovery, true, "a folded plain scalar must read as ours when it IS ours");
+});
+
+// A double-quoted scalar may fold onto a continuation line that begins with
+// `#`. `yamlChildSpan` skipped every comment-looking line when it decided where
+// the owned block ENDED, so such a continuation fell outside the span: disable
+// spliced the block out, left the orphaned fragment behind, and still exited 0.
+// The result is a config that no longer parses, reported as a clean uninstall.
+test("hermes disable removes an owned MCP block whose command folds onto a #-leading line", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, HERMES_USER_CONFIG);
+  // A `#` in the binary path is what lets a fold land immediately before one.
+  const hashBin = join(fx.home, "mcp#tools", "caveman-mcp");
+  mkdirSync(dirname(hashBin), { recursive: true });
+  writeFileSync(hashBin, readFileSync(join(fx.home, "bin", "caveman-mcp")), { mode: 0o755 });
+  chmodSync(hashBin, 0o755);
+  const env = { ...fx.env, HERMES_HOME: hermesHome, CAVEMAN_MCP_BIN: hashBin };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  assert.equal(journalledMcpCommand(fx.home), hashBin);
+
+  const cut = hashBin.indexOf("#");
+  const doc = [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: custom",
+    "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "plugins:",
+    "  enabled:",
+    "  - caveman_native",
+    "  - herdr-agent-state",
+    "mcp_servers:",
+    "  caveman-native:",
+    "    enabled: true",
+    // `\` at end of line joins with no space, so this is the same command.
+    `    command: "${hashBin.slice(0, cut)}\\`,
+    `      ${hashBin.slice(cut)}"`,
+    "  keep:",
+    "    command: keep-mcp",
+    "    enabled: true",
+    "# a comment of the user's own, after the block",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, doc);
+
+  // The value reader already spans the fold, so the install reads as ours.
+  const doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(doctor.components.mcp_recovery, true);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  // Nothing of the folded scalar may survive the removal.
+  assert.doesNotMatch(restored, /caveman-mcp/, `orphaned fold left behind:\n${restored}`);
+  assert.doesNotMatch(restored, /#tools/, `orphaned fold left behind:\n${restored}`);
+  // mcp_servers must go straight from its key to the user's own entry.
+  assert.match(restored, /^mcp_servers:\n {2}keep:$/m, `block removal corrupted the section:\n${restored}`);
+  // Everything the user owns is still there, the trailing comment included.
+  assert.match(restored, /^    command: keep-mcp$/m);
+  assert.match(restored, /^  provider: openai$/m);
+  assert.match(restored, /^  - herdr-agent-state$/m);
+  assert.match(restored, /^# a comment of the user's own, after the block$/m);
+  assert.match(restored, /^_config_version: 52$/m);
 });
 
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
@@ -2097,6 +2524,145 @@ test("status agrees with doctor on MCP recovery when only Gemini or only Pi is w
     assert.deepEqual(JSON.parse(status.stdout).off_states.map((state) => state.id).filter((id) => id === "mcp-missing"), [], `${agent}: status must not call recovery missing`);
   }
 });
+
+// #1444: OpenCode keeps routing metadata separate from the public event. Its
+// bus resolves a locationless session event through that session's owner and
+// then filters each location subscription using the routing snapshot, so an
+// event delivered to THIS plugin instance without a public `location` is
+// already ours — `session.deleted` publishes only `{ sessionID }`. Dropping it
+// skipped SessionEnd and left the session's context cached until the plugin was
+// disposed. A MISMATCHED location is still somebody else's and stays dropped.
+test("the V2 opencode plugin acts on a locationless session.deleted and still ignores another project", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+
+  const sessionHooks = new Map();
+  const scripted = [
+    { type: "session.created", location: { directory: fx.home }, data: { sessionID: "oc2-del" } },
+    // Routed here by the host with no public location — ours.
+    { type: "session.deleted", data: { sessionID: "oc2-del" } },
+    // Another project's session, located elsewhere — never ours.
+    { type: "session.created", location: { directory: "/elsewhere" }, data: { sessionID: "oc2-other" } },
+    { type: "session.deleted", location: { directory: "/elsewhere" }, data: { sessionID: "oc2-other" } },
+  ];
+  const fakeCtx = {
+    location: { directory: fx.home, workspaceID: undefined },
+    event: { async *subscribe() { for (const event of scripted) yield event; } },
+    session: { hook: async (name, cb) => { sessionHooks.set(name, cb); return { dispose: async () => {} }; } },
+    tool: { hook: async () => ({ dispose: async () => {} }) },
+  };
+  const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+  const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    const cleanup = await pluginModule.default.setup(fakeCtx);
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["SessionStart", "oc2-del"],
+      ["SessionEnd", "oc2-del"],
+    ], "the locationless deletion must end the session; the other project must be untouched");
+
+    // The cached context went with it: asking for context again re-runs
+    // SessionStart rather than replaying a deleted session's stale text.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("context")({ sessionID: "oc2-del", system: [] });
+    assert.deepEqual(readCapture().map((item) => item.event_name), ["SessionStart"],
+      "the deleted session's cached context must be gone");
+
+    // Disposal must not send a second SessionEnd for a session already ended.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await cleanup?.();
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["SessionEnd", "oc2-del"],
+    ], "only the session re-created by the context call remains to end");
+  } finally {
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+});
+
+// #1443: a host process can serve a project that is not its own launch
+// directory. Neither generated adapter passed that project directory on, so
+// `native-hook` saw no cwd in its payload and inherited the subprocess's —
+// nativeRuntimeRequest then fell back to process.cwd() and stamped the wrong
+// repository onto the native session. V1 discarded its factory context
+// entirely; V2 received ctx.location.directory and never used it.
+for (const { major, version } of [{ major: 1, version: "opencode 1.19.5" }, { major: 2, version: "opencode 2.0.7" }]) {
+  test(`the generated opencode V${major} plugin carries the host project cwd into native calls`, async () => {
+    const fx = fixture({ opencodeVersion: version });
+    const configDir = join(fx.home, ".config", "opencode");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+    const enabled = await run(["enable", "opencode"], fx.env);
+    assert.equal(enabled.code, 0, enabled.stderr);
+
+    // The project the host serves — deliberately neither this test process's
+    // cwd nor the fixture home the plugin was installed under.
+    const project = realpathSync(mkdtempSync(join(tmpdir(), "cave-oc-project-")));
+    const cwdLog = join(fx.home, "native-cwd.log");
+    const pluginPath = join(configDir, "plugins", "caveman-native.js");
+    const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+
+    const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+      .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+    const readCwds = () => readFileSync(cwdLog, "utf8").trim().split("\n").filter(Boolean);
+    const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+    const previous = [process.env.CAVE_NATIVE_CAPTURE, process.env.CAVE_NATIVE_CWD_CAPTURE];
+    process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+    process.env.CAVE_NATIVE_CWD_CAPTURE = cwdLog;
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    writeFileSync(cwdLog, "");
+    try {
+      if (major === 1) {
+        // The V1 plugin context names the project as `directory`.
+        const hooks = await pluginModule.CavemanNative({ directory: project });
+        await hooks.event({ event: { type: "session.created", properties: { sessionID: "oc-cwd" } } });
+        await hooks["tool.execute.before"]({ tool: "bash", sessionID: "oc-cwd" }, { args: { command: "git status" } });
+      } else {
+        const toolHooks = new Map();
+        const scripted = [{ type: "session.created", location: { directory: project }, data: { sessionID: "oc-cwd" } }];
+        await pluginModule.default.setup({
+          location: { directory: project, workspaceID: undefined },
+          event: { async *subscribe() { for (const event of scripted) yield event; } },
+          session: { hook: async () => ({ dispose: async () => {} }) },
+          tool: { hook: async (name, cb) => { toolHooks.set(name, cb); return { dispose: async () => {} }; } },
+        });
+        await flush();
+        await toolHooks.get("execute.before")({ tool: "shell", sessionID: "oc-cwd", input: { command: "git status" } });
+      }
+
+      const payloads = readCapture();
+      assert.ok(payloads.length >= 1, "the native call must have been recorded");
+      assert.equal(payloads[0].event_name, "SessionStart");
+      assert.equal(payloads[0].cwd, project,
+        "the payload must name the host's project directory, not the subprocess's");
+
+      // And the subprocess itself runs there, so anything it resolves
+      // relatively resolves against the project, not the launch directory.
+      const cwds = readCwds();
+      assert.ok(cwds.length >= 2, `expected a native and a shrink child: ${JSON.stringify(cwds)}`);
+      for (const cwd of cwds) {
+        assert.equal(realpathSync(cwd), project, "every generated child must run in the project directory");
+      }
+      assert.notEqual(project, realpathSync(process.cwd()), "the probe only means something from another cwd");
+    } finally {
+      for (const [key, value] of [["CAVE_NATIVE_CAPTURE", previous[0]], ["CAVE_NATIVE_CWD_CAPTURE", previous[1]]]) {
+        if (value === undefined) delete process.env[key];
+        else process.env[key] = value;
+      }
+    }
+  });
+}
 
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });

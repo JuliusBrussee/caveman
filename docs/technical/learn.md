@@ -282,7 +282,7 @@ Classes (the report's label in brackets):
 | `claude_md_weight:{user,project,codex}` | reducible | A `CLAUDE.md` (or `~/.codex/AGENTS.md` for `codex`) over 150 lines or 2000 tokens | `claude_md_weight` | Yes, via skill |
 | `claude_md_sections:{user,project}` | reducible | `CLAUDE.md` sections with no distinctive-line echo in ≥5 sessions. Emitted only if at least one other section did echo. | `claude_md_sections` | Yes, via skill |
 | `dead_load:skills` | reducible | Skills whose descriptions load every turn with no use detected in the window | `dead_load` | Yes, via skill |
-| `recurring_context:repaste:<fingerprint>` | recurring_context | A block of ≥180 tokens re-established in ≥3 sessions. Top 24 listed; the rest still count in the score. | `cavemem_offload` | Yes, via skill |
+| `recurring_context:repaste:<fingerprint>` | recurring_context | A block of ≥180 tokens re-established in ≥3 sessions. Context the host or caveman's own hook re-injects is excluded — the system-reminder envelope carrying `CLAUDE.md`/auto-memory, a hook result, the caveman ruleset — because offloading it saves nothing and it is already counted as always-loaded setup. Top 24 listed; the rest still count in the score. | `cavemem_offload` | Yes, via skill |
 | `context_dumbzone` | behavioral | Turns over 50% of the model window, if ≥10% of turns | `dumbzone_advice` | No |
 | `subagent_overuse` | behavioral | Subagent spawn counts | none | No |
 | `subagent_spend` | behavioral | Share of provider-counted context in subagent sidechains (≥100k tokens, ≥3 sessions). Visibility only. | none | No |

@@ -127,6 +127,38 @@ func TestTabularMarkdownKeepsShapeAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestTabularMarkdownKeepsEscapedPipesInsideCells(t *testing.T) {
+	// GFM writes a literal pipe in a cell as \|. Splitting rows on every pipe
+	// gave that row an extra cell, so the whole table failed the column check
+	// and was passed through uncompressed.
+	var b strings.Builder
+	b.WriteString("| name | filter | revenue |\n| --- | --- | ---: |\n")
+	for i := 0; i < 40; i++ {
+		filter := []string{"eu", "us"}[i%2]
+		if i == 7 {
+			filter = "`eu\\|us`"
+		}
+		fmt.Fprintf(&b, "| customer-%02d | %s | %d |\n", i, filter, 100+i)
+	}
+	input := b.String()
+	out, ok := compressors.NewTabular().Compress([]byte(input))
+	if !ok {
+		t.Fatal("expected a Markdown table with an escaped pipe to compress")
+	}
+	if !bytes.Contains(out, []byte("rows elided (caveman)")) {
+		t.Fatalf("marker missing:\n%s", out)
+	}
+	inputLines := map[string]bool{}
+	for _, line := range strings.Split(input, "\n") {
+		inputLines[line] = true
+	}
+	for _, line := range strings.Split(strings.TrimSuffix(string(out), "\n"), "\n") {
+		if !inputLines[line] && !strings.Contains(line, "rows elided (caveman)") {
+			t.Fatalf("kept row was rewritten: %q\n%s", line, out)
+		}
+	}
+}
+
 func TestTabularMalformedOrTinyPassesThrough(t *testing.T) {
 	c := compressors.NewTabular()
 	for _, input := range [][]byte{

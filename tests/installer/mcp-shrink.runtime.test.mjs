@@ -56,6 +56,48 @@ test('caveman-shrink preserves UTF-8 code points split across upstream chunks', 
   assert.equal(JSON.parse(result.stdout).result.payload, '🙂');
 });
 
+test('caveman-shrink passes a list with a null entry through and keeps running', () => {
+  const upstream = [
+    "console.log(JSON.stringify({jsonrpc:'2.0',id:1,result:{tools:[null,{name:'t'}]}}))",
+    "console.log(JSON.stringify({jsonrpc:'2.0',id:2,result:{}}))",
+  ].join(';');
+  const result = spawnSync(process.execPath, [proxy, process.execPath, '-e', upstream], {
+    encoding: 'utf8',
+    maxBuffer: 1024 * 1024,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const [first, second] = result.stdout.trim().split('\n').map(line => JSON.parse(line));
+  assert.deepEqual(first.result.tools, [null, { name: 't' }]);
+  assert.equal(second.id, 2);
+});
+
+// JSON.parse accepts a far deeper object than compressDescriptionsInPlace can
+// recurse over, so a deeply nested inputSchema raises RangeError inside the
+// transform rather than in the parse above it. Before the transform was wrapped
+// that killed the wrapper and the host lost the upstream server, exactly as a
+// null list entry did (#1435).
+test('caveman-shrink survives an inputSchema too deep to walk and keeps running', () => {
+  const depth = 200000;
+  const upstream = [
+    `const deep = '{"description":"a b c","properties":'.repeat(${depth}) + '{"x":1}' + '}'.repeat(${depth})`,
+    `console.log('{"jsonrpc":"2.0","id":1,"result":{"tools":[{"name":"t","inputSchema":' + deep + '}]}}')`,
+    `console.log(JSON.stringify({jsonrpc:'2.0',id:2,result:{}}))`,
+  ].join(';');
+  const result = spawnSync(process.execPath, [proxy, process.execPath, '-e', upstream], {
+    encoding: 'utf8',
+    maxBuffer: 64 * 1024 * 1024,
+    env: { ...process.env, CAVEMAN_SHRINK_DEBUG: '1' },
+  });
+  assert.equal(result.status, 0, result.stderr.slice(0, 400));
+  const lines = result.stdout.trim().split('\n');
+  assert.equal(lines.length, 2);
+  // The response still reaches the client, and the one after it is not lost.
+  assert.equal(JSON.parse(lines[0]).result.tools[0].name, 't');
+  assert.equal(JSON.parse(lines[1]).id, 2);
+  // The fail-open is diagnosable rather than silent.
+  assert.match(result.stderr, /transform failed, passing response through/);
+});
+
 for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
   test(`caveman-shrink forwards ${signal} to its spawned upstream process`, async () => {
     const pidFile = path.join(os.tmpdir(), `caveman-shrink-${signal}-${process.pid}-${Date.now()}.pid`);

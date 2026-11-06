@@ -154,6 +154,7 @@ function transformResponse(msg) {
   for (const arrayName of ['tools', 'prompts', 'resources', 'resourceTemplates']) {
     if (Array.isArray(r[arrayName])) {
       for (const item of r[arrayName]) {
+        if (!item || typeof item !== 'object') continue;
         for (const field of fields) {
           if (typeof item[field] === 'string') {
             const before = item[field];
@@ -179,7 +180,7 @@ function transformResponse(msg) {
   for (const arrayName of ['tools', 'prompts', 'resources', 'resourceTemplates']) {
     if (Array.isArray(r[arrayName])) {
       for (const item of r[arrayName]) {
-        if (item.inputSchema) compressDescriptionsInPlace(item.inputSchema, fields);
+        if (item && item.inputSchema) compressDescriptionsInPlace(item.inputSchema, fields);
       }
     }
   }
@@ -201,8 +202,23 @@ const responses = makeLineBuffer(line => {
     writeClient(line + '\n');
     return;
   }
-  const out = transformResponse(msg);
-  writeClient(JSON.stringify(out) + '\n');
+  let out;
+  try { out = JSON.stringify(transformResponse(msg)); } catch (error) {
+    // A response we fail to transform still reaches the client, unchanged.
+    // Reachable today: JSON.parse accepts a far deeper inputSchema than
+    // compressDescriptionsInPlace can recurse over, so a ~50k-deep schema
+    // raises RangeError here rather than in the parse above. Staying silent
+    // would turn any future transform fault into "compression quietly
+    // stopped", so name it when debugging is on.
+    if (debug) {
+      process.stderr.write(
+        `[caveman-shrink] transform failed, passing response through: ${error && error.message}\n`
+      );
+    }
+    writeClient(line + '\n');
+    return;
+  }
+  writeClient(out + '\n');
 });
 upstream.stdout.on('data', chunk => responses.push(chunk));
 upstream.stdout.on('end', () => responses.end());

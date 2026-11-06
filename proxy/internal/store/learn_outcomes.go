@@ -348,11 +348,16 @@ func scanConfirmedFixMetrics(sourceSet map[string]bool, records []AppliedFixReco
 					return
 				}
 				var fingerprints []string
-				for _, payload := range event.TextPayloads {
-					for _, block := range segmentBlocks(payload) {
-						if estimateTokens(block) >= minBlockTokens {
-							fingerprints = append(fingerprints, hashText(normalizeBlock(block)))
-						}
+				// Same segmentation and the same injected-context rule as the
+				// miner that produced these fingerprints (#1459) — a
+				// re-measurement must not confirm a repaste sink against text
+				// the host or the hook injected.
+				for _, candidate := range minableBlocks(event.TextPayloads) {
+					if candidate.injected {
+						continue
+					}
+					if estimateTokens(candidate.raw) >= minBlockTokens {
+						fingerprints = append(fingerprints, hashText(normalizeBlock(candidate.raw)))
 					}
 				}
 				var turn windowTurn

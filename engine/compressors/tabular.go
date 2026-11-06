@@ -266,10 +266,9 @@ func parseMarkdownTable(input []byte) (parsedTable, bool) {
 		if !strings.HasPrefix(text, "|") || !strings.HasSuffix(text, "|") {
 			return parsedTable{}, false
 		}
-		parts := strings.Split(strings.Trim(text, "|"), "|")
-		row := make([]string, len(parts))
-		for i, part := range parts {
-			row[i] = strings.TrimSpace(part)
+		row, ok := splitMarkdownRow(text)
+		if !ok {
+			return parsedTable{}, false
 		}
 		rows = append(rows, row)
 	}
@@ -287,6 +286,34 @@ func parseMarkdownTable(input []byte) (parsedTable, bool) {
 		}
 	}
 	return parsedTable{kind: tableMarkdown, rows: rows, delimiter: '|', crlf: crlf}, true
+}
+
+// splitMarkdownRow splits a "| a | b |" line into its trimmed cells. A
+// backslash escapes the next character, so an escaped pipe ("a \| b", the
+// only way GFM allows a literal pipe in a cell, code spans included) stays
+// inside its cell instead of starting a new one. The cells keep their escapes,
+// so a kept row is written back with the same pipes it was read with.
+func splitMarkdownRow(text string) ([]string, bool) {
+	inner := strings.TrimPrefix(text, "|")
+	var cells []string
+	start := 0
+	closed := false
+	for i := 0; i < len(inner); i++ {
+		switch inner[i] {
+		case '\\':
+			i++
+		case '|':
+			cells = append(cells, strings.TrimSpace(inner[start:i]))
+			start = i + 1
+			closed = start == len(inner)
+		}
+	}
+	if !closed {
+		// The line ends in an escaped pipe (or a lone backslash), not in the
+		// closing delimiter.
+		return nil, false
+	}
+	return cells, true
 }
 
 func keepNumericExtrema(rows [][]string, start int, keep []bool) {

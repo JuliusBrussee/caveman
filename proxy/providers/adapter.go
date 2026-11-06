@@ -426,6 +426,14 @@ const (
 	recoveryToolName     = "caveman_retrieve"
 	mcpRecoveryToolName  = "mcp__caveman__caveman_retrieve"
 	kiloRecoveryToolName = "caveman_caveman_retrieve"
+	// `caveman wrap claude` registers the recovery MCP server inside its
+	// ephemeral `caveman-wrap` plugin (buildClaudeEphemeralPlugin in
+	// packages/cli/src/index.ts). Claude Code keys a plugin's MCP server as
+	// `plugin:<plugin>:<server>` and then sanitises every character outside
+	// [A-Za-z0-9_-] to `_` when it builds the tool name, so the server
+	// `caveman` inside plugin `caveman-wrap` is called under this one spelling.
+	// tests/verify_repo.py holds the two sources to each other.
+	claudeWrapRecoveryToolName = "mcp__plugin_caveman-wrap_caveman__caveman_retrieve"
 )
 
 // IsRecoveryToolName reports whether a tool call is a caveman recovery call.
@@ -438,7 +446,8 @@ const (
 // elision it was trying to escape. Measured on 2026-08-06: the agent called
 // retrieve, reported "Same truncation", and re-read the same file seven times.
 func IsRecoveryToolName(name string) bool {
-	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName
+	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName ||
+		name == claudeWrapRecoveryToolName
 }
 
 type Base struct {
@@ -1211,6 +1220,16 @@ func mergeUsage(provider string, obj map[string]any, usage *UsageObservation) {
 		mergePricingQualifiers(resp, usage)
 		mergeProviderOutcomeQualifiers(provider, resp, usage)
 	}
+	// Anthropic's streaming message_start carries its usage object one level
+	// down, on message.usage — the only place streaming input_tokens ever
+	// appear, which is why usageObjects() reaches it. The outcome-qualifier
+	// guard has to reach the same object, or a separately-billed iteration kind
+	// riding it is never inspected and a token-only subtotal is presented as the
+	// exact bill (#1453). message_start carries no stop_reason, so the refusal
+	// arm inside stays inert for it.
+	if msg, ok := obj["message"].(map[string]any); ok {
+		mergeProviderOutcomeQualifiers(provider, msg, usage)
+	}
 	for _, u := range usageObjects(obj) {
 		if hasGeminiUsageKeys(u) {
 			mergeGeminiUsage(u, usage)
@@ -1860,9 +1879,36 @@ func tokenOnlyProviderTool(provider, toolType string) bool {
 	switch toolType {
 	case "web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318":
 		return true
-	default:
+	}
+	// Claude Code declares the server-side advisor on every agent turn once the
+	// feature flag is on for the account, whether or not it is ever invoked
+	// (#1465). The declaration alone carries no charge: an advisor that runs
+	// reports its own model as a non-"message" entry in usage.iterations, and
+	// mergeProviderOutcomeQualifiers already fails pricing closed on that
+	// (pinned by TestAnthropicMessageIterationsStayPriced's advisor_message case). Gating
+	// on the declaration instead left every agent request unpriced, so a whole
+	// install reported "Unknown" API cost.
+	//
+	// Matched as a dated revision of that one hosted tool, not as any type
+	// beginning "advisor": Anthropic version-stamps these, so a date bump must
+	// not reintroduce the bug, while a differently shaped advisor tool is a new
+	// billing question and still fails closed.
+	return isAnthropicDatedToolRevision(toolType, "advisor_")
+}
+
+// isAnthropicDatedToolRevision reports whether toolType is prefix plus
+// Anthropic's eight-digit YYYYMMDD version stamp, e.g. "advisor_20260301".
+func isAnthropicDatedToolRevision(toolType, prefix string) bool {
+	stamp, ok := strings.CutPrefix(toolType, prefix)
+	if !ok || len(stamp) != 8 {
 		return false
 	}
+	for _, r := range stamp {
+		if r < '0' || r > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 func mergePricingQualifiers(obj map[string]any, usage *UsageObservation) {

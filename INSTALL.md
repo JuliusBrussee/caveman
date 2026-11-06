@@ -439,7 +439,7 @@ What it removes:
 - Caveman hook entries from `$CLAUDE_CONFIG_DIR/settings.json` (default `~/.claude/`; matched by the substring `caveman`).
 - Hook files in `$CLAUDE_CONFIG_DIR/hooks/` (`caveman-activate.js`, `caveman-mode-tracker.js`, `caveman-parse.js`, `caveman-stats.js`, `caveman-config.js`, `cavecrew-model-overrides.js`, `caveman-statusline.{sh,ps1}`, plus the dir's `package.json` marker).
 - The Claude Code plugin and the Gemini CLI extension (if installed).
-- The opencode native plugin (`~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
+- The opencode native plugin (`$OPENCODE_CONFIG_DIR/plugins/caveman/`, default `~/.config/opencode/plugins/caveman/`, the `plugin` and `mcp.caveman-shrink` entries from `opencode.json`, our skill/agent/command files, the caveman block from `AGENTS.md`, and the opencode flag file).
 - The Codex SessionStart entry from `$CODEX_HOME/hooks.json` (default `~/.codex/`; other hooks, including the caveman CLI's own, stay) and the hook files under `$CODEX_HOME/caveman/`. The file goes away only if caveman's entry was all it held.
 - The Oh My Pi plugin (`omp plugin uninstall caveman`) and Caveman's managed OMP plugin package at `~/.omp/caveman-plugin/`.
 - The Antigravity CLI plugin (`agy plugin uninstall caveman`).
@@ -540,7 +540,7 @@ The profile slug must exist in [vercel-labs/skills](https://github.com/vercel-la
 The installer doesn't phone home. It writes to:
 
 - `$CLAUDE_CONFIG_DIR` (default `~/.claude/`) — hooks, flag file, `settings.json` merge.
-- Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `~/.config/opencode/`, etc.
+- Each agent's own config location — Cursor's `.cursor/rules/`, Windsurf's `.windsurf/rules/`, opencode's `$OPENCODE_CONFIG_DIR` (default `~/.config/opencode/`), etc.
 - Your current working directory (only with `--with-init`) — repo-local rule files.
 - `$CODEX_HOME` (default `~/.codex/`; only when Codex is detected or selected, and not with `--no-hooks`) — the caveman hook files in `caveman/`, one entry in `hooks.json`, and an ownership record.
 - `~/.omp/caveman-plugin/` (only with `--only omp`, or auto-detect when `omp` is on `PATH`) — managed OMP plugin package installed through `omp plugin install`.

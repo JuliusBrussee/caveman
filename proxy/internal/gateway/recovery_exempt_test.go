@@ -71,3 +71,58 @@ func TestRecoveryResultIsNeverRecompressed(t *testing.T) {
 		t.Fatalf("recovered bytes must reach the provider intact; the agent has no other way back.\nretrieve tail: %s", tail)
 	}
 }
+
+// TestEveryRecoveryToolSpellingIsExempt pins the exemption to every spelling in
+// the providers.IsRecoveryToolName allowlist, not just the plain MCP one.
+//
+// #1432: `caveman wrap claude` registers the recovery MCP server inside its
+// ephemeral `caveman-wrap` plugin, and Claude Code namespaces a plugin's MCP
+// server as `plugin:<plugin>:<server>` before building the tool name, so the
+// tool the model actually calls is
+// `mcp__plugin_caveman-wrap_caveman__caveman_retrieve`. That spelling was
+// missing from the allowlist, so the retrieve result was NOT exempt and the
+// prefix cache handed the agent back the very elision it was escaping — the
+// "Same truncation" failure, on the default `caveman claude` door.
+func TestEveryRecoveryToolSpellingIsExempt(t *testing.T) {
+	for _, toolName := range []string{
+		"caveman_retrieve",
+		"mcp__caveman__caveman_retrieve",
+		"caveman_caveman_retrieve",
+		"mcp__plugin_caveman-wrap_caveman__caveman_retrieve",
+	} {
+		t.Run(toolName, func(t *testing.T) {
+			rt := &captureTransport{responses: []string{subMessageRespBody, subMessageRespBody}}
+			comp := &liveZoneCompressor{outputs: [][]byte{[]byte("ELIDED"), []byte("ELIDED")}}
+			srv := newSocketFreeCompressServerWithConfig(
+				anthropic.New("https://upstream.test"),
+				comp,
+				rt,
+				passthroughTestCreds{},
+				Config{SubscriptionCompress: "live_zone", RecoveryViaMCP: true, PrefixCache: newTestPrefixCache()},
+			)
+			headers := map[string]string{
+				"user-agent":        "claude-cli/2.1",
+				"authorization":     "Bearer sk-ant-oat-test",
+				"anthropic-beta":    "oauth-2025-04-20",
+				"anthropic-version": "2023-06-01",
+			}
+
+			serveBody(t, srv, "/v1/messages", `{"model":"claude-sonnet-4-6","messages":[`+anthropicReadTurn(true)+`]}`, headers)
+			if !strings.Contains(string(rt.bodies[0]), "ELIDED") {
+				t.Fatalf("precondition: first read should have been compressed: %s", rt.bodies[0])
+			}
+
+			retrieve := strings.Replace(anthropicRetrieveTurn(), "mcp__caveman__caveman_retrieve", toolName, 1)
+			serveBody(t, srv, "/v1/messages", `{"model":"claude-sonnet-4-6","messages":[`+anthropicReadTurn(true)+`,`+retrieve+`]}`, headers)
+
+			upstream := string(rt.bodies[1])
+			retrieveIdx := strings.Index(upstream, "toolu_ret")
+			if retrieveIdx < 0 {
+				t.Fatalf("retrieve turn missing upstream: %s", upstream)
+			}
+			if tail := upstream[retrieveIdx:]; !strings.Contains(tail, recoveredBlock) {
+				t.Fatalf("recovered bytes were recompressed for %s; the agent has no other way back.\nretrieve tail: %s", toolName, tail)
+			}
+		})
+	}
+}

@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"syscall"
 	"time"
 )
 
@@ -16,6 +17,8 @@ import (
 // choose this path, preventing one integration from impersonating another
 // user's runtime.
 func SocketPath(home string) string { return filepath.Join(home, "run", "native.sock") }
+
+func unixSocketPathLimit() int { return len(syscall.RawSockaddrUnix{}.Path) - 1 }
 
 func dialNativeRuntime(ctx context.Context, home string) (net.Conn, error) {
 	return (&net.Dialer{}).DialContext(ctx, "unix", SocketPath(home))
@@ -32,6 +35,13 @@ func Serve(ctx context.Context, home string, runtime *Runtime) error {
 func ServeUnix(ctx context.Context, path string, runtime *Runtime) error {
 	if runtime == nil || runtime.store == nil {
 		return errors.New("native runtime: store is required")
+	}
+	if pathBytes, limit := len(path), unixSocketPathLimit(); pathBytes > limit {
+		return fmt.Errorf(
+			"native runtime: Unix socket path too long (%d bytes; platform limit %d); set CAVEMAN_HOME to a shorter path",
+			pathBytes,
+			limit,
+		)
 	}
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return fmt.Errorf("native runtime mkdir: %w", err)

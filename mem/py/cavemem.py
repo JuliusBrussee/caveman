@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+import sys
 from typing import Any
 
 
@@ -58,8 +59,45 @@ def recall(
     return _call(args)
 
 
+# See ARGV_TEXT_LIMIT in ../js/index.mjs: replacement bytes that still fit in one
+# command-line argument on Linux (MAX_ARG_STRLEN) and Windows (whole command line).
+_ARGV_TEXT_LIMIT = 24 * 1024 if sys.platform == "win32" else 96 * 1024
+
+
+def _supersede_stdin_supported() -> bool:
+    try:
+        capabilities = _call(["version", "--json"]).get("capabilities")
+    except Exception:
+        return False
+    return isinstance(capabilities, list) and "supersede-stdin" in capabilities
+
+
+def _argv_cannot_carry(text: str) -> bool:
+    """Whether this replacement has to go over stdin rather than argv.
+
+    Three reasons, mirroring ``argvCannotCarry`` in ``../js/index.mjs``: over the
+    platform argv limit; exactly ``--stdin``, which the binary reads as the flag
+    and then fills from whatever our own stdin holds (``subprocess`` lets the
+    child inherit it); or an embedded NUL, which no OS carries in an argument.
+    """
+    return len(text.encode("utf-8")) > _ARGV_TEXT_LIMIT or text == "--stdin" or "\0" in text
+
+
 def supersede(mem_id: str, text: str) -> dict[str, Any]:
     """Replace one current memory while preserving its version history."""
+    # A cavemem older than ``supersede --stdin`` reads its second argument as the
+    # replacement text, so handing one ``--stdin`` stores the literal flag,
+    # expires the real memory and reports success. Use the argv form for
+    # everything it can carry, and require the advertised capability above that.
+    if not _argv_cannot_carry(text):
+        return _call(["supersede", mem_id, text])
+    if not _supersede_stdin_supported():
+        raise RuntimeError(
+            "cavemem cannot supersede with this replacement: it has to be sent over stdin "
+            f"({len(text.encode('utf-8'))} bytes, the literal '--stdin', or an embedded NUL), "
+            "and this build does not advertise the supersede-stdin capability. "
+            "Upgrade the cavemem binary."
+        )
     return _call(["supersede", mem_id, "--stdin"], text)
 
 

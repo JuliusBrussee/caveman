@@ -36,7 +36,86 @@ var (
 	reBlankLine  = regexp.MustCompile(`\n[ \t]*\n`)
 	reWhitespace = regexp.MustCompile(`\s+`)
 	reDigits     = regexp.MustCompile(`\d+`)
+
+	// reHookResultPreamble matches the host's own hook-result preamble, which
+	// opens a payload the host injected: "SessionStart:startup hook success:",
+	// "PreToolUse:Bash hook failed:", and the same shape from other events and
+	// hosts. Anchored at the payload start, because a human may well QUOTE one
+	// mid-sentence and that block is still theirs (#1459).
+	//
+	// The trailing colon is load-bearing, and so is the capitalised event name
+	// and the lower-case verb: without the colon this also matched an ordinary
+	// English sentence whose first word happens to precede the words "hook
+	// success" ("The hook success path is the one I care about"), which would
+	// have suppressed a real finding to hide a false one.
+	reHookResultPreamble = regexp.MustCompile(`^[A-Z][A-Za-z0-9_]*(?::[A-Za-z0-9_.\-]+)?[ \t]+hook[ \t]+(?:success|succeeded|completed|failed|error)[ \t]*:`)
 )
+
+// injectedContextOpeners are literal payload openings that only the host or
+// caveman's own hook writes: Claude Code's system-reminder envelope (which
+// carries the CLAUDE.md / auto-memory injection), the bare CLAUDE.md preamble,
+// and the caveman ruleset's banner and SENTINEL first line.
+var injectedContextOpeners = []string{
+	"<system-reminder>",
+	"Codebase and user instructions are shown below",
+	"CAVEMAN MODE ACTIVE",
+	"Respond terse like smart caveman",
+}
+
+// injectedContextPayload reports whether one text payload was injected by the
+// host or by caveman's own hook rather than written by the user.
+//
+// The repaste miner's whole premise is that a recurring block is context a
+// developer re-establishes by hand, and its fix (cavemem_offload) only saves
+// anything if NOT pasting it is an option. For these payloads it is not: the
+// host re-injects CLAUDE.md and its memory blocks every session whatever
+// cavemem holds, and the SessionStart hook re-emits the ruleset for the same
+// reason it runs on every source — compaction prunes it out of context. Acting
+// on the recommendation the other way round (dropping the source once it is in
+// cavemem) silently stops the agent receiving its instructions. Those bytes are
+// already accounted as always-loaded setup (claude_md_weight), so mining them
+// double-counts them and crowds genuine pastes out of a capped report (#1459).
+//
+// Every rule is anchored at the payload start: a human block that mentions a
+// reminder tag or quotes the hook banner is still the human's own text, and
+// silencing it would cost a real finding to suppress a false one.
+func injectedContextPayload(payload string) bool {
+	head := strings.TrimLeft(payload, " \t\r\n")
+	if head == "" {
+		return false
+	}
+	for _, opener := range injectedContextOpeners {
+		if strings.HasPrefix(head, opener) {
+			return true
+		}
+	}
+	return reHookResultPreamble.MatchString(head)
+}
+
+// blockCandidate is one segmented block plus whether the payload it came out of
+// was host- or hook-injected. The flag rides alongside the block instead of
+// removing it, because a locator addresses a block by its flattened index
+// within the turn (segmenter v1) and the editing skill re-segments the line to
+// re-derive the body: dropping a payload would renumber every block after it.
+type blockCandidate struct {
+	raw      string
+	injected bool
+}
+
+// minableBlocks segments a turn's text payloads in document order, each payload
+// independently under segmenter v1, keeping the flattened block index that
+// locators and the editing skill share. It is the one place the injected-context
+// rule is applied, so every source and every fingerprint consumer agrees.
+func minableBlocks(payloads []string) []blockCandidate {
+	var out []blockCandidate
+	for _, payload := range payloads {
+		injected := injectedContextPayload(payload)
+		for _, block := range segmentBlocks(payload) {
+			out = append(out, blockCandidate{raw: block, injected: injected})
+		}
+	}
+	return out
+}
 
 // blockLocator points at one occurrence of a block without carrying its body.
 // For transcripts the address is (jsonl_line, block_index); the skill re-reads
@@ -166,8 +245,9 @@ func segmentBlocks(text string) []string {
 // extractTurnBlocks pulls the human-readable text payloads out of one transcript
 // turn (message.content as a string, or "text" blocks in a list) and segments
 // them in document order. Tool inputs and tool results are excluded — the target
-// is re-established narrative/context, not tool noise.
-func extractTurnBlocks(obj map[string]any) []string {
+// is re-established narrative/context, not tool noise — and so is context the
+// host or caveman's own hook injected (#1459).
+func extractTurnBlocks(obj map[string]any) []blockCandidate {
 	msg := asMap(obj["message"])
 	content := msg["content"]
 	if content == nil {
@@ -188,11 +268,7 @@ func extractTurnBlocks(obj map[string]any) []string {
 			}
 		}
 	}
-	var blocks []string
-	for _, p := range payloads {
-		blocks = append(blocks, segmentBlocks(p)...)
-	}
-	return blocks
+	return minableBlocks(payloads)
 }
 
 // normalizeBlock is the internal grouping key (lowercase, digit-run masked,
@@ -221,18 +297,20 @@ func (m *recurringMiner) observeTurn(rootKind, relPath string, jsonlLine int, ts
 // stay in document order and each payload uses segmenter v1 independently,
 // producing the same flattened block indexes as extractTurnBlocks.
 func (m *recurringMiner) observeTextPayloads(rootKind, relPath string, jsonlLine int, ts string, payloads []string, side bool) {
-	var blocks []string
-	for _, payload := range payloads {
-		blocks = append(blocks, segmentBlocks(payload)...)
-	}
-	m.observeBlocks(rootKind, relPath, jsonlLine, ts, blocks, side)
+	m.observeBlocks(rootKind, relPath, jsonlLine, ts, minableBlocks(payloads), side)
 }
 
-func (m *recurringMiner) observeBlocks(rootKind, relPath string, jsonlLine int, ts string, blocks []string, side bool) {
+func (m *recurringMiner) observeBlocks(rootKind, relPath string, jsonlLine int, ts string, blocks []blockCandidate, side bool) {
 	if m == nil {
 		return
 	}
-	for idx, raw := range blocks {
+	for idx, candidate := range blocks {
+		// idx still counts injected blocks: it is the locator address the
+		// editing skill re-derives a body with.
+		if candidate.injected {
+			continue
+		}
+		raw := candidate.raw
 		tokens := estimateTokens(raw)
 		if tokens < minBlockTokens {
 			continue
