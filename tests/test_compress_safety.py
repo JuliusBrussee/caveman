@@ -642,6 +642,44 @@ class CompressSafetyTests(unittest.TestCase):
             with self.subTest(line=line):
                 self.assertIsNone(compress_mod.find_credential(f"# Notes\n\n{line}\n"))
 
+    def test_html_comments_are_masked_before_model_and_restored_byte_exact(self):
+        # #1350: a comment that starts a line reached the model, which could
+        # drop or reword it while validation, never counting comments, passed.
+        original = (
+            "# Notes\n\n<!-- keep: owned by the release script -->\nProse one.\n\n"
+            "<!--\nmulti-line note\nfor the next editor\n-->\n\n"
+            "Prose two with an inline <!-- x --> tail.\n"
+        )
+        masked, blocks = compress_mod.mask_code_blocks(original)
+        self.assertNotIn("owned by the release script", masked)
+        self.assertNotIn("for the next editor", masked)
+        self.assertIn("inline <!-- x --> tail", masked)  # mid-line HTML is prose
+        self.assertEqual(len(blocks), 2)
+        self.assertEqual(compress_mod.restore_code_blocks(masked, blocks), original)
+
+    def test_unclosed_html_comment_is_preserved_to_the_end(self):
+        original = "# Notes\n\nProse.\n<!-- open\nstill comment\n"
+        masked, blocks = compress_mod.mask_code_blocks(original)
+        self.assertEqual(len(blocks), 1)
+        self.assertNotIn("still comment", masked)
+        self.assertEqual(compress_mod.restore_code_blocks(masked, blocks), original)
+
+    def test_validation_warnings_are_shown_after_a_pass(self):
+        # #1350: warnings were computed and never printed.
+        with tempfile.TemporaryDirectory() as tmp, \
+             tempfile.TemporaryDirectory() as data_home, \
+             mock.patch.dict(os.environ, {"XDG_DATA_HOME": data_home, "LOCALAPPDATA": data_home}):
+            path = self._file_with(Path(tmp), "# Heading\n\nThe quick brown fox jumps over the lazy dog.\n")
+            out = io.StringIO()
+            with mock.patch.object(compress_mod, "call_claude", return_value="# Heading\n\nFox jump dog.\n"), \
+                 mock.patch.object(compress_mod, "validate") as v, \
+                 contextlib.redirect_stdout(out):
+                v.return_value = mock.Mock(
+                    is_valid=True, errors=[], warnings=["Bullet count changed too much: 8 -> 3"]
+                )
+                self.assertTrue(compress_mod.compress_file(path))
+            self.assertIn("Bullet count changed too much: 8 -> 3", out.getvalue())
+
     def test_code_blocks_are_masked_before_model_and_restored_byte_exact(self):
         original = (
             "# Tree\n\nProse before.\n\n"

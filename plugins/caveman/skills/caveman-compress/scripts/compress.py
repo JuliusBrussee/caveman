@@ -860,11 +860,16 @@ FENCE_OPEN_RE = re.compile(r"^[ ]{0,3}(`{3,}|~{3,})(?:[^\r\n]*)$")
 # Whole-line tags only, at most 3 spaces in (4+ is an indented code block).
 NOCOMPRESS_OPEN_RE = re.compile(r"^[ ]{0,3}<!--\s*nocompress\s*-->\s*$", re.IGNORECASE)
 NOCOMPRESS_CLOSE_RE = re.compile(r"^[ ]{0,3}<!--\s*/nocompress\s*-->\s*$", re.IGNORECASE)
+# CommonMark HTML block type 2: a line opening with `<!--` (up to 3 spaces in)
+# runs to the first line holding `-->`. Comments often carry notes for the next
+# editor; unmasked, the model could drop or reword them and validation, which
+# never counted them, passed the result (#1350).
+HTML_COMMENT_OPEN_RE = re.compile(r"^[ ]{0,3}<!--")
 
 
 def mask_code_blocks(text: str) -> Tuple[str, List[Tuple[str, str]]]:
-    """Replace fenced and four-space-indented code, and <!-- nocompress -->
-    regions, with opaque line markers."""
+    """Replace fenced and four-space-indented code, <!-- nocompress -->
+    regions and block-level HTML comments with opaque line markers."""
     if CODE_MARKER_PREFIX in text:
         raise ValueError("Input contains reserved Caveman code-preservation marker")
     lines = text.splitlines(keepends=True)
@@ -878,13 +883,26 @@ def mask_code_blocks(text: str) -> Tuple[str, List[Tuple[str, str]]]:
         indented = bool(line_without_newline) and (
             line_without_newline.startswith("    ") or line_without_newline.startswith("\t")
         )
-        if not nocompress and not fence and not indented:
+        comment = (
+            not nocompress and not fence and not indented
+            and HTML_COMMENT_OPEN_RE.match(line_without_newline)
+        )
+        if not nocompress and not fence and not indented and not comment:
             out.append(lines[i])
             i += 1
             continue
 
         start = i
-        if nocompress:
+        if comment:
+            # Ends on the first line holding `-->`, which may be this one. An
+            # unclosed comment runs to the end of the document, as it renders.
+            after_open = line_without_newline[line_without_newline.index("<!--") + 4:]
+            i += 1
+            if "-->" not in after_open:
+                while i < len(lines) and "-->" not in lines[i]:
+                    i += 1
+                i = min(i + 1, len(lines))
+        elif nocompress:
             i += 1
             while i < len(lines) and not NOCOMPRESS_CLOSE_RE.match(lines[i].rstrip("\r\n")):
                 i += 1
@@ -1180,6 +1198,10 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
 
         if result.is_valid:
             print("Validation passed")
+            # Warnings don't block the write, but they were computed and never
+            # shown (#1350): a big bullet-count drop is worth a second look.
+            for warning in result.warnings:
+                print(f"   ⚠️ {warning}")
             run["live_write_started"] = True
             _write_target(filepath, compressed, backup_path, newline)
             staging_path.unlink(missing_ok=True)
