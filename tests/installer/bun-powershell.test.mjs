@@ -17,7 +17,10 @@ const ref = 'v0.0.0-bun-test';
 // flow and argument construction, not native Windows executable marshalling.
 for (const shell of shells.length ? shells : [undefined]) {
 function run(t, { node = false, bun = true, npx = true, major = 24, local = false, status = 0, args = ['--dry-run', '--config-dir', 'a path; & chars'] } = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman bun ps '));
+  // Windows runners hand out an 8.3 temp path (C:\Users\RUNNER~1\...) while
+  // PowerShell's $PSScriptRoot reports the long one, so compare long forms.
+  const made = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman bun ps '));
+  const dir = process.platform === 'win32' ? fs.realpathSync.native(made) : made;
   t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
   const script = path.join(dir, 'install.ps1');
   const log = path.join(dir, 'calls.jsonl');
