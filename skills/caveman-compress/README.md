@@ -38,9 +38,10 @@ To edit and re-compress, restore first — the skill refuses to run while a back
 exists, so that it never captures already-compressed text as the new "original":
 
 ```bash
-cp "$BACKUP" CLAUDE.md     # restore the uncompressed original
+FILE=path/to/the/file/you/compressed
+cp "$BACKUP" "$FILE"        # restore the uncompressed original
 mv "$BACKUP" "$BACKUP.kept" # move it aside (do not just delete it)
-# edit CLAUDE.md, then run the skill again
+# change $FILE, then run the skill again
 ```
 
 ## Benchmarks
@@ -160,6 +161,8 @@ acquire cross-session lock on the file  (waits up to 15 min if another run holds
         ↓
 detect file type        (no tokens)
         ↓
+refuse if text holds a key or token  (no tokens, nothing sent)
+        ↓
 configured provider compresses       (tokens: one call)
         ↓
 validate output         (no tokens)
@@ -170,8 +173,8 @@ if errors: configured provider fixes cherry-picked issues only   (tokens: target
         ↓
 validate again (one fix call at most)
         ↓
-write compressed → CLAUDE.md
-write original   → CLAUDE.original.md
+compressed text → same path as input
+original        → backup dir, as <name>.original.md
 ```
 
 Only two things use tokens: initial compression + targeted fix if validation fails. Everything else is local Python.

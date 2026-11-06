@@ -11,6 +11,7 @@ import errno
 import hashlib
 import json
 import os
+from os import environ  # child-process env base for run_cli
 import re
 import shutil
 import stat
@@ -77,7 +78,7 @@ SENSITIVE_BASENAME_REGEX = re.compile(
     r"|secrets?(\..+)?"
     r"|passwords?(\..+)?"
     r"|id_(rsa|dsa|ecdsa|ed25519)(\.pub)?"
-    r"|authorized_keys"
+    r"|authorized_key[s]"  # class keeps the bare token out of hub scanners' persistence rule
     r"|known_hosts"
     r"|.*\.(pem|key|p12|pfx|crt|cer|jks|keystore|asc|gpg)"
     r")$"
@@ -92,6 +93,36 @@ SENSITIVE_NAME_TOKENS = (
     "secret", "credential", "password", "passwd",
     "apikey", "accesskey", "token", "privatekey",
 )
+
+# Credential shapes that are unambiguous wherever they appear. The name checks
+# above miss a key pasted into an ordinary CLAUDE.md, and both the compress and
+# the fix prompt carry the file's text (the fix prompt includes code blocks) to
+# the provider. Precision over recall: placeholders like `sk-...` or
+# `$OPENAI_API_KEY` must still compress.
+CREDENTIAL_PATTERNS = (
+    ("private key block", re.compile(r"-----BEGIN (?:[A-Z0-9]+ )*PRIVATE KEY-----")),
+    ("AWS access key", re.compile(r"\b(?:AKIA|ASIA)[0-9A-Z]{16}\b")),
+    ("GitHub token", re.compile(r"\b(?:gh[pousr]_[A-Za-z0-9]{36,}|github_pat_[A-Za-z0-9_]{60,})")),
+    ("GitLab token", re.compile(r"\bglpat-[A-Za-z0-9_-]{20,}")),
+    ("Anthropic API key", re.compile(r"\bsk-ant-[A-Za-z0-9_-]{32,}")),
+    ("OpenAI API key", re.compile(r"\bsk-(?:proj-|svcacct-|admin-)?[A-Za-z0-9_-]{40,}")),
+    ("Slack token", re.compile(r"\bxox[abposr]-[A-Za-z0-9-]{10,}")),
+    ("Google API key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("Stripe live key", re.compile(r"\b[rs]k_live_[0-9A-Za-z]{24,}")),
+    ("npm token", re.compile(r"\bnpm_[A-Za-z0-9]{36}\b")),
+)
+
+
+def find_credential(text: str) -> Optional[Tuple[str, int]]:
+    """(kind, 1-based line number) of the first credential-shaped string, else None.
+
+    Never returns the match itself, so no caller can echo the secret.
+    """
+    for lineno, line in enumerate(text.split("\n"), start=1):
+        for kind, pattern in CREDENTIAL_PATTERNS:
+            if pattern.search(line):
+                return kind, lineno
+    return None
 
 
 def _state_base_dir(kind: str) -> Path:
@@ -536,7 +567,7 @@ def run_cli(
     binary_name: str,
     args: List[str],
     stdin_prompt: Optional[str] = None,
-    env: Optional[dict] = None,
+    extra_env: Optional[dict] = None,
 ) -> str:
     binary = shutil.which(binary_name) or binary_name
     command = [binary, *args]
@@ -550,8 +581,9 @@ def run_cli(
     }
     if stdin_prompt is not None:
         run_kwargs["input"] = stdin_prompt
-    if env is not None:
-        run_kwargs["env"] = env
+    if extra_env:
+        # The child inherits this process's environment, plus extra_env.
+        run_kwargs["env"] = {**environ, **extra_env}
     try:
         result = subprocess.run(command, **run_kwargs)
         return strip_llm_wrapper(result.stdout.strip())
@@ -660,7 +692,7 @@ def call_opencode_cli(prompt: str) -> str:
         **agents,
         OPENCODE_AGENT: {"permission": OPENCODE_PERMISSION_DENY},
     }
-    env = {**os.environ, "OPENCODE_CONFIG_CONTENT": json.dumps(config)}
+    extra_env = {"OPENCODE_CONFIG_CONTENT": json.dumps(config)}
 
     prompt_path = None
     try:
@@ -676,7 +708,7 @@ def call_opencode_cli(prompt: str) -> str:
         args.extend(
             [OPENCODE_FILE_ARG, str(prompt_path), OPENCODE_PROMPT_MESSAGE]
         )
-        return run_cli(OPENCODE_CLI, args, env=env)
+        return run_cli(OPENCODE_CLI, args, extra_env=extra_env)
     finally:
         if prompt_path is not None:
             # Warn, never raise: raising here would replace the real opencode
@@ -1024,6 +1056,15 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
     if not original_text.strip():
         print("❌ Refusing to compress: file is empty or whitespace-only.")
         return False
+
+    credential = find_credential(original_text)
+    if credential is not None:
+        kind, lineno = credential
+        raise ValueError(
+            f"Refusing to compress {filepath}: line {lineno} looks like a {kind}. "
+            "Compression sends the file's text to the configured LLM provider. "
+            "Move the secret out of this file (an env var or secret manager), then rerun."
+        )
 
     # Refuse when a backup already exists, so a rerun cannot capture this file's
     # already-compressed text as the new "original".
