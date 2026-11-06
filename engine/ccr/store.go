@@ -41,6 +41,12 @@ var ErrBudgetExceeded = errors.New("ccr: storage budget exceeded")
 // connection. Callers must preserve the original input and report the error.
 var ErrStorageChanged = errors.New("ccr: recovery storage changed; restart the process and restore missing recovery files")
 
+// ErrStoreDamaged means PRAGMA quick_check, or SQLite itself, found damage in
+// the recovery database. Reads still work and are hash-checked, but every write
+// is refused: a write into a damaged b-tree can spread the damage. Callers
+// must pass the original input through.
+var ErrStoreDamaged = errors.New("ccr: recovery store is damaged; new recovery writes are refused until it is repaired (caveman-proxy recovery-store repair)")
+
 // ObjectType is a closed typed-working-memory enum. Unknown values fail closed:
 // adapters may preserve unknown native payloads outside CCR, but may not invent
 // retrieval semantics for them.
@@ -219,7 +225,18 @@ type Stats struct {
 	// StorageFullReason names why StorageFull is true: StorageFullPayloadBudget,
 	// StorageFullPageCap or StorageFullDiskFull. It is empty when not full.
 	StorageFullReason string `json:"storage_full_reason,omitempty"`
+	// Integrity is IntegrityOK or IntegrityDamaged once this process has
+	// checked the database, and empty before that. A damaged store refuses
+	// every write; IntegrityDetail carries the first quick_check findings.
+	Integrity       string `json:"integrity,omitempty"`
+	IntegrityDetail string `json:"integrity_detail,omitempty"`
 }
+
+// Values of Stats.Integrity.
+const (
+	IntegrityOK      = "ok"
+	IntegrityDamaged = "damaged"
+)
 
 // Values of Stats.StorageFullReason.
 const (

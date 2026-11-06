@@ -278,7 +278,7 @@ func TestFreePagesBelowPageCapAreRoom(t *testing.T) {
 }
 
 func TestConsolidatedRepositoryMapsLeaveRoom(t *testing.T) {
-	const budget = 64 << 10
+	const budget = 128 << 10
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {
 		t.Fatal(err)
@@ -383,16 +383,18 @@ func TestConsolidatedRepositoryMapsLeaveRoom(t *testing.T) {
 }
 
 func TestPayloadBudgetRefusalReportsPayloadBudget(t *testing.T) {
-	const budget = 64 << 10
+	// Large enough that the schema's own pages leave the file below its page
+	// cap, so the payload budget is the only limit this test reaches.
+	const budget = 128 << 10
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err := store.Put(Recovery{ContentType: "text", Compressor: "test", Original: bytes.Repeat([]byte("a"), 20<<10)}); err != nil {
+	if _, err := store.Put(Recovery{ContentType: "text", Compressor: "test", Original: bytes.Repeat([]byte("a"), 40<<10)}); err != nil {
 		t.Fatal(err)
 	}
-	_, err = store.Put(Recovery{ContentType: "text", Compressor: "test", Original: bytes.Repeat([]byte("b"), 50<<10)})
+	_, err = store.Put(Recovery{ContentType: "text", Compressor: "test", Original: bytes.Repeat([]byte("b"), 100<<10)})
 	if !errors.Is(err, ErrBudgetExceeded) {
 		t.Fatalf("put error = %v, want ErrBudgetExceeded", err)
 	}

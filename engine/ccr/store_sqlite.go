@@ -12,6 +12,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -39,6 +40,11 @@ type Store struct {
 	// refused holds a refusal* value. It is set when a write fails with
 	// SQLITE_FULL and cleared by a later successful write.
 	refused atomic.Int32
+	// integrity is an integrity* value; integrityDetail holds the findings
+	// that made it integrityDamaged. A damaged store refuses every write.
+	integrity       atomic.Int32
+	integrityDetail atomic.Pointer[string]
+	logger          atomic.Pointer[slog.Logger]
 }
 
 const (
@@ -146,7 +152,11 @@ CREATE TABLE IF NOT EXISTS typed_objects (
   data BLOB NOT NULL
 );
 CREATE INDEX IF NOT EXISTS typed_objects_session_created
-  ON typed_objects(session_id, created_at DESC);`
+  ON typed_objects(session_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS ccr_meta (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL
+);`
 
 // ownerIndexSQL supports the dedup owner lookup. It only covers full copies
 // (data_ref is empty), so it stays small. It must run after ensureDataRefColumn.
@@ -600,6 +610,9 @@ func OpenMemory() (*Store, error) { return OpenWithBudget(":memory:", DefaultMax
 // same original twice (the handle is derived from the bytes) overwrites the row
 // with identical content and returns the same handle.
 func (s *Store) put(rec Recovery) (string, error) {
+	if err := s.refuseDamaged(); err != nil {
+		return "", fmt.Errorf("ccr put: %w", err)
+	}
 	handle := Handle(rec.Original)
 	// One write transaction holds the lock from the check to the insert.
 	tx, err := s.db.BeginTx(context.Background(), nil)
@@ -760,6 +773,9 @@ func (s *Store) getMetadata(handle string) ([]byte, error) {
 // reference to that row instead of a second copy of the bytes; readers resolve
 // the reference, so callers still see a byte-exact Data on every object.
 func (s *Store) putObject(input Object) (string, error) {
+	if err := s.refuseDamaged(); err != nil {
+		return "", fmt.Errorf("ccr typed object put: %w", err)
+	}
 	obj, err := prepareObject(input)
 	if err != nil {
 		return "", err
@@ -982,6 +998,9 @@ func (s *Store) setObjectCurrentness(id string, currentness Currentness) error {
 	if err := validateCurrentness(currentness); err != nil {
 		return err
 	}
+	if err := s.refuseDamaged(); err != nil {
+		return fmt.Errorf("ccr typed object currentness: %w", err)
+	}
 	result, err := s.db.Exec(`UPDATE typed_objects SET currentness = ? WHERE object_id = ?`, currentness, id)
 	if err != nil {
 		return fmt.Errorf("ccr typed object currentness: %w", err)
@@ -999,6 +1018,9 @@ func (s *Store) setObjectCurrentness(id string, currentness Currentness) error {
 func (s *Store) setObjectLifecycle(id string, lifecycle Lifecycle) error {
 	if err := validateLifecycle(lifecycle); err != nil {
 		return err
+	}
+	if err := s.refuseDamaged(); err != nil {
+		return fmt.Errorf("ccr typed object lifecycle: %w", err)
 	}
 	result, err := s.db.Exec(`UPDATE typed_objects SET lifecycle = ? WHERE object_id = ?`, lifecycle, id)
 	if err != nil {
@@ -1144,5 +1166,14 @@ func (s *Store) summary() (Stats, error) {
 		out.StorageFullReason = StorageFullDiskFull
 	}
 	out.StorageFull = out.StorageFullReason != ""
+	switch s.integrity.Load() {
+	case integrityOK:
+		out.Integrity = IntegrityOK
+	case integrityDamaged:
+		out.Integrity = IntegrityDamaged
+		if detail := s.integrityDetail.Load(); detail != nil {
+			out.IntegrityDetail = *detail
+		}
+	}
 	return out, nil
 }
