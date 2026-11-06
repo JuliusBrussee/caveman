@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -120,6 +121,10 @@ type Runtime struct {
 	// before the model request they announce (the Cloud link warms its route
 	// path). It must not block.
 	OnTurnStart func()
+	// Logger, when set, gets one rate-limited WARN line per request the socket
+	// closed without a decision (see dropLog). Nil logs nothing.
+	Logger *slog.Logger
+	drops  dropLog
 }
 
 type sessionActivity struct {
