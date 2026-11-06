@@ -93,7 +93,10 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 			oldest, oldestTime = entry, verified
 		}
 	}
-	wantProvider, wantModel, wantRegion, wantVerifiedAt := "anthropic", "claude-haiku-4-5", "global", "2026-07-10T00:00:00Z"
+	// Re-pinned 2026-11-06: that day's price re-check moved 34 rows but not
+	// the two Vertex Gemini 2.5 rows (Vertex retired both on 2026-10-20), so
+	// the oldest row is now the first of those two by the tie rule above.
+	wantProvider, wantModel, wantRegion, wantVerifiedAt := "vertex", "gemini-2.5-flash", "global", "2026-07-10T00:00:00Z"
 	if oldest.Provider != wantProvider || oldest.Model != wantModel || oldest.Region != wantRegion || oldest.VerifiedAt != wantVerifiedAt {
 		t.Fatalf("oldest verified_at row = %s/%s@%s verified_at=%s, want %s/%s@%s verified_at=%s (a capability-only edit must never move this)",
 			oldest.Provider, oldest.Model, oldest.Region, oldest.VerifiedAt, wantProvider, wantModel, wantRegion, wantVerifiedAt)
@@ -109,13 +112,13 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 	// must likewise update this expectation in the same commit as its catalog
 	// price row; capability-only changes must not alter VerifiedAt.
 	wantDates := map[string]int{
-		"2026-07-10T00:00:00Z": 13, // anthropic claude-opus-4-1 and bedrock claude-3-5-sonnet v2 removed 2026-10-10 (retired)
-		"2026-07-23T00:00:00Z": 23,
+		"2026-07-10T00:00:00Z": 2, // vertex gemini-2.5-pro/flash: retired on Vertex 2026-10-20, price not re-attested
 		"2026-08-05T00:00:00Z": 1,
 		"2026-08-07T00:00:00Z": 1,
 		"2026-08-10T00:00:00Z": 9,
 		"2026-09-28T00:00:00Z": 7,
-		"2026-10-08T00:00:00Z": 4, // claude-sonnet-5-5, claude-haiku-5-5, gpt-6.1-sol, gpt-6-luna added
+		"2026-10-08T00:00:00Z": 4,  // claude-sonnet-5-5, claude-haiku-5-5, gpt-6.1-sol, gpt-6-luna added
+		"2026-11-06T00:00:00Z": 34, // 11 of the 2026-07-10 rows and all 23 2026-07-23 rows, prices re-checked, none changed
 	}
 	gotDates := map[string]int{}
 	for _, entry := range entries {

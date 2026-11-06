@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- Re-checked the prices of 34 rows against the vendors' pricing pages on
+  2026-11-06 (snapshot `2026-11-06.yaml`): every OpenAI, Anthropic, Gemini API
+  and Bedrock row last checked 2026-07-10 or 2026-07-23, plus Vertex
+  `claude-sonnet-4-6` and `claude-haiku-4-5@20251001`. No price changed. Added
+  the pages the check used as sources where they were missing: OpenAI's
+  developer pricing page (and Batch guide for the two embedding rows) and
+  Google Cloud's partner-model pricing page for the two Vertex Claude rows.
+  Not re-checked: Vertex `gemini-2.5-pro` and `gemini-2.5-flash`. Google's
+  Vertex lifecycle page gives both a retirement date of 2026-10-20, so their
+  2026-07-10 date stays put.
 - Added `claude-sonnet-5-5` ($2 in / $10 out, cache read $0.10 = 0.05x) and
   `claude-haiku-5-5` ($0.10 / $0.50, 5x on every rate for prompts over 100,000
   tokens), checked against Anthropic's pricing page 2026-10-08 (snapshot
