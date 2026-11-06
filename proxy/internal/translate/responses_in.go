@@ -553,7 +553,7 @@ func replayedReasoning(encrypted []byte, replay string) string {
 // encrypted_content passes untouched.
 func responsesNativeBody(body map[string]json.RawMessage, model, effort, route string) error {
 	body["model"] = mustJSON(model)
-	restore := route != "" && route != "openai"
+	restore := route != "" && route != "openai" && route != "moonshot"
 	if input := body["input"]; !isStr(input) && bytes.Contains(input, []byte(`"reasoning"`)) {
 		if edited, changed := editReasoning(input, func(encrypted []byte) ([]byte, bool) {
 			if restore {
@@ -561,7 +561,7 @@ func responsesNativeBody(body map[string]json.RawMessage, model, effort, route s
 					return blob, true
 				}
 			}
-			if _, ours := envelopeBlocks(encrypted); ours || isNull(encrypted) || string(encrypted) == `""` {
+			if _, ours := envelopeBlocks(encrypted); ours && route != "moonshot" || isNull(encrypted) || string(encrypted) == `""` {
 				return nil, false
 			}
 			return encrypted, true

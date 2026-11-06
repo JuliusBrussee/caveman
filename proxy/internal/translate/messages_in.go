@@ -614,7 +614,7 @@ func messagesResponsesBody(top map[string]json.RawMessage, opts Options) (map[st
 	// "none" only for a model the catalog lists with levels: one that does
 	// not reason (gpt-4.1) refuses any reasoning field.
 	_, reasons := catalog.EffortLevels("openai", opts.Model)
-	switch effort := fitOpenAIEffort(m.effortFor(opts), openAIEfforts(opts.Model)); {
+	switch effort := responsesRequestEffort(m.effortFor(opts), opts); {
 	case effort == "none":
 		if reasons {
 			out["reasoning"] = json.RawMessage(`{"effort":"none"}`)

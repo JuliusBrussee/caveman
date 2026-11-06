@@ -195,6 +195,9 @@ func Request(from, to string, body []byte, opts Options) ([]byte, *Reply, error)
 		}
 		dropParams(fields, opts)
 	}
+	if err == nil && to == Responses && opts.Dialect == dialectKimi {
+		moonshotResponsesBody(fields, opts.Effort)
+	}
 	if err != nil {
 		return nil, nil, err
 	}

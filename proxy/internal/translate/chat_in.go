@@ -402,7 +402,7 @@ func chatResponsesBody(top map[string]json.RawMessage, opts Options) (map[string
 	// effort; any other model gets reasoning fields only when one was asked
 	// ("none" not even then: there is no reasoning to switch off).
 	_, reasons := catalog.EffortLevels("openai", opts.Model)
-	switch effort := fitOpenAIEffort(c.effort, openAIEfforts(opts.Model)); {
+	switch effort := responsesRequestEffort(c.effort, opts); {
 	case effort == "none":
 		if reasons {
 			out["reasoning"] = json.RawMessage(`{"effort":"none"}`)

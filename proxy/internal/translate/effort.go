@@ -15,6 +15,7 @@ const (
 	dialectOpenAIChat = "openai_chat" // reasoning_effort: <effort> (OpenAI, xAI, Groq, Gemini's compatible endpoint, ...)
 	dialectOpenRouter = "openrouter"  // reasoning: {effort}
 	dialectDeepSeek   = "deepseek"    // thinking: {type} + reasoning_effort low|high|max
+	dialectKimi       = "kimi"        // low|high|max on chat or Responses (Kimi K3, always thinking)
 	dialectToggle     = "toggle"      // thinking: {type: enabled|disabled} (Z.ai GLM, Kimi K2.x)
 	dialectQwen       = "qwen"        // enable_thinking + thinking_budget (DashScope)
 	dialectNone       = "none"        // no effort field at all (local servers)

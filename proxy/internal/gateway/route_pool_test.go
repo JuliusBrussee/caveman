@@ -198,6 +198,43 @@ func TestPoolLocalTargetTranslatesAndNeverTouchesTheHarnessPath(t *testing.T) {
 	}
 }
 
+func TestPoolMoonshotK3TargetSendsFittedResponsesRequest(t *testing.T) {
+	header := http.Header{}
+	header.Set("authorization", "Bearer sk-moonshot")
+	target := &RouteTarget{PoolID: "moonshot/kimi-k3", Via: "local", Host: "moonshot", Model: "kimi-k3", Wire: translate.Responses,
+		URL: "https://api.moonshot.ai/v1/responses", Header: header,
+		Translate: translate.Options{Model: "kimi-k3", Dialect: "kimi", Route: "moonshot"}}
+	c := newPoolCase(t, target, "max")
+	c.stub.respSSE = "data: {\"type\":\"response.output_text.delta\",\"delta\":\"moonshot says hi\"}\n\n" +
+		"data: {\"type\":\"response.completed\",\"response\":{\"id\":\"r1\"}}\n\n"
+	rec := poolSend(t, c.srv, `{"model":"claude-opus-5-5","max_tokens":50,"stream":true,"tools":[{"name":"Read","input_schema":{"type":"object"}}],"tool_choice":{"type":"tool","name":"Read"},"messages":[{"role":"user","content":"fix the bug"}]}`)
+	if rec.Code != 200 || !strings.Contains(rec.Body.String(), "moonshot says hi") {
+		t.Fatalf("answer %d: %s", rec.Code, rec.Body.String())
+	}
+	req, body := c.stub.last("/v1/responses")
+	if req == nil {
+		t.Fatal("the Moonshot Responses endpoint was not called")
+	}
+	if req.Header.Get("authorization") != "Bearer sk-moonshot" || req.Header.Get("x-api-key") != "" {
+		t.Fatalf("Moonshot headers = %v", req.Header)
+	}
+	var sent map[string]any
+	if err := json.Unmarshal([]byte(body), &sent); err != nil {
+		t.Fatal(err)
+	}
+	if sent["model"] != "kimi-k3" || sent["max_output_tokens"] != 50.0 || sent["tool_choice"] != "auto" || encode(sent["reasoning"]) != `{"effort":"max"}` {
+		t.Fatalf("Moonshot body = %s", body)
+	}
+	for _, unwanted := range []string{"include", "store", "parallel_tool_calls", "max_tokens"} {
+		if _, ok := sent[unwanted]; ok {
+			t.Fatalf("Moonshot body contains %s: %s", unwanted, body)
+		}
+	}
+	if req, _ := c.stub.last("/v1/messages"); req != nil {
+		t.Error("the harness's own provider was called too")
+	}
+}
+
 func TestPoolLocalTargetStreamsBackInTheCallersGrammar(t *testing.T) {
 	c := newPoolCase(t, localTarget("api.openai.com"), "")
 	c.stub.poolSSE = "data: {\"id\":\"c1\",\"model\":\"gpt-6.1-sol\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"str\"}}]}\n\n" +

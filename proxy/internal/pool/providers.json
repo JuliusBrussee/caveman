@@ -86,7 +86,8 @@
       "base_url": "https://api.moonshot.ai",
       "wires": {
         "messages": {"path": "/anthropic/v1/messages", "auth": "bearer"},
-        "chat": {"path": "/v1/chat/completions", "auth": "bearer", "effort": "openai_chat"}
+        "chat": {"path": "/v1/chat/completions", "auth": "bearer", "effort": "openai_chat"},
+        "responses": {"path": "/v1/responses", "auth": "bearer", "effort": "kimi"}
       },
       "models": [{"model": "kimi-k3"}],
       "drop_params": ["temperature"], "replay": true,
