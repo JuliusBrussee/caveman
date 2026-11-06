@@ -260,3 +260,37 @@ else if (ARGV[0] === "stats") console.log(JSON.stringify({spans:9,tokens_in:0,to
     }
   }
 });
+
+// #1369/#1370: a recovery store that refuses writes (damaged, or full with
+// nothing to expire) turns input compression off; status says so, with the
+// proxy's own fix and the binary spelled out. A healthy store adds nothing.
+test("status raises a recovery store that refuses writes as an off-state", async () => {
+  for (const refused of [false, true]) {
+    const isolated = statusEnv();
+    const report = refused
+      ? { schema: "caveman.recovery_store.v1", exists: true, writes_refused: true, reason: "recovery store is damaged", fix: "caveman stop, close agent sessions, then caveman-proxy recovery-store repair" }
+      : { schema: "caveman.recovery_store.v1", exists: true, writes_refused: false };
+    const proxy = nativeStub(join(isolated.home, "bin"), "store-proxy", `
+if (ARGV[0] === "version") console.log(JSON.stringify({version:"test",capabilities:["run_state","mcp_recovery","recovery_store_v1"]}));
+else if (ARGV[0] === "status") console.log(JSON.stringify({owner:"unknown"}));
+else if (ARGV[0] === "stats") console.log(JSON.stringify({spans:0,tokens_in:0,token_accounting:{},basis:"inferred"}));
+else if (ARGV[0] === "recovery-store" && ARGV[1] === "status") console.log(${JSON.stringify(JSON.stringify(report))});
+`);
+    isolated.env.CAVEMAN_PROXY_BIN = proxy;
+    try {
+      const out = await runCli(["status", "--json"], { env: isolated.env, cwd: isolated.home });
+      assert.equal(out.code, 0, out.stderr);
+      const state = JSON.parse(out.stdout).off_states.find((item) => item.id === "recovery-store");
+      if (!refused) {
+        assert.equal(state, undefined, "a healthy store must not raise the off-state");
+        continue;
+      }
+      assert.ok(state, "a store that refuses writes must raise an off-state");
+      assert.equal(state.line, "recovery store is damaged — new input passes through uncompressed");
+      assert.ok(state.fix.endsWith(" recovery-store repair"), state.fix);
+      assert.ok(state.fix.includes("store-proxy"), `the fix must name the installed binary: ${state.fix}`);
+    } finally {
+      isolated.cleanup();
+    }
+  }
+});

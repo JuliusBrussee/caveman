@@ -35,6 +35,8 @@ export async function modulesDoctor(): Promise<void> {
   }
   const down = await h.runtimeDown();
   if (down) failures.push(down);
+  const store = h.recoveryStoreProblem();
+  if (store) failures.push(store);
   const wired = h.nativeAgents().filter((agent) => agent.wired);
   for (const agent of wired) {
     const state = h.agentState(agent.id);
