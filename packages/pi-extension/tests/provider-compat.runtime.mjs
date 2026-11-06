@@ -13,12 +13,12 @@ const hostRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding
 const sdkManifest = hostRequire.resolve.paths("@earendil-works/pi-ai")
   .map(root => join(root, "@earendil-works/pi-ai/package.json")).find(existsSync);
 assert.ok(sdkManifest, "Pi's SDK dependency must be installed");
-assert.equal(JSON.parse(readFileSync(sdkManifest, "utf8")).version, "1.0.4", "Review compat detection when updating the pinned Pi SDK");
+assert.equal(JSON.parse(readFileSync(sdkManifest, "utf8")).version, "1.3.0", "Review compat detection when updating the pinned Pi SDK");
 const sdkStream = async api => (await import(pathToFileURL(join(dirname(sdkManifest), "dist/api", `${api}.js`)))).stream;
 const GATEWAY = "http://127.0.0.1:8787";
 const STREAMS = Object.fromEntries(await Promise.all(["openai-completions", "openai-responses", "anthropic-messages"]
   .map(async api => [api, await sdkStream(api)])));
-// `sk-` prefix: pi-ai 1.0.4 reads an `openai` model at api.openai.com with any other
+// `sk-` prefix: pi-ai 1.3.0 reads an `openai` model at api.openai.com with any other
 // key as a Sign in with ChatGPT token and drops max_output_tokens, temperature and
 // the prompt-cache fields. That credential is OAuth, which the router never routes,
 // so the fixture must look like the API key it stands for.
