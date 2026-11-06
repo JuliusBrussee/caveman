@@ -264,6 +264,8 @@ Displayed provider cost is a list-price subtotal, not a provider invoice. See
 - Authentication failures should be checked at inbound header and provider
   credential source without printing secret values.
 - A blocked custom base URL usually needs a precise `CAVE_SSRF_ALLOWLIST` entry.
+  The proxy answers `502 cave_upstream_blocked` (not `cave_upstream_unavailable`)
+  and logs one `WARN` line naming the refused host and the entry to add.
 - Unexpected unchanged context is valid when mode is record or a transform
   fails parse, size, policy, or recovery gates.
 - For behavior comparison, repeat request in record mode and compare provider

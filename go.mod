@@ -8,7 +8,7 @@ require (
 	github.com/chromedp/chromedp v0.16.0
 	github.com/go-json-experiment/json v0.0.0-20260623181947-01eb4420fa68
 	github.com/jackc/pgx/v5 v5.11.0
-	github.com/klauspost/compress v1.20.1
+	github.com/klauspost/compress v1.20.3
 	github.com/smacker/go-tree-sitter v0.0.0-20240827094217-dd81d9e9be82
 	github.com/tiktoken-go/tokenizer v0.8.1
 	golang.org/x/net v0.62.0

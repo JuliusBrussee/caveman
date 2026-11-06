@@ -180,6 +180,59 @@ test('the hook runs node by its absolute path, and replaces an older bare-node e
   assert.equal(fs.existsSync(hooksPath), false);
 });
 
+// #1452: `--hook-node node` writes bare `node`, resolved through the hook
+// process's PATH when Codex runs it, so a version-manager switch or prune
+// follows without a reinstall. The default stays the absolute install-time
+// node (GUI hosts start without the shell PATH). Windows already writes bare
+// `node`, so the flag changes nothing there.
+test('--hook-node node writes a PATH-resolved command that runs, and a plain re-run restores the pin', (t) => {
+  const { dir, env, readHooks, run } = sandbox(t);
+  let r = run('--only', 'codex', '--hook-node', 'node');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  let ours = readHooks().hooks.SessionStart.filter(isOurs);
+  assert.equal(ours.length, 1, JSON.stringify(readHooks()));
+  const command = ours[0].hooks[0].command;
+  if (process.platform === 'win32') {
+    assert.match(command, /^node "/);
+  } else {
+    assert.ok(command.startsWith('"node" "'), command);
+    // The command really resolves node through PATH at hook time.
+    const hookEnv = { ...env, PATH: `${path.dirname(process.execPath)}:/usr/bin:/bin`, CAVEMAN_DEFAULT_MODE: 'ultracave' };
+    const ran = spawnSync('/bin/sh', ['-c', command], { encoding: 'utf8', cwd: dir, env: hookEnv });
+    assert.equal(ran.status, 0, ran.stderr);
+    assert.ok(ran.stdout.startsWith('CAVEMAN MODE ACTIVE — mode: ultracave'), ran.stdout.slice(0, 120));
+  }
+  r = run('--only', 'codex');
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  ours = readHooks().hooks.SessionStart.filter(isOurs);
+  assert.equal(ours.length, 1, JSON.stringify(readHooks()));
+  if (process.platform !== 'win32') assert.ok(ours[0].hooks[0].command.startsWith(`"${path.dirname(process.execPath)}/node" "`), ours[0].hooks[0].command);
+});
+
+test('--hook-node with an absolute path pins that node', { skip: process.platform === 'win32' && 'Windows Codex hooks always run bare node' }, (t) => {
+  const { readHooks, run } = sandbox(t);
+  const r = run('--only', 'codex', '--hook-node', process.execPath);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  const [ours] = readHooks().hooks.SessionStart.filter(isOurs);
+  assert.ok(ours.hooks[0].command.startsWith(`"${process.execPath}" "`), ours.hooks[0].command);
+});
+
+test('--hook-node rejects a value that is not node before writing anything', (t) => {
+  const { dir, codexHome, run } = sandbox(t);
+  const missing = path.join(dir, 'nowhere', process.platform === 'win32' ? 'node.exe' : 'node');
+  for (const [args, why] of [
+    [['--hook-node'], /--hook-node requires/],
+    [['--hook-node', 'python3'], /--hook-node/],
+    [['--hook-node', path.join('bin', 'node')], /--hook-node/],
+    [['--hook-node', missing], /does not run/],
+  ]) {
+    const r = run('--only', 'codex', ...args);
+    assert.notEqual(r.status, 0, `${args.join(' ')} was accepted`);
+    assert.match(r.stdout + r.stderr, why);
+    assert.deepEqual(fs.readdirSync(codexHome), [], `${args.join(' ')} wrote into CODEX_HOME`);
+  }
+});
+
 // Once the caveman CLI wires Codex natively (a `caveman enable` journal), its
 // output module is the one injection and `caveman off` switches it. A second,
 // always-on voice hook would inject again and outlive `caveman off`.

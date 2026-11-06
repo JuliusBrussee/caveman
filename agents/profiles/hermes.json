@@ -17,10 +17,10 @@
   },
   "command_hook": { "method": "hermes-plugin" },
   "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "0.21.5",
+  "tested_agent_version": "0.23.0",
   "injection_completeness": "builder-assisted",
-  "last_verified_at": "2026-10-06",
-  "verified_by": "local pinned-binary probe (hermes 0.21.5 = release v2026.9.24 at f97608f1, editable install on Python 3.12, agents/probe-installed.mjs)",
+  "last_verified_at": "2026-11-06",
+  "verified_by": "CI pinned-binary probe (hermes 0.23.0 = release tag v0.23.0 at 2bd378ed, installed with uv sync --frozen from that tag's uv.lock on Python 3.14, agent-conformance pinned-upstream-binary lane on ubuntu-latest, agents/probe-installed.mjs: --version and --help both exit 0). Both install details are required, not incidental: from 0.22 hermes gates every core dependency on python_version >= '3.14', so a 3.12 install carries none of them and --help fails importing ruamel (the 0.22.7 drift report, #1236), and pip cannot resolve it at all (Pillow==13.0.0 against browser-harness's pillow==12.3.0, settled only by the project's [tool.uv] override-dependencies). Launchability only: the hermes-plugin hook, the native config write and a routed model request were not exercised on 0.23.0",
   "fallback": "generic-env",
   "maintainer": null
 }

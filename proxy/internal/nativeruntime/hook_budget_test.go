@@ -159,6 +159,28 @@ func TestServeConnClosesWithinBudgetUnderHeldWriteLock(t *testing.T) {
 	}
 }
 
+// The same empty reply must not be silent in the proxy log: the line says the
+// hook budget ran out, which is what the reporter could not see (#1279).
+func TestServeConnLogsAHookBudgetDrop(t *testing.T) {
+	runtime := lockedHomeRuntime(t)
+	sink := loggedRuntime(t, runtime)
+	if reply := exchange(t, runtime, &Request{
+		ProtocolVersion: ProtocolVersion,
+		Agent:           Agent{ID: "pi"},
+		Session:         Session{ID: "socket-contended"},
+		Event:           Event{Type: "session.start"},
+	}); len(reply) != 0 {
+		t.Fatalf("write-locked store produced a socket decision: %s", reply)
+	}
+	lines := sink.lines(t)
+	if len(lines) != 1 || lines[0]["reason"] != "deadline_exceeded" || lines[0]["event"] != "session.start" {
+		t.Fatalf("drop lines = %v; want one naming session.start and deadline_exceeded", lines)
+	}
+	if _, ok := lines[0]["elapsed_ms"].(float64); !ok {
+		t.Fatalf("drop line has no elapsed_ms: %v", lines[0])
+	}
+}
+
 // TestFreshStoreSocketAnswersDecisionWellWithinBudget is the healthy-home half
 // of #1279's differential: a fresh store answers with a real decision far below
 // the hook budget, before and after the fix.

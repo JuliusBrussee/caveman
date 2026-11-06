@@ -6,6 +6,7 @@ package ccr
 
 import (
 	"bytes"
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -234,6 +235,10 @@ func openWithBudgetHooks(path string, maxBytes int64, afterPrepare, afterOpen fu
 	if err := RetryOnBusy(func() error { return ensureDataRefColumn(db) }); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate sqlite data_ref %q: %w", canonicalPath, err)
+	}
+	if err := RetryOnBusy(func() error { return ensureStorageUsage(db) }); err != nil {
+		closeSQLiteAfterOpenFailure(db, canonicalPath)
+		return nil, fmt.Errorf("migrate sqlite storage usage %q: %w", canonicalPath, err)
 	}
 	if err := configureStorageBudget(db, maxBytes); err != nil {
 		closeSQLiteAfterOpenFailure(db, canonicalPath)
@@ -557,12 +562,126 @@ func (s *Store) checkRecoveryBudget(handle string, newBytes int64) error {
 	return nil
 }
 
+// storageBytes is the retained payload the budget counts. It reads the
+// trigger-kept counter (see storageUsageSchema), one row, instead of summing
+// every row of both tables: that sum ran on every Put and PutObject, on the one
+// connection the gateway's compressor and the native runtime share, so a
+// weeks-old store spent each write scanning itself and native hooks ran out
+// their 250 ms budget queued behind those scans (issue #1279). A counter that
+// cannot be read (its row or table removed behind this process) falls back to
+// the scan, never to zero.
 func (s *Store) storageBytes() (int64, error) {
 	var used int64
-	err := s.db.QueryRow(`SELECT
-	  COALESCE((SELECT SUM(length(original)+COALESCE(length(metadata),0)) FROM recoveries),0) +
-	  COALESCE((SELECT SUM(length(data)+length(dependencies_json)) FROM typed_objects),0)`).Scan(&used)
+	if err := s.db.QueryRow(`SELECT bytes FROM ccr_storage_usage WHERE id = 1`).Scan(&used); err == nil {
+		return used, nil
+	}
+	err := s.db.QueryRow(`SELECT ` + storageUsageScan).Scan(&used)
 	return used, err
+}
+
+// storageUsageScan is the full-table definition of the retained payload. The
+// counter triggers below keep exactly this sum, term for term.
+const storageUsageScan = `
+  COALESCE((SELECT SUM(length(original)+COALESCE(length(metadata),0)) FROM recoveries),0) +
+  COALESCE((SELECT SUM(length(data)+length(dependencies_json)) FROM typed_objects),0)`
+
+// storageUsageSchema keeps the retained-payload total in one row. The counter
+// lives in the database, not in this process, because several processes write
+// the same ccr.db (proxy, caveman-mcp, cavemem, ...): triggers run inside every
+// writer's own transaction, including binaries that predate them, so the total
+// stays exact across processes and restarts. Each term matches storageUsageScan,
+// NULLs included (SUM skips a NULL term; COALESCE adds 0 for it).
+const storageUsageSchema = `
+CREATE TABLE IF NOT EXISTS ccr_storage_usage (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  bytes INTEGER NOT NULL
+);
+CREATE TRIGGER IF NOT EXISTS ccr_storage_usage_recoveries_insert AFTER INSERT ON recoveries BEGIN
+  UPDATE ccr_storage_usage SET bytes = bytes
+    + COALESCE(length(NEW.original)+COALESCE(length(NEW.metadata),0),0) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS ccr_storage_usage_recoveries_update AFTER UPDATE OF original, metadata ON recoveries BEGIN
+  UPDATE ccr_storage_usage SET bytes = bytes
+    - COALESCE(length(OLD.original)+COALESCE(length(OLD.metadata),0),0)
+    + COALESCE(length(NEW.original)+COALESCE(length(NEW.metadata),0),0) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS ccr_storage_usage_recoveries_delete AFTER DELETE ON recoveries BEGIN
+  UPDATE ccr_storage_usage SET bytes = bytes
+    - COALESCE(length(OLD.original)+COALESCE(length(OLD.metadata),0),0) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS ccr_storage_usage_objects_insert AFTER INSERT ON typed_objects BEGIN
+  UPDATE ccr_storage_usage SET bytes = bytes
+    + COALESCE(length(NEW.data)+length(NEW.dependencies_json),0) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS ccr_storage_usage_objects_update AFTER UPDATE OF data, dependencies_json ON typed_objects BEGIN
+  UPDATE ccr_storage_usage SET bytes = bytes
+    - COALESCE(length(OLD.data)+length(OLD.dependencies_json),0)
+    + COALESCE(length(NEW.data)+length(NEW.dependencies_json),0) WHERE id = 1;
+END;
+CREATE TRIGGER IF NOT EXISTS ccr_storage_usage_objects_delete AFTER DELETE ON typed_objects BEGIN
+  UPDATE ccr_storage_usage SET bytes = bytes
+    - COALESCE(length(OLD.data)+length(OLD.dependencies_json),0) WHERE id = 1;
+END;`
+
+// storageUsageNames are every schema object storageUsageSchema creates.
+var storageUsageNames = []string{
+	"ccr_storage_usage",
+	"ccr_storage_usage_recoveries_insert", "ccr_storage_usage_recoveries_update", "ccr_storage_usage_recoveries_delete",
+	"ccr_storage_usage_objects_insert", "ccr_storage_usage_objects_update", "ccr_storage_usage_objects_delete",
+}
+
+// ensureStorageUsage installs the counter and seeds it with the one full scan
+// it replaces. Creating the triggers and seeding happen in one IMMEDIATE
+// transaction, under the write lock, so no write from any process can land
+// between the sum and the first trigger. An install that is already complete
+// costs one catalog read.
+func ensureStorageUsage(db *sql.DB) error {
+	ctx := context.Background()
+	conn, err := db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	placeholders := strings.TrimSuffix(strings.Repeat("?,", len(storageUsageNames)), ",")
+	args := make([]any, len(storageUsageNames))
+	for i, name := range storageUsageNames {
+		args[i] = name
+	}
+	var present int
+	if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM sqlite_master WHERE name IN (`+placeholders+`)`, args...).Scan(&present); err != nil {
+		return err
+	}
+	if present == len(storageUsageNames) {
+		var rows int
+		if err := conn.QueryRowContext(ctx, `SELECT count(*) FROM ccr_storage_usage WHERE id = 1`).Scan(&rows); err != nil {
+			return err
+		}
+		if rows == 1 {
+			return nil
+		}
+	}
+	if _, err := conn.ExecContext(ctx, `BEGIN IMMEDIATE`); err != nil {
+		return err
+	}
+	committed := false
+	defer func() {
+		if !committed {
+			_, _ = conn.ExecContext(ctx, `ROLLBACK`)
+		}
+	}()
+	if _, err := conn.ExecContext(ctx, storageUsageSchema); err != nil {
+		return err
+	}
+	// Re-seed whenever anything was missing: a partial install cannot be
+	// trusted to have counted every write, and the write lock makes the sum exact.
+	if _, err := conn.ExecContext(ctx, `INSERT OR REPLACE INTO ccr_storage_usage (id, bytes) VALUES (1, (SELECT `+storageUsageScan+`))`); err != nil {
+		return err
+	}
+	if _, err := conn.ExecContext(ctx, `COMMIT`); err != nil {
+		return err
+	}
+	committed = true
+	return nil
 }
 
 func isFull(err error) bool {

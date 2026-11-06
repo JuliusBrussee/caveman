@@ -47,7 +47,7 @@ class UsageReader:
         if self.overflow:
             return
         # Check before decoding/concatenating an arbitrarily large host chunk.
-        if len(chunk) > self.max_buffer or len(self.text) * 4 + len(chunk) > self.max_buffer:
+        if len(chunk) > self.max_buffer or len(self.text) + len(chunk) > self.max_buffer:
             self.text, self.overflow = "", True
             return
         self.text += self.decoder.decode(chunk)

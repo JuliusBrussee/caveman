@@ -9,7 +9,6 @@ Visibility: this repo and `caveman-browse` are public now;
 after its gates; `caveman-coding-agent` and Caveman-Cloud remain private
 commercial source.
 
-@./skills/caveman/SKILL.md
-@./skills/caveman-commit/SKILL.md
-@./skills/caveman-review/SKILL.md
-@./skills/caveman-compress/SKILL.md
+Load `skills/caveman/SKILL.md` only while caveman mode is on. Load
+`skills/caveman-commit/SKILL.md`, `skills/caveman-review/SKILL.md`, or
+`skills/caveman-compress/SKILL.md` only when that task is asked.
