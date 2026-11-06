@@ -126,7 +126,12 @@ func cacheChurnSink(sessions []cacheHygieneSession, perTurnHooks []string) []Sin
 			bucket.TokensObserved += int64(spike.CacheCreation)
 			buckets[spike.Classification] = bucket
 			spikes = append(spikes, spike.CacheCreation)
-			locators = append(locators, spike)
+			// A sample per classification, like the repaste locators: the
+			// bucket counts above stay exact, and a long history cannot flood
+			// the report an agent reads back.
+			if bucket.Turns <= maxLocatorSamples {
+				locators = append(locators, spike)
+			}
 		}
 		if churn {
 			affected++

@@ -143,6 +143,15 @@ func TestCacheChurnSourceMixedSessions(t *testing.T) {
 		t.Fatalf("mixed attribution = %+v", sink)
 	}
 	locators := sink.Evidence["locators"].([]cacheSpike)
+	// Locators are a per-classification sample, not every spike: the report is
+	// read back into an agent's context, and a long history would flood it.
+	perClass := map[string]int{}
+	for _, spike := range locators {
+		perClass[spike.Classification]++
+	}
+	if perClass["cold_resume"] != maxLocatorSamples || perClass["invalidation"] != 2 || perClass["unknown"] != 2 {
+		t.Fatalf("locator sample per classification = %v, want cold_resume capped at %d", perClass, maxLocatorSamples)
+	}
 	for _, spike := range locators {
 		if !strings.HasPrefix(spike.SessionPath, root) || spike.Source != "claude" || spike.PriorLine != spike.JSONLLine-2 || spike.GapSeconds == nil || *spike.GapSeconds != 7200 || spike.TTLSeconds != 3600 || spike.Model != "claude-sonnet-4-6" {
 			t.Fatalf("source metadata lost: %+v", spike)
@@ -157,7 +166,7 @@ func TestCacheChurnSourceMixedSessions(t *testing.T) {
 		t.Fatal(err)
 	}
 	evidence := decoded["evidence"].(map[string]any)
-	if evidence["tokens_observed"] != float64(240000) || len(evidence["locators"].([]any)) != 12 {
+	if evidence["tokens_observed"] != float64(240000) || len(evidence["locators"].([]any)) != maxLocatorSamples+4 {
 		t.Fatalf("JSON evidence = %s", raw)
 	}
 	if strings.Contains(sink.Suggestion, "content that changes every message") || !strings.Contains(sink.Suggestion, "2 tool-change invalidations; 2 unresolved spikes; 8 likely cold resumes") {
