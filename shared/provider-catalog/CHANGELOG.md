@@ -9,9 +9,16 @@
   the pages the check used as sources where they were missing: OpenAI's
   developer pricing page (and Batch guide for the two embedding rows) and
   Google Cloud's partner-model pricing page for the two Vertex Claude rows.
-  Not re-checked: Vertex `gemini-2.5-pro` and `gemini-2.5-flash`. Google's
-  Vertex lifecycle page gives both a retirement date of 2026-10-20, so their
-  2026-07-10 date stays put.
+- Removed two rows for retired models: Vertex `gemini-2.5-pro` and
+  `gemini-2.5-flash` (global). Google's Vertex model-versions page and both
+  model pages give a retirement date of 2026-10-20, with `gemini-3.8-flash` /
+  `gemini-3.5-flash(-lite)` as replacements. Their prices were not re-checked,
+  so they are absent from `2026-11-06.yaml`; older snapshots keep the rows.
+  Vertex Gemini lookups now return an honest unpriced zero, and the catalog has
+  no Vertex Gemini rows until a current model is added with a checked price.
+  These were the only rows carrying `region_agnostic_pricing`. The capability
+  stays registered and pinned, and its tests now run on a fixture catalog.
+  The Gemini API rows for the same model ids are unaffected.
 - Added `claude-sonnet-5-5` ($2 in / $10 out, cache read $0.10 = 0.05x) and
   `claude-haiku-5-5` ($0.10 / $0.50, 5x on every rate for prompts over 100,000
   tokens), checked against Anthropic's pricing page 2026-10-08 (snapshot

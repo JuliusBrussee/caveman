@@ -72,16 +72,20 @@ func TestParseUsage_GeminiNoCacheStaysUnknown(t *testing.T) {
 }
 
 // Catalog cost for a Vertex model in the catalog must be non-zero (the catalog
-// entries were added with this adapter), proving usage+cost wiring.
+// entries were added with this adapter), proving usage+cost wiring. Since
+// 2026-11-06 the catalog holds no Vertex Gemini rows: Vertex retired
+// gemini-2.5-pro (geminiModel) on 2026-10-20, so that id must price to an
+// honest unpriced zero instead of a stale list price.
 func TestUsageAndCost_NonZeroForCatalogModels(t *testing.T) {
-	for _, model := range []string{geminiModel, claudeModel} {
-		price, version := catalog.Price("vertex", model)
-		if strings.HasPrefix(version, "unpriced") {
-			t.Fatalf("catalog missing vertex model %q (version=%q)", model, version)
-		}
-		if price.InputPerMillion <= 0 || price.OutputPerMillion <= 0 {
-			t.Fatalf("catalog vertex price not set for %q: %+v", model, price)
-		}
+	price, version := catalog.Price("vertex", claudeModel)
+	if strings.HasPrefix(version, "unpriced") {
+		t.Fatalf("catalog missing vertex model %q (version=%q)", claudeModel, version)
+	}
+	if price.InputPerMillion <= 0 || price.OutputPerMillion <= 0 {
+		t.Fatalf("catalog vertex price not set for %q: %+v", claudeModel, price)
+	}
+	if price, version := catalog.Price("vertex", geminiModel); price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
+		t.Fatalf("retired vertex model %q still priced: %+v %q", geminiModel, price, version)
 	}
 }
 
@@ -89,7 +93,9 @@ func TestUsageAndCost_NonZeroForCatalogModels(t *testing.T) {
 // aiplatform-shaped httptest stub records a truthful usage row — tokens and cost
 // non-zero, cache_status honest, bearer token forwarded. Exercises
 // ResolveUpstreamURL + (inherited) SanitizeAndMapHeaders + the real upstream
-// call + ParseUsage together, for both model families.
+// call + ParseUsage together, for both model families. Truthful spend means a
+// positive cost for a cataloged model (Claude) and an honest zero for the
+// retired, uncataloged Gemini id, never a borrowed or stale price.
 func TestVertex_EndToEndTruthfulUsage(t *testing.T) {
 	var sawAuth string
 	stub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -114,9 +120,10 @@ func TestVertex_EndToEndTruthfulUsage(t *testing.T) {
 		model     string
 		method    string
 		body      string
+		priced    bool
 	}{
-		{"google", geminiModel, "generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`},
-		{"anthropic", claudeModel, "rawPredict", `{"anthropic_version":"vertex-2023-10-16","messages":[{"role":"user","content":"hi"}],"max_tokens":100}`},
+		{"google", geminiModel, "generateContent", `{"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`, false},
+		{"anthropic", claudeModel, "rawPredict", `{"anthropic_version":"vertex-2023-10-16","messages":[{"role":"user","content":"hi"}],"max_tokens":100}`, true},
 	}
 	for _, tc := range cases {
 		path := predictPath(tc.publisher, tc.model, tc.method)
@@ -168,8 +175,11 @@ func TestVertex_EndToEndTruthfulUsage(t *testing.T) {
 			OutputTokens:      usage.OutputTokens,
 			CachedInputTokens: usage.CachedInputTokens,
 		})
-		if total <= 0 {
+		if tc.priced && total <= 0 {
 			t.Fatalf("%s: cost = %v, want > 0 (truthful spend)", tc.publisher, total)
+		}
+		if !tc.priced && total != 0 {
+			t.Fatalf("%s: cost = %v for an uncataloged model, want an honest 0", tc.publisher, total)
 		}
 	}
 }
