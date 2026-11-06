@@ -206,6 +206,11 @@ func retrieveError(err error) ToolResult {
 	if errors.Is(err, ccr.ErrCorruptRecovery) {
 		return ToolError("cave_corrupt_recovery", "stored data for this handle is damaged. Run PRAGMA quick_check on ~/.caveman/ccr.db")
 	}
+	// Expired is final too: the store deleted the object under its retention
+	// policy, so asking again cannot succeed.
+	if errors.Is(err, ccr.ErrExpired) {
+		return ToolError("cave_expired_recovery", "this object expired under the recovery store's retention policy and cannot be recovered; do not retry it")
+	}
 	return ToolError("cave_unknown_handle", "no original found for handle")
 }
 

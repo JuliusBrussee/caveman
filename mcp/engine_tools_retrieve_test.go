@@ -139,3 +139,28 @@ func TestRetrieveReportsCorruptRecoveryDistinctly(t *testing.T) {
 		}
 	}
 }
+
+type expiredEngine struct{ storeEngine }
+
+func (e *expiredEngine) Retrieve(string) ([]byte, error) {
+	return nil, fmt.Errorf("retrieve: %w", ccr.ErrExpired)
+}
+func (e *expiredEngine) RetrieveQuery(string, string) ([]byte, error) {
+	return nil, fmt.Errorf("retrieve: %w", ccr.ErrExpired)
+}
+
+func TestRetrieveReportsExpiredObjectDistinctly(t *testing.T) {
+	eng := &expiredEngine{}
+	for _, args := range []json.RawMessage{
+		retrieveArgs("ccr://ccr_obj_old", ""),
+		json.RawMessage(`{"recovery_handle":"ccr_obj_old","verify_only":true}`),
+	} {
+		result := retrieveTool(eng, args)
+		if !result.IsError || !strings.Contains(result.Content[0].Text, "cave_expired_recovery") {
+			t.Fatalf("expired object must report cave_expired_recovery: %+v", result)
+		}
+		if strings.Contains(result.Content[0].Text, "cave_unknown_handle") {
+			t.Fatalf("expired object must not read as an unknown handle: %+v", result)
+		}
+	}
+}

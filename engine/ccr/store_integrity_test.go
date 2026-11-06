@@ -3,6 +3,7 @@
 package ccr
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -139,6 +140,41 @@ func TestSQLiteCorruptionMidOperationStopsWrites(t *testing.T) {
 	_, err = store.PutObject(Object{Type: ObjectFileObservation, SessionID: "s", Source: "test", Data: []byte("x")})
 	if !errors.Is(err, ErrStoreDamaged) {
 		t.Fatalf("put after SQLite reported damage = %v, want ErrStoreDamaged", err)
+	}
+}
+
+func TestReclaimNeverWritesToADamagedStore(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "ccr.db")
+	damagedStore(t, path, "double-parent")
+	store, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	before, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store.mu.Lock()
+	store.refused.Store(refusalPageCap)
+	freed := store.reclaimForWrite()
+	store.mu.Unlock()
+	if freed {
+		t.Fatal("reclaim reported room in a damaged store")
+	}
+	if store.integrity.Load() != integrityDamaged {
+		t.Fatal("reclaim did not run its integrity check")
+	}
+	var walFrames int64
+	if info, err := os.Stat(path + "-wal"); err == nil {
+		walFrames = info.Size()
+	}
+	after, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, after) || walFrames > 0 {
+		t.Fatalf("reclaim wrote to a damaged store (wal %d bytes)", walFrames)
 	}
 }
 

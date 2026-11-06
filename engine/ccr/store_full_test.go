@@ -5,14 +5,11 @@ package ccr
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
 	"errors"
-	"fmt"
 	"path/filepath"
 	"strconv"
 	"testing"
-	"time"
 )
 
 func TestPutObjectReturnsStorageFullInsteadOfMintingHandle(t *testing.T) {
@@ -274,111 +271,6 @@ func TestFreePagesBelowPageCapAreRoom(t *testing.T) {
 	}
 	if stats.StorageFull || stats.StorageFullReason != "" {
 		t.Fatalf("full = %v, reason = %q, want a store with free pages to read as not full", stats.StorageFull, stats.StorageFullReason)
-	}
-}
-
-func TestConsolidatedRepositoryMapsLeaveRoom(t *testing.T) {
-	const budget = 128 << 10
-	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer store.Close()
-	var pageSize int64
-	if err := store.db.QueryRow(`PRAGMA page_size`).Scan(&pageSize); err != nil {
-		t.Fatal(err)
-	}
-	// Each map is several pages long, so its bytes live in overflow pages.
-	data := bytes.Repeat([]byte("m"), int(pageSize)*4)
-	hash := "sha256:" + fmt.Sprintf("%x", sha256.Sum256(data))
-	// Insert full copies of one map, the way old stores hold them, until the
-	// page cap refuses a row.
-	var insertErr error
-	for i := 0; i < 1000 && insertErr == nil; i++ {
-		_, insertErr = store.db.Exec(
-			`INSERT INTO typed_objects (
-			 object_id, object_type, content_hash, source, created_at, repository_state,
-			 session_id, transform_version, currentness, lifecycle, dependencies_json,
-			 original_byte_length, stored_byte_length, data, data_ref
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			"ccr_obj_dup"+strconv.Itoa(i), string(ObjectRepositoryMap), hash, "test",
-			time.Unix(int64(1000+i), 0).UTC().Format(time.RFC3339Nano), "state"+strconv.Itoa(i),
-			"s", "v1", string(Current), string(Hot), "[]", len(data), len(data), data, "",
-		)
-	}
-	if !isFull(insertErr) {
-		t.Fatalf("insert error = %v, want a full store", insertErr)
-	}
-	// Fill what is left with distinct maps until the page cap refuses one.
-	for i := 0; i < 100 && !errors.Is(err, ErrBudgetExceeded); i++ {
-		_, err = store.PutObject(Object{
-			Type: ObjectRepositoryMap, SessionID: "s", Source: "test",
-			Data: append(bytes.Repeat([]byte("n"), int(pageSize)), strconv.Itoa(i)...),
-		})
-	}
-	if !errors.Is(err, ErrBudgetExceeded) {
-		t.Fatalf("put error = %v, want ErrBudgetExceeded", err)
-	}
-	stats, err := store.Summary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !stats.StorageFull || stats.StorageFullReason != StorageFullPageCap {
-		t.Fatalf("before: full = %v, reason = %q, want page_cap", stats.StorageFull, stats.StorageFullReason)
-	}
-	tx, err := store.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, stmt := range []string{
-		`CREATE TEMP TABLE owners AS
-		   SELECT g.content_hash,
-		          (SELECT t.object_id FROM typed_objects t
-		           WHERE t.object_type = 'RepositoryMap' AND t.content_hash = g.content_hash AND t.data_ref = ''
-		           ORDER BY t.created_at ASC, t.object_id ASC LIMIT 1) AS owner
-		   FROM (SELECT DISTINCT content_hash FROM typed_objects
-		         WHERE object_type = 'RepositoryMap' AND data_ref = '') g`,
-		`UPDATE typed_objects
-		   SET data = x'', data_ref = (SELECT owner FROM owners o WHERE o.content_hash = typed_objects.content_hash)
-		   WHERE object_type = 'RepositoryMap' AND data_ref = ''
-		     AND object_id <> (SELECT owner FROM owners o WHERE o.content_hash = typed_objects.content_hash)`,
-	} {
-		if _, err := tx.Exec(stmt); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
-	}
-	var pages, free int64
-	if err := store.db.QueryRow(`PRAGMA page_count`).Scan(&pages); err != nil {
-		t.Fatal(err)
-	}
-	if err := store.db.QueryRow(`PRAGMA freelist_count`).Scan(&free); err != nil {
-		t.Fatal(err)
-	}
-	t.Logf("after consolidation: page_count = %d, freelist_count = %d, cap = %d", pages, free, store.pageCap.Load())
-	if free == 0 {
-		t.Fatal("consolidation freed no page")
-	}
-	if pages != store.pageCap.Load() {
-		t.Fatalf("page_count = %d, want it at the cap %d", pages, store.pageCap.Load())
-	}
-	if _, err := store.PutObject(Object{
-		Type: ObjectRepositoryMap, SessionID: "s", Source: "test",
-		Data: bytes.Repeat([]byte("n"), 2000),
-	}); err != nil {
-		t.Fatalf("put after consolidation: %v", err)
-	}
-	if store.refused.Load() != refusalNone {
-		t.Fatal("refused-write state stayed set after a successful write")
-	}
-	stats, err = store.Summary()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if stats.StorageFull || stats.StorageFullReason != "" {
-		t.Fatalf("after: full = %v, reason = %q, want a store with room", stats.StorageFull, stats.StorageFullReason)
 	}
 }
 

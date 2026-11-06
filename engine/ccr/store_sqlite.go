@@ -45,6 +45,9 @@ type Store struct {
 	integrity       atomic.Int32
 	integrityDetail atomic.Pointer[string]
 	logger          atomic.Pointer[slog.Logger]
+	// futileReclaimAt is when a reclaim last freed nothing, guarded by mu. A
+	// full store with nothing it may expire does not rescan on every write.
+	futileReclaimAt time.Time
 }
 
 const (
@@ -156,18 +159,32 @@ CREATE INDEX IF NOT EXISTS typed_objects_session_created
 CREATE TABLE IF NOT EXISTS ccr_meta (
   key TEXT PRIMARY KEY,
   value TEXT NOT NULL
-);`
+);
+CREATE TABLE IF NOT EXISTS expired_objects (
+  object_id TEXT PRIMARY KEY,
+  expired_at TEXT NOT NULL
+) WITHOUT ROWID;`
 
 // ownerIndexSQL supports the dedup owner lookup. It only covers full copies
-// (data_ref is empty), so it stays small. It must run after ensureDataRefColumn.
+// of repository maps, the one type PutObject deduplicates: an index over every
+// full row would cost tens of MiB on a large store, all of it counted against
+// the page cap. It must run after ensureDataRefColumn.
 const ownerIndexSQL = `CREATE INDEX IF NOT EXISTS typed_objects_owner
   ON typed_objects(object_type, content_hash, created_at, object_id)
-  WHERE data_ref = ''`
+  WHERE data_ref = '' AND object_type = 'RepositoryMap'`
 
-// ownerLookupSQL finds the owner row for a deduplicated object. The object_id
-// tie-breaker makes the choice stable when created_at values are equal.
+// dataRefIndexSQL lists the rows that point at another row's bytes, so the
+// store can ask "does anything still use this owner" without reading every
+// row. Only reference rows are indexed. It must run after ensureDataRefColumn.
+const dataRefIndexSQL = `CREATE INDEX IF NOT EXISTS typed_objects_data_ref
+  ON typed_objects(data_ref) WHERE data_ref != ''`
+
+// ownerLookupSQL finds the owner row for a deduplicated repository map. The
+// type is a literal so the planner can prove the partial owner index applies.
+// The object_id tie-breaker makes the choice stable when created_at values are
+// equal.
 const ownerLookupSQL = `SELECT object_id FROM typed_objects
- WHERE object_type = ? AND content_hash = ?
+ WHERE object_type = 'RepositoryMap' AND content_hash = ?
    AND data_ref = '' AND object_id != ?
  ORDER BY created_at ASC, object_id ASC LIMIT 1`
 
@@ -354,10 +371,12 @@ func openWithBudgetHooks(path string, maxBytes int64, afterPrepare, afterOpen fu
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate sqlite data_ref %q: %w", canonicalPath, err)
 	}
-	// The owner index needs data_ref, so it must come after the column exists.
-	if err := RetryOnBusy(func() error { _, e := db.Exec(ownerIndexSQL); return e }); err != nil {
-		closeSQLiteAfterOpenFailure(db, canonicalPath)
-		return nil, fmt.Errorf("migrate sqlite owner index %q: %w", canonicalPath, err)
+	// Both indexes need data_ref, so they must come after the column exists.
+	for _, index := range []string{ownerIndexSQL, dataRefIndexSQL} {
+		if err := RetryOnBusy(func() error { _, e := db.Exec(index); return e }); err != nil {
+			closeSQLiteAfterOpenFailure(db, canonicalPath)
+			return nil, fmt.Errorf("migrate sqlite typed object index %q: %w", canonicalPath, err)
+		}
 	}
 	if err := configureStorageBudget(db, maxBytes, &store.pageCap); err != nil {
 		closeSQLiteAfterOpenFailure(db, canonicalPath)
@@ -613,6 +632,17 @@ func (s *Store) put(rec Recovery) (string, error) {
 	if err := s.refuseDamaged(); err != nil {
 		return "", fmt.Errorf("ccr put: %w", err)
 	}
+	handle, err := s.putOnce(rec)
+	// A full store frees room under the retention policy, then the write
+	// gets one more try. If nothing could be freed it stays refused, and the
+	// caller passes the original through as before (#1370).
+	if errors.Is(err, ErrBudgetExceeded) && s.reclaimForWrite() {
+		handle, err = s.putOnce(rec)
+	}
+	return handle, err
+}
+
+func (s *Store) putOnce(rec Recovery) (string, error) {
 	handle := Handle(rec.Original)
 	// One write transaction holds the lock from the check to the insert.
 	tx, err := s.db.BeginTx(context.Background(), nil)
@@ -776,6 +806,14 @@ func (s *Store) putObject(input Object) (string, error) {
 	if err := s.refuseDamaged(); err != nil {
 		return "", fmt.Errorf("ccr typed object put: %w", err)
 	}
+	id, err := s.putObjectOnce(input)
+	if errors.Is(err, ErrBudgetExceeded) && s.reclaimForWrite() {
+		id, err = s.putObjectOnce(input)
+	}
+	return id, err
+}
+
+func (s *Store) putObjectOnce(input Object) (string, error) {
 	obj, err := prepareObject(input)
 	if err != nil {
 		return "", err
@@ -803,10 +841,7 @@ func (s *Store) putObject(input Object) (string, error) {
 		// itself is often unchanged, so a long session re-stores the same
 		// multi-MB map per commit even though the session never changed
 		// (issue #1023).
-		err = tx.QueryRow(
-			ownerLookupSQL,
-			obj.Type, obj.ContentHash, obj.ID,
-		).Scan(&dataRef)
+		err = tx.QueryRow(ownerLookupSQL, obj.ContentHash, obj.ID).Scan(&dataRef)
 		if errors.Is(err, sql.ErrNoRows) {
 			dataRef, err = "", nil
 		}
@@ -944,11 +979,17 @@ func (s *Store) resolveObjectData(q querier, obj Object, dataRef string) (Object
 // fallbackObjectData returns the first full copy of obj's content whose bytes
 // match obj.ContentHash.
 func fallbackObjectData(q querier, obj Object) ([]byte, bool, error) {
+	// A repository map names its type literally, so the lookup can use the
+	// partial owner index instead of reading every row.
+	typeTerm, args := `object_type = ?`, []any{obj.Type, obj.ContentHash, obj.ID, fallbackCopyLimit}
+	if obj.Type == ObjectRepositoryMap {
+		typeTerm, args = `object_type = 'RepositoryMap'`, args[1:]
+	}
 	rows, err := q.Query(
 		`SELECT data FROM typed_objects
-		 WHERE object_type = ? AND content_hash = ? AND data_ref = '' AND object_id != ?
+		 WHERE `+typeTerm+` AND content_hash = ? AND data_ref = '' AND object_id != ?
 		 ORDER BY created_at ASC, object_id ASC LIMIT ?`,
-		obj.Type, obj.ContentHash, obj.ID, fallbackCopyLimit)
+		args...)
 	if err != nil {
 		return nil, false, fmt.Errorf("ccr typed object fallback lookup: %w", err)
 	}
@@ -986,6 +1027,12 @@ func (s *Store) getObject(id string) (Object, error) {
 func (s *Store) getObjectFrom(q querier, id string) (Object, error) {
 	obj, dataRef, err := scanObject(q.QueryRow(`SELECT `+objectColumns+` FROM typed_objects WHERE object_id = ?`, id))
 	if errors.Is(err, sql.ErrNoRows) {
+		// An expired object answers "expired", so an agent holding its
+		// ccr:// reference stops asking instead of retrying an unknown id.
+		var expiredAt string
+		if q.QueryRow(`SELECT expired_at FROM expired_objects WHERE object_id = ?`, id).Scan(&expiredAt) == nil {
+			return Object{}, fmt.Errorf("%w (%s expired %s)", ErrExpired, id, expiredAt)
+		}
 		return Object{}, ErrNotFound
 	}
 	if err != nil {

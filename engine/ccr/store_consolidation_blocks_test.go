@@ -77,7 +77,7 @@ func TestOwnerTieBreakUsesSmallestObjectID(t *testing.T) {
 
 func ownerPlan(t *testing.T, db *sql.DB) string {
 	t.Helper()
-	rows, err := db.Query(`EXPLAIN QUERY PLAN `+ownerLookupSQL, ObjectRepositoryMap, "sha256:x", "id")
+	rows, err := db.Query(`EXPLAIN QUERY PLAN `+ownerLookupSQL, "sha256:x", "id")
 	if err != nil {
 		t.Fatal(err)
 	}

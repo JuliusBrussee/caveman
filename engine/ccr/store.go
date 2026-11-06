@@ -47,6 +47,12 @@ var ErrStorageChanged = errors.New("ccr: recovery storage changed; restart the p
 // must pass the original input through.
 var ErrStoreDamaged = errors.New("ccr: recovery store is damaged; new recovery writes are refused until it is repaired (caveman-proxy recovery-store repair)")
 
+// ErrExpired is returned for a typed object the store deleted under its
+// retention policy. It wraps ErrNotFound, so a caller that only asks "is it
+// here" is unchanged, while a caller that reports to an agent can say the
+// reference expired rather than that it never existed.
+var ErrExpired = fmt.Errorf("%w: the object expired under the recovery store's retention policy and cannot be recovered", ErrNotFound)
+
 // ObjectType is a closed typed-working-memory enum. Unknown values fail closed:
 // adapters may preserve unknown native payloads outside CCR, but may not invent
 // retrieval semantics for them.
