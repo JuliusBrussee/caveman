@@ -127,6 +127,8 @@ For "auto-activates? No" agents, invoke the Caveman skill using the host's skill
 
 Scripted Claude Code runs (`claude -p` and the Agent SDK) start with caveman off whatever that file says, so tools that read Claude's reply get plain text. Type `/caveman` in the prompt, or set `CAVEMAN_DEFAULT_MODE=caveman` (or another mode) in their environment, to turn it on.
 
+**Drop the per-prompt reminder.** In Claude Code, caveman adds a one-line reminder to every prompt so the style holds against other plugins' instructions. To drop it but keep caveman on, add `"reinforce": false` to the same file (for example `{"defaultMode": "caveman", "reinforce": false}`), or set `CAVEMAN_REINFORCE=0` in the environment. The full rules still load when a session starts and when you switch modes.
+
 **Subagents.** Some agents hand parts of a job to helper agents ("subagents"). Whether the helpers talk caveman depends on the host:
 
 - **Claude Code**: yes. Each subagent starts in the mode of the window that spawned it. Say "stop caveman" and new subagents start normal too. Cavecrew agents keep their own caveman voice.

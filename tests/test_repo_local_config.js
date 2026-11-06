@@ -19,8 +19,9 @@ const assert = require('assert');
 const tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-userhome-'));
 process.env.XDG_CONFIG_HOME = tmpHome;
 delete process.env.CAVEMAN_DEFAULT_MODE;
+delete process.env.CAVEMAN_REINFORCE;
 
-const { getDefaultMode, findRepoConfigPath } = require('../src/hooks/caveman-config');
+const { getDefaultMode, findRepoConfigPath, getReinforce } = require('../src/hooks/caveman-config');
 
 let passed = 0;
 let failed = 0;
@@ -257,6 +258,84 @@ test('a .caveman/config.json without defaultMode does not hide .caveman.json', (
   process.chdir(tmp);
   assert.strictEqual(getDefaultMode(), 'off', 'sibling .caveman.json');
   assert.strictEqual(getDefaultMode(nested), 'off', 'parent directory');
+});
+
+// #1468: the per-turn reinforcement switch resolves through the same sources,
+// in the same order, as defaultMode: env → nearest repo config naming it →
+// user config → on.
+function withReinforceEnv(value, fn) {
+  const saved = process.env.CAVEMAN_REINFORCE;
+  if (value === undefined) delete process.env.CAVEMAN_REINFORCE;
+  else process.env.CAVEMAN_REINFORCE = value;
+  try { fn(); } finally {
+    if (saved === undefined) delete process.env.CAVEMAN_REINFORCE;
+    else process.env.CAVEMAN_REINFORCE = saved;
+  }
+}
+
+function withUserConfig(content, fn) {
+  fs.mkdirSync(path.join(tmpHome, 'caveman'), { recursive: true });
+  fs.writeFileSync(path.join(tmpHome, 'caveman', 'config.json'), content);
+  try { fn(); } finally {
+    fs.rmSync(path.join(tmpHome, 'caveman'), { recursive: true, force: true });
+  }
+}
+
+test('reinforcement is on when nothing configures it', (tmp) => {
+  process.chdir(tmp);
+  assert.strictEqual(getReinforce(), true);
+});
+
+test('repo config reinforce:false turns it off, from a nested dir and via startDir', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ reinforce: false }));
+  const nested = path.join(tmp, 'a', 'b');
+  fs.mkdirSync(nested, { recursive: true });
+  process.chdir(nested);
+  assert.strictEqual(getReinforce(), false, 'walk up from cwd');
+  process.chdir(os.tmpdir());
+  assert.strictEqual(getReinforce(nested), false, 'startDir');
+});
+
+test('CAVEMAN_REINFORCE beats repo config, both ways', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ reinforce: false }));
+  process.chdir(tmp);
+  withReinforceEnv('1', () => assert.strictEqual(getReinforce(), true));
+  withReinforceEnv('true', () => assert.strictEqual(getReinforce(), true));
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ reinforce: true }));
+  for (const off of ['0', 'false', 'off', 'no', ' FALSE ']) {
+    withReinforceEnv(off, () => assert.strictEqual(getReinforce(), false, off));
+  }
+});
+
+test('an unrecognized CAVEMAN_REINFORCE falls through to config', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ reinforce: false }));
+  process.chdir(tmp);
+  withReinforceEnv('maybe', () => assert.strictEqual(getReinforce(), false));
+  withReinforceEnv('', () => assert.strictEqual(getReinforce(), false));
+});
+
+test('repo reinforce beats user reinforce; user config applies without one', (tmp) => {
+  withUserConfig(JSON.stringify({ reinforce: false }), () => {
+    process.chdir(tmp);
+    assert.strictEqual(getReinforce(), false, 'user config alone');
+    fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ reinforce: true }));
+    assert.strictEqual(getReinforce(), true, 'repo config wins');
+  });
+});
+
+test('a repo config naming only defaultMode does not hide the user reinforce', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ defaultMode: 'ultracave' }));
+  withUserConfig('{\n  // comments are fine\n  "reinforce": false,\n}', () => {
+    process.chdir(tmp);
+    assert.strictEqual(getReinforce(), false);
+    assert.strictEqual(getDefaultMode(), 'ultracave', 'defaultMode unaffected');
+  });
+});
+
+test('a non-boolean reinforce value is ignored', (tmp) => {
+  fs.writeFileSync(path.join(tmp, '.caveman.json'), JSON.stringify({ reinforce: 'sometimes' }));
+  process.chdir(tmp);
+  assert.strictEqual(getReinforce(), true);
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);
