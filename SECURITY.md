@@ -276,9 +276,15 @@ Important files include:
 CCR SQLite files and sidecars are created or tightened to mode `0600` and refuse
 unsafe symlink/non-regular-file paths. This is filesystem access control, not
 database encryption. Default retained CCR payload budget is 512 MiB;
-`CAVEMAN_CCR_MAX_BYTES` can change it. Existing recovery handles are never
-evicted. When the budget is exhausted, new recovery writes fail and lossy
-transforms must fall back to pass-through.
+`CAVEMAN_CCR_MAX_BYTES` can change it. Blob recovery handles (`ccr_…`) are
+never evicted. When the store is full, a refused write first frees room by
+consolidating duplicate repository maps, then by expiring typed objects
+(`ccr://ccr_obj_…`) of sessions that ended 14+ days ago or have been idle 30+
+days, oldest first; each expiry is logged and the id then answers "expired".
+If nothing can be freed, new recovery writes fail and lossy transforms fall
+back to pass-through. A store that fails `PRAGMA quick_check` refuses every
+write; `caveman-proxy recovery-store repair` rebuilds it from every row that
+still matches its hash and keeps the damaged files as a backup.
 
 Uninstall removes installed integrations and hooks. Do not assume it erases
 runtime databases, reports, backups, or credentials; inspect `~/.caveman/` and

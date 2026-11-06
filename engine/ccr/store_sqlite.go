@@ -16,7 +16,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -121,6 +120,9 @@ func newPageCapConnector(dsn string, pageCap *atomic.Int64) *pageCapConnector {
 }
 
 const DefaultMaxStorageBytes int64 = 512 << 20 // 512 MiB retained payloads
+
+// Path is the canonical path of the database file, or ":memory:".
+func (s *Store) Path() string { return s.path }
 
 // Persistent distinguishes durable exact recovery from an in-memory test store.
 func (s *Store) Persistent() bool { return s != nil && s.path != ":memory:" }
@@ -276,13 +278,9 @@ func isBusy(err error) bool {
 // Open opens (creating if needed) the SQLite database at path and migrates the
 // schema. Use ":memory:" for an ephemeral store (tests, the eval harness).
 func Open(path string) (*Store, error) {
-	maxBytes := DefaultMaxStorageBytes
-	if raw := strings.TrimSpace(os.Getenv("CAVEMAN_CCR_MAX_BYTES")); raw != "" {
-		parsed, err := strconv.ParseInt(raw, 10, 64)
-		if err != nil || parsed <= 0 {
-			return nil, fmt.Errorf("CAVEMAN_CCR_MAX_BYTES must be a positive integer")
-		}
-		maxBytes = parsed
+	maxBytes, err := BudgetFromEnv()
+	if err != nil {
+		return nil, err
 	}
 	return OpenWithBudget(path, maxBytes)
 }

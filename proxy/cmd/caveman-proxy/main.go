@@ -85,6 +85,10 @@ func main() {
 		runStatus(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: redact.SlogReplaceAttr})), os.Args[2:])
 	case "version":
 		runVersion(os.Args[2:])
+	case "recovery-store":
+		// Prints one JSON document on stdout for the CLI; diagnostics go to
+		// stderr.
+		runRecoveryStore(slog.New(slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{ReplaceAttr: redact.SlogReplaceAttr})), os.Args[2:])
 	case "native-why":
 		runNativeWhy(logger, os.Args[2:])
 	case "native-hook":
@@ -410,6 +414,11 @@ func runServe(logger *slog.Logger) {
 		defer close(maintenance)
 		spend.RunCacheComponentMaintenance(ctx)
 	}()
+	// Check the recovery store once per release (#1369), off the request
+	// path; a damaged store stops taking writes as soon as this finds it.
+	if recovery != nil {
+		go checkRecoveryIntegrity(home, recovery, logger)
+	}
 	go func() {
 		logger.Info("caveman proxy listening", "addr", cfg.Listen, "mode", cfg.Mode, "basis", "inferred", "inbound_auth", inboundAuth, "tls", serverTLS != nil)
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -558,6 +567,11 @@ func compatUpstreams(cfg config.Config) map[string]string {
 // in-memory handle or correlation marker is minted.
 func initializeNativePersistence(home, path string, cfg *config.Config, logger *slog.Logger) (*ccr.Store, []byte) {
 	recovery, err := ccr.Open(path)
+	if err == nil {
+		// Expiry, consolidation and damage reach proxy.log: no recovery is
+		// removed or refused without a line saying so.
+		recovery.SetLogger(logger)
+	}
 	if err != nil {
 		logger.Warn("CCR unavailable; forcing record pass-through and disabling native runtime", "error", err)
 		cfg.Mode = "record"
@@ -620,6 +634,7 @@ func runVersion(args []string) {
 				"native_hook_bridge_v1",
 				"typed_ccr",
 				"decision_ledger_v1",
+				"recovery_store_v1",
 			},
 		})
 		return
