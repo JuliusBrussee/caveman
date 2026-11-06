@@ -97,6 +97,9 @@ const loadRuleset = cfg.loadRuleset || (() => null);
 const fallbackRuleset = cfg.fallbackRuleset || (() => null);
 const thesisLine = cfg.thesisLine
   || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die.');
+// The reinforcement switch (#1468). A caveman-config.js predating it keeps
+// reinforcing, which is what that copy always did.
+const getReinforce = cfg.getReinforce || (() => true);
 const { parseModeChange, INDEPENDENT_MODES } = requireSibling('caveman-parse', (m) =>
   m && typeof m.parseModeChange === 'function' && m.INDEPENDENT_MODES instanceof Set) || {
   parseModeChange: () => null,
@@ -367,9 +370,13 @@ function handle(raw) {
     // defaultMode "off" to opt a project out of caveman entirely. Thread the
     // hook stdin's cwd through so that check resolves for the session's
     // directory, not this hook process's own cwd. This gates ONLY the
-    // reinforcement output below — it never deletes or writes the flag file.
-    const reinforce = activeMode && !INDEPENDENT_MODES.has(activeMode)
-      && getDefaultMode(data.cwd) !== 'off'
+    // output below — it never deletes or writes the flag file.
+    const prose = !!activeMode && !INDEPENDENT_MODES.has(activeMode)
+      && getDefaultMode(data.cwd) !== 'off';
+    // #1468: `reinforce: false` / CAVEMAN_REINFORCE=0 drops only the per-turn
+    // reminder. It is not a caveman off switch, so it does not gate the
+    // switch ruleset below — a switch without its rules is #975 again.
+    const reinforce = prose && getReinforce(data.cwd)
       ? reinforcementForMode(activeMode)
       : null;
 
@@ -380,13 +387,13 @@ function handle(raw) {
     // rules, silently and self-confirmingly: the banner agrees with the user
     // while the output does not.
     //
-    // `reinforce` is the gate as well as the reminder: it already encodes both
-    // "caveman is active and not an independent mode" and the #634 repo
-    // opt-out, so a project with defaultMode "off" gets neither line.
+    // `prose` is the gate: it encodes both "caveman is active and not an
+    // independent mode" and the #634 repo opt-out, so a project with
+    // defaultMode "off" gets neither line.
     // A SKILL.md that cannot be read — the standalone hook install has no
     // skills dir — gets the same fallback ruleset activate.js injects there.
     let ruleset = null;
-    if (switchedToMode && reinforce) {
+    if (switchedToMode && prose) {
       const body = loadRuleset(switchedToMode, __dirname) || fallbackRuleset(switchedToMode, __dirname);
       if (body) ruleset = rulesetBanner(switchedToMode) + '\n\n' + body.trimEnd();
     }
