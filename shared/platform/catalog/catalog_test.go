@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"regexp"
@@ -93,7 +94,13 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 			oldest, oldestTime = entry, verified
 		}
 	}
-	wantProvider, wantModel, wantRegion, wantVerifiedAt := "anthropic", "claude-haiku-4-5", "global", "2026-07-10T00:00:00Z"
+	// Re-pinned 2026-11-06, and the move comes from a DELETION, not a date
+	// edit. That day's price re-check moved 34 rows to 2026-11-06; the only
+	// two 2026-07-10 rows it did not move, vertex gemini-2.5-pro and
+	// gemini-2.5-flash, were removed because Vertex retired both on
+	// 2026-10-20. claude-sonnet-5's own 2026-08-05 date is untouched; it is
+	// simply the oldest row left.
+	wantProvider, wantModel, wantRegion, wantVerifiedAt := "anthropic", "claude-sonnet-5", "global", "2026-08-05T00:00:00Z"
 	if oldest.Provider != wantProvider || oldest.Model != wantModel || oldest.Region != wantRegion || oldest.VerifiedAt != wantVerifiedAt {
 		t.Fatalf("oldest verified_at row = %s/%s@%s verified_at=%s, want %s/%s@%s verified_at=%s (a capability-only edit must never move this)",
 			oldest.Provider, oldest.Model, oldest.Region, oldest.VerifiedAt, wantProvider, wantModel, wantRegion, wantVerifiedAt)
@@ -109,13 +116,15 @@ func TestOldestVerifiedAtIsNotSilentlyAdvanced(t *testing.T) {
 	// must likewise update this expectation in the same commit as its catalog
 	// price row; capability-only changes must not alter VerifiedAt.
 	wantDates := map[string]int{
-		"2026-07-10T00:00:00Z": 13, // anthropic claude-opus-4-1 and bedrock claude-3-5-sonnet v2 removed 2026-10-10 (retired)
-		"2026-07-23T00:00:00Z": 23,
+		// 2026-07-10 is gone: 11 of its rows moved to 2026-11-06 with a real price
+		// re-check, and vertex gemini-2.5-pro/flash were removed (Vertex retired
+		// both 2026-10-20). 2026-07-23 is gone the same way: all 23 re-checked.
 		"2026-08-05T00:00:00Z": 1,
 		"2026-08-07T00:00:00Z": 1,
 		"2026-08-10T00:00:00Z": 9,
 		"2026-09-28T00:00:00Z": 7,
-		"2026-10-08T00:00:00Z": 4, // claude-sonnet-5-5, claude-haiku-5-5, gpt-6.1-sol, gpt-6-luna added
+		"2026-10-08T00:00:00Z": 4,  // claude-sonnet-5-5, claude-haiku-5-5, gpt-6.1-sol, gpt-6-luna added
+		"2026-11-06T00:00:00Z": 34, // 11 of the 2026-07-10 rows and all 23 2026-07-23 rows, prices re-checked, none changed
 	}
 	gotDates := map[string]int{}
 	for _, entry := range entries {
@@ -250,7 +259,11 @@ func loadCurrentCatalog(t *testing.T) []catalog.Entry {
 // names. It is a function rather than inline test body so a probe can feed it a
 // deliberately tampered catalog and assert the pin actually catches the tamper —
 // a pin is only worth what its miss looks like.
-func snapshotDrift(t *testing.T, current []catalog.Entry) []string {
+//
+// snapshotOverlay rows are treated as present in the on-disk snapshot their own
+// verified_at names. Only a probe that injects a synthetic row passes any (see
+// withPriceCapabilityCarrier); the real-catalog check passes none.
+func snapshotDrift(t *testing.T, current []catalog.Entry, snapshotOverlay ...catalog.Entry) []string {
 	t.Helper()
 	var drift []string
 	snapshots := map[string]map[snapshotKey]catalog.Entry{}
@@ -270,6 +283,15 @@ func snapshotDrift(t *testing.T, current []catalog.Entry) []string {
 			rows = make(map[snapshotKey]catalog.Entry, len(decoded))
 			for _, row := range decoded {
 				rows[snapshotKey{row.Provider, row.Model, row.Region}] = row
+			}
+			for _, row := range snapshotOverlay {
+				if overlayVerified, _ := time.Parse(time.RFC3339, row.VerifiedAt); overlayVerified.Format("2006-01-02") == version {
+					key := snapshotKey{row.Provider, row.Model, row.Region}
+					if _, clash := rows[key]; clash {
+						t.Fatalf("synthetic snapshot row %s/%s@%s collides with a real row in snapshot %s", row.Provider, row.Model, row.Region, version)
+					}
+					rows[key] = row
+				}
 			}
 			snapshots[version] = rows
 		}
@@ -320,8 +342,8 @@ func TestEveryCurrentCatalogRowMatchesItsImmutableDatedSnapshot(t *testing.T) {
 func TestTamperedPriceCapabilityBreaksTheSnapshotPin(t *testing.T) {
 	for _, capability := range catalog.PriceAffectingCapabilities {
 		t.Run(capability, func(t *testing.T) {
-			current := loadCurrentCatalog(t)
-			if drift := snapshotDrift(t, current); len(drift) != 0 {
+			current, overlay := withPriceCapabilityCarrier(t, loadCurrentCatalog(t), capability)
+			if drift := snapshotDrift(t, current, overlay...); len(drift) != 0 {
 				t.Fatalf("catalog already drifts before tampering: %v", drift)
 			}
 			tampered := false
@@ -352,7 +374,7 @@ func TestTamperedPriceCapabilityBreaksTheSnapshotPin(t *testing.T) {
 			if !tampered {
 				t.Fatalf("no catalog row carries %s — the probe would prove nothing", capability)
 			}
-			if drift := snapshotDrift(t, current); len(drift) == 0 {
+			if drift := snapshotDrift(t, current, overlay...); len(drift) == 0 {
 				t.Fatalf("a tampered %s passed the immutable snapshot pin: a price-affecting capability escaped the version a signed receipt attests", capability)
 			}
 		})
@@ -364,7 +386,10 @@ func TestTamperedPriceCapabilityBreaksTheSnapshotPin(t *testing.T) {
 		// nothing changed. Editing a value and removing it entirely must both
 		// break the pin.
 		t.Run(capability+"/deleted", func(t *testing.T) {
-			current := loadCurrentCatalog(t)
+			current, overlay := withPriceCapabilityCarrier(t, loadCurrentCatalog(t), capability)
+			if drift := snapshotDrift(t, current, overlay...); len(drift) != 0 {
+				t.Fatalf("catalog already drifts before deleting: %v", drift)
+			}
 			deleted := false
 			for i := range current {
 				if _, ok := current[i].Capabilities[capability]; !ok {
@@ -382,11 +407,71 @@ func TestTamperedPriceCapabilityBreaksTheSnapshotPin(t *testing.T) {
 			if !deleted {
 				t.Fatalf("no catalog row carries %s — the probe would prove nothing", capability)
 			}
-			if drift := snapshotDrift(t, current); len(drift) == 0 {
+			if drift := snapshotDrift(t, current, overlay...); len(drift) == 0 {
 				t.Fatalf("DELETING %s passed the immutable snapshot pin: a price-affecting capability can be removed without the version a signed receipt attests changing", capability)
 			}
 		})
 	}
+}
+
+// withPriceCapabilityCarrier returns the catalog a tamper probe runs on, plus the
+// snapshot rows that back any synthetic row in it. When a real current row
+// carries the capability, the probe runs on the real catalog unchanged and no
+// overlay is returned. When none does, it appends ONE synthetic carrier: a copy
+// of a real global row (a Vertex one for region_agnostic_pricing) under a model
+// id no catalog uses, with the capability set to a plausible value (true for a
+// boolean, the 1.10 the multipliers cite otherwise). An untampered copy of that
+// row is returned as the overlay for the snapshot its verified_at names.
+//
+// That is the state since 2026-11-06 for region_agnostic_pricing: its only
+// carriers, vertex gemini-2.5-pro and gemini-2.5-flash, were removed after
+// Vertex retired both. The probe must keep running anyway. What it proves is
+// that pricingIdentity pins the key, so that editing or deleting it breaks the
+// snapshot pin. That is a property of the pin, not of which rows exist today.
+// Skipping it would let a later change drop the key from pricingIdentity
+// unnoticed, right up until the next row that carries it ships unpinned.
+func withPriceCapabilityCarrier(t *testing.T, current []catalog.Entry, capability string) ([]catalog.Entry, []catalog.Entry) {
+	t.Helper()
+	for _, entry := range current {
+		if _, ok := entry.Capabilities[capability]; ok {
+			return current, nil
+		}
+	}
+	// Any global row works for the pin; a Vertex one is preferred for
+	// region_agnostic_pricing because that is where the flag means something.
+	template := -1
+	for i, entry := range current {
+		if entry.Region != "global" {
+			continue
+		}
+		if template < 0 {
+			template = i
+		}
+		if capability == catalog.RegionAgnosticPricingCapability && entry.Provider == "vertex" {
+			template = i
+			break
+		}
+	}
+	if template < 0 {
+		t.Fatalf("no global row to base a synthetic %s carrier on", capability)
+	}
+	var value any = 1.10
+	if capability == catalog.RegionAgnosticPricingCapability {
+		value = true
+	}
+	carrier := func() catalog.Entry {
+		row := current[template]
+		row.Model = "synthetic-" + capability + "-carrier"
+		row.Capabilities = make(map[string]any, len(current[template].Capabilities)+1)
+		for k, v := range current[template].Capabilities {
+			row.Capabilities[k] = v
+		}
+		row.Capabilities[capability] = value
+		row.Sources = append([]string(nil), current[template].Sources...)
+		return row
+	}
+	t.Logf("no current row carries %s; probing a synthetic carrier based on %s/%s@%s", capability, current[template].Provider, current[template].Model, current[template].Region)
+	return append(append([]catalog.Entry(nil), current...), carrier()), []catalog.Entry{carrier()}
 }
 
 // PricingMultiplier fails closed on any capability not registered as
@@ -500,8 +585,18 @@ func TestOfficialRuntimeModelPricesAndTiers(t *testing.T) {
 	if price, version := catalog.Price("bedrock", "global.anthropic.claude-sonnet-4-6"); price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
 		t.Fatalf("regionless Bedrock lookup borrowed a regional price: %+v %q", price, version)
 	}
-	if price, version := catalog.PriceForRegionOrAgnostic("vertex", "gemini-2.5-pro", "us-central1"); price.InputPerMillion != 1.25 || strings.HasPrefix(version, "unpriced:") {
-		t.Fatalf("region-agnostic Vertex price unavailable: %+v %q", price, version)
+	// Vertex retired gemini-2.5-pro and gemini-2.5-flash on 2026-10-20 and both
+	// rows left the catalog on 2026-11-06. A retired model must resolve to an
+	// honest unpriced zero. It must not borrow the still-priced Gemini API row
+	// for the same model id (asserted priced in the table above), and no other
+	// row may answer for it. TestPriceForRegionOrAgnosticOnFixtureCatalog now
+	// carries the region-agnostic resolution these rows used to exercise.
+	for _, model := range []string{"gemini-2.5-pro", "gemini-2.5-flash"} {
+		for _, region := range []string{"us-central1", "global"} {
+			if price, version := catalog.PriceForRegionOrAgnostic("vertex", model, region); price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
+				t.Fatalf("retired vertex/%s@%s still priced: %+v %q", model, region, price, version)
+			}
+		}
 	}
 	if price, version := catalog.PriceForRegionOrAgnostic("vertex", "claude-sonnet-4-6", "us-central1"); price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
 		t.Fatalf("regional Claude price borrowed global row: %+v %q", price, version)
@@ -523,6 +618,153 @@ func TestOfficialRuntimeModelPricesAndTiers(t *testing.T) {
 	if _, ok := catalog.PricingMultiplier("anthropic", "claude-haiku-4-5", "global", "inference_geo_us_multiplier"); ok {
 		t.Fatal("a model with no documented us-geo premium inherited one")
 	}
+}
+
+// regionAgnosticFixtureProbeEnv switches TestPriceForRegionOrAgnosticFixtureProbe
+// on. The probe has to run in its own process: the package loads its catalog once
+// (sync.Once) from the embedded file or CAVE_CATALOG_PATH, so a fixture catalog
+// cannot be swapped in after any other test in this binary has done a lookup.
+const regionAgnosticFixtureProbeEnv = "CAVEMAN_CATALOG_REGION_AGNOSTIC_PROBE"
+
+// regionAgnosticFixtureCatalog holds one row per branch of
+// PriceForRegionOrAgnostic. The prices are invented and the models are fixture
+// ids; nothing here describes a vendor's real price list.
+const regionAgnosticFixtureCatalog = `
+- provider: vertex
+  model: fixture-agnostic
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 1.25
+    output_per_million: 10
+    cache_read_input_per_million: 0.125
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: 0.5
+    cache_storage_per_million_tokens_hour: null
+  capabilities:
+    region_agnostic_pricing: true
+  sources: [https://example.com/pricing]
+  verified_at: 2026-11-06T00:00:00Z
+- provider: vertex
+  model: fixture-agnostic
+  region: europe-west4
+  currency: USD
+  pricing:
+    input_per_million: 1.50
+    output_per_million: 12
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+    cache_storage_per_million_tokens_hour: null
+  capabilities: {}
+  sources: [https://example.com/pricing]
+  verified_at: 2026-10-08T00:00:00Z
+- provider: vertex
+  model: fixture-flag-false
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3
+    output_per_million: 15
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+    cache_storage_per_million_tokens_hour: null
+  capabilities:
+    region_agnostic_pricing: false
+  sources: [https://example.com/pricing]
+  verified_at: 2026-11-06T00:00:00Z
+- provider: vertex
+  model: fixture-no-flag
+  region: global
+  currency: USD
+  pricing:
+    input_per_million: 3
+    output_per_million: 15
+    cache_read_input_per_million: null
+    cache_write_input_per_million: null
+    cache_write_1h_input_per_million: null
+    reasoning_output_per_million: null
+    batch_discount_fraction: null
+    cache_storage_per_million_tokens_hour: null
+  capabilities: {}
+  sources: [https://example.com/pricing]
+  verified_at: 2026-11-06T00:00:00Z
+`
+
+// TestPriceForRegionOrAgnosticOnFixtureCatalog proves the region-agnostic
+// resolution rule on a fixture catalog. Until 2026-11-06 the real Vertex Gemini
+// 2.5 rows exercised it; Vertex retired both models on 2026-10-20 and no current
+// row carries region_agnostic_pricing, so without a fixture the rule that lets
+// a global row answer a regional lookup would go untested. The rule decides
+// whether a whole region's spend is priced or zero.
+func TestPriceForRegionOrAgnosticOnFixtureCatalog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "catalog.yaml")
+	if err := os.WriteFile(path, []byte(regionAgnosticFixtureCatalog), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := catalog.DecodeAndValidate([]byte(regionAgnosticFixtureCatalog)); err != nil {
+		t.Fatalf("fixture catalog rejected: %v", err)
+	}
+	cmd := exec.Command(os.Args[0], "-test.run=^TestPriceForRegionOrAgnosticFixtureProbe$", "-test.v")
+	cmd.Env = append(os.Environ(), regionAgnosticFixtureProbeEnv+"=1", "CAVE_CATALOG_PATH="+path)
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("fixture probe failed: %v\n%s", err, out)
+	}
+	// Guard against a vacuous pass: the probe must have run, on the fixture.
+	if !strings.Contains(string(out), "fixture probe ran on 4 rows") || !strings.Contains(string(out), "--- PASS: TestPriceForRegionOrAgnosticFixtureProbe") {
+		t.Fatalf("fixture probe did not run on the fixture catalog:\n%s", out)
+	}
+}
+
+// TestPriceForRegionOrAgnosticFixtureProbe does nothing in a normal run. It is
+// the child process of TestPriceForRegionOrAgnosticOnFixtureCatalog, started
+// with CAVE_CATALOG_PATH pointing at regionAgnosticFixtureCatalog.
+func TestPriceForRegionOrAgnosticFixtureProbe(t *testing.T) {
+	if os.Getenv(regionAgnosticFixtureProbeEnv) != "1" {
+		return
+	}
+	if rows := len(catalog.List()); rows != 4 {
+		t.Fatalf("probe loaded %d rows, want the 4 fixture rows (CAVE_CATALOG_PATH ignored?)", rows)
+	}
+	t.Log("fixture probe ran on 4 rows")
+	unpriced := func(model, region string, price cost.Price, version string) {
+		t.Helper()
+		if price != (cost.Price{}) || !strings.HasPrefix(version, "unpriced:") {
+			t.Errorf("vertex/%s@%s = %+v %q, want an honest unpriced zero", model, region, price, version)
+		}
+	}
+	// A global row that declares region_agnostic_pricing answers a regional
+	// lookup with its own price and its own catalog version.
+	if price, version := catalog.PriceForRegionOrAgnostic("vertex", "fixture-agnostic", "us-central1"); price.InputPerMillion != 1.25 || price.OutputPerMillion != 10 || price.CacheReadPerMillion != 0.125 || version != "2026-11-06" {
+		t.Errorf("region-agnostic global row did not answer us-central1: %+v %q", price, version)
+	}
+	// An exact regional row always wins over the region-agnostic global row.
+	if price, version := catalog.PriceForRegionOrAgnostic("vertex", "fixture-agnostic", "europe-west4"); price.InputPerMillion != 1.50 || price.OutputPerMillion != 12 || version != "2026-10-08" {
+		t.Errorf("exact regional row lost to the global row: %+v %q", price, version)
+	}
+	// The exact-only lookup never honours the flag.
+	price, version := catalog.PriceForRegion("vertex", "fixture-agnostic", "us-central1")
+	unpriced("fixture-agnostic", "us-central1 (exact-only)", price, version)
+	// A global row that says false, or says nothing, never answers a regional
+	// lookup: unknown is not region-agnostic.
+	for _, model := range []string{"fixture-flag-false", "fixture-no-flag"} {
+		price, version := catalog.PriceForRegionOrAgnostic("vertex", model, "us-central1")
+		unpriced(model, "us-central1", price, version)
+		if global, _ := catalog.PriceForRegionOrAgnostic("vertex", model, "global"); global.InputPerMillion != 3 {
+			t.Errorf("vertex/%s@global = %+v, want its own global price", model, global)
+		}
+	}
+	// Another provider's row with the same model id is never borrowed.
+	price, version = catalog.PriceForRegionOrAgnostic("gemini", "fixture-agnostic", "us-central1")
+	unpriced("fixture-agnostic (provider gemini)", "us-central1", price, version)
 }
 
 // List must return the full catalog (more than the old hardcoded 3 models) and

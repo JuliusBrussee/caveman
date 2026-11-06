@@ -268,7 +268,8 @@
     - https://openai.com/api/pricing/
     - https://developers.openai.com/api/docs/guides/prompt-caching
     - https://developers.openai.com/api/docs/models/gpt-5.5
-  verified_at: 2026-07-10T00:00:00Z
+    - https://developers.openai.com/api/docs/pricing
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-08-09T00:00:00Z
 - provider: openai
   model: gpt-5.4-mini
@@ -295,7 +296,8 @@
     json_mode: true
   sources:
     - https://developers.openai.com/api/docs/models/gpt-5.4-mini
-  verified_at: 2026-07-10T00:00:00Z
+    - https://developers.openai.com/api/docs/pricing
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-08-09T00:00:00Z
 - provider: openai
   model: gpt-5.5-2026-04-23
@@ -380,7 +382,8 @@
     json_mode: true
   sources:
     - https://developers.openai.com/api/docs/models/gpt-5.4-nano
-  verified_at: 2026-07-10T00:00:00Z
+    - https://developers.openai.com/api/docs/pricing
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-08-09T00:00:00Z
 - provider: openai
   model: gpt-5.4-nano-2026-03-17
@@ -427,7 +430,9 @@
   sources:
     - https://openai.com/api/pricing/
     - https://developers.openai.com/api/docs/models/text-embedding-3-large
-  verified_at: 2026-07-10T00:00:00Z
+    - https://developers.openai.com/api/docs/pricing
+    - https://developers.openai.com/api/docs/guides/batch
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: openai
   model: text-embedding-3-small
@@ -449,7 +454,9 @@
   sources:
     - https://openai.com/api/pricing/
     - https://developers.openai.com/api/docs/models/text-embedding-3-small
-  verified_at: 2026-07-10T00:00:00Z
+    - https://developers.openai.com/api/docs/pricing
+    - https://developers.openai.com/api/docs/guides/batch
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: anthropic
   model: claude-fable-5-1
@@ -705,7 +712,7 @@
     - https://platform.claude.com/docs/en/about-claude/models/overview
     - https://platform.claude.com/docs/en/build-with-claude/context-windows
     - https://platform.claude.com/docs/en/build-with-claude/effort
-  verified_at: 2026-07-10T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-08-09T00:00:00Z
 - provider: anthropic
   model: claude-sonnet-4-5
@@ -818,7 +825,7 @@
     - https://platform.claude.com/docs/en/about-claude/pricing
     - https://platform.claude.com/docs/en/about-claude/models/overview
     - https://platform.claude.com/docs/en/build-with-claude/context-windows
-  verified_at: 2026-07-10T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: anthropic
   model: claude-haiku-4-5-20251001
@@ -876,7 +883,7 @@
   sources:
     - https://ai.google.dev/gemini-api/docs/pricing
     - https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro
-  verified_at: 2026-07-10T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: gemini
   model: gemini-2.5-flash
@@ -903,7 +910,7 @@
   sources:
     - https://ai.google.dev/gemini-api/docs/pricing
     - https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash
-  verified_at: 2026-07-10T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 # Bedrock prices are keyed by the exact invocation model/profile ID and source
 # Region. Global and geographic inference profiles are not regionless: AWS
@@ -936,7 +943,7 @@
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-4-8.html
     - https://platform.claude.com/docs/en/about-claude/models/overview
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: global.anthropic.claude-sonnet-4-6
@@ -965,7 +972,7 @@
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-4-6.html
     - https://platform.claude.com/docs/en/about-claude/models/overview
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: global.anthropic.claude-haiku-4-5-20251001-v1:0
@@ -994,7 +1001,7 @@
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-4-5.html
     - https://platform.claude.com/docs/en/about-claude/models/overview
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: global.amazon.nova-2-lite-v1:0
@@ -1028,7 +1035,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: us.meta.llama4-maverick-17b-instruct-v1:0
@@ -1061,7 +1068,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-maverick-17b-instruct.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: us.meta.llama4-scout-17b-instruct-v1:0
@@ -1094,7 +1101,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-meta-llama-4-scout-17b-instruct.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1128,7 +1135,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1162,7 +1169,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1196,7 +1203,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1230,7 +1237,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1264,7 +1271,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1298,7 +1305,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.mistral-large-3-675b-instruct
@@ -1332,7 +1339,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-mistral-large-3.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1367,7 +1374,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1402,7 +1409,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1437,7 +1444,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1472,7 +1479,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1507,7 +1514,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1542,7 +1549,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1577,7 +1584,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1612,7 +1619,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1647,7 +1654,7 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: bedrock
   model: mistral.ministral-3-8b-instruct
@@ -1682,72 +1689,16 @@
   sources:
     - https://aws.amazon.com/bedrock/pricing/
     - https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-mistral-ai-ministral-3-8b.html
-  verified_at: 2026-07-23T00:00:00Z
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
-# Vertex AI: Google Gemini (publishers/google) + Anthropic Claude
-# (publishers/anthropic) through one aiplatform endpoint. Prices are the
-# global-endpoint list rates; regional/multi-region newer Claude models carry a
-# +10% premium not modeled here. The model id is exactly what the gateway
-# resolves from the request path (.../models/{model}:{method}).
-- provider: vertex
-  model: gemini-2.5-pro
-  region: global
-  currency: USD
-  pricing:
-    input_per_million: 1.25
-    output_per_million: 10.00
-    cache_read_input_per_million: 0.125
-    cache_write_input_per_million: null
-    reasoning_output_per_million: 10.00
-    batch_discount_fraction: 0.50
-    cache_storage_per_million_tokens_hour: 4.50
-    long_context_threshold_tokens: 200000
-    long_context_input_multiplier: 2.0
-    long_context_output_multiplier: 1.5
-  capabilities:
-    generate_content: true
-    stream_generate_content: true
-    explicit_cache: true
-    streaming: true
-    batch: true
-    region_agnostic_pricing: true
-    context_window_tokens: 1048576
-    tools: true
-    vision: true
-    json_mode: true
-  sources:
-    - https://cloud.google.com/vertex-ai/generative-ai/pricing
-    - https://ai.google.dev/gemini-api/docs/models/gemini-2.5-pro
-  verified_at: 2026-07-10T00:00:00Z
-  capabilities_verified_at: 2026-07-30T00:00:00Z
-- provider: vertex
-  model: gemini-2.5-flash
-  region: global
-  currency: USD
-  pricing:
-    input_per_million: 0.30
-    output_per_million: 2.50
-    cache_read_input_per_million: 0.03
-    cache_write_input_per_million: null
-    reasoning_output_per_million: 2.50
-    batch_discount_fraction: 0.50
-    cache_storage_per_million_tokens_hour: 1.00
-  capabilities:
-    generate_content: true
-    stream_generate_content: true
-    explicit_cache: true
-    streaming: true
-    batch: true
-    region_agnostic_pricing: true
-    context_window_tokens: 1048576
-    tools: true
-    vision: true
-    json_mode: true
-  sources:
-    - https://cloud.google.com/vertex-ai/generative-ai/pricing
-    - https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash
-  verified_at: 2026-07-10T00:00:00Z
-  capabilities_verified_at: 2026-07-30T00:00:00Z
+# Vertex AI: Anthropic Claude (publishers/anthropic) through the aiplatform
+# endpoint. Prices are the global-endpoint list rates; regional/multi-region
+# newer Claude models carry a +10% premium not modeled here. The model id is
+# exactly what the gateway resolves from the request path
+# (.../models/{model}:{method}). There are no Google Gemini (publishers/google)
+# rows: gemini-2.5-pro and gemini-2.5-flash were removed on 2026-11-06 because
+# Vertex retired both on 2026-10-20, so Vertex Gemini traffic is an honest
+# unpriced zero until a current model is added with a checked price.
 - provider: vertex
   model: claude-sonnet-4-6
   region: global
@@ -1773,7 +1724,8 @@
     - https://cloud.google.com/vertex-ai/generative-ai/pricing
     - https://platform.claude.com/docs/en/about-claude/pricing
     - https://platform.claude.com/docs/en/build-with-claude/context-windows
-  verified_at: 2026-07-10T00:00:00Z
+    - https://cloud.google.com/model-garden/partner-models/pricing
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
 - provider: vertex
   model: claude-haiku-4-5@20251001
@@ -1800,5 +1752,6 @@
     - https://cloud.google.com/vertex-ai/generative-ai/pricing
     - https://platform.claude.com/docs/en/about-claude/pricing
     - https://platform.claude.com/docs/en/build-with-claude/context-windows
-  verified_at: 2026-07-10T00:00:00Z
+    - https://cloud.google.com/model-garden/partner-models/pricing
+  verified_at: 2026-11-06T00:00:00Z
   capabilities_verified_at: 2026-07-30T00:00:00Z
