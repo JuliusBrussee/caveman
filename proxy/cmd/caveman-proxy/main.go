@@ -402,6 +402,14 @@ func runServe(logger *slog.Logger) {
 			logger.Warn("CAVEMAN_AUTH_TOKEN is set on a loopback listener; local clients must present the token in x-cave-api-key or Authorization: Bearer", "addr", cfg.Listen)
 		}
 	}
+	// Move cache component lists out of the request rows and expire old ones
+	// (#1371), off the request path. Only the proxy that owns the listener
+	// does it, and it ends before the deferred spend.Close.
+	maintenance := make(chan struct{})
+	go func() {
+		defer close(maintenance)
+		spend.RunCacheComponentMaintenance(ctx)
+	}()
 	go func() {
 		logger.Info("caveman proxy listening", "addr", cfg.Listen, "mode", cfg.Mode, "basis", "inferred", "inbound_auth", inboundAuth, "tls", serverTLS != nil)
 		if err := srv.Serve(listener); err != nil && err != http.ErrServerClosed {
@@ -414,6 +422,7 @@ func runServe(logger *slog.Logger) {
 	defer shutdownCancel()
 	_ = srv.Shutdown(shutdownCtx)
 	_ = server.Close() // saves what cache warming learned, writes the last rows
+	<-maintenance
 	if err := runstate.RemoveMatching(home, state.Port, state.InstanceToken); err != nil {
 		logger.Warn("cannot remove proxy run state", "error", err)
 	}

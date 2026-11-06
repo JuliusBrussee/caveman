@@ -10,7 +10,7 @@ the managed gateway (the managed gateway imports them from here). `caveman start
 - `internal/gateway/` — the request lifecycle (`server.go` + `proxy.go`) behind three injected seams: `Authenticator`, `CredentialResolver`, `TelemetrySink`. Ports the managed loop with the fail-open fix. `serve` sets `Config.AsyncRecord`: a row's request token count, sink write (batched) and Cloud observe run after the handler returns, in record order (`recorder.go`). A reader that must see the request it follows calls `Server.Flush` first (session receipts do); close the server before the sink.
 - `GET /health/ready` identifies the runtime and advertises `billing: "byok"` because the standalone proxy forwards the caller's selected provider credential. The managed twin advertises `managed`; SDK dollar budgets fail closed on missing/unknown billing provenance.
 - `internal/config/` — `caveman.yaml` loader + BYOK env-key resolution; unknown mode fails closed to `record`.
-- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink` and `BatchSink`. `RecordBatch` commits request rows with `synchronous=NORMAL` on its own connection (WAL): a power loss or OS crash can drop the last batches, a process crash or clean exit loses none; every other table keeps FULL.
+- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink` and `BatchSink`. `RecordBatch` commits request rows with `synchronous=NORMAL` on its own connection (WAL): a power loss or OS crash can drop the last batches, a process crash or clean exit loses none; every other table keeps FULL. A request's cache component digest list goes to `request_cache_components` in the same transaction as its row, never into `requests`.
 - `internal/standalone/` — wiring: static `Auth`, BYOK `Creds`, adapter set, and the always-on SSRF-guarded client.
 - `internal/identity/` — who calls the framework middleware routes (legacy token, token map, OIDC/JWT, mTLS) and the reloadable TLS listener config.
 - `internal/nativeruntime/` — normalized local-agent lifecycle, Task Contract,
@@ -25,6 +25,13 @@ the managed gateway (the managed gateway imports them from here). `caveman start
   provider usage, request hashes, declared context/plan identity, ordered
   provider-prefix component hashes, actual transform IDs/counts, and CCR handle;
   basis is always `inferred`, verified dollars always zero.
+  `caveman.agent.evidence.v1` carries `provider_cache_components_available` on
+  every request: true only when the ordered component list is present and
+  valid. The list lives in `request_cache_components`, not the `requests` row
+  (#1371: it is up to 66 KB and slowed every stats read), and expires after
+  14 days; `serve` moves legacy lists there in the background. An empty or
+  unavailable list is never evidence of an unchanged cache prefix, and output
+  from an older binary without the flag must not be read as available.
 
 ## Conventions
 - Build/test: `make product-build PRODUCT=proxy` / `make product-test PRODUCT=proxy`.
