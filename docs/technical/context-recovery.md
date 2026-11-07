@@ -59,11 +59,37 @@ in-memory runtime is discarded unless its host persists record separately.
 
 ## Capacity behavior
 
-Recovery storage is bounded, with a default payload capacity of 512 MiB. A new
-record that exceeds available capacity is refused without evicting existing
-handles, and Engine keeps original input.
+Recovery storage is bounded, with a default payload capacity of 512 MiB. The
+SQLite page cap counts every page (indexes, overflow, slack), so the file can
+fill before the payload does. A write the store refuses for capacity first
+frees room and is tried once more:
 
-This rule protects old compacted context from becoming a dangling reference.
+1. Duplicate full copies of one repository map become references to a single
+   copy whose bytes verify. No object is deleted.
+2. Typed objects past the retention policy are deleted, oldest first, until the
+   store is at 80% of its limits: archived objects of a session whose last write
+   is 14+ days old, and every object of a session idle 30+ days. A row that a
+   kept row reads through `data_ref` stays. Each expiry is logged, and the id
+   answers "expired" (`cave_expired_recovery`) for 180 days rather than
+   "unknown".
+
+Blob recovery handles (`ccr_…`) are never expired, because an emitted request
+may reference any of them. If nothing can be freed the write is refused and
+Engine keeps original input. `caveman-proxy recovery-store status` reports a
+full store and what the next write can expire.
+
+## Integrity
+
+A store damaged before an upgrade stays damaged across it. The proxy runs
+`PRAGMA quick_check` once per release, on its own read-only connection, and a
+damaged store (or SQLite reporting a malformed page mid-operation) refuses
+every write: a write into a damaged b-tree can spread the damage. Reads go on
+and are hash-checked. `caveman-proxy recovery-store check` runs the check on
+demand; `caveman-proxy recovery-store repair` takes an exclusive lock (so it
+refuses while any other process has the store open), copies every row whose
+bytes still match its handle or content hash into a new file, moves the damaged
+database and its journals aside as a backup, and lists every row it could not
+carry over.
 
 ## Security properties
 

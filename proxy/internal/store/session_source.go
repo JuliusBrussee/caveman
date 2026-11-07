@@ -48,6 +48,8 @@ type turnEvent struct {
 	CacheReadInputTokens     int
 	CacheCreationInputTokens int
 	CacheUsagePresent        bool
+	CacheTTL                 time.Duration
+	CacheMissReason          string
 	// Billing buckets are DISJOINT and provider-counted, normalized per adapter
 	// because sources disagree on whether input_tokens already includes the
 	// cached share (claude/opencode: disjoint sum; codex/gemini: inclusive).
@@ -190,6 +192,8 @@ func (c *sessionEventConsumer) consume(event turnEvent) {
 		c.cacheHygiene.observe(cacheUsageTurn{
 			ContextTotal: ctx, CacheRead: event.CacheReadInputTokens,
 			CacheCreation: event.CacheCreationInputTokens, Present: event.CacheUsagePresent,
+			Timestamp: event.Timestamp, CacheTTL: event.CacheTTL, MissReason: event.CacheMissReason,
+			Model: event.Model, SessionPath: c.ref.path, Source: c.sourceID, JSONLLine: event.JSONLLine,
 		})
 		c.behavior.Turns++
 		if c.behavior.TurnsBySource == nil {

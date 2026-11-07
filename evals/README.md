@@ -57,7 +57,7 @@ installed could reach every arm. `llm_run.py` now isolates each call
 
 - `prompts/<lang>.txt` — fixed list of dev questions, one per line.
   `en.txt` is the default; `pt.txt` is Brazilian Portuguese; `fr.txt`
-  is French and mirrors `en.txt` line for line.
+  is French and `es.txt` is Spanish (Spain); both mirror `en.txt` line for line.
 - `llm_run.py` — runs `claude -p --output-format json --system-prompt-file …`
   per (prompt, arm), captures real LLM output, writes
   `snapshots/results.json` along with metadata (model, CLI version,

@@ -37,7 +37,7 @@ type Options struct {
 	Model           string   // the upstream's model id, written into the body
 	Shown           string   // the model name the caller reads in the answer (the model it asked for); "" = Model
 	Effort          string   // "", none, minimal, low, medium, high, xhigh, max: applied in the upstream's dialect ("" leaves the request's own, translated)
-	Dialect         string   // chat upstream effort dialect: "openai_chat" (default), "openrouter", "deepseek", "toggle", "qwen", "none"
+	Dialect         string   // chat upstream effort dialect: "openai_chat" (default), "openrouter", "deepseek", "kimi", "toggle", "qwen", "none"
 	Route           string   // upstream provider id ("anthropic" = Anthropic's own API): namespaces thinking signatures
 	Replay          bool     // the upstream wants its own reasoning replayed as reasoning_content (chat wire)
 	MaxTokensField  string   // chat: rename max_tokens to this (e.g. "max_completion_tokens"); "" keeps max_tokens

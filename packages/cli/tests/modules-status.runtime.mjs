@@ -376,3 +376,26 @@ test("status counts the MCP entry native wiring writes for Claude and Codex", as
     fx.cleanup();
   }
 });
+
+// #1369: doctor runs the full check (PRAGMA quick_check) and fails on a
+// damaged recovery store, naming the repair. `check` exits 1 with its report
+// on stdout, as the real binary does.
+test("doctor fails a damaged recovery store and names the repair", async () => {
+  const fx = modulesFixture({ blocks: true });
+  try {
+    assert.equal((await runCli(["on", "--all", "--yes"], fx.env)).code, 0);
+    writeFileSync(join(fx.bin, "caveman-proxy"), `#!/bin/sh
+case "$1" in
+  version) printf '%s\\n' '{"version":"1.0.0","capabilities":["run_state","native_runtime_v1","native_hook_bridge_v1","typed_ccr","recovery_store_v1"]}' ;;
+  status) if [ -f "$CAVEMAN_HOME/run/$4.json" ]; then cat "$CAVEMAN_HOME/run/$4.json"; else printf '%s\\n' '{"owner":"unknown"}'; fi ;;
+  stats) printf '%s\\n' '{"spans":0,"tokens_in":0,"token_accounting":{},"basis":"inferred"}' ;;
+  recovery-store) if [ "$2" = check ]; then printf '%s\\n' '{"schema":"caveman.recovery_store.v1","exists":true,"integrity":"damaged","writes_refused":true,"reason":"recovery store is damaged","fix":"caveman stop, close agent sessions, then caveman-proxy recovery-store repair"}'; exit 1; fi ;;
+esac
+`, { mode: 0o755 });
+    const out = await runCli(["doctor"], fx.env);
+    assert.equal(out.code, 1, out.stdout + out.stderr);
+    assert.match(out.stdout, /^✗ recovery store is damaged — new input passes through uncompressed · fix: caveman stop, close agent sessions, then \S*caveman-proxy recovery-store repair$/m);
+  } finally {
+    fx.cleanup();
+  }
+});

@@ -17,6 +17,26 @@ import (
 	"time"
 )
 
+// BlockedError is the guard's policy refusal: the destination (or its port)
+// is one this Config does not permit. Callers tell it apart from a DNS or
+// connect failure with IsBlocked, so a refused upstream is not reported as a
+// provider outage. The message is the same one the guard always returned and,
+// in self-hosted mode, names the CAVE_SSRF_ALLOWLIST entry that would permit it.
+type BlockedError struct{ msg string }
+
+func (e *BlockedError) Error() string { return e.msg }
+
+func blockedf(format string, args ...any) error {
+	return &BlockedError{msg: fmt.Sprintf(format, args...)}
+}
+
+// IsBlocked reports whether err (or anything it wraps, such as the *url.Error
+// an http.Client returns) is a guard refusal rather than a network failure.
+func IsBlocked(err error) bool {
+	var blocked *BlockedError
+	return errors.As(err, &blocked)
+}
+
 // loopbackPrefixes lists the loopback ranges. They are always blocked in
 // managed mode; in self-hosted mode an explicit allowlist entry (the hostname,
 // the IP literal, or "localhost") opts them back in — a single operator
@@ -198,7 +218,7 @@ func ValidateURLNoResolve(raw string, cfg Config) error {
 		return checkAddr(addr, host, port, cfg)
 	}
 	if strings.EqualFold(host, "localhost") && !(!cfg.ManagedMode && isInAllowList(host, port, cfg.AllowList)) {
-		return fmt.Errorf("ssrf: host %q is blocked (loopback)", host)
+		return blockedf("ssrf: host %q is blocked (loopback)", host)
 	}
 	return nil
 }
@@ -224,7 +244,7 @@ func parseValidatedURL(raw string, cfg Config) (host, port string, err error) {
 	}
 	port = u.Port()
 	if cfg.ManagedMode && port != "" && port != "443" {
-		return "", "", errors.New("ssrf: managed mode requires port 443")
+		return "", "", blockedf("ssrf: managed mode requires port 443")
 	}
 	if port == "" {
 		if u.Scheme == "https" {
@@ -257,7 +277,7 @@ func validateHostPort(ctx context.Context, host, port string, cfg Config) error 
 	// self-hosted operator allowlisted it (resolution still runs, so every
 	// resolved address is range-checked below like any other).
 	if strings.EqualFold(host, "localhost") && !(!cfg.ManagedMode && isInAllowList(host, port, cfg.AllowList)) {
-		return fmt.Errorf("ssrf: host %q is blocked (loopback)", host)
+		return blockedf("ssrf: host %q is blocked (loopback)", host)
 	}
 
 	// Resolve ALL addresses the hostname currently maps to.  A hostname that
@@ -331,9 +351,9 @@ func checkAddr(addr netip.Addr, host, port string, cfg Config) error {
 			// silent: the allowlist is a no-op there by contract, so advertising
 			// it would send the operator after a setting that cannot help.
 			if !cfg.ManagedMode {
-				return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s; add %s to the SSRF allowlist (CAVE_SSRF_ALLOWLIST) to permit it", addr, host, p, allowListSuggestion(addr, port))
+				return blockedf("ssrf: destination %s (for host %q) is in blocked range %s; add %s to the SSRF allowlist (CAVE_SSRF_ALLOWLIST) to permit it", addr, host, p, allowListSuggestion(addr, port))
 			}
-			return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
+			return blockedf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
 		}
 	}
 
@@ -342,7 +362,7 @@ func checkAddr(addr netip.Addr, host, port string, cfg Config) error {
 			if !cfg.ManagedMode {
 				return nil
 			}
-			return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
+			return blockedf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
 		}
 	}
 
@@ -351,18 +371,18 @@ func checkAddr(addr netip.Addr, host, port string, cfg Config) error {
 			// These ranges (link-local/metadata, ULA outside the narrow local-TUN
 			// exception, multicast, unspecified, documentation) are absolutely
 			// blocked — no allowlist escape in any mode.
-			return fmt.Errorf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
+			return blockedf("ssrf: destination %s (for host %q) is in blocked range %s", addr, host, p)
 		}
 	}
 
 	if inRFC1918(addr) {
 		if cfg.ManagedMode {
-			return fmt.Errorf("ssrf: destination %s (for host %q) is a private address blocked in managed mode", addr, host)
+			return blockedf("ssrf: destination %s (for host %q) is a private address blocked in managed mode", addr, host)
 		}
 		// In self-hosted mode, RFC1918 is blocked unless the original hostname
 		// OR the resolved IP literal appears in the allowlist.
 		if !isInAllowList(host, port, cfg.AllowList) && !isInAllowList(addr.String(), port, cfg.AllowList) {
-			return fmt.Errorf("ssrf: destination %s (for host %q) is a private address; add %s to the SSRF allowlist (CAVE_SSRF_ALLOWLIST) to permit it", addr, host, allowListSuggestion(addr, port))
+			return blockedf("ssrf: destination %s (for host %q) is a private address; add %s to the SSRF allowlist (CAVE_SSRF_ALLOWLIST) to permit it", addr, host, allowListSuggestion(addr, port))
 		}
 	}
 	return nil
@@ -453,7 +473,7 @@ func dialContextWith(cfg Config, lookup lookupNetIPFunc, dial rawDialContextFunc
 			return nil, err
 		}
 		if cfg.ManagedMode && port != "443" {
-			return nil, errors.New("ssrf: managed mode requires port 443")
+			return nil, blockedf("ssrf: managed mode requires port 443")
 		}
 
 		if parsed, parseErr := netip.ParseAddr(host); parseErr == nil {
@@ -465,7 +485,7 @@ func dialContextWith(cfg Config, lookup lookupNetIPFunc, dial rawDialContextFunc
 		}
 
 		if strings.EqualFold(host, "localhost") && !(!cfg.ManagedMode && isInAllowList(host, port, cfg.AllowList)) {
-			return nil, fmt.Errorf("ssrf: host %q is blocked (loopback)", host)
+			return nil, blockedf("ssrf: host %q is blocked (loopback)", host)
 		}
 		addrs, err := lookup(ctx, "ip", host)
 		if err != nil {

@@ -272,14 +272,15 @@ def extract_inline_codes(text):
     # closes with an equal-length run. A mid-line ``` in prose ("inside a
     # ```diff fence") has no equal closer, so it matches nothing — instead of
     # its trailing backtick shifting the pairing of every following span.
-    # The opener is the WHOLE run (`(?!`)` after it), so a lone ``` can never
+    # The opener is the WHOLE run (a lookahead refuses one more backtick), so a lone ``` can never
     # shrink to a single backtick and pair with the next span. The content may
     # hold a run of a different length (``a`b``), so it is "anything, lazily"
     # up to the first equal run, not "anything but a backtick"; DOTALL keeps
     # hard-wrapped spans in the comparison set.
     return [
         m.group(2)
-        for m in re.finditer(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", text_without_fences, re.DOTALL)
+        # \x60 is a backtick: spelled out so no "!" sits before a literal one.
+        for m in re.finditer(r"(?<!\x60)(\x60+)(?!\x60)(.+?)(?<!\x60)\1(?!\x60)", text_without_fences, re.DOTALL)
     ]
 
 

@@ -1,0 +1,65 @@
+name: Verify Codex profile route
+on:
+  pull_request:
+    paths:
+      - "agents/profiles/codex.json"
+      - "packages/cli/**"
+      - "installer/lib/portable-process.js"
+      - ".github/scripts/verify-codex-route.mjs"
+      - ".github/workflows/verify-codex.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-codex-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+# profiles.yml owns PR scope validation using event base/head SHAs and full history.
+# The Codex version under test is agents/profiles/codex.json tested_agent_version,
+# which compile.mjs keeps equal to the agent-conformance matrix pin: a pin bump
+# needs no edit here.
+jobs:
+  route:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.16.0'
+      - name: Read the pinned Codex version from its profile
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./agents/profiles/codex.json').tested_agent_version")"
+          [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]] || { echo "codex profile pin is not a release version: $version" >&2; exit 1; }
+          echo "CODEX_VERSION=$version" >> "$GITHUB_ENV"
+      - name: Install isolated upstream binary and CLI build dependencies
+        shell: pwsh
+        run: |
+          $taskPrefix = Join-Path $env:RUNNER_TEMP 'codex-pinned'
+          npm install --prefix $taskPrefix --no-audit --no-fund --no-package-lock "@openai/codex@$env:CODEX_VERSION"
+          if ($LASTEXITCODE) { exit $LASTEXITCODE }
+          (Join-Path $taskPrefix 'node_modules\.bin') | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+          npm install --ignore-scripts --no-audit --no-fund --no-package-lock --prefix packages/cli
+          exit $LASTEXITCODE
+      - run: npm --prefix packages/cli run build
+      - name: Require the candidate pin without drift allowances
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p evidence
+          git rev-parse HEAD > evidence/revision.txt
+          node agents/probe-installed.mjs --require codex --json > evidence/probe-strict.json
+          node -e "const assert=require('node:assert/strict'),v=process.env.CODEX_VERSION,r=require('./evidence/probe-strict.json').results.find(r=>r.id==='codex');assert.equal(r.status,'ok');assert.equal(r.tested,v);assert.equal(r.observed,v);assert.equal(r.version_ok,true);assert.equal(r.help_ok,true);assert.equal(r.version_matches,true);"
+      - name: Real routing probes from two scratch homes
+        run: node .github/scripts/verify-codex-route.mjs
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: windows-codex-route
+          path: evidence/
