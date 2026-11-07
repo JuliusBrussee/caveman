@@ -110,7 +110,7 @@ COMPATIBILITY = MappingProxyType({
     "openai": Compatibility("certified", (("openai", "2.20", "4"),)),
     "anthropic": Compatibility("certified", (("anthropic", "1.0", "3"),)),
     "litellm": Compatibility("certified", (("litellm", "1.95", "2"),)),
-    "google": Compatibility("experimental", (("google-genai", "2.18", "3"),)),
+    "google": Compatibility("experimental", (("google-genai", "2.18", "4"),)),
     "strands": Compatibility("experimental", (("strands-agents", "1.43", "2"),)),
     "agno": Compatibility("experimental", (("agno", "3.0", "4"),)),
     "crewai": Compatibility("experimental", (("crewai", "1.15.3", "2"),)),

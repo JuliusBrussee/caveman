@@ -72,7 +72,7 @@ Wrapping never raises for a version problem, even in strict mode. To fail fast a
 | `openai` | openai 2.20–<4 | 2.20.0 | 2.54.0, 3.19.2 |
 | `anthropic` | anthropic 1.0–<2 | 1.0.0 | 1.8.0 |
 | `litellm` | litellm 1.95–<2 (extra exclusions and filelock floor below) | 1.95.0 | 1.103.10 |
-| `google` | google-genai 2.18–<3 | 2.18.0 | 2.25.0 |
+| `google` | google-genai 2.18–<4 | 2.18.0 | 3.0.0 |
 | `strands` | strands-agents 1.43–<2 | 1.43.0 | 1.57.0 |
 | `agno` | agno 3.0–<4 | 3.0.0 | 3.0.11 |
 | `crewai` | crewai 1.15.3–<2 | 1.15.3 | 1.15.22 |
