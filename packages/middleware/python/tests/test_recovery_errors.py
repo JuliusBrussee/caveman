@@ -103,24 +103,23 @@ def recover_anthropic(runtime, scope, asynchronous):
 
 @recover("google")
 def recover_google(runtime, scope, asynchronous):
-    import httpx
     from google import genai
     from google.genai import types
-    from caveman_middleware.google import with_caveman_google
+    from caveman_middleware.google import with_caveman_google, _http
 
     received = []
 
     def provider(request):
         received.append(json.loads(request.content))
         part = ({"functionCall": {"name": "caveman_retrieve", "args": {"handle": HANDLE}}} if len(received) == 1 else {"text": "done"})
-        return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [part]}, "finishReason": "STOP"}]})
+        return _http.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [part]}, "finishReason": "STOP"}]})
 
     def read_log() -> str:
         """Read the log."""
         return "log"
 
-    options = types.HttpOptions(httpx_client=httpx.Client(transport=httpx.MockTransport(provider)),
-                                httpx_async_client=httpx.AsyncClient(transport=httpx.MockTransport(provider)))
+    options = types.HttpOptions(httpx_client=_http.Client(transport=_http.MockTransport(provider)),
+                                httpx_async_client=_http.AsyncClient(transport=_http.MockTransport(provider)))
     wrapped = with_caveman_google(genai.Client(api_key="test", http_options=options), runtime=runtime, scope=scope)
     call = dict(model="gemini-test", contents="go", config=types.GenerateContentConfig(tools=[read_log]))
     asyncio.run(wrapped.aio.models.generate_content(**call)) if asynchronous else wrapped.models.generate_content(**call)
