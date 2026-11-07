@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { copyFileSync, linkSync, readFileSync, symlinkSync } from "node:fs";
+import { copyFileSync, linkSync, readFileSync, symlinkSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { parseStatsOptions, renderStatsSummary } from "../dist/stats-cli.js";
 import { isolatedCliEnv, runCli } from "./_cli.mjs";
@@ -120,4 +120,25 @@ console.log(JSON.stringify({schema:'caveman.stats.v1',basis:'inferred',totals:{r
     assert.deepEqual(JSON.parse(readFileSync(log, "utf8")), ["stats", "--report", "--provider", "openai", "--days", "7"]);
     assert.doesNotMatch(out.stderr, /Opening|dashboard/);
   } finally { isolated.cleanup(); }
+});
+
+// #1371: a report that runs out of time says so, names the size it had to
+// read, and points at the narrower window, instead of a bare ETIMEDOUT.
+test("stats names a timed-out report and a shorter window", async () => {
+  const isolated = statsEnv();
+  try {
+    const slow = nativeStub(join(isolated.home, "bin"), "slow-proxy", `
+if (ARGV[0] === "stats") { setTimeout(() => console.log("{}"), 5000); }
+`);
+    writeFileSync(join(isolated.home, "caveman.db"), Buffer.alloc(3 * 1048576));
+    const out = await runCli(["stats", "--plain"], {
+      env: { ...isolated.env, CAVEMAN_PROXY_BIN: slow, CAVE_STATS_TIMEOUT_MS: "300" },
+      cwd: isolated.home,
+    });
+    assert.equal(out.code, 1);
+    assert.match(out.stderr, /caveman stats timed out after 0s reading the local stats database \(3 MB\)\. Try a shorter window: caveman stats --days 7/);
+    assert.doesNotMatch(out.stderr, /ETIMEDOUT/);
+  } finally {
+    isolated.cleanup();
+  }
 });

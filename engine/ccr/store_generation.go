@@ -174,6 +174,11 @@ func withStore[T any](s *Store, fn func() (T, error)) (T, error) {
 	if changed := s.checkGeneration(); changed != nil {
 		return zero, changed
 	}
+	if isCorrupt(err) {
+		// SQLite found damage mid-operation. Stop writing before the next
+		// write lands in the damaged tree (#1369).
+		s.markDamaged([]string{err.Error()})
+	}
 	return value, err
 }
 

@@ -289,6 +289,24 @@ CREATE TABLE IF NOT EXISTS experiment_arms (
 CREATE INDEX IF NOT EXISTS idx_experiment_arms_experiment
   ON experiment_arms(experiment_id, started_at);
 
+-- The provider cache component digest list of a request (issue #1371). It
+-- lives here, not in requests, because it is up to 66 KB per row: in the
+-- requests row it sat before the accounting columns, and every stats read
+-- walked its overflow pages to reach them. One row per requests.id, written
+-- in the same transaction as the request row; it expires after
+-- cacheComponentRetention. requests.provider_cache_component_sha256 is the
+-- legacy home: new rows leave it NULL, and the proxy moves old values here.
+CREATE TABLE IF NOT EXISTS request_cache_components (
+  request_id INTEGER PRIMARY KEY,
+  digests TEXT NOT NULL
+);
+
+-- Progress of one-time and periodic store maintenance, by key.
+CREATE TABLE IF NOT EXISTS store_maintenance (
+  key TEXT PRIMARY KEY,
+  value INTEGER NOT NULL
+);
+
 -- Stats windows filter and sort on julianday(ts). The expression must match
 -- the query text in stats.go. On an existing database this builds once.
 CREATE INDEX IF NOT EXISTS idx_requests_julianday_ts
@@ -417,9 +435,60 @@ func (s *Store) Close() error { return s.db.Close() }
 // always "inferred" in standalone.
 func (s *Store) Record(rec gateway.RequestRecord) {
 	sanitizeRequestRecord(&rec)
-	if _, err := s.db.Exec(insertRequestSQL, requestRecordArgs(&rec)...); err != nil && s.logger != nil {
+	if err := s.recordOne(&rec); err != nil && s.logger != nil {
 		s.logger.Warn("local spend store insert failed", "error", err, "request_id", rec.RequestID)
 	}
+}
+
+// recordOne writes one sanitized row. A row with a cache component list writes
+// the request row and its list in one transaction, so neither exists alone.
+func (s *Store) recordOne(rec *gateway.RequestRecord) error {
+	ctx := context.Background()
+	if rec.ProviderCacheComponentSHA256 == "" {
+		_, err := s.db.ExecContext(ctx, insertRequestSQL, requestRecordArgs(rec)...)
+		return err
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	if err := insertRequest(ctx, tx, tx, rec); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+
+type contextExecer interface {
+	ExecContext(ctx context.Context, query string, args ...any) (sql.Result, error)
+}
+
+// insertRequest writes a sanitized row through request (a transaction or a
+// statement prepared in one) and its component list through components, which
+// must belong to the same transaction.
+func insertRequest(ctx context.Context, request, components contextExecer, rec *gateway.RequestRecord) error {
+	result, err := request.ExecContext(ctx, insertRequestSQL, requestRecordArgs(rec)...)
+	if err != nil {
+		return err
+	}
+	if rec.ProviderCacheComponentSHA256 == "" {
+		return nil
+	}
+	id, err := result.LastInsertId()
+	if err != nil {
+		return err
+	}
+	_, err = components.ExecContext(ctx, insertCacheComponentsSQL, id, rec.ProviderCacheComponentSHA256)
+	return err
+}
+
+const insertCacheComponentsSQL = `INSERT INTO request_cache_components (request_id, digests) VALUES (?, ?)`
+
+// stmtExecer adapts a prepared statement, which takes no query text.
+type stmtExecer struct{ stmt *sql.Stmt }
+
+func (e stmtExecer) ExecContext(ctx context.Context, _ string, args ...any) (sql.Result, error) {
+	return e.stmt.ExecContext(ctx, args...)
 }
 
 // RecordBatch persists rows in one transaction (gateway.BatchSink): the rows
@@ -479,15 +548,23 @@ func (s *Store) recordBatch(recs []gateway.RequestRecord) error {
 	if err != nil {
 		return err
 	}
+	componentStmt, err := tx.PrepareContext(ctx, insertCacheComponentsSQL)
+	if err != nil {
+		_ = stmt.Close()
+		return err
+	}
 	for _, rec := range recs {
 		sanitizeRequestRecord(&rec)
 		// One failed insert fails the batch: it rolls back, and each row then
 		// gets its own Record, as it would have without batching.
-		if _, err := stmt.ExecContext(ctx, requestRecordArgs(&rec)...); err != nil {
+		if err := insertRequest(ctx, stmtExecer{stmt}, stmtExecer{componentStmt}, &rec); err != nil {
+			_ = stmt.Close()
+			_ = componentStmt.Close()
 			return fmt.Errorf("insert request %s: %w", rec.RequestID, err)
 		}
 	}
 	_ = stmt.Close()
+	_ = componentStmt.Close()
 	// A failed commit wrote nothing, so the rows are written again one by
 	// one. (Only a commit SQLite rolled back itself mid-batch, on a full
 	// disk or an I/O error, could leave earlier rows in and duplicate them.)
@@ -642,7 +719,9 @@ const insertRequestSQL = `INSERT INTO requests (
 func requestRecordArgs(rec *gateway.RequestRecord) []any {
 	return []any{rec.Timestamp, rec.RequestID, rec.TraceID, rec.Label, rec.SessionID, rec.SessionCorrelationBasis, rec.AgentBuildSHA256, rec.EfficiencyPlanSHA256,
 		rec.ContextBill, rec.TransformTrace, rec.TransformLocation, rec.CacheEpoch, rec.CachePrefixSHA256,
-		rec.ProviderCachePrefixSHA256, rec.ProviderCacheComponentSHA256, rec.CacheBoundaryKnown, rec.CacheBust, rec.CacheBustCause, rec.CompressionEligible,
+		// The component list goes to request_cache_components (insertRequest);
+		// the legacy requests column stays NULL (issue #1371).
+		rec.ProviderCachePrefixSHA256, nil, rec.CacheBoundaryKnown, rec.CacheBust, rec.CacheBustCause, rec.CompressionEligible,
 		rec.AgentSlug, rec.Provider, rec.Model, rec.RouteFrom, rec.RouteTo, rec.Endpoint, rec.Stream,
 		rec.StatusCode, rec.ErrorCode, rec.LatencyMS, rec.TTFBMS, rec.RequestBytes, rec.ResponseBytes,
 		rec.InputTokens, rec.OutputTokens, rec.CachedInputTokens, rec.CacheCreationInputTokens,
@@ -756,36 +835,37 @@ type RecentRequest struct {
 // Cave Build. It exposes hashes and usage only; request/response bodies never
 // enter this surface. Basis remains inferred.
 type AgentEvidence struct {
-	TS                           string `json:"ts"`
-	RequestID                    string `json:"request_id"`
-	SessionID                    string `json:"session_id"`
-	AgentBuildSHA256             string `json:"agent_build_sha256"`
-	EfficiencyPlanSHA256         string `json:"efficiency_plan_sha256"`
-	Provider                     string `json:"provider"`
-	Model                        string `json:"model"`
-	StatusCode                   int64  `json:"status_code"`
-	InputTokens                  int64  `json:"input_tokens"`
-	OutputTokens                 int64  `json:"output_tokens"`
-	CachedInputTokens            int64  `json:"cached_input_tokens"`
-	CacheCreationInputTokens     int64  `json:"cache_creation_input_tokens"`
-	ReasoningTokens              int64  `json:"reasoning_tokens"`
-	TokenUsageBasis              string `json:"token_usage_basis"`
-	RawRequestSHA256             string `json:"raw_request_sha256"`
-	TransformedRequestSHA256     string `json:"transformed_request_sha256"`
-	RequestHashComplete          bool   `json:"request_hash_complete"`
-	OptimizationIDs              string `json:"optimization_ids"`
-	ContextBill                  string `json:"context_bill"`
-	TransformTrace               string `json:"transform_trace"`
-	TransformLocation            string `json:"transform_location"`
-	CacheEpoch                   string `json:"cache_epoch"`
-	CachePrefixSHA256            string `json:"declared_cache_prefix_sha256"`
-	ProviderCachePrefixSHA256    string `json:"provider_cache_prefix_sha256"`
-	ProviderCacheComponentSHA256 string `json:"provider_cache_component_sha256"`
-	CacheBoundaryKnown           bool   `json:"cache_boundary_known"`
-	RecoveryHandle               string `json:"recovery_handle"`
-	CompressionTokensBefore      int64  `json:"compression_tokens_before"`
-	CompressionTokensAfter       int64  `json:"compression_tokens_after"`
-	Basis                        string `json:"basis"`
+	TS                               string `json:"ts"`
+	RequestID                        string `json:"request_id"`
+	SessionID                        string `json:"session_id"`
+	AgentBuildSHA256                 string `json:"agent_build_sha256"`
+	EfficiencyPlanSHA256             string `json:"efficiency_plan_sha256"`
+	Provider                         string `json:"provider"`
+	Model                            string `json:"model"`
+	StatusCode                       int64  `json:"status_code"`
+	InputTokens                      int64  `json:"input_tokens"`
+	OutputTokens                     int64  `json:"output_tokens"`
+	CachedInputTokens                int64  `json:"cached_input_tokens"`
+	CacheCreationInputTokens         int64  `json:"cache_creation_input_tokens"`
+	ReasoningTokens                  int64  `json:"reasoning_tokens"`
+	TokenUsageBasis                  string `json:"token_usage_basis"`
+	RawRequestSHA256                 string `json:"raw_request_sha256"`
+	TransformedRequestSHA256         string `json:"transformed_request_sha256"`
+	RequestHashComplete              bool   `json:"request_hash_complete"`
+	OptimizationIDs                  string `json:"optimization_ids"`
+	ContextBill                      string `json:"context_bill"`
+	TransformTrace                   string `json:"transform_trace"`
+	TransformLocation                string `json:"transform_location"`
+	CacheEpoch                       string `json:"cache_epoch"`
+	CachePrefixSHA256                string `json:"declared_cache_prefix_sha256"`
+	ProviderCachePrefixSHA256        string `json:"provider_cache_prefix_sha256"`
+	ProviderCacheComponentSHA256     string `json:"provider_cache_component_sha256"`
+	ProviderCacheComponentsAvailable bool   `json:"provider_cache_components_available"`
+	CacheBoundaryKnown               bool   `json:"cache_boundary_known"`
+	RecoveryHandle                   string `json:"recovery_handle"`
+	CompressionTokensBefore          int64  `json:"compression_tokens_before"`
+	CompressionTokensAfter           int64  `json:"compression_tokens_after"`
+	Basis                            string `json:"basis"`
 }
 
 // AgentEvidenceForBuild returns all requests for one exact session/build/plan
@@ -795,7 +875,7 @@ func (s *Store) AgentEvidenceForBuild(sessionID, buildSHA256, planSHA256 string)
 		return nil, fmt.Errorf("invalid agent evidence identity")
 	}
 	rows, err := s.db.Query(
-		`SELECT ts, request_id, session_id, agent_build_sha256, efficiency_plan_sha256,
+		`SELECT r.ts, r.request_id, r.session_id, agent_build_sha256, efficiency_plan_sha256,
 		        COALESCE(provider,''), COALESCE(model,''), COALESCE(status_code,0),
 		        COALESCE(input_tokens,0), COALESCE(output_tokens,0), COALESCE(cached_input_tokens,0),
 		        COALESCE(cache_creation_input_tokens,0), COALESCE(reasoning_tokens,0),
@@ -803,12 +883,14 @@ func (s *Store) AgentEvidenceForBuild(sessionID, buildSHA256, planSHA256 string)
 		        COALESCE(transformed_request_sha256,''), COALESCE(request_hash_complete,0), COALESCE(optimization_ids,''),
 		        COALESCE(context_bill,''), COALESCE(transform_trace,''), COALESCE(transform_location,''),
 		        COALESCE(cache_epoch,''), COALESCE(cache_prefix_sha256,''),
-		        COALESCE(provider_cache_prefix_sha256,''), COALESCE(provider_cache_component_sha256,''),
+		        COALESCE(provider_cache_prefix_sha256,''),
+		        COALESCE(c.digests, NULLIF(r.provider_cache_component_sha256,''), ''),
 		        COALESCE(cache_boundary_known,0), COALESCE(recovery_handle,''),
 		        COALESCE(compression_tokens_before,0), COALESCE(compression_tokens_after,0), basis
-		   FROM requests
+		   FROM requests r
+		   LEFT JOIN request_cache_components c ON c.request_id = r.id
 		  WHERE session_id = ? AND agent_build_sha256 = ? AND efficiency_plan_sha256 = ?
-		  ORDER BY id ASC
+		  ORDER BY r.id ASC
 		  LIMIT 500`,
 		sessionID, buildSHA256, planSHA256,
 	)
@@ -833,6 +915,11 @@ func (s *Store) AgentEvidenceForBuild(sessionID, buildSHA256, planSHA256 string)
 		); err != nil {
 			return nil, err
 		}
+		// An empty list is no evidence: the proxy recorded none, the persistence
+		// boundary refused it, or retention expired it. A consumer must never
+		// read an unavailable list as an unchanged cache prefix.
+		item.ProviderCacheComponentsAvailable = item.ProviderCacheComponentSHA256 != "" &&
+			validDigestList(item.ProviderCacheComponentSHA256, 1_024)
 		out = append(out, item)
 	}
 	return out, rows.Err()

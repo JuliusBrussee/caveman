@@ -90,6 +90,9 @@ export type ModuleHost = {
   // What doctor says, with the fix, when wired agents send their requests to a
   // local runtime that is not running; undefined otherwise.
   runtimeDown(): Promise<string | undefined>;
+  // What doctor says, with the fix, when the recovery store refuses new
+  // recoveries (damaged, or full with nothing to expire); undefined otherwise.
+  recoveryStoreProblem(): string | undefined;
   // What a wired agent still asks of the user before Caveman's hooks run
   // (Codex: trust them in /hooks); undefined when nothing.
   agentAsk(agent: string): string | undefined;

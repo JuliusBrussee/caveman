@@ -720,6 +720,10 @@ setModuleHost({
     }));
   },
   agentAsk: (agent) => agent === "codex" && readNativeJournal("codex") && !codexHooksTrusted() ? CODEX_TRUST_ASK : undefined,
+  recoveryStoreProblem: () => {
+    const store = readRecoveryStore(true);
+    return store?.writes_refused && store.reason ? `${store.reason} — new input passes through uncompressed${store.fix ? ` · fix: ${store.fix}` : ""}` : undefined;
+  },
   runtimeDown: async () => {
     const wired = (["claude", "codex", "hermes", "gemini", "opencode", "pi", "aider"] as NativeAgent[]).filter((agent) => readNativeJournal(agent));
     return wired.length && await agentRuntimeState() === "down" ? agentRuntimeLine("down", wired) : undefined;
@@ -4912,7 +4916,8 @@ type OffStateID =
   | "download-stalled"
   | "unsupported-platform"
   | "refresh-offline"
-  | "cache-bust";
+  | "cache-bust"
+  | "recovery-store";
 
 export type OffState = { id: OffStateID; line: string; fix?: string };
 
@@ -5015,6 +5020,14 @@ export const OFF_STATES = {
   },
   // The proxy's cache tripwire: the client re-sent bytes the provider had
   // cached and caveman forwarded them differently. Never expected; a bug.
+  // The recovery store (ccr.db) refuses new recoveries: it is damaged, or full
+  // with nothing old enough to expire. Every lossy compression needs one, so
+  // inputs pass through uncompressed until the fix (#1369, #1370).
+  recoveryStore: (reason: string, fix: string | undefined): OffState => ({
+    id: "recovery-store",
+    line: `${reason} — new input passes through uncompressed`,
+    ...(fix ? { fix } : {}),
+  }),
   cavemanCacheBust: (count: number): OffState => ({
     id: "cache-bust",
     line: `caveman changed bytes the provider had already cached on ${count} request${count === 1 ? "" : "s"} today — those turns paid to re-cache their prompt; this is a caveman bug`,
@@ -5028,6 +5041,7 @@ const OFF_STATE_PRECEDENCE: OffStateID[] = [
   "running-mode-mismatch",
   "invalid-mode",
   "user-record",
+  "recovery-store",
   "mcp-missing",
   "mem-missing",
   "zdr",
@@ -5682,6 +5696,37 @@ function readProxyObserveSummary(sinceISO: string): ProxyObserveSummary | null {
     return parsed as ProxyObserveSummary;
   } catch {
     return null;
+  }
+}
+
+// What `caveman-proxy recovery-store status|check` says about the recovery
+// store (ccr.db). `check` reads the whole file (PRAGMA quick_check) and exits 1
+// on a damaged store with its report still on stdout.
+type RecoveryStoreState = { exists?: boolean; writes_refused?: boolean; reason?: string; fix?: string };
+
+function readRecoveryStore(check: boolean): RecoveryStoreState | undefined {
+  if (!probeProxyVersion()?.capabilities.includes("recovery_store_v1")) return undefined;
+  const bin = cavemanBin("caveman-proxy", "CAVEMAN_PROXY_BIN");
+  let out: string;
+  try {
+    out = execFileSync(bin, ["recovery-store", check ? "check" : "status"], {
+      encoding: "utf8",
+      env: process.env,
+      timeout: check ? 120_000 : 10_000,
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+  } catch (error) {
+    out = String((error as { stdout?: unknown }).stdout ?? "");
+  }
+  try {
+    const parsed = JSON.parse(out) as RecoveryStoreState & { schema?: string };
+    if (parsed?.schema !== "caveman.recovery_store.v1") return undefined;
+    // The fix names the subcommand; spell out the binary, which is not on PATH.
+    const shown = /[^\w@%+=:,./\\-]/.test(bin) ? quoteHookPath(bin) : bin;
+    if (parsed.fix) parsed.fix = parsed.fix.replace("caveman-proxy recovery-store", `${shown} recovery-store`);
+    return parsed;
+  } catch {
+    return undefined;
   }
 }
 
@@ -19545,6 +19590,12 @@ function evalsRun(argv: string[] = []) {
 // stats prints the local spend summary by delegating to the proxy binary, which
 // owns the ~/.caveman/ SQLite store. The CLI carries no database dependency, so
 // it reads through the same Go binary `caveman start` launches.
+// The report reads every request row in its window; CAVE_STATS_TIMEOUT_MS
+// overrides the 60s it may take.
+function statsTimeoutMs(): number {
+  return Number(process.env.CAVE_STATS_TIMEOUT_MS) || 60_000;
+}
+
 function stats(argv: string[] = []) {
   if (argv.length === 1 && ["--help", "-h", "help"].includes(argv[0]!)) {
     process.stdout.write(STATS_HELP);
@@ -19562,7 +19613,7 @@ function stats(argv: string[] = []) {
     const args = ["stats", "--report", ...options.filters];
     if (!options.json || options.out) args.push("--write-report");
     if (options.out) args.push("--out", resolve(options.out));
-    const out = execFileSync(bin, args, { encoding: "utf8", timeout: 60_000, maxBuffer: 32 * 1024 * 1024 });
+    const out = execFileSync(bin, args, { encoding: "utf8", timeout: statsTimeoutMs(), maxBuffer: 32 * 1024 * 1024 });
     const report = JSON.parse(out) as StatsCLIReport;
     // Older companion binaries ignore --report. Keep their measurements
     // readable, but never pretend they generated the new accounting report.
@@ -19580,6 +19631,14 @@ function stats(argv: string[] = []) {
       if (report.report_path && (options.open || (!options.plain && learnTuiTerminal()))) openLearnReport(report.report_path);
     }
   } catch (error) {
+    // A report that ran out of time says so, with the size it had to read
+    // and the narrower window that reads less (#1371).
+    if ((error as { code?: string }).code === "ETIMEDOUT") {
+      let size = "";
+      try { size = ` (${Math.round(statSync(join(cavemanHome(), "caveman.db")).size / 1048576)} MB)`; } catch { /* no local store */ }
+      console.error(`caveman stats timed out after ${Math.round(statsTimeoutMs() / 1000)}s reading the local stats database${size}. Try a shorter window: caveman stats --days 7`);
+      process.exit(1);
+    }
     console.error(`failed to read stats via ${bin}: ${(error as Error).message}`);
     process.exit(1);
   }
@@ -21745,6 +21804,8 @@ async function status(argv: string[]) {
   const today = versionInfo ? readProxyObserveSummary(localMidnightRFC3339()) : null;
   const cavemanBusts = Number(today?.caveman_cache_bust_requests ?? 0);
   if (Number.isSafeInteger(cavemanBusts) && cavemanBusts > 0) states.push(OFF_STATES.cavemanCacheBust(cavemanBusts));
+  const recoveryStore = versionInfo ? readRecoveryStore(false) : undefined;
+  if (recoveryStore?.writes_refused && recoveryStore.reason) states.push(OFF_STATES.recoveryStore(recoveryStore.reason, recoveryStore.fix));
   const runningMode = runtime.owner !== "unknown" && runtime.mode ? runtime.mode : null;
   const resolvedMode = gate.mode;
   const snapshot = readLearnSnapshot();

@@ -147,7 +147,10 @@ func goldenStoredRows(t *testing.T, async bool) []map[string]string {
 		t.Fatal(err)
 	}
 	defer db.Close()
-	rows, err := db.Query(`SELECT * FROM requests ORDER BY id`)
+	// The component list lives in request_cache_components (#1371); the golden
+	// pins the list a request was stored with, wherever it lives.
+	rows, err := db.Query(`SELECT requests.*, COALESCE((SELECT digests FROM request_cache_components
+		WHERE request_id = requests.id), '') AS stored_cache_components FROM requests ORDER BY id`)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,6 +183,11 @@ func goldenStoredRows(t *testing.T, async bool) []map[string]string {
 				row[column] = fmt.Sprint(value)
 			}
 		}
+		if legacy := row["provider_cache_component_sha256"]; legacy != "NULL" {
+			t.Fatalf("request row keeps its component list in the requests row: %q", legacy)
+		}
+		row["provider_cache_component_sha256"] = row["stored_cache_components"]
+		delete(row, "stored_cache_components")
 		out = append(out, row)
 	}
 	if err := rows.Err(); err != nil {

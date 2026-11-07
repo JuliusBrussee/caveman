@@ -41,6 +41,18 @@ var ErrBudgetExceeded = errors.New("ccr: storage budget exceeded")
 // connection. Callers must preserve the original input and report the error.
 var ErrStorageChanged = errors.New("ccr: recovery storage changed; restart the process and restore missing recovery files")
 
+// ErrStoreDamaged means PRAGMA quick_check, or SQLite itself, found damage in
+// the recovery database. Reads still work and are hash-checked, but every write
+// is refused: a write into a damaged b-tree can spread the damage. Callers
+// must pass the original input through.
+var ErrStoreDamaged = errors.New("ccr: recovery store is damaged; new recovery writes are refused until it is repaired (caveman-proxy recovery-store repair)")
+
+// ErrExpired is returned for a typed object the store deleted under its
+// retention policy. It wraps ErrNotFound, so a caller that only asks "is it
+// here" is unchanged, while a caller that reports to an agent can say the
+// reference expired rather than that it never existed.
+var ErrExpired = fmt.Errorf("%w: the object expired under the recovery store's retention policy and cannot be recovered", ErrNotFound)
+
 // ObjectType is a closed typed-working-memory enum. Unknown values fail closed:
 // adapters may preserve unknown native payloads outside CCR, but may not invent
 // retrieval semantics for them.
@@ -216,7 +228,33 @@ type Stats struct {
 	StorageBytes    int64 `json:"storage_bytes,omitempty"`
 	MaxStorageBytes int64 `json:"max_storage_bytes,omitempty"`
 	StorageFull     bool  `json:"storage_full,omitempty"`
+	// StorageFullReason names why StorageFull is true: StorageFullPayloadBudget,
+	// StorageFullPageCap or StorageFullDiskFull. It is empty when not full.
+	StorageFullReason string `json:"storage_full_reason,omitempty"`
+	// Integrity is IntegrityOK or IntegrityDamaged once this process has
+	// checked the database, and empty before that. A damaged store refuses
+	// every write; IntegrityDetail carries the first quick_check findings.
+	Integrity       string `json:"integrity,omitempty"`
+	IntegrityDetail string `json:"integrity_detail,omitempty"`
 }
+
+// Values of Stats.Integrity.
+const (
+	IntegrityOK      = "ok"
+	IntegrityDamaged = "damaged"
+)
+
+// Values of Stats.StorageFullReason.
+const (
+	// StorageFullPayloadBudget means retained payload bytes reached the budget.
+	StorageFullPayloadBudget = "payload_budget"
+	// StorageFullPageCap means the database file reached its SQLite page cap.
+	// Indexes, overflow pages and unused space count toward the cap.
+	StorageFullPageCap = "page_cap"
+	// StorageFullDiskFull means a write failed with SQLITE_FULL while the
+	// file was below its page cap, so the disk or file system refused it.
+	StorageFullDiskFull = "disk_full"
+)
 
 // Handle returns the content-addressed handle for a payload without storing it.
 func Handle(original []byte) string {

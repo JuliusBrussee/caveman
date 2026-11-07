@@ -127,7 +127,7 @@ func scannedUsage(t *testing.T, s *Store) int64 {
 
 func countedUsage(t *testing.T, s *Store) int64 {
 	t.Helper()
-	used, err := s.storageBytes()
+	used, err := s.storageBytes(s.db)
 	if err != nil {
 		t.Fatal(err)
 	}
