@@ -16,17 +16,17 @@ provenance and PyPI attestations automatically.
 Tags must be annotated, GitHub-verified, and point to a commit on `main`. The
 workflow rejects a tag whose version differs from the package metadata.
 
-| Tag | Artifact | Latest published (2026-10-07) | Version in main (Caveman 4.0.1) | GitHub Release |
+| Tag | Artifact | Latest published (2026-11-06) | Version in main (Caveman 4.1.0) | GitHub Release |
 |---|---|---|---|---|
 | `sdk-ts-v*` | npm `@caveman-ai/sdk` | `1.2.0` | `1.2.0` | Yes |
 | `sdk-python-v*` | PyPI `caveman-sdk` | `1.2.0` | `1.2.0` | Yes |
-| `middleware-ts-v*` | npm `@caveman-ai/middleware` | `1.0.1` | `1.0.1` | Yes |
-| `middleware-python-v*` | PyPI `caveman-middleware` | `1.0.0` | `1.0.0` | Yes |
+| `middleware-ts-v*` | npm `@caveman-ai/middleware` | `1.0.1` | `1.1.0` | Yes |
+| `middleware-python-v*` | PyPI `caveman-middleware` | `1.0.0` | `1.0.1` | Yes |
 | `contracts-v*` | npm `@caveman-ai/contracts` | `2.0.0` | `2.1.0` | Yes |
-| `pi-v*` | npm `@caveman-ai/pi` | `0.3.0` | `0.3.1` | No |
-| `bin-v*` | Go binaries and container image | `bin-v2.1.0` | `bin-v4.0.1` (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
-| `cli-v*` | npm `@caveman-ai/cli` | `2.1.0` | `4.0.1` | No |
-| `v*` | Caveman product (installer, plugin, skills) | `v3.2.0` | `v4.0.1` | Yes, "Latest" |
+| `pi-v*` | npm `@caveman-ai/pi` | `0.3.1` | `0.3.2` | No |
+| `bin-v*` | Go binaries and container image | `bin-v4.0.2` | `bin-v4.1.0` (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
+| `cli-v*` | npm `@caveman-ai/cli` | `4.0.1` | `4.1.0` | No |
+| `v*` | Caveman product (installer, plugin, skills) | `v4.0.1` | `v4.1.0` | Yes, "Latest" |
 
 `tests/verify_repo.py` checks that each SDK and middleware package's version,
 version constant (`SDK_VERSION`, `MIDDLEWARE_VERSION`), and top `CHANGELOG.md`

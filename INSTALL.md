@@ -9,16 +9,16 @@ If just want it to work, run the one-liner. If want to know what gets touched, s
 **macOS / Linux / WSL / Git Bash**
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.sh | bash
 ```
 
 **Windows (PowerShell 5.1+)**
 
 ```powershell
-irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.ps1 | iex
+irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.ps1 | iex
 ```
 
-> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, skill, and hook downloads stay pinned to that release tag, never the moving `main` branch. Hook files are checked against a SHA-256 list from the same tag: that catches a broken or partial download, not a tag that was moved. If that list can't be fetched or any file fails it, no hook is installed and your settings stay as they were. Runtime binaries are checked against a checksum list signed with a key built into the CLI. Set `CAVEMAN_REF` only when intentionally testing another ref.
+> Piping a script straight into a shell runs it sight-unseen. If you'd rather read it first, download then run: `curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.sh -o install.sh` (review it) `&& bash install.sh`. Bootstrap, package, skill, and hook downloads stay pinned to that release tag, never the moving `main` branch. Hook files are checked against a SHA-256 list from the same tag: that catches a broken or partial download, not a tag that was moved. If that list can't be fetched or any file fails it, no hook is installed and your settings stay as they were. Runtime binaries are checked against a checksum list signed with a key built into the CLI. Set `CAVEMAN_REF` only when intentionally testing another ref.
 
 What it does:
 
@@ -31,7 +31,7 @@ What it does:
 Want to preview before installing? Use `--dry-run`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.sh | bash -s -- --dry-run
+curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.sh | bash -s -- --dry-run
 ```
 
 ## Per-agent install
@@ -63,7 +63,7 @@ remaining routing is reported as incomplete with instructions to finish under No
 
 If you want to install for one agent (or want to know exactly what command runs under the hood), use the table below. Every row also works as `--only <id>` to the unified installer.
 
-> **On npm 12 or newer, add `--allow-git=root` to any bare `npx -y github:...` command below.** npm 12 turns off git package fetches by default, so a plain `npx -y github:JuliusBrussee/caveman` stops with `npm error code EALLOWGIT`. The flag opts in just the one package you asked for: `npx --allow-git=root -y github:JuliusBrussee/caveman -- --only <id>`. Check with `npx --version`. `install.sh` and `install.ps1` detect the npm major and add the flag themselves starting with `v3.2.0`, so the one-liners above (pinned to `v4.0.1`) work on npm 12. **One-liners pinned to `v3.1.0` or older download shims that predate that change and keep failing on npm 12**: switch the tag to `v4.0.1`, or install with the flag directly: `npx --allow-git=root -y github:JuliusBrussee/caveman#v4.0.1 -- --only <id>`.
+> **On npm 12 or newer, add `--allow-git=root` to any bare `npx -y github:...` command below.** npm 12 turns off git package fetches by default, so a plain `npx -y github:JuliusBrussee/caveman` stops with `npm error code EALLOWGIT`. The flag opts in just the one package you asked for: `npx --allow-git=root -y github:JuliusBrussee/caveman -- --only <id>`. Check with `npx --version`. `install.sh` and `install.ps1` detect the npm major and add the flag themselves starting with `v3.2.0`, so the one-liners above (pinned to `v4.1.0`) work on npm 12. **One-liners pinned to `v3.1.0` or older download shims that predate that change and keep failing on npm 12**: switch the tag to `v4.1.0`, or install with the flag directly: `npx --allow-git=root -y github:JuliusBrussee/caveman#v4.1.0 -- --only <id>`.
 
 > **Choose the install scope your agent reads.** `-g` installs into the agent's user skill directory. Without it, skills belong to the current project. The unified installer uses user scope except for Replit, whose documented filesystem location is the project's `.agents/skills`. Run Replit's command from that project's Shell. Replit workspace-wide skills are managed in Workspace Settings.
 

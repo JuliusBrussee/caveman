@@ -47,7 +47,7 @@ const MIN_NODE_MAJOR = 18;
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v4.0.1';
+const PINNED_REF = process.env.CAVEMAN_REF || 'v4.1.0';
 const OPENCLAW_SKILL_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(PINNED_REF)
   ? PINNED_REF.replace(/^v/, '')
   : undefined;

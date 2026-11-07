@@ -4,6 +4,20 @@
 new major. Read this file before upgrading. Prereleases publish under their own
 npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
+## 1.1.0 — 2026-11-07
+
+- Security: the MCP adapter now requires `@modelcontextprotocol/sdk` 1.32.0 or
+  later. Earlier releases followed redirects to any origin and handed it custom
+  headers, and on 307/308 the request body including OAuth tokens
+  ([GHSA-6prh-2h8m-c8cw](https://osv.dev/vulnerability/GHSA-6prh-2h8m-c8cw)).
+  With 1.30.x or 1.31.x installed, MCP results pass through uncompressed and a
+  warning names the advisory and the version to upgrade to.
+- `@anthropic-ai/sdk` 0.132.0 through 0.137.0 and the 1.x major (tested 1.0.0
+  and 1.1.0) are inside the supported range (`>=0.124.0 <2`). Before this, the
+  latest SDK passed content through with an `unsupported_version` warning.
+- Mastra: call options forward again across `@mastra/core`'s vendored
+  `@ai-sdk/provider` types, which lagged the real package and failed `tsc`.
+
 ## 1.0.1 — 2026-10-05
 
 - Version gate: `@anthropic-ai/sdk` 0.129.0, 0.130.0 and 0.131.0 were tested

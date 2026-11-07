@@ -22,10 +22,10 @@
 set -euo pipefail
 
 REPO="JuliusBrussee/caveman"
-PINNED_REF="${CAVEMAN_REF:-v4.0.1}"
+PINNED_REF="${CAVEMAN_REF:-v4.1.0}"
 # The CLI release the first run comes from when caveman is not installed;
 # kept equal to packages/cli/package.json (tests/installer/shim-security).
-CLI_VERSION="4.0.1"
+CLI_VERSION="4.1.0"
 
 # Prefer Node, including its existing version check. Bun is a fallback only
 # when Node is absent, not a way to hide an old or broken Node installation.

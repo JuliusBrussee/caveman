@@ -1,6 +1,6 @@
 {
   "name": "caveman-installer",
-  "version": "4.0.1",
+  "version": "4.1.0",
   "description": "Caveman installer \u2014 detects your AI coding agents and installs caveman for each one.",
   "license": "Apache-2.0",
   "author": "Julius Brussee",

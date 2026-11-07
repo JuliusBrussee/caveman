@@ -4,7 +4,7 @@
 # you'd pass to installer/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.0.1/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.ps1 | iex
 #
 # Local clone:
 #   pwsh install.ps1 [flags]
@@ -32,10 +32,10 @@ function Install-Caveman {
 
   $ErrorActionPreference = "Stop"
   $Repo = "JuliusBrussee/caveman"
-  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v4.0.1" }
+  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v4.1.0" }
   # The CLI release the first run comes from when caveman is not installed;
   # kept equal to packages/cli/package.json (tests/installer/shim-security).
-  $CliVersion = "4.0.1"
+  $CliVersion = "4.1.0"
 
   # Keep Node first; only fall back when it is absent, never when it is old.
   $Runtime = "node"

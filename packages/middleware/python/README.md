@@ -9,7 +9,7 @@ This quickstart targets middleware `1.0.0` and SDK `1.2.0`. Read the [release no
 Follow the [LangChain quickstart](https://docs.caveman.so/integrations/frameworks) for a fresh environment and [runtime installation](https://docs.caveman.so/reference/faq). Start the local runtime separately; the client package does not include it.
 
 ```sh
-python -m pip install 'caveman-sdk==1.2.0' 'caveman-middleware[langchain]==1.0.0' 'langchain==1.4.1' 'langchain-core==1.6.3' 'langgraph==1.2.11'
+python -m pip install 'caveman-sdk==1.2.0' 'caveman-middleware[langchain]==1.0.1' 'langchain==1.4.1' 'langchain-core==1.6.3' 'langgraph==1.2.11'
 ```
 
 The framework guide above is the runnable walkthrough. A separate downloadable quickstart script is not published on the docs site.

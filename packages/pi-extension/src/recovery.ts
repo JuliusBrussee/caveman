@@ -195,7 +195,7 @@ export class RecoveryClient {
       await this.call("initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "caveman-pi-extension", version: "0.3.1" },
+        clientInfo: { name: "caveman-pi-extension", version: "0.3.2" },
       }, undefined, INIT_TIMEOUT_MS);
       this.notify("notifications/initialized");
       if (this.disposed) { this.onChildGone(child); this.stop(child); return false; }

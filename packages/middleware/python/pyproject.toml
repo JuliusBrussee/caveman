@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "caveman-middleware"
-version = "1.0.0"
+version = "1.0.1"
 description = "Native framework adapters for the Caveman compression runtime."
 readme = "README.md"
 license = "Apache-2.0"

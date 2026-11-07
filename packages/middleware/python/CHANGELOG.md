@@ -4,6 +4,16 @@
 major. Read this file before upgrading. pip skips prereleases unless you pin one
 or pass `--pre`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
+## 1.0.1 — 2026-11-07
+
+- Security: the `litellm` extra excludes litellm 1.107.0, which upstream
+  reported compromised
+  ([security incident, 2026-10-21](https://docs.litellm.ai/blog/security-incident-oct-21-2026)),
+  and 1.106.0 to 1.106.2, which import the optional `mcp` package on ordinary
+  tool calls. The extra also requires a patched `filelock` (4.2.1 or later).
+- `anthropic` 2.x is inside the supported range (`>=1.0,<3`). Before this, the
+  latest SDK passed content through with an `unsupported_version` warning.
+
 ## 1.0.0 — 2026-09-24
 
 - First stable release. Requires `caveman-sdk` 1.2.0 or later
