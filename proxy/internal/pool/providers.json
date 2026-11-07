@@ -148,6 +148,17 @@
         {"model": "glm-5.3", "id": "zai-org/GLM-5.3"}
       ],
       "billing": "metered"
+    },
+    {
+      "id": "runcrate", "aggregator": true, "name": "Runcrate", "kind": "api_key", "env": ["RUNCRATE_API_KEY"],
+      "base_url": "https://api.runcrate.ai/v1",
+      "wires": {"chat": {"path": "/chat/completions", "auth": "bearer", "effort": "openai_chat"}},
+      "models": [
+        {"model": "glm-5.3", "id": "zai-org/GLM-5.3"},
+        {"model": "glm-5.3-flash", "id": "zai-org/GLM-5.3-Flash"},
+        {"model": "gpt-oss-120b", "id": "openai/gpt-oss-120b"}
+      ],
+      "billing": "metered"
     }
   ]
 }
