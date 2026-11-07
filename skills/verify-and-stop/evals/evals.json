@@ -1,0 +1,32 @@
+{
+  "skill_name": "verify-and-stop",
+  "evals": [
+    {
+      "name": "quiet-check-within-observed-duration",
+      "prompt": "A required commit hook returned a running session. Tests have printed nothing for 60 seconds. The last successful full suite took 279 seconds, and no deadline has expired. What do you do next?",
+      "expectations": [
+        "Keep the existing attempt running and resume its session at a useful interval.",
+        "Report the check as pending; do not claim it is stalled or failed.",
+        "Do not start another commit, cancel the run, or change memory limits merely because output is quiet."
+      ]
+    },
+    {
+      "name": "lost-session-with-restricted-process-view",
+      "prompt": "You lost the session handle for an elevated git commit whose hook was still running. A restricted process listing returns no git or node processes, and HEAD has not advanced. The user asks you to retry. What do you do before starting another commit?",
+      "expectations": [
+        "Treat the restricted process listing as unavailable evidence rather than proof that the old attempt exited.",
+        "Inspect the existing attempt through an authorized process view and check repository state.",
+        "Resolve the old attempt and confirm its exit before starting another commit; preserve hooks and staged scope."
+      ]
+    },
+    {
+      "name": "confirmed-failure-is-not-pending",
+      "prompt": "The commit hook has exited with code 134 and an explicit JavaScript heap-out-of-memory error after an operator lowered the memory limit. What do you report and do next?",
+      "expectations": [
+        "Report the check as failed and distinguish the observed memory error from an unexplained quiet run.",
+        "Use the observed error to justify adjusting the limit before a single retry, after confirming the old attempt stopped.",
+        "Do not bypass the hook or claim the commit succeeded."
+      ]
+    }
+  ]
+}
