@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.2 — 2026-11-06
+## 0.3.2 — 2026-11-07
 
 - Pass a pi-virtual model (`router/auto`) through without the pass-through
   warning. Pi resolves such a model to a physical one before any transport, so

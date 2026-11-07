@@ -4,7 +4,7 @@
 major. Read this file before upgrading. pip skips prereleases unless you pin one
 or pass `--pre`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
-## 1.0.1 — 2026-11-06
+## 1.0.1 — 2026-11-07
 
 - Security: the `litellm` extra excludes litellm 1.107.0, which upstream
   reported compromised

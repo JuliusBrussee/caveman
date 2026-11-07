@@ -4,7 +4,7 @@
 new major. Read this file before upgrading. Prereleases publish under their own
 npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
-## 1.1.0 — 2026-11-06
+## 1.1.0 — 2026-11-07
 
 - Security: the MCP adapter now requires `@modelcontextprotocol/sdk` 1.32.0 or
   later. Earlier releases followed redirects to any origin and handed it custom
