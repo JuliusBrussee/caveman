@@ -128,7 +128,9 @@ test("stats names a timed-out report and a shorter window", async () => {
   const isolated = statsEnv();
   try {
     const slow = nativeStub(join(isolated.home, "bin"), "slow-proxy", `
-if (ARGV[0] === "stats") { setTimeout(() => console.log("{}"), 5000); }
+// The Windows native-stub preload exits as soon as this body returns.
+// Block here so both platforms actually exercise the parent process timeout.
+if (ARGV[0] === "stats") { Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5000); console.log("{}"); }
 `);
     writeFileSync(join(isolated.home, "caveman.db"), Buffer.alloc(3 * 1048576));
     const out = await runCli(["stats", "--plain"], {
