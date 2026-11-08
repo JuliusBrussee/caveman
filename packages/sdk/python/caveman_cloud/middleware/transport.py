@@ -130,7 +130,11 @@ class _Budget(io.RawIOBase):
             # ponytail: polls close() every 100 ms; select on a wake-up socketpair if that latency ever matters.
             self._sock.settimeout(min(_left(self._deadline), 0.1))
             try:
-                return self._sock.recv_into(buffer)
+                data = self._sock.recv_into(buffer)
+                # CONNECT's reader hands this socket to the TLS handshake next;
+                # the polling slice belongs to this read, not the next phase.
+                self._sock.settimeout(max(0.001, self._deadline - time.monotonic()))
+                return data
             except TimeoutError:
                 if self._closed():
                     raise OSError("transport closed") from None
