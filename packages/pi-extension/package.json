@@ -44,5 +44,8 @@
     "@types/node": "24.19.2",
     "esbuild": "0.28.2",
     "typescript": "5.9.3"
+  },
+  "overrides": {
+    "undici": "8.12.4"
   }
 }
