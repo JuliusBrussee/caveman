@@ -212,6 +212,18 @@ class TestDefaultTransport(unittest.TestCase):
                 self.assertEqual(untrusted.preflight().reason, "runtime_unavailable", "the system trust store rejects the test CA")
 
 
+    @unittest.skipUnless(shutil.which("openssl"), "openssl CLI mints the throwaway certificate")
+    def test_connect_read_poll_timeout_does_not_bound_tls_handshake(self):
+        original = ssl.SSLSocket.do_handshake
+
+        def delayed(sock, *args, **kwargs):
+            if sock.server_side:
+                time.sleep(0.25)  # over the read polling slice, within the exchange budget
+            return original(sock, *args, **kwargs)
+
+        with patch.object(ssl.SSLSocket, "do_handshake", delayed):
+            self.test_https_proxy_connect_tunnel_with_custom_ca()
+
     def assert_bounded(self, runtime, deadline_s):
         started = time.monotonic()
         reason = runtime.preflight().reason
