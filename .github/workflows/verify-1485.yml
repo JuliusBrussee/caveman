@@ -1,0 +1,46 @@
+name: Verify OpenCode configured paths
+on:
+  push:
+    branches: [fix/opencode-config-path-whitespace]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  reproduce:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: '24.16.0'
+      - name: Install build dependencies on runner only
+        run: npm install --ignore-scripts --no-audit --no-fund --no-package-lock --prefix packages/cli
+      - name: Build production CLI
+        run: npm --prefix packages/cli run build
+      - name: Reproduce against unmodified production code
+        shell: bash
+        run: |
+          set +e
+          node --import ./packages/cli/tests/fixtures/sanitize-host-env.mjs --test --test-reporter=tap packages/cli/tests/opencode-config-dir.runtime.mjs > baseline.tap 2>&1
+          result=$?
+          cat baseline.tap
+          RESULT="$result" node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const log = readFileSync('baseline.tap', 'utf8');
+          const failures = log.split('\n').filter(line => /^not ok /.test(line));
+          assert.equal(process.env.RESULT, '1', 'baseline must fail');
+          assert.equal(failures.length, process.platform === 'win32' ? 6 : 12);
+          assert.ok(failures.every(line => /1485 (leading|trailing) spaces/.test(line)), failures.join('\n'));
+          for (const surface of ['CLI install/uninstall', 'unified installer/uninstaller', 'copied mode plugin']) {
+            assert.ok(failures.some(line => line.includes(surface)), surface);
+          }
+          console.log('Confirmed production-path failures:', failures.length);
+          JS
