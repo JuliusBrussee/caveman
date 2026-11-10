@@ -24,7 +24,7 @@ test('installer bin does not collide with the bundled CLI', () => {
 
   assert.deepEqual(
     installerBins.map(([, target]) => target),
-    ['./installer/install.js', './bin/install.js'],
+    ['./installer/install.js', './installer/sweet.js'],
     'the GitHub package exposes the upstream installer and the Sweet wrapper',
   );
 

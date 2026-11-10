@@ -21,7 +21,7 @@
 - `src/hooks/caveman-config.js`, 활성화·추적 훅, `.codex/codex-sessionstart.js`: 스킬 누락 시에도 한국어와 정확도 경계 유지.
 - `skills/activation-rule.mjs`, OpenClaw 부트스트랩: 항상 켜지는 지시에도 동일한 페르소나 적용.
 - `agents/cavecrew-*.md`: 평문 한국어와 불완전·테스트 미실행 보고. reviewer는 세션 모델 상속.
-- `bin/install.js`, 설치기 저장소 주소, 셸/PowerShell 진입점: 포크에서 스킬을 받는다. 런타임 패키지 자체는 모체 패키지를 유지한다.
+- `installer/sweet.js`, 설치기 저장소 주소, 셸/PowerShell 진입점: 포크에서 스킬을 받는다. 런타임 패키지 자체는 모체 패키지를 유지한다.
 - `scripts/sync-sweet.mjs`: 별칭 압축 스크립트, 플러그인 배포본, 훅 체크섬, 결정적 ZIP 생성.
 
 모체가 배포한 npm CLI/바이너리는 이 체크아웃의 수정으로 바뀌지 않는다. 로컬 소스의 CLI 프롬프트 생성본은 갱신했지만, 공식 npm CLI가 독자적으로 주입하는 프롬프트까지 한국어로 바꾸려면 수정된 CLI를 따로 빌드·배포해야 한다. 이 작업은 로컬 플러그인·스킬·훅을 검증하며 별도 패키지 게시를 수행하지 않는다.

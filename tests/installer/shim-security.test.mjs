@@ -50,9 +50,9 @@ test("Sweet bootstrap refs agree and can be pinned explicitly", () => {
   assert.match(installer, /process\.env\.SWEET_REF \|\| process\.env\.CAVEMAN_REF \|\| 'main'/);
   for (const body of [shellShim, powershellShim, installer]) assert.match(body, /HDomi\/sweet-agent/);
   assert.match(readFileSync(join(root, "INSTALL.md"), "utf8"), /SWEET_REF/);
-  const wrapper = readFileSync(join(root, "bin/install.js"), "utf8");
+  const wrapper = readFileSync(join(root, "installer/sweet.js"), "utf8");
   assert.match(wrapper, /process\.env\.SWEET_REF/);
-  assert.match(wrapper, /require\('\.\.\/installer\/install\.js'\)/);
+  assert.match(wrapper, /require\('\.\/install\.js'\)/);
 });
 
 // With no caveman on PATH the first run comes from npx; it must be the CLI

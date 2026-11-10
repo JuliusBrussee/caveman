@@ -9,9 +9,9 @@
 이 브랜치를 포함한 로컬 체크아웃에서 설치해.
 
 ```sh
-node bin/install.js --list
-node bin/install.js --only codex
-node bin/install.js --only claude
+node installer/sweet.js --list
+node installer/sweet.js --only codex
+node installer/sweet.js --only claude
 ```
 
 `--dry-run`으로 먼저 설치 계획을 확인할 수 있어. 실제 설치는 요청한 명령 하나만 실행하면 돼. 현재 세션에서는 사용자 설정에 설치하지 않았어.
