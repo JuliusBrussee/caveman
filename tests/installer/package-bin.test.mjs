@@ -24,9 +24,11 @@ test('installer bin does not collide with the bundled CLI', () => {
 
   assert.deepEqual(
     installerBins.map(([, target]) => target),
-    ['./installer/install.js', './installer/sweet.js'],
-    'the GitHub package exposes the upstream installer and the Sweet wrapper',
+    ['./installer/sweet.js', './installer/sweet.js'],
+    'both public commands run the Sweet installer entrypoint',
   );
+
+  assert.equal(packageBins(installer)[installer.name], './installer/sweet.js', 'npm exec must resolve the package name without ambiguous bins');
 
   const cliBinNames = new Set(Object.keys(packageBins(cli)));
   for (const [name] of installerBins) {

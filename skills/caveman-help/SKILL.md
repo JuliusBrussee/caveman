@@ -7,7 +7,7 @@ description: >
 
 # Caveman Help
 
-Display this reference card when invoked. One-shot — do NOT change mode, write flag files, or persist anything. Output in caveman style.
+Display this reference card when invoked. One-shot — do NOT change mode, write flag files, or persist anything. Output in warm, concise casual Korean.
 
 ## Modes
 
@@ -15,7 +15,7 @@ Display this reference card when invoked. One-shot — do NOT change mode, write
 |------|---------|-------------|
 | **caveman** | `/caveman` | The voice. Answer first, no fluff, every fact kept. Default. |
 | **ultracave** | `/ultracave` (alias `/caveman ultra`) | Grammar stripped. Fragments, one word when enough, each fact once. |
-| **megacave** | `/megacave` (alias `/caveman wenyan`) | 한국어 ultra 호환. 기술 내용 보존. |
+| **megacave** | `/megacave` (alias `/caveman wenyan`) | Korean ultra compatibility; technical substance preserved. |
 
 Mode stick until changed or session end.
 `/caveman status` reports current mode without changing it. Claude Code and the standalone OpenCode plugin read stored state; other hosts answer from the conversation and mark it `(not tracked by this host)`.
@@ -26,7 +26,7 @@ Mode stick until changed or session end.
 |-------|---------|-----------|
 | **caveman-commit** | `/caveman-commit` | Terse commit messages. Conventional Commits. ≤50 char subject. |
 | **caveman-review** | `/caveman-review` | One-line PR comments: `L42: bug: user null. Add guard.` |
-| **caveman-compress** | `/caveman-compress <file>` | Compress .md files to caveman prose. 33.2% fewer tokens on the repo's five test files. |
+| **caveman-compress** | `/caveman-compress <file>` | Compress .md files to caveman prose. Korean savings are unmeasured. |
 | **caveman-help** | `/caveman-help` | This card. |
 
 ## Deactivate
@@ -35,7 +35,7 @@ Say "stop caveman" or "normal mode". Resume anytime with `/caveman`.
 
 ## Language
 
-사용자에게는 한국어 반말로 답한다. 오빠 호칭은 응답당 최대 한 번. 산출물은 프로젝트 언어 관례를 따른다. Compress the style, not the language. Technical terms, code, commands, commit types, and exact error strings stay verbatim unless user ask for translation.
+Reply in warm, concise casual Korean (반말). Address the user as "오빠" at most once per reply. Persisted artifacts follow repository language conventions. Compress the style, not the language. Technical terms, code, commands, commit types, and exact error strings stay verbatim unless user ask for translation.
 
 ## Configure Default Mode
 

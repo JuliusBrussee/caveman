@@ -45,4 +45,4 @@ authorship and DCO sign-off.
   untouched.
 - Match the surrounding style. Small, focused PRs review fastest.
 
-Questions → open a discussion or ping us at **hello@caveman.so**.
+Questions: open an issue at https://github.com/HDomi/sweet-agent/issues.

@@ -2,7 +2,7 @@
 # caveman — uninstaller for the SessionStart + SubagentStart + UserPromptSubmit + SessionEnd hooks
 # Removes: hook files in ~/.claude/hooks, settings.json entries, and the mode state
 # Usage: bash src/hooks/uninstall.sh
-#   or:  bash <(curl -s https://raw.githubusercontent.com/JuliusBrussee/caveman/main/src/hooks/uninstall.sh)
+#   or:  bash <(curl -s https://raw.githubusercontent.com/HDomi/sweet-agent/main/src/hooks/uninstall.sh)
 set -e
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -78,7 +78,7 @@ if [ -f "$SETTINGS" ]; then
       } catch (e) {
         console.error('  Cannot parse ' + settingsPath + ': ' + e.message);
         console.error('  Nothing was changed. If the file has // comments, run:');
-        console.error('    npx -y github:JuliusBrussee/caveman -- --uninstall');
+        console.error('    npx -y github:HDomi/sweet-agent -- --uninstall');
         process.exit(3);
       }
 
@@ -211,6 +211,6 @@ echo "Done! Restart Claude Code to complete the uninstall."
 # Guidance for other agents
 echo ""
 echo "Other agents:"
-echo "  npx skills remove JuliusBrussee/caveman -g  # Cursor, Windsurf, Cline, Copilot, etc."
+echo "  npx skills remove HDomi/sweet-agent -g  # Cursor, Windsurf, Cline, Copilot, etc."
 echo "  claude plugin disable caveman  # Claude Code plugin"
 echo "  gemini extensions uninstall caveman  # Gemini CLI"

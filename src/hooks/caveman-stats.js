@@ -61,7 +61,7 @@ if (configFailure) {
   // non-zero exit would surface as a hook error while the user quits.
   if (process.argv.includes('--record')) process.exit(0);
   process.stderr.write('caveman-stats: ' + configFailure + '\n'
-    + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks.\n');
+    + 'Run `/plugin update sweet-agent`, or rerun install.sh for standalone hooks.\n');
   // Unlike the two style hooks, stats has no useful degraded output — every
   // figure it prints comes from the flag/history the config module owns.
   // Exiting non-zero lets the mode-tracker's existing catch substitute its

@@ -5,8 +5,8 @@
 # you'd pass to installer/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash
-#   curl -fsSL https://raw.githubusercontent.com/JuliusBrussee/caveman/v1.10.0/install.sh | bash -s -- --all
+#   curl -fsSL https://raw.githubusercontent.com/HDomi/sweet-agent/v1.10.0/install.sh | bash
+#   curl -fsSL https://raw.githubusercontent.com/HDomi/sweet-agent/v1.10.0/install.sh | bash -s -- --all
 #
 # Local clone:
 #   bash install.sh [flags]

@@ -41,25 +41,25 @@ test('Claude command envelope activates the Sweet alias with Korean context', t 
   const run = prompt => spawnSync(process.execPath, [join(root, 'src/hooks/caveman-mode-tracker.js')], { input: JSON.stringify({ prompt, cwd: home, session_id: 'sweet-test' }), encoding: 'utf8', env, cwd: home, timeout: 10000 });
   const on = run('<command-name>/sweet</command-name><command-args>ultra</command-args>');
   assert.equal(on.status, 0, on.stderr);
-  assert.match(on.stdout, /한국어 반말/);
+  assert.match(on.stdout, /casual Korean/);
   const status = run('<command-name>/sweet</command-name><command-args>status</command-args>');
   assert.equal(status.status, 0, status.stderr);
-  assert.match(status.stdout, /Caveman mode: ultracave/);
+  assert.match(status.stdout, /Sweet mode: ultracave/);
   const off = run('<command-name>/sweet</command-name><command-args>off</command-args>');
   assert.equal(off.status, 0, off.stderr);
   const after = run('/sweet status');
-  assert.match(after.stdout, /Caveman mode: off/);
+  assert.match(after.stdout, /Sweet mode: off/);
 });
 
 test('all prose modes and degraded rules retain the Korean persona and artifact boundary', () => {
   const config = require('../../src/hooks/caveman-config.js');
   for (const mode of ['caveman', 'ultracave', 'megacave']) {
     const body = config.loadRuleset(mode, join(root, 'src/hooks'));
-    assert.match(body, /한국어/);
+    assert.match(body, /Korean/);
     assert.match(body, /오빠/);
-    assert.match(body, /프로젝트의 언어 관례/);
+    assert.match(body, /project.*language conventions/i);
     assert.doesNotMatch(body, /以文言答|Prose in 文言|Caveman in Classical Chinese/);
-    assert.match(config.fallbackRuleset(mode), /한국어 반말/);
+    assert.match(config.fallbackRuleset(mode), /casual Korean/);
   }
 });
 
@@ -67,4 +67,40 @@ test('Sweet compression scripts match maintained canonical scripts', () => {
   for (const name of ['compress.py', 'detect.py', 'validate.py', 'cli.py']) {
     assert.equal(readFileSync(join(root, 'skills/sweet-compress/scripts', name), 'utf8'), readFileSync(join(root, 'skills/caveman-compress/scripts', name), 'utf8'));
   }
+});
+
+test('public Sweet installer executes help and propagates invalid-argument failure', () => {
+  const run = args => spawnSync(process.execPath, [join(root, 'installer/sweet.js'), ...args], { encoding: 'utf8', timeout: 10000 });
+  const help = run(['--help']);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /Sweet Agent installer/);
+  assert.match(help.stdout, /USAGE/);
+  const invalid = run(['--sweet-invalid-option']);
+  assert.equal(invalid.status, 2, invalid.stdout + invalid.stderr);
+  assert.match(invalid.stderr, /unknown flag/);
+});
+
+for (const [prompt, expected] of [
+  ['/sweet-agent:sweet ultra', { action: 'set', mode: 'ultracave' }],
+  ['/sweet-agent:sweet off', { action: 'clear' }],
+  ['/sweet-agent:sweet status', { action: 'status' }],
+  ['/sweet-agent:sweet-review', { action: 'set', mode: 'review' }],
+  ['/sweet-agent:ultracave', { action: 'set', mode: 'ultracave' }],
+  ['/unrelated:sweet off', null],
+]) {
+  test(`public Sweet namespace: ${prompt}`, () => assert.deepEqual(parseModeChange(prompt, options), expected));
+}
+
+test('public plugin manifests consistently identify the fork and keep valid assets', () => {
+  for (const relative of ['.claude-plugin/plugin.json', '.cursor-plugin/plugin.json', 'gemini-extension.json', 'plugins/caveman/.codex-plugin/plugin.json']) {
+    const manifest = JSON.parse(readFileSync(join(root, relative), 'utf8'));
+    assert.equal(manifest.name, 'sweet-agent', relative);
+    assert.match(manifest.description, /Korean/);
+    if (manifest.author) assert.equal(manifest.author.name, 'HDomi', relative);
+  }
+  const marketplace = JSON.parse(readFileSync(join(root, '.claude-plugin/marketplace.json'), 'utf8'));
+  assert.equal(marketplace.name, 'sweet-agent');
+  assert.equal(marketplace.plugins[0].name, 'sweet-agent');
+  const codex = JSON.parse(readFileSync(join(root, 'plugins/caveman/.codex-plugin/plugin.json'), 'utf8'));
+  for (const field of ['logo', 'composerIcon']) assert.ok(readFileSync(join(root, 'plugins/caveman', codex.interface[field])).includes(Buffer.from('<svg')));
 });

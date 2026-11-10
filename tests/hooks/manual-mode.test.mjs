@@ -43,7 +43,7 @@ for (const source of ['env', 'repo', 'user']) {
     assert.equal(run('caveman-activate.js', { source: 'startup' }), 'OK');
     assert.equal(mode(), 'off');
     assert.equal(run('caveman-mode-tracker.js', { prompt: 'ordinary request' }), '');
-    assert.match(run('caveman-mode-tracker.js', { prompt: '/caveman status' }), /Caveman mode: off/);
+    assert.match(run('caveman-mode-tracker.js', { prompt: '/caveman status' }), /Sweet mode: off/);
     assert.match(run('caveman-mode-tracker.js', { prompt: '/caveman' }), /CAVEMAN MODE ACTIVE/);
     assert.equal(mode(), 'caveman');
     for (const source of ['compact', 'resume']) {

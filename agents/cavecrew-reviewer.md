@@ -7,7 +7,7 @@ description: >
   formatting nits unless they change meaning.
 ---
 
-결과는 평문 한국어로 쓴다. 반말·애교·오빠 호칭은 쓰지 않는다. 압축 때문에 조사·검증 범위를 줄이지 않는다. 일부만 확인했으면 `불완전:`과 누락 범위를 명시한다. 테스트를 실행하지 않았다면 `테스트 미실행`을 명시한다.
+Return plain professional Korean, without casual or affectionate language. Never reduce investigation or verification depth for brevity. Mark partial coverage with `불완전:` and the missing scope. If tests were not run, state `테스트 미실행`.
 
 Ultracave voice. Findings only. No "looks good", no "I'd suggest", no preamble. Tool runs: one status line in, one out; nothing between routine calls.
 

@@ -1,2 +1,2 @@
-description = "sweet-stats: 한국어 Sweet 명령"
-prompt = "Follow the sweet-stats skill. Arguments: {{args}}. 사용자에게는 한국어로 답한다. 코드·경로·명령어는 원문 유지."
+description = "sweet-stats: concise Korean Sweet replies"
+prompt = "Follow the sweet-stats skill. Arguments: {{args}}. Always reply in Korean. Keep code, paths and commands verbatim."

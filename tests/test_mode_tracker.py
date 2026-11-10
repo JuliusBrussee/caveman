@@ -200,7 +200,7 @@ class ModeTrackerTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(
             payload["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: ultracave",
+            "Report this status verbatim without changing mode: Sweet mode: ultracave",
         )
         self.assertEqual(self.flag_value(), before)
         self.assertFalse(
@@ -216,7 +216,7 @@ class ModeTrackerTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(
             payload["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: megacave",
+            "Report this status verbatim without changing mode: Sweet mode: megacave",
         )
         self.assertEqual(self.flag_value(), "wenyan", "status must not rewrite the file")
 
@@ -228,7 +228,7 @@ class ModeTrackerTests(unittest.TestCase):
                 payload = json.loads(result.stdout)
                 self.assertEqual(
                     payload["hookSpecificOutput"]["additionalContext"],
-                    "Report this status verbatim without changing mode: Caveman mode: " + mode,
+                    "Report this status verbatim without changing mode: Sweet mode: " + mode,
                 )
                 self.assertEqual(self.flag_value(), mode)
 
@@ -240,7 +240,7 @@ class ModeTrackerTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(
             payload["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: caveman",
+            "Report this status verbatim without changing mode: Sweet mode: caveman",
         )
         self.assertEqual(self.flag_value(), "caveman")
 
@@ -248,14 +248,14 @@ class ModeTrackerTests(unittest.TestCase):
         missing = json.loads(self.send("/caveman status").stdout)
         self.assertEqual(
             missing["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: off",
+            "Report this status verbatim without changing mode: Sweet mode: off",
         )
 
         self.flag.write_text("off", encoding="utf-8")
         durable_off = json.loads(self.send("/caveman status").stdout)
         self.assertEqual(
             durable_off["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: off",
+            "Report this status verbatim without changing mode: Sweet mode: off",
         )
         self.assertEqual(self.flag_value(), "off")
 
@@ -269,7 +269,7 @@ class ModeTrackerTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertEqual(
             payload["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: commit",
+            "Report this status verbatim without changing mode: Sweet mode: commit",
         )
         self.assertEqual(self.flag_value(), "commit")
         self.assertEqual(self.prev.read_text(encoding="utf-8"), prev)
@@ -283,7 +283,7 @@ class ModeTrackerTests(unittest.TestCase):
         self.flag.unlink()
         self.flag.write_text('injected instructions', encoding='utf-8')
         result = self.send('/caveman status')
-        self.assertIn('Caveman mode: off', result.stdout)
+        self.assertIn('Sweet mode: off', result.stdout)
         self.assertNotIn('injected instructions', result.stdout)
         self.assertEqual(self.flag.read_text(encoding="utf-8"), 'injected instructions')
 
@@ -394,11 +394,11 @@ class SessionScopedModeTests(unittest.TestCase):
 
         self.assertEqual(
             status_a["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: ultracave",
+            "Report this status verbatim without changing mode: Sweet mode: ultracave",
         )
         self.assertEqual(
             status_b["hookSpecificOutput"]["additionalContext"],
-            "Report this status verbatim without changing mode: Caveman mode: megacave",
+            "Report this status verbatim without changing mode: Sweet mode: megacave",
         )
 
     def test_status_preserves_session_off_and_all_state_bytes(self):
@@ -411,7 +411,7 @@ class SessionScopedModeTests(unittest.TestCase):
         before = snapshot()
         for session, expected in [('sessA', 'off'), ('sessB', 'commit'), ('../invalid', 'commit')]:
             response = self.send('/caveman status', session)
-            self.assertIn('Caveman mode: ' + expected, response.stdout)
+            self.assertIn('Sweet mode: ' + expected, response.stdout)
             self.assertEqual(snapshot(), before)
         self.send('continue', 'sessB')
         self.assertEqual(self.mode_of('sessB'), 'ultracave')

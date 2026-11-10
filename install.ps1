@@ -4,7 +4,7 @@
 # you'd pass to installer/install.js can be passed here; we just forward them.
 #
 # One-line install:
-#   irm https://raw.githubusercontent.com/JuliusBrussee/caveman/v4.1.0/install.ps1 | iex
+#   irm https://raw.githubusercontent.com/HDomi/sweet-agent/v4.1.0/install.ps1 | iex
 #
 # Local clone:
 #   pwsh install.ps1 [flags]

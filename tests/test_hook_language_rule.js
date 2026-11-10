@@ -51,7 +51,7 @@ function test(name, fn) {
 // SKILL.md cites "ASD-STE100 Simplified Technical English" as a writing
 // register, which is a rule about sentence construction, not a reply language.
 const LANGUAGE_NAMES =
-  /\b(Portuguese|Spanish|French|German|Italian|Dutch|Chinese|Mandarin|Japanese|Korean|Russian|Arabic|Hindi|Polish|Turkish|Swedish)\b/i;
+  /\b(Portuguese|Spanish|French|German|Italian|Dutch|Chinese|Mandarin|Japanese|Russian|Arabic|Hindi|Polish|Turkish|Swedish)\b/i;
 
 // The few-shot shape itself, in either arrow style, independent of which
 // language fills it in.
@@ -131,7 +131,7 @@ test('fallback still tells the model not to switch languages', () => {
 test('megacave fallback does not pair "never switch language" with its 文言 thesis', () => {
   const out = activate({ withSkills: false, mode: 'megacave' });
   assert.ok(out.includes('mode: megacave'), 'expected a megacave session');
-  assert.ok(out.includes('한국어 반말'), 'the Korean thesis went missing');
+  assert.ok(out.includes('casual Korean'), 'the Korean thesis went missing');
   assert.doesNotMatch(out, /never switch/i, 'megacave fallback contradicts its own thesis');
   assert.doesNotMatch(out, /User's language/, 'megacave fallback contradicts its own thesis');
 });

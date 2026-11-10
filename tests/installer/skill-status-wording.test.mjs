@@ -18,6 +18,6 @@ for (const file of [
   test(`${file}: hook-less status is marked, not unknown`, () => {
     const body = read(file).replace(/\s+/g, " ");
     assert.ok(body.includes("(not tracked by this host)"), "names the no-hook marker");
-    assert.doesNotMatch(body, /Caveman mode: unknown|report `unknown`|or `unknown`/);
+    assert.doesNotMatch(body, /Sweet mode: unknown|report `unknown`|or `unknown`/);
   });
 }

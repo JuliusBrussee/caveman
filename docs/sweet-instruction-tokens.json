@@ -1,0 +1,189 @@
+{
+  "baseline_ref": "40ac065d",
+  "method": "English translation and consolidation of source instructions. Counts include frontmatter, examples and preserved Korean trigger literals; not a pure language-only experiment.",
+  "limits": "Local o200k_base/cl100k_base estimates from js-tiktoken 1.0.21, not Claude or billed session usage. No live model behavior equivalence or whole-session savings claim.",
+  "files": {
+    "skills/caveman-commit/SKILL.md": {
+      "sha256": "1179bc59fcaf93df68122e6d90f24b764da0cfdb850e3bb8756c62bfa27460c0",
+      "o200k_base": {
+        "before": 656,
+        "after": 632,
+        "reduction_pct": 3.7
+      },
+      "cl100k_base": {
+        "before": 687,
+        "after": 638,
+        "reduction_pct": 7.1
+      }
+    },
+    "skills/caveman-compress/SKILL.md": {
+      "sha256": "97450e74341c9d791c4ded984ffb80ea2f14d987af2f951da5cb0d9da7dc39c9",
+      "o200k_base": {
+        "before": 1344,
+        "after": 1376,
+        "reduction_pct": -2.4
+      },
+      "cl100k_base": {
+        "before": 1362,
+        "after": 1394,
+        "reduction_pct": -2.3
+      }
+    },
+    "skills/caveman-help/SKILL.md": {
+      "sha256": "c1d85f32008ae90df7eb4e96c616823f96861c524a93dd02b8ceb125eb74e7cf",
+      "o200k_base": {
+        "before": 717,
+        "after": 704,
+        "reduction_pct": 1.8
+      },
+      "cl100k_base": {
+        "before": 750,
+        "after": 710,
+        "reduction_pct": 5.3
+      }
+    },
+    "skills/caveman-review/SKILL.md": {
+      "sha256": "0b3724426b0e37ca4f2447af0de0158e814e3bcced815984a60f234f59fc9d73",
+      "o200k_base": {
+        "before": 678,
+        "after": 654,
+        "reduction_pct": 3.5
+      },
+      "cl100k_base": {
+        "before": 712,
+        "after": 663,
+        "reduction_pct": 6.9
+      }
+    },
+    "skills/caveman/SKILL.md": {
+      "sha256": "e237f633b15522452ec60ddc8cb41987cc754ec697cb80dd493f8fbdea69ba29",
+      "o200k_base": {
+        "before": 1648,
+        "after": 1469,
+        "reduction_pct": 10.9
+      },
+      "cl100k_base": {
+        "before": 1919,
+        "after": 1489,
+        "reduction_pct": 22.4
+      }
+    },
+    "skills/megacave/SKILL.md": {
+      "sha256": "0fc3c0cf142d262bc1006319766f85a84a98c28e6aaf350208581266a25c2150",
+      "o200k_base": {
+        "before": 1098,
+        "after": 921,
+        "reduction_pct": 16.1
+      },
+      "cl100k_base": {
+        "before": 1362,
+        "after": 934,
+        "reduction_pct": 31.4
+      }
+    },
+    "skills/sweet-commit/SKILL.md": {
+      "sha256": "2bcbd765de2dceeb4d330c7ddaf84a3d37ab11264fdefbf5725e57e51947552e",
+      "o200k_base": {
+        "before": 977,
+        "after": 422,
+        "reduction_pct": 56.8
+      },
+      "cl100k_base": {
+        "before": 1325,
+        "after": 451,
+        "reduction_pct": 66
+      }
+    },
+    "skills/sweet-compress/SKILL.md": {
+      "sha256": "88cd671651cc8c221cdd87da9c62b2743d91ce6e577f95c06af830fc0b6d3d80",
+      "o200k_base": {
+        "before": 1337,
+        "after": 1369,
+        "reduction_pct": -2.4
+      },
+      "cl100k_base": {
+        "before": 1355,
+        "after": 1387,
+        "reduction_pct": -2.4
+      }
+    },
+    "skills/sweet-help/SKILL.md": {
+      "sha256": "9c6f69b3aefeee19e9910a709c032d9daa39a0e11dbc5d9148459c4487dbb3d9",
+      "o200k_base": {
+        "before": 249,
+        "after": 206,
+        "reduction_pct": 17.3
+      },
+      "cl100k_base": {
+        "before": 343,
+        "after": 210,
+        "reduction_pct": 38.8
+      }
+    },
+    "skills/sweet-review/SKILL.md": {
+      "sha256": "7c3a38baa575a48519746e5cf420a8714cdbeab31735fdaafdca709280a5f771",
+      "o200k_base": {
+        "before": 932,
+        "after": 383,
+        "reduction_pct": 58.9
+      },
+      "cl100k_base": {
+        "before": 1326,
+        "after": 416,
+        "reduction_pct": 68.6
+      }
+    },
+    "skills/sweet-stats/SKILL.md": {
+      "sha256": "eb3389a647a4111c20fbba4a1c61fd1d317ff4cbe35075560ba9722fd425986a",
+      "o200k_base": {
+        "before": 453,
+        "after": 441,
+        "reduction_pct": 2.6
+      },
+      "cl100k_base": {
+        "before": 478,
+        "after": 437,
+        "reduction_pct": 8.6
+      }
+    },
+    "skills/sweet/SKILL.md": {
+      "sha256": "d3dc664f8198d8717f8a395f28a6498bfec05201888d01dedc10a6bb02265d11",
+      "o200k_base": {
+        "before": 1976,
+        "after": 813,
+        "reduction_pct": 58.9
+      },
+      "cl100k_base": {
+        "before": 2888,
+        "after": 872,
+        "reduction_pct": 69.8
+      }
+    },
+    "skills/sweetcrew/SKILL.md": {
+      "sha256": "85e8bb006347f3f0b78209af0cb51d24acc7e651559057921a554c520c82c6cb",
+      "o200k_base": {
+        "before": 1787,
+        "after": 646,
+        "reduction_pct": 63.9
+      },
+      "cl100k_base": {
+        "before": 2490,
+        "after": 682,
+        "reduction_pct": 72.6
+      }
+    },
+    "skills/ultracave/SKILL.md": {
+      "sha256": "1356aa6825a02d5385469bbb58bf149bbc00ed71766ca78ea788c844ebd67042",
+      "o200k_base": {
+        "before": 1098,
+        "after": 921,
+        "reduction_pct": 16.1
+      },
+      "cl100k_base": {
+        "before": 1362,
+        "after": 934,
+        "reduction_pct": 31.4
+      }
+    }
+  }
+}

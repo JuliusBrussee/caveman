@@ -211,8 +211,7 @@ test('real Bun executes a local skills fixture despite its Node shebang', { skip
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const result = JSON.parse(fs.readFileSync(log, 'utf8'));
   assert.ok(result.bun, 'the Node-shebang fixture must actually run under Bun');
-  const pinned = fs.readFileSync(installer, 'utf8').match(/const PINNED_REF = process.env.CAVEMAN_REF \|\| '([^']+)'/)[1];
-  assert.deepEqual(result.args, ['add', `HDomi/sweet-agent#${process.env.CAVEMAN_REF || pinned}`, '--skill', '*', '-a', 'codex', '--yes', '-g']);
+  assert.deepEqual(result.args, ['add', path.join(root, 'skills'), '--skill', '*', '-a', 'codex', '--yes', '-g']);
   assert.equal(fs.existsSync(path.join(f.home, '.codex/hooks.json')), false);
 });
 test('real Bun shell shim installs from a clone without Node', { skip: !bunBinary || process.platform === 'win32' }, t => {

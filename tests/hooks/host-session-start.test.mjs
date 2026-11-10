@@ -48,9 +48,9 @@ test('copilot: ultracave default emits the ultracave skill under additionalConte
   const out = run('copilot', { env, cwd: dir, payload: { sessionId: 's', source: 'startup', cwd: dir } });
   assert.deepEqual(Object.keys(out), ['additionalContext']);
   assert.match(out.additionalContext, /^CAVEMAN MODE ACTIVE — mode: ultracave\n\n/);
-  // No standalone `Caveman mode:` line: Copilot CLI 1.0.92 echoed it at the
+  // No standalone `Sweet mode:` line: Copilot CLI 1.0.92 echoed it at the
   // top of ordinary answers (2 of 3 live runs; 0 of 3 without it).
-  assert.doesNotMatch(out.additionalContext, /^Caveman mode:/m);
+  assert.doesNotMatch(out.additionalContext, /^Sweet mode:/m);
   assert.ok(out.additionalContext.includes(skillBody('ultracave')));
 });
 

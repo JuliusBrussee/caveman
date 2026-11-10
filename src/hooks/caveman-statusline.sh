@@ -66,10 +66,10 @@ MODE=$(printf '%s' "$MODE" | tr -cd 'a-z0-9-')
 # as the skill they became. Anything else → render nothing rather than echo
 # attacker bytes.
 case "$MODE" in
-  caveman|lite|full) BADGE="CAVEMAN" ;;
-  ultracave|ultra) BADGE="ULTRACAVE" ;;
-  megacave|wenyan|wenyan-lite|wenyan-full|wenyan-ultra) BADGE="MEGACAVE" ;;
-  commit|review|compress) BADGE="CAVEMAN:$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')" ;;
+  caveman|lite|full) BADGE="SWEET" ;;
+  ultracave|ultra) BADGE="SWEET:ULTRA" ;;
+  megacave|wenyan|wenyan-lite|wenyan-full|wenyan-ultra) BADGE="SWEET:ULTRA" ;;
+  commit|review|compress) BADGE="SWEET:$(printf '%s' "$MODE" | tr '[:lower:]' '[:upper:]')" ;;
   *) exit 0 ;;
 esac
 

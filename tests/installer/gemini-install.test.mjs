@@ -44,7 +44,7 @@ import { isolatedEnv } from './_isolated-env.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
-const URL = 'https://github.com/HDomi/sweet-agent';
+const URL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const IS_WIN = process.platform === 'win32';
 
 function freshTmpDir() {
@@ -455,11 +455,11 @@ test('gemini install and uninstall see an installed caveman extension', () => {
   try {
     const fakeBin = fakeGeminiDir(root);
     const home = path.join(root, 'home');
-    const ext = path.join(home, '.gemini', 'extensions', 'caveman');
+    const ext = path.join(home, '.gemini', 'extensions', 'sweet-agent');
     fs.mkdirSync(ext, { recursive: true });
-    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
+    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "sweet-agent"}\n');
     const { result, record } = runInstaller(root, ['--only', 'gemini', '--non-interactive'], fakeBin);
-    assert.match(result.stdout, /caveman extension already installed/);
+    assert.match(result.stdout, /Sweet Agent extension already installed/);
     assert.equal(fs.existsSync(record), false, 'install ran over an installed extension');
 
     const removed = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--config-dir', path.join(root, 'claude'), '--non-interactive'], {
@@ -468,7 +468,7 @@ test('gemini install and uninstall see an installed caveman extension', () => {
       encoding: 'utf8',
     });
     assert.equal(removed.status, 0, `${removed.stdout}${removed.stderr}`);
-    assert.match(tokens(record).join(' '), /extensions uninstall caveman/, 'uninstall left the extension installed');
+    assert.match(tokens(record).join(' '), /extensions uninstall sweet-agent/, 'uninstall left the extension installed');
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -485,18 +485,18 @@ test('gemini --force reinstalls an installed extension, unless the user turned i
     const fakeBin = fakeGeminiDir(root);
     const home = path.join(root, 'home');
     const extensions = path.join(home, '.gemini', 'extensions');
-    fs.mkdirSync(path.join(extensions, 'caveman'), { recursive: true });
-    fs.writeFileSync(path.join(extensions, 'caveman', 'gemini-extension.json'), '{"name": "caveman"}\n');
+    fs.mkdirSync(path.join(extensions, 'sweet-agent'), { recursive: true });
+    fs.writeFileSync(path.join(extensions, 'sweet-agent', 'gemini-extension.json'), '{"name": "sweet-agent"}\n');
     const enablement = path.join(extensions, 'extension-enablement.json');
-    fs.writeFileSync(enablement, JSON.stringify({ caveman: { overrides: [`!${home}/*`] } }));
+    fs.writeFileSync(enablement, JSON.stringify({ 'sweet-agent': { overrides: [`!${home}/*`] } }));
     const off = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], fakeBin);
     assert.match(off.result.stdout, /turned off in Gemini CLI/);
     assert.equal(fs.existsSync(off.record), false, 'reinstalled an extension the user turned off');
 
-    fs.writeFileSync(enablement, JSON.stringify({ caveman: { overrides: [`${home}/*`] } }));
+    fs.writeFileSync(enablement, JSON.stringify({ 'sweet-agent': { overrides: [`${home}/*`] } }));
     const { result, record } = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], fakeBin);
     assert.equal(result.status, 0, `${result.stdout}${result.stderr}`);
-    assert.match(tokens(record).join(' '), new RegExp(`extensions uninstall caveman .*extensions install ${URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.match(tokens(record).join(' '), new RegExp(`extensions uninstall sweet-agent .*extensions install ${URL.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
   } finally {
     fs.rmSync(root, { recursive: true, force: true });
   }
@@ -509,9 +509,9 @@ for (const partial of [false, true]) test(`gemini --force puts the old extension
   const root = freshTmpDir();
   try {
     const home = path.join(root, 'home');
-    const ext = path.join(home, '.gemini', 'extensions', 'caveman');
+    const ext = path.join(home, '.gemini', 'extensions', 'sweet-agent');
     fs.mkdirSync(path.join(ext, 'commands'), { recursive: true });
-    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
+    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "sweet-agent"}\n');
     fs.writeFileSync(path.join(ext, 'commands', 'caveman.toml'), 'prompt = "x"\n');
     // A fake whose uninstall removes the extension and whose install fails,
     // after writing part of a new one when `partial`.
@@ -529,7 +529,7 @@ for (const partial of [false, true]) test(`gemini --force puts the old extension
     }
     const { result } = runInstaller(root, ['--only', 'gemini', '--force', '--non-interactive'], bin);
     assert.notEqual(result.status, 0, 'a failed install reported success');
-    assert.equal(fs.readFileSync(path.join(ext, 'gemini-extension.json'), 'utf8'), '{"name": "caveman"}\n', 'the old extension is gone');
+    assert.equal(fs.readFileSync(path.join(ext, 'gemini-extension.json'), 'utf8'), '{"name": "sweet-agent"}\n', 'the old extension is gone');
     assert.equal(fs.readFileSync(path.join(ext, 'commands', 'caveman.toml'), 'utf8'), 'prompt = "x"\n');
     assert.equal(fs.existsSync(path.join(ext, 'half.json')), false, 'the failed install is still there');
     assert.match(result.stdout + result.stderr, /put the old caveman extension back/);
@@ -545,9 +545,9 @@ test('gemini --force keeps the saved extension when it cannot be put back', { sk
   const extensions = path.join(root, 'home', '.gemini', 'extensions');
   let kept;
   try {
-    const ext = path.join(extensions, 'caveman');
+    const ext = path.join(extensions, 'sweet-agent');
     fs.mkdirSync(ext, { recursive: true });
-    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "caveman"}\n');
+    fs.writeFileSync(path.join(ext, 'gemini-extension.json'), '{"name": "sweet-agent"}\n');
     // The failed install leaves a half-written extension in a folder it then locks.
     const bin = path.join(root, 'fake-bin');
     fs.mkdirSync(bin);
@@ -559,7 +559,7 @@ test('gemini --force keeps the saved extension when it cannot be put back', { sk
     const said = result.stdout + result.stderr;
     kept = said.match(/A copy is kept at (\S+): copy it to /)?.[1];
     assert.ok(kept, said);
-    assert.equal(fs.readFileSync(path.join(kept, 'gemini-extension.json'), 'utf8'), '{"name": "caveman"}\n');
+    assert.equal(fs.readFileSync(path.join(kept, 'gemini-extension.json'), 'utf8'), '{"name": "sweet-agent"}\n');
   } finally {
     try { fs.chmodSync(extensions, 0o755); } catch (_) {}
     if (kept) fs.rmSync(path.dirname(kept), { recursive: true, force: true });

@@ -34,7 +34,7 @@ test('dry-run --only claude prints plan and writes nothing', () => {
   assert.equal(r.status, 0);
   assert.match(r.stdout, /Claude Code detected/);
   assert.match(r.stdout, /would run: claude plugin marketplace add/);
-  assert.match(r.stdout, /would run: claude plugin install caveman@caveman/);
+  assert.match(r.stdout, /would run: claude plugin install sweet-agent@sweet-agent/);
   assert.match(r.stdout, /would mkdir -p .*[\\\/]hooks/);
   assert.match(r.stdout, /would install .*caveman-activate\.js/);
   assert.match(r.stdout, /would merge SessionStart \+ SubagentStart \+ UserPromptSubmit \+ SessionEnd \+ statusline/);

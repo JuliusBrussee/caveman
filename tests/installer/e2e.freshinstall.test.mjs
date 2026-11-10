@@ -1018,7 +1018,7 @@ function recordingClaudeEnv(root, record, list = '', json = list) {
   return isolatedEnv(path.join(root, 'home'), [dir]);
 }
 
-// Only `caveman@caveman` is the caveman plugin. A bare /caveman/ match on the
+// Only `sweet-agent@sweet-agent` is the caveman plugin. A bare /caveman/ match on the
 // list also took caveman-browse@caveman-browse for it and skipped the install.
 test('another caveman-named plugin does not count as the caveman plugin', () => {
   const dir = freshTmpDir();
@@ -1029,7 +1029,7 @@ test('another caveman-named plugin does not count as the caveman plugin', () => 
     const r = runInstaller(['--only', 'claude'], configDir, env);
     assert.equal(r.status, 0, `install failed:\n${r.stdout}\n${r.stderr}`);
     assert.doesNotMatch(r.stdout, /already installed/);
-    assert.match(fs.readFileSync(record, 'utf8'), /^plugin install caveman@caveman$/m);
+    assert.match(fs.readFileSync(record, 'utf8'), /^plugin install sweet-agent@sweet-agent$/m);
 
     fs.writeFileSync(record, '');
     const u = runInstaller(['--uninstall'], configDir, env);
@@ -1050,7 +1050,7 @@ test('plugin install after a failed one drops the standalone hook entries', () =
   try {
     // `plugin list --json` reports the plugin it just installed as on.
     const on = () => recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), '',
-      JSON.stringify([{ id: 'caveman@caveman', version: '3.2.0', scope: 'user', enabled: true }]));
+      JSON.stringify([{ id: 'sweet-agent@sweet-agent', version: '3.2.0', scope: 'user', enabled: true }]));
     const env = on();
     const first = runInstaller(['--only', 'claude'], configDir, { ...env, FAKE_CLAUDE_FAIL_INSTALL: '1' });
     assert.match(first.stdout, /falling back to standalone wiring/, first.stdout + first.stderr);
@@ -1086,9 +1086,9 @@ test('a turned-off caveman plugin keeps the standalone hooks', () => {
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude-config');
   const settingsPath = path.join(configDir, 'settings.json');
-  const listed = 'Installed plugins:\n\n  ❯ caveman@caveman\n    Version: 3.2.0\n    Scope: user\n    Status: ✘ disabled\n';
+  const listed = 'Installed plugins:\n\n  ❯ sweet-agent@sweet-agent\n    Version: 3.2.0\n    Scope: user\n    Status: ✘ disabled\n';
   const claude = (enabled) => recordingClaudeEnv(dir, path.join(dir, 'claude-calls.txt'), listed,
-    JSON.stringify([{ id: 'caveman@caveman', version: '3.2.0', scope: 'user', enabled }]));
+    JSON.stringify([{ id: 'sweet-agent@sweet-agent', version: '3.2.0', scope: 'user', enabled }]));
   const wired = () => SETTINGS.hasCavemanHook(SETTINGS.readSettings(settingsPath), 'SessionStart', 'caveman-activate');
   try {
     const first = runInstaller(['--only', 'claude', '--with-hooks'], configDir, claude(false));

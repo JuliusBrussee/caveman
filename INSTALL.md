@@ -7,5 +7,5 @@
 Claude Code 플러그인 갱신:
 
 ```sh
-claude plugin update caveman@caveman
+claude plugin update sweet-agent@sweet-agent
 ```

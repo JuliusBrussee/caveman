@@ -4,7 +4,7 @@
 //
 //   $ claude plugin update caveman
 //   × Failed to update plugin "caveman": Plugin "caveman" not found
-//   $ claude plugin update caveman@caveman
+//   $ claude plugin update sweet-agent@sweet-agent
 //   √ Plugin "caveman" updated ...
 //
 // That is #321, and the reporter only got there by guessing. The install table

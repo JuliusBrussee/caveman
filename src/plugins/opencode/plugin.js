@@ -353,7 +353,7 @@ export const CavemanPlugin = async (ctx) => {
           const active = readFlag(flagPath);
           // Replace the expanded activation template for this message only.
           // No shared pending response: concurrent sessions cannot steal it.
-          part.text = 'Report this status verbatim without changing mode: Caveman mode: ' + (active || 'off');
+          part.text = 'Report this status verbatim without changing mode: Sweet mode: ' + (active || 'off');
           statusThisTurn = true;
           continue;
         }

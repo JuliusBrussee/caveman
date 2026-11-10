@@ -70,11 +70,11 @@ if ($Mode -eq "off") { exit 0 }
 # names (lite, full, ultra, wenyan*) still sit in older session files and
 # mirrors; they render as the skill they became. Anything else → render nothing.
 $Badges = @{
-    'caveman' = 'CAVEMAN'; 'lite' = 'CAVEMAN'; 'full' = 'CAVEMAN'
-    'ultracave' = 'ULTRACAVE'; 'ultra' = 'ULTRACAVE'
-    'megacave' = 'MEGACAVE'; 'wenyan' = 'MEGACAVE'; 'wenyan-lite' = 'MEGACAVE'
-    'wenyan-full' = 'MEGACAVE'; 'wenyan-ultra' = 'MEGACAVE'
-    'commit' = 'CAVEMAN:COMMIT'; 'review' = 'CAVEMAN:REVIEW'; 'compress' = 'CAVEMAN:COMPRESS'
+    'caveman' = 'SWEET'; 'lite' = 'SWEET'; 'full' = 'SWEET'
+    'ultracave' = 'SWEET:ULTRA'; 'ultra' = 'SWEET:ULTRA'
+    'megacave' = 'SWEET:ULTRA'; 'wenyan' = 'SWEET:ULTRA'; 'wenyan-lite' = 'SWEET:ULTRA'
+    'wenyan-full' = 'SWEET:ULTRA'; 'wenyan-ultra' = 'SWEET:ULTRA'
+    'commit' = 'SWEET:COMMIT'; 'review' = 'SWEET:REVIEW'; 'compress' = 'SWEET:COMPRESS'
 }
 if (-not $Badges.ContainsKey($Mode)) { exit 0 }
 

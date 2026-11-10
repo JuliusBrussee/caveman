@@ -229,7 +229,7 @@ test("root installer runs npm and pnpm shims that forward to an .exe directly", 
   writeFileSync(exe, "MZ");
   const shim = join(root, "claude.CMD");
   const env = { Path: root, PATHEXT: ".EXE;.CMD" };
-  const args = ["plugin", "install", "caveman@caveman", "a&b %PATH%"];
+  const args = ["plugin", "install", "sweet-agent@sweet-agent", "a&b %PATH%"];
   const invoke = (options = {}) => portable.portableInvocation("claude", args, {
     platform: "win32", env, execPath: "node.exe", ...options,
   });

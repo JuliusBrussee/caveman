@@ -197,7 +197,7 @@ if (!hasStart) {
       type: 'command',
       command: 'node "' + hooksDir + '/caveman-activate.js"',
       timeout: 30,
-      statusMessage: 'Loading caveman mode...'
+      statusMessage: 'Loading Sweet Agent mode...'
     }]
   });
 }
@@ -213,7 +213,7 @@ if (!hasSubagent) {
       type: 'command',
       command: 'node "' + hooksDir + '/caveman-activate.js" --subagent',
       timeout: 30,
-      statusMessage: 'Loading caveman mode for subagent...'
+      statusMessage: 'Loading Sweet Agent mode for subagent...'
     }]
   });
 }
@@ -229,7 +229,7 @@ if (!hasPrompt) {
       type: 'command',
       command: 'node "' + hooksDir + '/caveman-mode-tracker.js"',
       timeout: 30,
-      statusMessage: 'Tracking caveman mode...'
+      statusMessage: 'Tracking Sweet Agent mode...'
     }]
   });
 }
@@ -245,7 +245,7 @@ if (!hasEnd) {
       type: 'command',
       command: 'node "' + hooksDir + '/caveman-stats.js" --record',
       timeout: 5,
-      statusMessage: 'Recording caveman stats...'
+      statusMessage: 'Recording Sweet Agent stats...'
     }]
   });
 }

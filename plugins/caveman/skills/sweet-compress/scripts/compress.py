@@ -817,6 +817,7 @@ STRICT RULES:
 - Preserve file paths and commands
 - Return ONLY the compressed markdown body, with no preface, commentary, or YAML frontmatter — do NOT wrap the entire output in a ```markdown fence or any other fence. Inner code blocks from the original stay as-is; do not add a new outer fence around the whole file.
 - Output ends where the input ends: no appended summary, notes, "untouched" section, or trailing commentary, and no new --- or *** break to introduce one
+- Preserve the input prose language; never translate it. Korean stays Korean, English stays English
 - Keep the verb that carries each instruction: "Do X", "Run Y", "Never Z" stay orders. A fragment is fine, a verbless noun phrase is not
 
 Only compress natural language prose. Never restructure, add formatting, or improve organization.
@@ -832,6 +833,7 @@ def build_fix_prompt(original: str, compressed: str, errors: List[str]) -> str:
 
 CRITICAL RULES:
 - DO NOT recompress or rephrase the file
+- Preserve the ORIGINAL prose language; do not translate
 - ONLY fix the listed errors — leave everything else exactly as-is
 - The ORIGINAL is provided as reference only (to restore missing content)
 - Preserve caveman style in all untouched sections

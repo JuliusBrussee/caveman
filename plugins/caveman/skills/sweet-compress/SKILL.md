@@ -40,6 +40,8 @@ python3 -m scripts <absolute_filepath>
 
 ## Compression Rules
 
+Preserve the source prose language; never translate. Korean input stays Korean and English input stays English. This file operation does not inherit the chat reply-language requirement.
+
 ### Remove
 - Articles: a, an, the
 - Filler: just, really, basically, actually, simply, essentially, generally

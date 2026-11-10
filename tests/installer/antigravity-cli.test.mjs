@@ -32,7 +32,7 @@ if (ARGV[1] === 'install') {
   fs.rmSync(${JSON.stringify(installed)}, { recursive: true, force: true });
   fs.cpSync(ARGV[2], ${JSON.stringify(installed)}, { recursive: true });
 }
-if (ARGV[1] === 'list') console.log(JSON.stringify({ imports: fs.existsSync(${JSON.stringify(installed)}) ? [{ name: 'caveman', source: 'antigravity' }] : null }, null, 2));
+if (ARGV[1] === 'list') console.log(JSON.stringify({ imports: fs.existsSync(${JSON.stringify(installed)}) ? [{ name: 'sweet-agent', source: 'antigravity' }] : null }, null, 2));
 if (ARGV[1] === 'uninstall') fs.rmSync(${JSON.stringify(installed)}, { recursive: true, force: true });
 `);
   // Only the stub (and node, which Windows shims need by name) on PATH.
@@ -50,9 +50,9 @@ test('stages the plugin with skills and the always-on rule, then hands it to agy
   assert.equal(r.status, 0, r.stdout + r.stderr);
   const [install] = calls().filter((argv) => argv[1] === 'install');
   assert.deepEqual(install.slice(0, 2), ['plugin', 'install']);
-  assert.equal(path.basename(install[2]), 'caveman');
+  assert.equal(path.basename(install[2]), 'sweet-agent');
   assert.equal(fs.existsSync(install[2]), false, 'staging copy is cleaned up');
-  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).name, 'caveman');
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(installed, 'plugin.json'), 'utf8')).name, 'sweet-agent');
   for (const id of SKILLS) assert.ok(fs.existsSync(path.join(installed, 'skills', id, 'SKILL.md')), id);
   assert.equal(
     fs.readFileSync(path.join(installed, 'rules', 'AGENTS.md'), 'utf8'),
@@ -83,6 +83,6 @@ test('uninstall removes the plugin only when agy lists it', (t) => {
   assert.equal(calls().some((argv) => argv[1] === 'uninstall'), false);
   assert.equal(run(['--only', 'antigravity-cli']).status, 0);
   assert.equal(run(['--uninstall']).status, 0);
-  assert.deepEqual(calls().filter((argv) => argv[1] === 'uninstall'), [['plugin', 'uninstall', 'caveman']]);
+  assert.deepEqual(calls().filter((argv) => argv[1] === 'uninstall'), [['plugin', 'uninstall', 'sweet-agent']]);
   assert.equal(fs.existsSync(installed), false);
 });

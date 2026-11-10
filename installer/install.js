@@ -585,7 +585,7 @@ function writeSettingsKeepingComments(settingsPath, settings, meta, warn) {
 function claudeHasCaveman() {
   const r = captureSpawn('claude', ['plugin', 'list']);
   const out = (r.stdout || '').replace(/\x1b\[[0-9;]*m/g, '');
-  return r.status === 0 && /(^|\s)caveman@caveman(\s|$)/m.test(out);
+  return r.status === 0 && /(^|\s)sweet-agent@sweet-agent(\s|$)/m.test(out);
 }
 
 // `plugin list` also names a turned-off plugin, which runs no hooks. Only
@@ -593,7 +593,7 @@ function claudeHasCaveman() {
 function claudeCavemanEnabled() {
   const r = captureSpawn('claude', ['plugin', 'list', '--json']);
   try {
-    return spawnOk(r) && JSON.parse(r.stdout).some((p) => p && p.id === 'caveman@caveman' && p.scope === 'user' && p.enabled === true);
+    return spawnOk(r) && JSON.parse(r.stdout).some((p) => p && p.id === 'sweet-agent@sweet-agent' && p.scope === 'user' && p.enabled === true);
   } catch (_) { return false; }
 }
 
@@ -616,8 +616,8 @@ async function installClaude(ctx) {
     // A dry run makes none; a dir this run made goes again once it is empty.
     const tmpExisted = fs.existsSync(path.join(configDir, 'tmp'));
     const pluginEnv = opts.dryRun ? null : sameFilesystemTmpEnv(configDir);
-    const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', REPO], { env: pluginEnv }, opts.dryRun);
-    const r2 = runSpawn('claude', ['plugin', 'install', 'caveman@caveman'], { env: pluginEnv }, opts.dryRun);
+    const r1 = runSpawn('claude', ['plugin', 'marketplace', 'add', ctx.repoRoot || REPO], { env: pluginEnv }, opts.dryRun);
+    const r2 = runSpawn('claude', ['plugin', 'install', 'sweet-agent@sweet-agent'], { env: pluginEnv }, opts.dryRun);
     if (pluginEnv && !tmpExisted) { try { fs.rmdirSync(pluginEnv.TMPDIR); } catch (_) {} }
     if (spawnOk(r1) && spawnOk(r2)) {
       results.installed.push('claude');
@@ -737,7 +737,7 @@ async function installClaude(ctx) {
 // to <GEMINI_CLI_HOME or ~>/.gemini/extensions/<name>; a linked extension
 // holds only the install record.
 function geminiHasCaveman() {
-  const dir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'caveman');
+  const dir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'sweet-agent');
   return ['gemini-extension.json', '.gemini-extension-install.json'].some((f) => fs.existsSync(path.join(dir, f)));
 }
 
@@ -746,7 +746,7 @@ function geminiHasCaveman() {
 function geminiCavemanTurnedOff() {
   const file = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'extension-enablement.json');
   try {
-    const entry = JSON.parse(fs.readFileSync(file, 'utf8')).caveman;
+    const entry = JSON.parse(fs.readFileSync(file, 'utf8'))['sweet-agent'];
     return !!entry && Array.isArray(entry.overrides) && entry.overrides.some((o) => String(o).startsWith('!'));
   } catch (_) { return false; }
 }
@@ -758,14 +758,14 @@ function installGemini(ctx) {
 
   const installed = geminiHasCaveman();
   if (installed && !opts.force) {
-    note('  caveman extension already installed (use --force to reinstall)');
+    note('  Sweet Agent extension already installed (use --force to reinstall)');
     results.skipped.push(['gemini', 'extension already installed']);
     process.stdout.write('\n');
     return;
   }
   if (installed && geminiCavemanTurnedOff()) {
-    note('  caveman extension is turned off in Gemini CLI. Reinstalling would turn it back on, so it is left as is.');
-    note('  To reinstall anyway: gemini extensions uninstall caveman, then run this installer again.');
+    note('  Sweet Agent extension is turned off in Gemini CLI. Reinstalling would turn it back on, so it is left as is.');
+    note('  To reinstall anyway: gemini extensions uninstall sweet-agent, then run this installer again.');
     results.skipped.push(['gemini', 'extension turned off in Gemini CLI']);
     process.stdout.write('\n');
     return;
@@ -775,7 +775,7 @@ function installGemini(ctx) {
   // the latest release alone. So --force reinstalls: uninstall, then install.
   // A copy of the old one is kept aside first: when the install then fails
   // (network, rate limit), it goes back instead of leaving no extension.
-  const extDir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'caveman');
+  const extDir = path.join(process.env.GEMINI_CLI_HOME || os.homedir(), '.gemini', 'extensions', 'sweet-agent');
   let saved = null;
   const uninstallFirst = (spawnOpts) => {
     if (!installed) return true;
@@ -783,7 +783,7 @@ function installGemini(ctx) {
       let dir;
       try {
         dir = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-gemini-'));
-        fs.cpSync(extDir, path.join(dir, 'caveman'), { recursive: true, verbatimSymlinks: true });
+        fs.cpSync(extDir, path.join(dir, 'sweet-agent'), { recursive: true, verbatimSymlinks: true });
         saved = dir;
       } catch (e) {
         if (dir) { try { fs.rmSync(dir, { recursive: true, force: true }); } catch (_) {} }
@@ -791,7 +791,7 @@ function installGemini(ctx) {
         return false;
       }
     }
-    if (spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], spawnOpts, opts.dryRun))) return true;
+    if (spawnOk(runSpawn('gemini', ['extensions', 'uninstall', 'sweet-agent'], spawnOpts, opts.dryRun))) return true;
     results.failed.push(['gemini', 'gemini extensions uninstall failed']);
     return false;
   };
@@ -818,7 +818,7 @@ function installGemini(ctx) {
   const help = captureSpawn('gemini', ['--help']);
   const sessionTrust = help.status === 0
     && /--skip-trust\b/.test(`${help.stdout || ''}${help.stderr || ''}`);
-  const url = `https://github.com/${REPO}`;
+  const url = ctx.repoRoot || `https://github.com/${REPO}`;
   let r;
   if (!sessionTrust) {
     const tail = "Installing from the current directory with the CLI's own trust and consent prompts.";
@@ -869,10 +869,10 @@ function installGemini(ctx) {
   if (!spawnOk(r) && saved && (r || !fs.existsSync(extDir))) {
     try {
       fs.rmSync(extDir, { recursive: true, force: true });
-      fs.cpSync(path.join(saved, 'caveman'), extDir, { recursive: true, verbatimSymlinks: true });
+      fs.cpSync(path.join(saved, 'sweet-agent'), extDir, { recursive: true, verbatimSymlinks: true });
       note('  put the old caveman extension back');
     } catch (_) {
-      warn(`  could not put the old caveman extension back. A copy is kept at ${path.join(saved, 'caveman')}: copy it to ${extDir}, or install it again with: gemini extensions install ${url}`);
+      warn(`  could not put the old caveman extension back. A copy is kept at ${path.join(saved, 'sweet-agent')}: copy it to ${extDir}, or install it again with: gemini extensions install ${url}`);
       saved = null;
     }
   }
@@ -920,7 +920,8 @@ function installViaSkills(ctx, prov) {
   // workspace-wide library is managed in the UI, not a home-directory scan.
   // Other adapters resolve their user directories and supported home overrides.
   // `#ref` pins skill content to this release, like the hook downloads.
-  const args = ['skills', 'add', `${REPO}#${PINNED_REF}`, '--skill', '*', '-a', prov.profile, '--yes'];
+  const skillSource = ctx.repoRoot ? path.join(ctx.repoRoot, 'skills') : `${REPO}#${PINNED_REF}`;
+  const args = ['skills', 'add', skillSource, '--skill', '*', '-a', prov.profile, '--yes'];
   if (prov.skillsScope === 'project') note(`  Installing into this project: ${process.cwd()}`);
   else args.push('-g');
   const runner = packageInvocation(args);
@@ -1190,7 +1191,7 @@ function installHermes(ctx) {
 
   if (!repoRoot) {
     warn('  Hermes native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node installer/install.js --only hermes');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd sweet-agent && node installer/sweet.js --only hermes');
     results.failed.push(['hermes', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
@@ -1242,7 +1243,7 @@ function installHermes(ctx) {
 // the plugin is enabled; agy has no session-start hook (PreInvocation runs
 // before every model call). Checked live with agy 1.2.17: caveman voice with
 // the rule, normal prose without it or with the plugin disabled.
-const AGY_PLUGIN_NAME = 'caveman';
+const AGY_PLUGIN_NAME = 'sweet-agent';
 const AGY_SKILL_DIRS = HERMES_SKILL_DIRS;
 
 function installAntigravityCli(ctx) {
@@ -1268,7 +1269,7 @@ function installAntigravityCli(ctx) {
     fs.mkdirSync(path.join(pluginDir, 'rules'), { recursive: true });
     fs.writeFileSync(path.join(pluginDir, 'plugin.json'), JSON.stringify({
       name: AGY_PLUGIN_NAME,
-      description: 'Caveman: terse replies, every technical fact kept',
+      description: 'Sweet Agent: concise Korean replies, every technical fact kept',
     }, null, 2) + '\n');
     fs.copyFileSync(path.join(repoRoot, 'src', 'rules', 'caveman-activate.md'), path.join(pluginDir, 'rules', 'AGENTS.md'));
     for (const name of AGY_SKILL_DIRS) {
@@ -1276,7 +1277,7 @@ function installAntigravityCli(ctx) {
     }
     if (spawnOk(runSpawn('agy', ['plugin', 'install', pluginDir], null, false))) {
       results.installed.push('antigravity-cli');
-      note('  new agy sessions start in caveman mode; `agy plugin disable caveman` turns it off');
+      note('  new agy sessions start in caveman mode; `agy plugin disable sweet-agent` turns it off');
     } else {
       results.failed.push(['antigravity-cli', 'agy plugin install failed']);
     }
@@ -1301,8 +1302,8 @@ const OPENCODE_COMMAND_FILES = ['caveman.md', 'ultracave.md', 'megacave.md', 'ca
 // The directory: opencode 1.x imports it through its package.json main
 // (plugin.js), opencode 2.x loads its server.js. A plugin.js entry worked on
 // 1.x only and made 2.x warn "configured plugin path must be a directory".
-const OPENCODE_PLUGIN_REL = './plugins/caveman';
-const OPENCODE_PLUGIN_LEGACY_REL = './plugins/caveman/plugin.js';
+const OPENCODE_PLUGIN_REL = './plugins/sweet-agent';
+const OPENCODE_PLUGIN_LEGACY_REL = './plugins/sweet-agent/plugin.js';
 const OPENCODE_AGENTS_MD_SENTINEL = 'Respond terse like smart caveman';
 // Marker fence for the opencode AGENTS.md ruleset block. Same convention as
 // installer/lib/openclaw.js for SOUL.md — lets us strip our block cleanly even when
@@ -1322,8 +1323,8 @@ function countOccurrences(haystack, needle) {
 // node_modules and records runtime state in omp-plugins.lock.json. We prepare
 // a stable managed plugin package under ~/.omp/ so the symlink never points at
 // an npx cache directory that may disappear after install.
-const OMP_PLUGIN_NAME = 'caveman';
-const OMP_PLUGIN_DIRNAME = 'caveman-plugin';
+const OMP_PLUGIN_NAME = 'sweet-agent';
+const OMP_PLUGIN_DIRNAME = 'sweet-agent-plugin';
 // OMP transpiles .js as ESM; preserve .cjs so module.exports loads as a factory.
 const OMP_EXTENSION_ENTRY = './index.cjs';
 const OMP_SKILL_DIRS = OPENCODE_SKILL_DIRS;
@@ -1333,7 +1334,7 @@ const OMP_RULE_FILE = 'caveman.md';
 const OMP_PACKAGE_FILE = 'package.json';
 const OMP_INDEX_FILE = 'index.cjs';
 const OMP_PACKAGE_VERSION = '0.1.0';
-const OMP_PLUGIN_DESCRIPTION = 'Caveman terse communication mode for Oh My Pi';
+const OMP_PLUGIN_DESCRIPTION = 'Sweet Agent Korean communication mode for Oh My Pi';
 const OMP_RULE_COUNT = 1;
 // OMP has no hook files for plugins; persistence (issue #743 — caveman must
 // stay active beyond the first prompt) comes from re-appending the ruleset to
@@ -1343,8 +1344,8 @@ function ompExtensionSource(ruleBodyText) {
   const ruleLiteral = JSON.stringify(ruleBodyText);
   return `'use strict';
 
-const STATUS_LABEL = 'caveman';
-const STATUS_TEXT = 'CAVEMAN';
+const STATUS_LABEL = 'sweet-agent';
+const STATUS_TEXT = 'SWEET';
 const RULE = ${ruleLiteral};
 
 module.exports = function cavemanPlugin(pi) {
@@ -1484,7 +1485,7 @@ function installOmp(ctx) {
 
   if (!repoRoot) {
     warn('  OMP native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node installer/install.js --only omp');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd sweet-agent && node installer/sweet.js --only omp');
     results.failed.push(['omp', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
@@ -1552,14 +1553,14 @@ function installOpencode(ctx) {
 
   if (!repoRoot) {
     warn('  opencode native install requires a local clone of the caveman repo.');
-    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd caveman && node installer/install.js --only opencode');
+    note('  Re-run from a clone: git clone https://github.com/' + REPO + ' && cd sweet-agent && node installer/sweet.js --only opencode');
     results.failed.push(['opencode', 'native install requires local repo clone']);
     process.stdout.write('\n');
     return;
   }
 
   const dir = opencodeConfigDir();
-  const pluginDir   = path.join(dir, 'plugins', 'caveman');
+  const pluginDir   = path.join(dir, 'plugins', 'sweet-agent');
   const commandsDir = path.join(dir, 'commands');
   const agentsDir   = path.join(dir, 'agents');
   const skillsDir   = path.join(dir, 'skills');
@@ -1585,7 +1586,7 @@ function installOpencode(ctx) {
     // journal records installed digests and force backups, so uninstall can
     // remove only bytes this installer still owns.
     const operations = [{
-      relativePath: 'plugins/caveman',
+      relativePath: 'plugins/sweet-agent',
       write: (stage) => {
         fs.mkdirSync(stage, { recursive: true });
         fs.copyFileSync(path.join(pluginSrc, 'plugin.js'), path.join(stage, 'plugin.js'));
@@ -2236,7 +2237,7 @@ function bundledCliNodeFloorUnmet() {
 function uninstall(ctx) {
   const { say, note, warn, ok, opts, configDir } = ctx;
   let cleanupFailed = false;
-  say('🪨 caveman uninstall');
+  say('Sweet Agent uninstall');
 
   if (opts.dryRun) note('  (dry run — nothing will be removed)');
 
@@ -2360,7 +2361,7 @@ function uninstall(ctx) {
   // print "Plugin not installed" stderr noise.
   if (hasCmd('claude')) {
     if (claudeHasCaveman()) {
-      const r = runSpawn('claude', ['plugin', 'uninstall', 'caveman@caveman'], null, opts.dryRun);
+      const r = runSpawn('claude', ['plugin', 'uninstall', 'sweet-agent@sweet-agent'], null, opts.dryRun);
       if (spawnOk(r)) ok('  removed claude plugin');
     } else {
       note('  claude plugin not installed — skipping');
@@ -2384,7 +2385,7 @@ function uninstall(ctx) {
   // Gemini extension. Same idempotency probe as claude.
   if (hasCmd('gemini')) {
     if (geminiHasCaveman()) {
-      runSpawn('gemini', ['extensions', 'uninstall', 'caveman'], null, opts.dryRun);
+      runSpawn('gemini', ['extensions', 'uninstall', 'sweet-agent'], null, opts.dryRun);
     } else {
       note('  gemini extension not installed — skipping');
     }
@@ -2405,7 +2406,7 @@ function uninstall(ctx) {
   // Antigravity CLI plugin. agy owns its copy; same idempotency probe as gemini.
   if (hasCmd('agy')) {
     const probe = captureSpawn('agy', ['plugin', 'list']);
-    if (spawnOk(probe) && /"name":\s*"caveman"/.test(probe.stdout || '')) {
+    if (spawnOk(probe) && /"name":\s*"sweet-agent"/.test(probe.stdout || '')) {
       const r = runSpawn('agy', ['plugin', 'uninstall', AGY_PLUGIN_NAME], null, opts.dryRun);
       if (spawnOk(r)) ok('  removed the Antigravity CLI plugin');
       else cleanupFailed = true;
@@ -2743,7 +2744,7 @@ async function promptForOnly(detected) {
 // ── --list ─────────────────────────────────────────────────────────────────
 function printList(noColor) {
   const c = makeChalk(noColor);
-  process.stdout.write(c.orange('🪨 caveman provider matrix') + '\n\n');
+  process.stdout.write(c.orange('🪨 Sweet Agent provider matrix') + '\n\n');
   process.stdout.write(`  ${pad('ID', 15)} ${pad('AGENT', 22)} INSTALL MECHANISM\n`);
   process.stdout.write(`  ${pad('--', 15)} ${pad('-----', 22)} -----------------\n`);
   for (const p of PROVIDERS) {
@@ -2760,7 +2761,7 @@ function pad(s, n) { s = String(s); return s + ' '.repeat(Math.max(0, n - s.leng
 
 // ── Help ───────────────────────────────────────────────────────────────────
 function printHelp() {
-  process.stdout.write(`caveman installer — detects your agents and installs caveman for each one.
+  process.stdout.write(`Sweet Agent installer — detects your agents and installs Sweet Agent for each one.
 
 USAGE
   npx -y github:HDomi/sweet-agent -- [flags]
@@ -2879,7 +2880,7 @@ async function main() {
 
   if (opts.uninstall) return uninstall(ctx);
 
-  ctx.say('🪨 caveman installer');
+  ctx.say('Sweet Agent installer');
   ctx.note(`  ${REPO}`);
   if (opts.dryRun) ctx.note('  (dry run — nothing will be written)');
   if (IS_BUN) ctx.note('  Bun: installing skills without Node-only hooks. Install Node >=18 for automatic activation.');
@@ -2962,9 +2963,8 @@ async function main() {
     process.stdout.write('  or pass --only <agent> to force a specific target.\n');
   }
   process.stdout.write('\n');
-  ctx.note("  start any session and say 'caveman mode', or run /caveman in Claude Code");
-  ctx.note('  measure what caveman save you: run /caveman-stats');
-  ctx.note('  verified team savings coming soon — join waitlist: https://caveman.so');
+  ctx.note("  start any session with /sweet for warm, concise Korean replies");
+  ctx.note('  inspect recorded usage with /sweet-stats; Korean savings are unmeasured');
   ctx.note(`  uninstall: npx -y github:${REPO} -- --uninstall`);
 
   // Unsupported providers are not successful skips: they must not hide a
@@ -2978,4 +2978,4 @@ if (require.main === module) {
         .catch(err => { process.stderr.write((err && err.stack || String(err)) + '\n'); process.exit(1); });
 }
 
-module.exports = { downloadTo, DOWNLOAD_MAX_REDIRECTS, DOWNLOAD_TIMEOUT_MS, DOWNLOAD_MAX_BYTES };
+module.exports = { main, downloadTo, DOWNLOAD_MAX_REDIRECTS, DOWNLOAD_TIMEOUT_MS, DOWNLOAD_MAX_BYTES };

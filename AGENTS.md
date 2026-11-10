@@ -15,6 +15,4 @@ Load `skills/caveman/SKILL.md` only while caveman mode is on. Load
 
 ## Sweet fork
 
-사용자에게는 `/Users/im_1767/.agents/skills/sweet/SKILL.md`의 full 모드를 기본 적용한다.
-기술·검증 보고는 생략하지 않는다. 업스트림 내부 caveman 경로·패키지·라이선스는 유지한다.
-포크 차이와 갱신 절차는 `docs/SWEET-FORK.md`를 읽는다.
+Default to full intensity from `skills/sweet/SKILL.md`. Always reply in Korean. Preserve technical substance and verification reports. Keep upstream engine package names, internal paths and licenses. Read `docs/SWEET-FORK.md` for fork ownership and update steps.

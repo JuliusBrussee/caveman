@@ -6,7 +6,7 @@ description: >
   Trigger: /caveman-stats.
 ---
 
-사용자에게는 한국어로 보고한다. 한국어 절감률은 측정하지 않았으므로 영어 측정치를 한국어 절감률로 제시하지 않는다. 내부 실행 파일과 설정은 caveman 이름을 사용한다.
+Report explanatory prose in Korean; relay metric blocks verbatim. Korean savings are unmeasured: never present English measurements as Korean savings. Internal executables and settings keep their caveman names.
 
 In Claude Code, `src/hooks/caveman-mode-tracker.js` resolves `src/hooks/caveman-stats.js` next to itself and runs it on `/caveman-stats`. The hook does not block the prompt: it supplies the report through `hookSpecificOutput.additionalContext` with an instruction to print it verbatim inside a fenced code block. Do exactly that, and do not calculate, recompute or re-round the numbers yourself.
 

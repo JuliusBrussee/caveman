@@ -1,7 +1,7 @@
 {
   "name": "sweet-agent",
   "version": "4.1.0",
-  "description": "한국어 반말과 오빠 호칭을 적용한 Caveman 포크",
+  "description": "Sweet Agent: concise casual Korean replies with technical accuracy intact.",
   "license": "Apache-2.0",
   "author": "HDomi",
   "homepage": "https://github.com/HDomi/sweet-agent",
@@ -13,7 +13,7 @@
     "url": "https://github.com/HDomi/sweet-agent/issues"
   },
   "bin": {
-    "caveman-install": "./installer/install.js",
+    "sweet-agent": "./installer/sweet.js",
     "sweet": "./installer/sweet.js"
   },
   "engines": {
@@ -39,7 +39,11 @@
     "LICENSE",
     "NOTICE",
     "!**/__pycache__/**",
-    "!**/*.py[cod]"
+    "!**/*.py[cod]",
+    "dist/sweet.skill",
+    ".claude-plugin/",
+    "gemini-extension.json",
+    "GEMINI.md"
   ],
   "packageManager": "pnpm@10.14.0",
   "dependencies": {

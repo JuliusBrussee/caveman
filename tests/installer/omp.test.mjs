@@ -13,7 +13,7 @@ import { isolatedEnv } from './_isolated-env.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
-const OMP_PLUGIN_DIR = path.join('.omp', 'caveman-plugin');
+const OMP_PLUGIN_DIR = path.join('.omp', 'sweet-agent-plugin');
 const OMP_ARGS_LOG = 'omp-args.log';
 const OMP_SHIM_NAME = process.platform === 'win32' ? 'omp.cmd' : 'omp';
 const OMP_SHIM_SCRIPT_NAME = 'omp-shim.js';
@@ -28,7 +28,7 @@ const path = require('path');
 const args = process.argv.slice(2);
 const home = process.env.HOME || process.env.USERPROFILE;
 const hostRoot = path.join(home, 'omp-host-plugins');
-const link = path.join(hostRoot, 'node_modules', 'caveman');
+const link = path.join(hostRoot, 'node_modules', 'sweet-agent');
 const registration = path.join(home, 'omp-registration.json');
 if (args[1] === 'doctor') {
   console.log(JSON.stringify([{ name: 'plugins_directory', status: fs.existsSync(hostRoot) ? 'ok' : 'warning', message: fs.existsSync(hostRoot) ? 'Found at ' + hostRoot : 'Not created yet' }]));
@@ -36,7 +36,7 @@ if (args[1] === 'doctor') {
 }
 if (args[1] === 'list') {
   if (process.env.OMP_INVALID_LIST === '1') { console.log('{}'); process.exit(0); }
-  console.log(JSON.stringify({ npm: fs.existsSync(registration) ? [{ name: 'caveman', path: link }] : [], marketplace: process.env.OMP_MARKETPLACE_CONFLICT === '1' ? [{ id: 'caveman@example' }] : [] }));
+  console.log(JSON.stringify({ npm: fs.existsSync(registration) ? [{ name: 'sweet-agent', path: link }] : [], marketplace: process.env.OMP_MARKETPLACE_CONFLICT === '1' ? [{ id: 'sweet-agent@example' }] : [] }));
   process.exit(0);
 }
 fs.appendFileSync(path.join(home, '${OMP_ARGS_LOG}'), args.join(' ') + '\\n');
@@ -98,7 +98,7 @@ test('omp fresh install prepares plugin package and invokes OMP plugin install',
     const pkgPath = path.join(pluginDir, 'package.json');
     assert.ok(fs.existsSync(pkgPath), 'OMP plugin package.json missing');
     const pkg = JSON.parse(fs.readFileSync(pkgPath, 'utf8'));
-    assert.equal(pkg.name, 'caveman');
+    assert.equal(pkg.name, 'sweet-agent');
     assert.deepEqual(pkg.omp.extensions, ['./index.cjs']);
 
     assert.ok(fs.existsSync(path.join(pluginDir, 'index.cjs')), 'OMP extension entry missing');
@@ -133,9 +133,9 @@ test('OMP failed registration retains owned payload and backs up replaced user f
     const r = runInstaller(['--only', 'omp', '--force'], home, { OMP_FAIL_INSTALL: '1' });
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stdout + r.stderr, /omp plugin install failed/, 'install failure was not reported');
-    assert.equal(JSON.parse(fs.readFileSync(path.join(pluginDir, 'package.json'), 'utf8')).name, 'caveman');
+    assert.equal(JSON.parse(fs.readFileSync(path.join(pluginDir, 'package.json'), 'utf8')).name, 'sweet-agent');
     const journal = JSON.parse(fs.readFileSync(path.join(home, '.omp', '.caveman-omp-ownership.json'), 'utf8'));
-    const backup = path.join(home, '.omp', '.caveman-omp-backups', journal.entries['caveman-plugin'].restoreBackup);
+    const backup = path.join(home, '.omp', '.caveman-omp-backups', journal.entries['sweet-agent-plugin'].restoreBackup);
     assert.equal(fs.readFileSync(path.join(backup, 'package.json'), 'utf8'), EXISTING_MARKER);
     assert.equal(fs.existsSync(pluginDir + '.previous'), false, 'backup directory leaked after failed install');
   } finally {
@@ -203,7 +203,7 @@ test('OMP failed fresh registration retains journaled payload for recovery', () 
     assert.equal(result.status, 1);
     assert.ok(fs.existsSync(path.join(home, OMP_PLUGIN_DIR, 'index.cjs')));
     assert.ok(fs.existsSync(path.join(home, '.omp', '.caveman-omp-ownership.json')));
-    assert.deepEqual(fs.readdirSync(path.join(home, '.omp')).sort(), ['.caveman-omp-ownership.json', 'caveman-plugin']);
+    assert.deepEqual(fs.readdirSync(path.join(home, '.omp')).sort(), ['.caveman-omp-ownership.json', 'sweet-agent-plugin']);
   } finally { fs.rmSync(home, { recursive: true, force: true }); }
 });
 
@@ -212,7 +212,7 @@ test('OMP refuses untracked physical host collisions during install and uninstal
     const home = freshHome();
     try {
       if (installed) assert.equal(runInstaller(['--only', 'omp'], home).status, 0);
-      const target = path.join(home, 'omp-host-plugins', 'node_modules', 'caveman');
+      const target = path.join(home, 'omp-host-plugins', 'node_modules', 'sweet-agent');
       fs.rmSync(target, { recursive: true, force: true });
       fs.mkdirSync(target, { recursive: true });
       fs.writeFileSync(path.join(target, 'user-notes.txt'), 'foreign content');
@@ -245,7 +245,7 @@ test('OMP partial host registration keeps a valid owned link and can be retried 
   try {
     const failed = runInstaller(['--only', 'omp'], home, { OMP_PARTIAL_INSTALL: '1' });
     assert.equal(failed.status, 1);
-    const target = path.join(home, 'omp-host-plugins', 'node_modules', 'caveman');
+    const target = path.join(home, 'omp-host-plugins', 'node_modules', 'sweet-agent');
     assert.equal(fs.realpathSync(target), fs.realpathSync(path.join(home, OMP_PLUGIN_DIR)));
     assert.ok(fs.existsSync(path.join(home, '.omp', '.caveman-omp-ownership.json')));
     assert.equal(runInstaller(['--only', 'omp'], home).status, 0);
@@ -345,7 +345,7 @@ test('omp uninstall uses plugin lifecycle and removes prepared package', () => {
     assert.notEqual(r2.status, 2, `uninstall argv error: ${r2.stderr}`);
     assert.equal(fs.existsSync(pluginDir), false, 'prepared OMP plugin package survived uninstall');
     const shimCalls = fs.readFileSync(path.join(home, OMP_ARGS_LOG), 'utf8');
-    assert.match(shimCalls, /plugin uninstall caveman/, 'OMP plugin uninstall was not invoked');
+    assert.match(shimCalls, /plugin uninstall sweet-agent/, 'OMP plugin uninstall was not invoked');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -368,7 +368,7 @@ test('omp extension keeps caveman active beyond the first prompt', async () => {
     assert.ok(handlers.before_agent_start, 'before_agent_start handler missing');
     let status;
     await handlers.session_start({}, { ui: { setStatus: (k, v) => { status = [k, v]; } } });
-    assert.deepEqual(status, ['caveman', 'CAVEMAN']);
+    assert.deepEqual(status, ['sweet-agent', 'SWEET']);
     const first = await handlers.before_agent_start({ systemPrompt: ['base'] });
     assert.match(first.systemPrompt.join('\n'), /Respond terse like smart caveman/, 'first prompt lost ruleset');
     const second = await handlers.before_agent_start({ systemPrompt: ['base'] });

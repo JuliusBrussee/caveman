@@ -37,7 +37,7 @@ function requireSibling(name, isUsable) {
     process.stderr.write('caveman: ' + (absent
       ? name + '.js is missing from ' + __dirname + ' — the install is incomplete.'
       : name + ' could not load — ' + message.split('\n')[0]) + '\n'
-      + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+      + 'Run `/plugin update sweet-agent`, or rerun install.sh for standalone hooks. '
       + 'Continuing with reduced functionality.\n');
     return null;
   }
@@ -46,7 +46,7 @@ function requireSibling(name, isUsable) {
   // undefined — the raw stack trace this guard exists to remove.
   if (!isUsable(mod)) {
     process.stderr.write('caveman: ' + name + ' loaded but is missing expected exports — the install is inconsistent.\n'
-      + 'Run `/plugin update caveman`, or rerun install.sh for standalone hooks. '
+      + 'Run `/plugin update sweet-agent`, or rerun install.sh for standalone hooks. '
       + 'Continuing with reduced functionality.\n');
     return null;
   }
@@ -96,7 +96,7 @@ const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — mode
 const loadRuleset = cfg.loadRuleset || (() => null);
 const fallbackRuleset = cfg.fallbackRuleset || (() => null);
 const thesisLine = cfg.thesisLine
-  || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다. 산출물은 프로젝트 언어 관례를 따른다. 기술 정확도와 검증 결과는 생략하지 않는다.');
+  || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die. Reply in warm, concise casual Korean (반말). Address the user as "오빠" at most once per reply. Persisted artifacts follow repository language conventions. Preserve technical accuracy and verification results.');
 // The reinforcement switch (#1468). A caveman-config.js predating it keeps
 // reinforcing, which is what that copy always did.
 const getReinforce = cfg.getReinforce || (() => true);
@@ -196,7 +196,7 @@ function handle(raw) {
     // as additionalContext (#618), instructing the model to relay it
     // verbatim. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
-    const statsMatch = /^\/(?:caveman(?::caveman)?|sweet(?::sweet)?)-stats(?:\s+(.*))?$/.exec(prompt);
+    const statsMatch = /^\/(?:caveman(?::caveman)?|sweet(?::sweet)?|sweet-agent:(?:sweet|caveman))-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
       // Resolved once, outside the try, because the failure message needs it
@@ -255,7 +255,7 @@ function handle(raw) {
       process.stdout.write(JSON.stringify({
         hookSpecificOutput: {
           hookEventName: 'UserPromptSubmit',
-          additionalContext: 'Report this status verbatim without changing mode: Caveman mode: ' + (activeMode || 'off')
+          additionalContext: 'Report this status verbatim without changing mode: Sweet mode: ' + (activeMode || 'off')
         }
       }));
       return;

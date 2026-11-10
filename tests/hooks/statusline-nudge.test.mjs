@@ -48,7 +48,7 @@ test('SessionStart statusline command preserves a literal dollar-sign path', {
     timeout: 5000,
   });
   assert(statusline.status === 0, statusline.stderr);
-  assert.match(statusline.stdout, /\[CAVEMAN\]/);
+  assert.match(statusline.stdout, /\[SWEET\]/);
 });
 
 // The hook is a plain script with no exports, so the helper is lifted out of

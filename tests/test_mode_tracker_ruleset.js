@@ -225,7 +225,7 @@ test('no reachable SKILL.md: reinforcement uses the built-in thesis fallback', (
   const ctx = runTrackerAgainstConfig({ stripNewExports: false, pluginRoot: nowhere });
   assert.ok(!ctx.includes(ULTRA_ROW), `no skill file, yet a body was injected:\n${ctx}`);
   assert.ok(ctx.includes('CAVEMAN MODE ACTIVE (ultracave). Respond terse like smart caveman. All technical'
-    + ' substance stay. Only fluff die. Then cut again. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다. Answer only what was asked:'),
+    + ' substance stay. Only fluff die. Then cut again. Reply in warm, concise casual Korean (반말). Address the user as "오빠" at most once per reply. Answer only what was asked:'),
     `fallback thesis missing:\n${ctx}`);
 });
 
@@ -238,7 +238,7 @@ test('no reachable SKILL.md: a switch injects the fallback ruleset', () => {
   assert.ok(ctx.includes('CAVEMAN MODE ACTIVE — mode: ultracave\n\nRespond terse like smart caveman.'),
     `fallback ruleset missing:\n${ctx}`);
   assert.ok(ctx.includes('9. Never perform caveman.'), `rule headlines missing:\n${ctx}`);
-  assert.ok(ctx.includes('Only fluff die. Then cut again. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다.\n\nCAVEMAN MODE ACTIVE (ultracave).'),
+  assert.ok(ctx.includes('Only fluff die. Then cut again. Reply in warm, concise casual Korean (반말). Address the user as "오빠" at most once per reply.\n\nCAVEMAN MODE ACTIVE (ultracave).'),
     `ultracave thesis missing, or the reminder no longer comes last:\n${ctx}`);
 });
 

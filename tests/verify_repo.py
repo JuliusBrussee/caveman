@@ -464,7 +464,7 @@ def verify_powershell_static() -> None:
         "powershell -ExecutionPolicy Bypass -File" in install_text,
         "install.ps1 missing PowerShell statusline command",
     )
-    ensure("[CAVEMAN" in statusline_text, "caveman-statusline.ps1 missing badge output")
+    ensure("= 'SWEET'" in statusline_text, "caveman-statusline.ps1 missing Sweet badge map")
 
     # uninstall.ps1's .bak probe deliberately runs a node that exits 1 whenever
     # the backup holds the comments the rewrite dropped, and it does not abort:
@@ -892,7 +892,7 @@ def verify_hook_install_flow() -> None:
             [bash, "src/hooks/caveman-statusline.sh"],
             env=hook_env,
         )
-        ensure("[MEGACAVE]" in statusline.stdout, "statusline badge output mismatch (legacy wenyan-ultra → megacave)")
+        ensure("[SWEET:ULTRA]" in statusline.stdout, "statusline badge output mismatch (legacy wenyan-ultra → megacave)")
 
         reinstall = run([bash, "src/hooks/install.sh"], env=hook_env)
         ensure("Nothing to do" in reinstall.stdout, "install.sh should be idempotent")

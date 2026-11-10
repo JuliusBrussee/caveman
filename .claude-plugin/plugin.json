@@ -1,10 +1,10 @@
 {
-  "name": "caveman",
+  "name": "sweet-agent",
   "version": "4.1.0",
-  "description": "한국어 반말로 짧고 다정하게 답하고 기술 내용은 그대로 보존하는 Sweet 포크",
+  "description": "Sweet Agent: concise casual Korean replies with technical accuracy intact.",
   "author": {
-    "name": "Julius Brussee",
-    "url": "https://github.com/JuliusBrussee"
+    "name": "HDomi",
+    "url": "https://github.com/HDomi"
   },
   "hooks": {
     "SessionStart": [
@@ -14,7 +14,7 @@
             "type": "command",
             "command": "command -v node >/dev/null 2>&1 || exit 0; HOOK_ROOT=$(printf %s \"${CLAUDE_PLUGIN_ROOT}\" | sed 's|^/\\([a-zA-Z]\\)/|\\1:/|'); node \"$HOOK_ROOT/src/hooks/caveman-activate.js\"",
             "timeout": 30,
-            "statusMessage": "Loading caveman mode..."
+            "statusMessage": "Loading Sweet Agent mode..."
           }
         ]
       }
@@ -26,7 +26,7 @@
             "type": "command",
             "command": "command -v node >/dev/null 2>&1 || exit 0; HOOK_ROOT=$(printf %s \"${CLAUDE_PLUGIN_ROOT}\" | sed 's|^/\\([a-zA-Z]\\)/|\\1:/|'); node \"$HOOK_ROOT/src/hooks/caveman-activate.js\" --subagent",
             "timeout": 30,
-            "statusMessage": "Loading caveman mode for subagent..."
+            "statusMessage": "Loading Sweet Agent mode for subagent..."
           }
         ]
       }
@@ -38,7 +38,7 @@
             "type": "command",
             "command": "command -v node >/dev/null 2>&1 || exit 0; HOOK_ROOT=$(printf %s \"${CLAUDE_PLUGIN_ROOT}\" | sed 's|^/\\([a-zA-Z]\\)/|\\1:/|'); node \"$HOOK_ROOT/src/hooks/caveman-mode-tracker.js\"",
             "timeout": 30,
-            "statusMessage": "Tracking caveman mode..."
+            "statusMessage": "Tracking Sweet Agent mode..."
           }
         ]
       }
@@ -50,7 +50,7 @@
             "type": "command",
             "command": "command -v node >/dev/null 2>&1 || exit 0; HOOK_ROOT=$(printf %s \"${CLAUDE_PLUGIN_ROOT}\" | sed 's|^/\\([a-zA-Z]\\)/|\\1:/|'); node \"$HOOK_ROOT/src/hooks/caveman-stats.js\" --record",
             "timeout": 5,
-            "statusMessage": "Recording caveman stats..."
+            "statusMessage": "Recording Sweet Agent stats..."
           }
         ]
       }

@@ -31,7 +31,7 @@ These are policy targets for a small maintainer team, not a contractual SLA.
 Do not open a public issue for suspected arbitrary code execution, path escape,
 credential exposure, proxy isolation failure, recovery-data exposure, or similar
 security bugs. Use [GitHub private vulnerability
-reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new).
+reporting](https://github.com/HDomi/sweet-agent/security/advisories/new).
 
 ## Data-flow summary
 
@@ -229,7 +229,7 @@ is yours.
 
 To have every stored event for an install ID deleted, send the ID through
 [GitHub private vulnerability
-reporting](https://github.com/JuliusBrussee/caveman/security/advisories/new)
+reporting](https://github.com/HDomi/sweet-agent/security/advisories/new)
 with "telemetry deletion" in the title. Deletion covers the events table;
 Supabase's platform request logs expire on their own schedule and cannot be
 deleted per install.
@@ -405,3 +405,7 @@ available locally.
   points LLM callsites at the gateway URL you give it. If you do not use Caveman
   Cloud, install only the core skill:
   `npx skills add JuliusBrussee/caveman --skill caveman`.
+
+## Sweet Agent fork scope
+
+The persona, plugin identities and installer integration are maintained in this fork. Published `@caveman-ai/*` packages, binaries and Caveman Cloud remain upstream products; their original endpoints and disclosures above are unchanged. Report fork-specific issues to this repository, and upstream runtime issues to the upstream project.

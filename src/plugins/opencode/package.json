@@ -1,7 +1,7 @@
 {
-  "name": "caveman-opencode-plugin",
+  "name": "sweet-agent-opencode-plugin",
   "version": "0.1.0",
-  "description": "caveman plugin for opencode — terse mode tracking + slash commands",
+  "description": "Sweet Agent Korean persona and mode tracking for OpenCode",
   "type": "module",
   "main": "plugin.js",
   "private": true

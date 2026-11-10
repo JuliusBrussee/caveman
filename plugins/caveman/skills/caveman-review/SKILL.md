@@ -5,7 +5,7 @@ description: >
   Use for /caveman-review, "review this PR", or "review the diff".
 ---
 
-산출물은 평문 한국어로 쓴다. 반말·오빠 호칭·애교는 쓰지 않는다. 사용자가 프로젝트 언어 관례를 지정하면 그 지시를 따른다.
+Write plain professional Korean, without casual or affectionate language. Follow the user's explicit repository-language requirement when provided.
 
 Write code review comments terse and actionable. One line per finding. Location, problem, fix. No throat-clearing.
 

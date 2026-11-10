@@ -44,7 +44,7 @@ function sessionContext(payload) {
       .replace(/^---[\s\S]*?---\s*/, '');
   } catch (e) { ruleset = loadRuleset(mode, __dirname); }
   if (!ruleset) return null;
-  // The banner already names the mode. A separate `Caveman mode: <mode>` line
+  // The banner already names the mode. A separate `Sweet mode: <mode>` line
   // got echoed at the top of ordinary answers in Copilot CLI live runs, so
   // that line stays reserved for an explicit `/caveman status` reply.
   return rulesetBanner(mode) + '\n\n' + ruleset.trimEnd();

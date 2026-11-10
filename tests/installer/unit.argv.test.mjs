@@ -36,7 +36,7 @@ test('--help prints usage and exits 0', () => {
 test('--list prints provider matrix', () => {
   const r = run('--list');
   assert.equal(r.status, 0);
-  assert.match(r.stdout, /caveman provider matrix/);
+  assert.match(r.stdout, /Sweet Agent provider matrix/);
   assert.match(r.stdout, /claude\b/);
   assert.match(r.stdout, /gemini\b/);
   assert.match(r.stdout, /antigravity\b.*\(soft\)/);

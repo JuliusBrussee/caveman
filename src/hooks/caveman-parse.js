@@ -229,6 +229,8 @@ function parseModeChange(promptRaw, options) {
   prompt = prompt.toLowerCase().replace(/\s+/g, ' ');
   if (!prompt) return null;
 
+  // Normalize the public plugin namespace without rewriting quoted user data.
+  prompt = prompt.replace(/^\/sweet-agent:(?=(?:sweet|caveman|ultracave|megacave)(?:-|\s|$))/, '/');
   // Sweet aliases are command-token rewrites, never replacements in user data.
   prompt = prompt.replace(/^\/(?:sweet:)?sweet(?=-|\s|$)/, '/caveman');
   const sweetFirstLine = firstLine.replace(/^activate sweet mode:/, 'activate caveman mode:');
@@ -245,7 +247,7 @@ function parseModeChange(promptRaw, options) {
   // opencode's expanded /caveman-help card lists the commands and quotes the
   // triggers; its prose ("Activate caveman" once the backtick span is blanked)
   // must not switch the mode. Checked before every trigger, deactivation too.
-  if (options.expandedTpl && /^show the caveman quick-reference card\b/.test(prompt)) return null;
+  if (options.expandedTpl && /^show the (?:caveman|sweet) quick-reference card\b/.test(prompt)) return null;
 
   const naturalLanguage = !options.skipNaturalLanguage && !prompt.startsWith('/');
   const nlPrompt = naturalLanguage ? prompt.replace(QUOTED_SPAN_REGEX, ' ') : '';
