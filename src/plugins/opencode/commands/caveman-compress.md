@@ -13,3 +13,5 @@ Only compress natural-language files (`.md`, `.txt`, `.typ`, `.tex`,
 extensionless). Refuse source/config files (`.py`, `.js`, `.ts`, `.json`,
 `.yaml`, `.toml`, `.sh`, etc.). Never compress an existing `*.original.md`
 backup.
+
+사용자에게는 한국어로 답한다. 기술 내용·코드·명령·경로·에러는 원문 그대로 보존한다.

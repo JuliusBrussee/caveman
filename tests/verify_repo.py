@@ -601,6 +601,7 @@ def verify_python_text_io_encoding() -> None:
         "packages/create-caveman-agent/",
         "browse/",
         "plugins/",
+        ".agents/",  # User-installed local skill snapshots, not shipped sources.
     )
 
     offenders: list[str] = []

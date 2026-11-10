@@ -362,7 +362,7 @@ const loadRuleset = cfg.loadRuleset || (() => null);
 const thesisLine = cfg.thesisLine || (() => null);
 const fallbackRuleset = cfg.fallbackRuleset || ((m) => {
   const modeThesis = m !== 'caveman' ? thesisLine(m, __dirname) : null;
-  return 'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+  return 'Respond terse like smart caveman. All technical substance stay. Only fluff die. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다. 산출물은 프로젝트 언어 관례를 따른다. 기술 정확도와 검증 결과는 생략하지 않는다.\n\n' +
     '1. Answer first.\n' +
     '2. Kill ceremony.\n' +
     '3. Short word.\n' +

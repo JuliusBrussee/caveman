@@ -229,6 +229,11 @@ function parseModeChange(promptRaw, options) {
   prompt = prompt.toLowerCase().replace(/\s+/g, ' ');
   if (!prompt) return null;
 
+  // Sweet aliases are command-token rewrites, never replacements in user data.
+  prompt = prompt.replace(/^\/(?:sweet:)?sweet(?=-|\s|$)/, '/caveman');
+  const sweetFirstLine = firstLine.replace(/^activate sweet mode:/, 'activate caveman mode:');
+
+
   // Deactivation intent — computed FIRST so "turn caveman mode off" never
   // falls through to the activation patterns (#598), and applied with the
   // highest priority: it's what the tracker's original unconditional
@@ -256,6 +261,17 @@ function parseModeChange(promptRaw, options) {
     (/\bnormal\s+mode\b/.test(nlPrompt) && /\bcaveman\b/.test(nlPrompt))
   );
   if (wantsOff) return { action: 'clear' };
+  const bareKorean = nlPrompt.trim().length <= 30
+    && !/(코드|함수|변수|클래스|파일|컴포넌트|버튼|메시지|문구|주석|테스트|프롬프트|응답값|출력값|페이지|화면|로그|에러|오류|api|ui)/i.test(nlPrompt);
+  if (naturalLanguage && (
+    /^(?:스윗|sweet)\s*(?:모드\s*)?(?:끄기|꺼|해제|중지)(?:\s|[.!]|$)/.test(nlPrompt.trim())
+    || (bareKorean && /^(?:그만|일반 모드|존댓말로 해)[.!]*$/.test(nlPrompt.trim()))
+  )) return { action: 'clear' };
+  if (naturalLanguage && bareKorean && /^(?:스윗 모드|다정하게 말해|짧게 말해|반말로 해|토큰 아껴)[.!]*$/.test(nlPrompt.trim())) {
+    const mode = getDefaultMode();
+    return mode === 'off' ? null : { action: 'set', mode: mode === 'manual' ? 'caveman' : mode };
+  }
+
 
   // opencode expands a typed "/caveman <arg>", "/ultracave", "/megacave" (and
   // the independent-mode commands) into the command file's prose before
@@ -278,7 +294,7 @@ function parseModeChange(promptRaw, options) {
     }
     const own = /^activate (ultracave|megacave) mode\b/.exec(prompt);
     if (own) return { action: 'set', mode: own[1] };
-    const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(firstLine);
+    const tpl = /^activate caveman mode:[ \t]*(\S*)/.exec(sweetFirstLine);
     if (tpl) return resolveModeArg(tpl[1], getDefaultMode);
   }
 

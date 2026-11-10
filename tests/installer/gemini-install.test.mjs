@@ -44,7 +44,7 @@ import { isolatedEnv } from './_isolated-env.mjs';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
 const INSTALLER = path.join(REPO_ROOT, 'installer', 'install.js');
-const URL = 'https://github.com/JuliusBrussee/caveman';
+const URL = 'https://github.com/HDomi/sweet-agent';
 const IS_WIN = process.platform === 'win32';
 
 function freshTmpDir() {

@@ -27,6 +27,6 @@ test("always-on copies name the three skills and no retired level list", () => {
     const body = read(file);
     assert.match(body, /Respond terse like smart caveman/, `${file}: sentinel`);
     for (const command of ["/caveman", "/ultracave", "/megacave"]) assert.ok(body.includes(command), `${file}: ${command}`);
-    assert.doesNotMatch(body, /wenyan|lite\|full/, `${file}: retired level names`);
+    assert.doesNotMatch(body, /wenyan|Classical Chinese/, `${file}: retired level names`);
   }
 });

@@ -131,7 +131,7 @@ test('fallback still tells the model not to switch languages', () => {
 test('megacave fallback does not pair "never switch language" with its 文言 thesis', () => {
   const out = activate({ withSkills: false, mode: 'megacave' });
   assert.ok(out.includes('mode: megacave'), 'expected a megacave session');
-  assert.ok(out.includes('以文言答'), 'the 文言 thesis went missing');
+  assert.ok(out.includes('한국어 반말'), 'the Korean thesis went missing');
   assert.doesNotMatch(out, /never switch/i, 'megacave fallback contradicts its own thesis');
   assert.doesNotMatch(out, /User's language/, 'megacave fallback contradicts its own thesis');
 });

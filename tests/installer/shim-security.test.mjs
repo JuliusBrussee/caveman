@@ -31,7 +31,7 @@ test("stdin shell install never executes caller cwd installer/install.js", { ski
   });
   assert.equal(result.status, 0, result.stderr);
   assert.doesNotMatch(result.stdout, /bad/);
-  assert.match(result.stdout, /^-y\ngithub:JuliusBrussee\/caveman#v3\.4\.5\n--help$/m);
+  assert.match(result.stdout, /^-y\ngithub:HDomi\/sweet-agent#v3\.4\.5\n--help$/m);
   assert.equal(spawnSync("test", ["-e", marker]).status, 1, "caller payload must not execute");
 });
 
@@ -42,31 +42,17 @@ test("both public shims pin bootstrap package to immutable release", () => {
   assert.doesNotMatch(powershellShim, /caveman\/main\/install\.ps1/);
 });
 
-test("every bootstrap pin names the same release", () => {
-  // v2.3.0 shipped with install.sh and install.ps1 still pinned to v2.2.0:
-  // bumping installer/install.js and the README one-liners is not enough, because
-  // each shim carries its own default ref and the curl-pipe path uses that
-  // one. Keep the four pins (plus the installer package version) in lockstep.
-  const pins = {
-    "install.sh": shellShim.match(/^PINNED_REF="\$\{CAVEMAN_REF:-(v[^}"]+)\}"$/m)?.[1],
-    "install.ps1": powershellShim.match(/\$PinnedRef = if \(\$env:CAVEMAN_REF\) \{ \$env:CAVEMAN_REF \} else \{ "(v[^"]+)" \}/)?.[1],
-    "installer/install.js": readFileSync(join(root, "installer", "install.js"), "utf8")
-      .match(/^const PINNED_REF = process\.env\.CAVEMAN_REF \|\| '(v[^']+)';$/m)?.[1],
-  };
-  for (const [file, pin] of Object.entries(pins)) {
-    assert.ok(pin, `${file} must declare a parseable pinned ref`);
-  }
-  assert.equal(new Set(Object.values(pins)).size, 1, `bootstrap pins disagree: ${JSON.stringify(pins)}`);
-
-  const version = JSON.parse(readFileSync(join(root, "package.json"), "utf8")).version;
-  assert.equal(`v${version}`, pins["install.sh"], "installer package version must match the pinned release");
-
-  for (const doc of ["README.md", "INSTALL.md"]) {
-    const text = readFileSync(join(root, doc), "utf8");
-    const refs = [...text.matchAll(/raw\.githubusercontent\.com\/JuliusBrussee\/caveman\/(v[\d.]+)\//g)].map((m) => m[1]);
-    assert.ok(refs.length > 0, `${doc} must carry at least one pinned install one-liner`);
-    for (const ref of refs) assert.equal(ref, pins["install.sh"], `${doc} one-liner pins ${ref}`);
-  }
+test("Sweet bootstrap refs agree and can be pinned explicitly", () => {
+  const installer = readFileSync(join(root, "installer/install.js"), "utf8");
+  assert.match(shellShim, /PINNED_REF="\$\{SWEET_REF:-\$\{CAVEMAN_REF:-main\}\}"/);
+  assert.match(powershellShim, /\$env:SWEET_REF/);
+  assert.match(powershellShim, /else \{ "main" \}/);
+  assert.match(installer, /process\.env\.SWEET_REF \|\| process\.env\.CAVEMAN_REF \|\| 'main'/);
+  for (const body of [shellShim, powershellShim, installer]) assert.match(body, /HDomi\/sweet-agent/);
+  assert.match(readFileSync(join(root, "INSTALL.md"), "utf8"), /SWEET_REF/);
+  const wrapper = readFileSync(join(root, "bin/install.js"), "utf8");
+  assert.match(wrapper, /process\.env\.SWEET_REF/);
+  assert.match(wrapper, /require\('\.\.\/installer\/install\.js'\)/);
 });
 
 // With no caveman on PATH the first run comes from npx; it must be the CLI
@@ -78,7 +64,7 @@ test("both shims pin the first-run CLI to packages/cli/package.json", () => {
   assert.doesNotMatch(shellShim + powershellShim, /@caveman-ai\/cli@latest/);
 });
 
-// `npx github:JuliusBrussee/caveman -- --uninstall` puts this package's own CLI
+// `npx github:HDomi/sweet-agent -- --uninstall` puts this package's own CLI
 // dependency first on PATH, so that CLI runs `caveman disable --all`. One from
 // an older major cannot undo what the release wrote: 1.x left Claude Code on
 // the caveman-auto model with its route gone. The floor may trail the CLI

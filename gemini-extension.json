@@ -1,6 +1,6 @@
 {
   "name": "caveman",
-  "description": "Ultra-compressed communication mode. Shortens replies while preserving technical substance, code, commands, and exact errors.",
+  "description": "한국어 반말로 짧고 다정하게 답하고 기술 내용은 그대로 보존하는 Sweet 포크",
   "version": "4.1.0",
   "contextFileName": "GEMINI.md"
 }

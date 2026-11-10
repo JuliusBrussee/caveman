@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
     paths:
+      - skills/sweet*/**
+      - scripts/sync-sweet.mjs
       - skills/caveman/SKILL.md
       - skills/ultracave/SKILL.md
       - skills/megacave/SKILL.md
@@ -64,6 +66,9 @@ jobs:
         # updated. Delete first so the archive is genuinely rebuilt.
         run: mkdir -p dist && rm -f dist/caveman.skill && cd skills && zip -r ../dist/caveman.skill caveman/
 
+      - name: Sync Sweet delivery surfaces
+        run: node scripts/sync-sweet.mjs
+
       - name: Commit and push if changed
         env:
           GITHUB_TOKEN: ${{ github.token }}
@@ -79,6 +84,7 @@ jobs:
             plugins/caveman/agents/cavecrew-builder.md \
             plugins/caveman/agents/cavecrew-reviewer.md \
             dist/caveman.skill
+          git add plugins/caveman/skills/ skills/sweet-compress/scripts/ src/hooks/checksums.sha256 dist/sweet.skill
           git diff --staged --quiet && exit 0
           git commit -m "chore: sync SKILL.md copies [skip ci]"
           git config --local credential.helper '!f() { echo "username=x-access-token"; echo "password=$GITHUB_TOKEN"; }; f'

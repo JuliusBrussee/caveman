@@ -425,7 +425,7 @@ test('expandedTpl: no non-activation opencode template switches a prose mode', (
   // matter stripped, $ARGUMENTS empty. /caveman-help listed "Activate caveman"
   // in its table, which flipped ultracave back to caveman (or turned it on).
   const dir = path.join(__dirname, '..', 'src', 'plugins', 'opencode', 'commands');
-  const PROSE = new Set(['caveman', 'ultracave', 'megacave']);
+  const PROSE = new Set(['caveman', 'ultracave', 'megacave', 'sweet']);
   const checked = [];
   for (const file of fs.readdirSync(dir).filter((f) => f.endsWith('.md'))) {
     if (PROSE.has(file.replace(/\.md$/, ''))) continue; // activation templates by design

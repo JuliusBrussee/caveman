@@ -6,7 +6,7 @@ const path = require('path');
 const OWNED = require('./owned-install');
 const { packageInvocation } = require('./package-runner');
 
-const REPO = 'JuliusBrussee/caveman';
+const REPO = process.env.CAVEMAN_REPO || 'HDomi/sweet-agent';
 
 function usesNativeSkills(provider, env = process.env) {
   return provider === 'continue' || provider === 'aider-desk' ||

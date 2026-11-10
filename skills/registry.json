@@ -21,7 +21,14 @@
     "caveman-compress",
     "caveman-help",
     "caveman-review",
-    "caveman-stats"
+    "caveman-stats",
+    "sweet",
+    "sweet-commit",
+    "sweet-review",
+    "sweet-compress",
+    "sweet-help",
+    "sweet-stats",
+    "sweetcrew"
   ],
   "skills": [
     {

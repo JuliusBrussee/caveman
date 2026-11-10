@@ -31,8 +31,10 @@ function Install-Caveman {
   )
 
   $ErrorActionPreference = "Stop"
-  $Repo = "JuliusBrussee/caveman"
-  $PinnedRef = if ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "v4.1.0" }
+  $Repo = "HDomi/sweet-agent"
+  $PinnedRef = if ($env:SWEET_REF) { $env:SWEET_REF } elseif ($env:CAVEMAN_REF) { $env:CAVEMAN_REF } else { "main" }
+  $env:CAVEMAN_REPO = $Repo
+  $env:CAVEMAN_REF = $PinnedRef
   # The CLI release the first run comes from when caveman is not installed;
   # kept equal to packages/cli/package.json (tests/installer/shim-security).
   $CliVersion = "4.1.0"

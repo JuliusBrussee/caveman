@@ -1,7 +1,7 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "caveman",
-  "description": "Ultra-compressed communication mode. Shortens prose while preserving technical terms, code, commands, and exact errors.",
+  "description": "한국어 반말로 짧고 다정하게 답하고 기술 내용은 그대로 보존하는 Sweet 포크",
   "owner": {
     "name": "Julius Brussee",
     "url": "https://github.com/JuliusBrussee"

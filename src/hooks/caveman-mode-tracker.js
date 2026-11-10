@@ -96,7 +96,7 @@ const rulesetBanner = cfg.rulesetBanner || ((m) => 'CAVEMAN MODE ACTIVE — mode
 const loadRuleset = cfg.loadRuleset || (() => null);
 const fallbackRuleset = cfg.fallbackRuleset || (() => null);
 const thesisLine = cfg.thesisLine
-  || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die.');
+  || (() => 'Respond terse like smart caveman. All technical substance stay. Only fluff die. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다. 산출물은 프로젝트 언어 관례를 따른다. 기술 정확도와 검증 결과는 생략하지 않는다.');
 // The reinforcement switch (#1468). A caveman-config.js predating it keeps
 // reinforcing, which is what that copy always did.
 const getReinforce = cfg.getReinforce || (() => true);
@@ -183,7 +183,7 @@ function handle(raw) {
     let skipNaturalLanguage = false;
     const envName = /<command-name>\s*([^<\s]+)\s*<\/command-name>/.exec(prompt);
     if (envName) {
-      if (/^\/(?:caveman|ultracave\b|megacave\b)/.test(envName[1])) {
+      if (/^\/(?:caveman|sweet|ultracave\b|megacave\b)/.test(envName[1])) {
         const envArgs = /<command-args>\s*([^<]*?)\s*<\/command-args>/.exec(prompt);
         const args = envArgs ? envArgs[1].trim() : '';
         prompt = args ? envName[1] + ' ' + args : envName[1];
@@ -196,7 +196,7 @@ function handle(raw) {
     // as additionalContext (#618), instructing the model to relay it
     // verbatim. The script reads the active session log, so we pass
     // transcript_path through when Claude Code provides it.
-    const statsMatch = /^\/caveman(?::caveman)?-stats(?:\s+(.*))?$/.exec(prompt);
+    const statsMatch = /^\/(?:caveman(?::caveman)?|sweet(?::sweet)?)-stats(?:\s+(.*))?$/.exec(prompt);
     if (statsMatch) {
       const tailArgs = (statsMatch[1] || '').trim().split(/\s+/).filter(Boolean);
       // Resolved once, outside the try, because the failure message needs it

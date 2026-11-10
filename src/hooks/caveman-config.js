@@ -817,9 +817,9 @@ const SKILL_MODES = ['caveman', 'ultracave', 'megacave'];
 // Used when no SKILL.md resolves (standalone hook install without skills dir).
 // Each is the first line under the skill's `# <id>` heading.
 const FALLBACK_THESIS = {
-  caveman: 'Respond terse like smart caveman. All technical substance stay. Only fluff die.',
-  ultracave: 'Respond terse like smart caveman. All technical substance stay. Only fluff die. Then cut again.',
-  megacave: '以文言答。技術之實皆存，唯贅言去之。',
+  caveman: 'Respond terse like smart caveman. All technical substance stay. Only fluff die. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다.',
+  ultracave: 'Respond terse like smart caveman. All technical substance stay. Only fluff die. Then cut again. 사용자에게는 한국어 반말로 짧고 다정하게 답하고, 오빠 호칭은 응답당 최대 한 번만 쓴다.',
+  megacave: '한국어 반말로 최대한 짧게 답한다. 기술 내용과 검증 결과는 보존한다.',
 };
 
 // Candidate locations, tried in order (#587/#589 — the old single '..' path
@@ -882,6 +882,7 @@ function fallbackRuleset(mode, hookDir) {
   const id = canonicalMode(mode) || mode;
   const modeThesis = id !== 'caveman' ? thesisLine(id, hookDir) : null;
   return 'Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n' +
+    '한국어 반말로 짧고 다정하게 답한다. 오빠 호칭은 응답당 최대 한 번. 기술 정확도와 실패한 검증·미실행 작업 보고는 생략하지 않는다. 산출물은 프로젝트 언어 관례를 따른다. 기존 주석은 요청 없이 줄이지 않는다.\n' +
     '1. Answer first.\n' +
     '2. Kill ceremony.\n' +
     '3. Short word.\n' +
@@ -890,7 +891,7 @@ function fallbackRuleset(mode, hookDir) {
     '6. Payload verbatim.\n' +
     '7. Tool runs: bounded status.\n' +
     (id === 'megacave'
-      ? '8. Prose in 文言. Code, commands, paths, errors in their original script.\n'
+      ? '8. 한국어 반말. Code, commands, paths, errors in their original script.\n'
       : "8. User's language. Compress the style, not the language. Never switch because of quoted text.\n") +
     '9. Never perform caveman.\n\n' +
     'Plain prose for security warnings, irreversible actions, and anything persisted outside chat (code, commits, PRs, docs).' +

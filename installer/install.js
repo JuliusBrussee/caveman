@@ -8,7 +8,7 @@
 //
 // Distribution:
 //   Local clone: node installer/install.js [flags]
-//   curl|bash:   delegated from install.sh shim → npx -y github:JuliusBrussee/caveman -- [flags]
+//   curl|bash:   delegated from install.sh shim → npx -y github:HDomi/sweet-agent -- [flags]
 //   Windows:     pwsh install.ps1 [flags] → same npx delegation
 //
 // Pure stdlib, zero npm runtime deps.
@@ -35,7 +35,7 @@ const { parseCommandArgs } = require('./lib/command-args');
 const { packageInvocation } = require('./lib/package-runner');
 const IS_BUN = Boolean(process.versions.bun);
 
-const REPO = 'JuliusBrussee/caveman';
+const REPO = process.env.CAVEMAN_REPO || 'HDomi/sweet-agent';
 // Mirrors the `engines.node` floor in package.json. Hardcoded rather than read
 // from disk because this file also runs detached from a checkout (the curl
 // fallback path); `tests/installer/node-floor.test.mjs` fails the build if the
@@ -47,7 +47,7 @@ const MIN_NODE_MAJOR = 18;
 // the new tag on every release (CI release step) AFTER regenerating
 // src/hooks/checksums.sha256 so the integrity manifest matches the ref.
 // Overridable via CAVEMAN_REF for testing against a branch.
-const PINNED_REF = process.env.CAVEMAN_REF || 'v4.1.0';
+const PINNED_REF = process.env.SWEET_REF || process.env.CAVEMAN_REF || 'main';
 const OPENCLAW_SKILL_VERSION = /^v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/.test(PINNED_REF)
   ? PINNED_REF.replace(/^v/, '')
   : undefined;
@@ -1169,7 +1169,7 @@ function installCopilotCliHook(ctx) {
 
 // ── hermes native install ──────────────────────────────────────────────────
 // Drops the caveman skills into ~/.hermes/skills/productivity/ (or HERMES_HOME if set).
-const HERMES_SKILL_DIRS = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+const HERMES_SKILL_DIRS = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew', 'sweet', 'sweet-commit', 'sweet-review', 'sweet-compress', 'sweet-help', 'sweet-stats', 'sweetcrew'];
 
 function hermesConfigDir() {
   // Hermes uses ~/.hermes by default, or HERMES_HOME env var. Hermes 0.21.5 reads
@@ -1295,9 +1295,9 @@ function installAntigravityCli(ctx) {
 // opencode.json with a "plugin" array entry. Mirrors the Claude Code hook
 // architecture as closely as opencode allows — only the statusline is missing
 // (opencode's TUI exposes no plugin-writable badge).
-const OPENCODE_SKILL_DIRS  = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew'];
+const OPENCODE_SKILL_DIRS  = ['caveman', 'ultracave', 'megacave', 'caveman-commit', 'caveman-review', 'caveman-help', 'caveman-stats', 'caveman-compress', 'cavecrew', 'sweet', 'sweet-commit', 'sweet-review', 'sweet-compress', 'sweet-help', 'sweet-stats', 'sweetcrew'];
 const OPENCODE_AGENT_FILES = ['cavecrew-investigator.md', 'cavecrew-builder.md', 'cavecrew-reviewer.md'];
-const OPENCODE_COMMAND_FILES = ['caveman.md', 'ultracave.md', 'megacave.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md'];
+const OPENCODE_COMMAND_FILES = ['caveman.md', 'ultracave.md', 'megacave.md', 'caveman-commit.md', 'caveman-review.md', 'caveman-compress.md', 'caveman-stats.md', 'caveman-help.md', 'sweet.md', 'sweet-commit.md', 'sweet-review.md', 'sweet-compress.md', 'sweet-stats.md', 'sweet-help.md'];
 // The directory: opencode 1.x imports it through its package.json main
 // (plugin.js), opencode 2.x loads its server.js. A plugin.js entry worked on
 // 1.x only and made 2.x warn "configured plugin path must be a directory".
@@ -2717,7 +2717,7 @@ function uninstall(ctx) {
   // every agent's directory, and generic names (migration, lean-build) can be
   // the user's own. Run by hand it lists the names and asks first.
   ok('skills added by `npx skills` (Cursor/Windsurf/Cline/etc.) stay. To remove them:');
-  ok('  npx skills remove JuliusBrussee/caveman -g   (lists the skills and asks first)');
+  ok('  npx skills remove HDomi/sweet-agent -g   (lists the skills and asks first)');
   ok('per-repo init files (.cursor/, .windsurf/, AGENTS.md) — remove with your editor');
   return cleanupFailed ? 1 : 0;
 }
@@ -2763,7 +2763,7 @@ function printHelp() {
   process.stdout.write(`caveman installer — detects your agents and installs caveman for each one.
 
 USAGE
-  npx -y github:JuliusBrussee/caveman -- [flags]
+  npx -y github:HDomi/sweet-agent -- [flags]
   node installer/install.js [flags]
   bun installer/install.js [flags]    # experimental skills-only fallback
   bash install.sh [flags]              # Node first, Bun when Node is absent
@@ -2822,10 +2822,10 @@ FLAGS
   -h, --help            Show this help.
 
 EXAMPLES
-  npx -y github:JuliusBrussee/caveman                        # default install
-  npx -y github:JuliusBrussee/caveman -- --all               # all the trimmings
-  npx -y github:JuliusBrussee/caveman -- --only claude --no-mcp-shrink
-  npx -y github:JuliusBrussee/caveman -- --uninstall
+  npx -y github:HDomi/sweet-agent                        # default install
+  npx -y github:HDomi/sweet-agent -- --all               # all the trimmings
+  npx -y github:HDomi/sweet-agent -- --only claude --no-mcp-shrink
+  npx -y github:HDomi/sweet-agent -- --uninstall
 
   Issues: https://github.com/${REPO}/issues
 `);

@@ -70,7 +70,7 @@ for (const local of [false, true]) {
     const r = run(t, { local });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(r.calls, [{name:'bun', args:[
-      ...(local ? [path.join(r.dir, 'installer/install.js')] : ['x', '--bun', `github:JuliusBrussee/caveman#${ref}`]),
+      ...(local ? [path.join(r.dir, 'installer/install.js')] : ['x', '--bun', `github:HDomi/sweet-agent#${ref}`]),
       '--dry-run', '--config-dir', 'a path; & chars',
     ]}]);
     if (!local) assert.match(r.stdout, /session-alive/);
@@ -86,7 +86,7 @@ test(`${shell || 'PowerShell unavailable'}: keeps Node first and npm 12 flags`, 
   const r = run(t, { node: true });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(r.calls[0].name, 'npx');
-  assert.deepEqual(r.calls[0].args.slice(0, 3), ['--allow-git=root', '-y', `github:JuliusBrussee/caveman#${ref}`]);
+  assert.deepEqual(r.calls[0].args.slice(0, 3), ['--allow-git=root', '-y', `github:HDomi/sweet-agent#${ref}`]);
 });
 test(`${shell || 'PowerShell unavailable'}: rejects old Node or missing npx rather than using Bun`, { skip: !shell }, t => {
   for (const options of [{ node: true, major: 16 }, { node: true, npx: false }]) {

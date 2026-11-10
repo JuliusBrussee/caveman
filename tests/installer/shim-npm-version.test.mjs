@@ -58,7 +58,7 @@ test('shell shim opts into root git fetching on npm 12+', {
   assert.deepEqual(runShim('12.0.1'), [
     '--allow-git=root',
     '-y',
-    `github:JuliusBrussee/caveman#${REF}`,
+    `github:HDomi/sweet-agent#${REF}`,
     '--only',
     'claude',
   ]);
@@ -69,7 +69,7 @@ test('shell shim keeps legacy invocation before npm 12', {
 }, () => {
   assert.deepEqual(runShim('11.15.0'), [
     '-y',
-    `github:JuliusBrussee/caveman#${REF}`,
+    `github:HDomi/sweet-agent#${REF}`,
     '--only',
     'claude',
   ]);
@@ -82,7 +82,7 @@ test('an unreadable or non-numeric npx version falls back to the legacy invocati
   // config flag to an older npm; NPX_MAJOR=0 keeps the legacy path.
   assert.deepEqual(runShim('not-a-version'), [
     '-y',
-    `github:JuliusBrussee/caveman#${REF}`,
+    `github:HDomi/sweet-agent#${REF}`,
     '--only',
     'claude',
   ]);

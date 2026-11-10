@@ -24,8 +24,8 @@ test('installer bin does not collide with the bundled CLI', () => {
 
   assert.deepEqual(
     installerBins.map(([, target]) => target),
-    ['./installer/install.js'],
-    'the GitHub package must expose only the unified installer',
+    ['./installer/install.js', './bin/install.js'],
+    'the GitHub package exposes the upstream installer and the Sweet wrapper',
   );
 
   const cliBinNames = new Set(Object.keys(packageBins(cli)));

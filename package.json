@@ -1,26 +1,28 @@
 {
-  "name": "caveman-installer",
+  "name": "sweet-agent",
   "version": "4.1.0",
-  "description": "Caveman installer \u2014 detects your AI coding agents and installs caveman for each one.",
+  "description": "한국어 반말과 오빠 호칭을 적용한 Caveman 포크",
   "license": "Apache-2.0",
-  "author": "Julius Brussee",
-  "homepage": "https://github.com/JuliusBrussee/caveman",
+  "author": "HDomi",
+  "homepage": "https://github.com/HDomi/sweet-agent",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/JuliusBrussee/caveman.git"
+    "url": "git+https://github.com/HDomi/sweet-agent.git"
   },
   "bugs": {
-    "url": "https://github.com/JuliusBrussee/caveman/issues"
+    "url": "https://github.com/HDomi/sweet-agent/issues"
   },
   "bin": {
-    "caveman-install": "./installer/install.js"
+    "caveman-install": "./installer/install.js",
+    "sweet": "./bin/install.js"
   },
   "engines": {
     "node": ">=18"
   },
   "scripts": {
     "test": "node --test --test-force-exit --test-concurrency=2 tests/installer/*.test.mjs tests/hooks/*.test.mjs",
-    "test:windows": "node scripts/test-windows-compat.mjs"
+    "test:windows": "node scripts/test-windows-compat.mjs",
+    "sync:sweet": "node packages/cli/scripts/compile-registries.mjs && node scripts/sync-sweet.mjs"
   },
   "files": [
     ".cursor-plugin/",
@@ -37,7 +39,8 @@
     "LICENSE",
     "NOTICE",
     "!**/__pycache__/**",
-    "!**/*.py[cod]"
+    "!**/*.py[cod]",
+    "bin/install.js"
   ],
   "packageManager": "pnpm@10.14.0",
   "dependencies": {

@@ -55,7 +55,7 @@ for (const local of [false, true]) {
     assert.equal(r.status, 0, r.stderr);
     assert.deepEqual(r.logged.slice(1), local
       ? [path.join(r.dir, 'installer/install.js'), ...args]
-      : ['x', '--bun', `github:JuliusBrussee/caveman#${ref}`, ...args]);
+      : ['x', '--bun', `github:HDomi/sweet-agent#${ref}`, ...args]);
     assert.doesNotMatch(r.stdout, /runtime .*needs Node/);
   });
   test(`Bun shell fallback propagates installer failure (${local ? 'local' : 'pipe'})`, { skip: process.platform === 'win32' }, t => {
@@ -68,7 +68,7 @@ test('shell prefers Node and keeps npm 12 handling when Bun is present', { skip:
   const r = shim(t, { node: 20 });
   assert.equal(r.status, 0, r.stderr);
   assert.equal(path.basename(r.logged[0]), 'npx');
-  assert.deepEqual(r.logged.slice(1), ['--allow-git=root', '-y', `github:JuliusBrussee/caveman#${ref}`, '--help']);
+  assert.deepEqual(r.logged.slice(1), ['--allow-git=root', '-y', `github:HDomi/sweet-agent#${ref}`, '--help']);
 });
 test('old Node and missing npx do not silently switch to Bun', { skip: process.platform === 'win32' }, t => {
   const old = shim(t, { node: 16 });
@@ -90,11 +90,11 @@ test('Bun first run names the Node CLI requirement without launching it', { skip
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /runtime .*needs Node 22\.13\+/);
   assert.equal(path.basename(r.logged[0]), 'bun');
-  assert.deepEqual(r.logged.slice(1), ['x', '--bun', `github:JuliusBrussee/caveman#${ref}`, '--only', 'codex', '--non-interactive']);
+  assert.deepEqual(r.logged.slice(1), ['x', '--bun', `github:HDomi/sweet-agent#${ref}`, '--only', 'codex', '--non-interactive']);
 });
 
 test('package runner preserves Node argv and forces Bun before the package', () => {
-  const args = ['skills', 'add', `JuliusBrussee/caveman#${ref}`, '--skill', '*', '-a', 'codex', '--yes'];
+  const args = ['skills', 'add', `HDomi/sweet-agent#${ref}`, '--skill', '*', '-a', 'codex', '--yes'];
   assert.deepEqual(packageInvocation(args, { bun: undefined }), { command: 'npx', args: ['-y', ...args] });
   for (const execPath of ['/a path/bun', 'C:\\Program Files\\bun\\bun.exe']) {
     assert.deepEqual(packageInvocation(args, { bun: '1.4.3', execPath }), { command: execPath, args: ['x', '--bun', ...args] });
@@ -174,7 +174,7 @@ require(${JSON.stringify(path.join(root, 'installer/lib/provider-skills.js'))}).
   assert.equal(r.status, 0, r.stderr);
   assert.deepEqual(JSON.parse(r.stdout), {
     command: process.execPath,
-    args: ['x', '--bun', 'skills', 'add', `JuliusBrussee/caveman#${ref}`, '--skill', '*', '-a', 'codex', '--yes', '--copy'],
+    args: ['x', '--bun', 'skills', 'add', `HDomi/sweet-agent#${ref}`, '--skill', '*', '-a', 'codex', '--yes', '--copy'],
   });
   assert.equal(fs.readFileSync(path.join(f.home, 'skills/caveman/SKILL.md'), 'utf8'), 'fixture');
 });
@@ -212,7 +212,7 @@ test('real Bun executes a local skills fixture despite its Node shebang', { skip
   const result = JSON.parse(fs.readFileSync(log, 'utf8'));
   assert.ok(result.bun, 'the Node-shebang fixture must actually run under Bun');
   const pinned = fs.readFileSync(installer, 'utf8').match(/const PINNED_REF = process.env.CAVEMAN_REF \|\| '([^']+)'/)[1];
-  assert.deepEqual(result.args, ['add', `JuliusBrussee/caveman#${process.env.CAVEMAN_REF || pinned}`, '--skill', '*', '-a', 'codex', '--yes', '-g']);
+  assert.deepEqual(result.args, ['add', `HDomi/sweet-agent#${process.env.CAVEMAN_REF || pinned}`, '--skill', '*', '-a', 'codex', '--yes', '-g']);
   assert.equal(fs.existsSync(path.join(f.home, '.codex/hooks.json')), false);
 });
 test('real Bun shell shim installs from a clone without Node', { skip: !bunBinary || process.platform === 'win32' }, t => {

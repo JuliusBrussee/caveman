@@ -127,7 +127,7 @@ test('detached install stages all skills in a disposable project and copies to t
   let staged;
   const run = (command, args, options) => {
     assert.equal(command, 'npx');
-    assert.deepEqual(args, ['-y', 'skills', 'add', 'JuliusBrussee/caveman', '--skill', '*', '-a', 'codex', '--yes', '--copy']);
+    assert.deepEqual(args, ['-y', 'skills', 'add', 'HDomi/sweet-agent', '--skill', '*', '-a', 'codex', '--yes', '--copy']);
     staged = options.cwd;
     assert.notEqual(staged, f.directory);
     fs.cpSync(path.join(f.repoRoot, 'skills'), path.join(staged, '.agents', 'skills'), { recursive: true });

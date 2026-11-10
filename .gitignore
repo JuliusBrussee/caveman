@@ -44,3 +44,6 @@ docs/plans/
 # Python build output — never a source of truth.
 packages/sdk/python/build/
 packages/middleware/python/build/
+
+# Sweet persona release archive.
+!dist/sweet.skill

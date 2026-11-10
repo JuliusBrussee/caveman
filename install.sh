@@ -21,8 +21,9 @@
 
 set -euo pipefail
 
-REPO="JuliusBrussee/caveman"
-PINNED_REF="${CAVEMAN_REF:-v4.1.0}"
+REPO="HDomi/sweet-agent"
+PINNED_REF="${SWEET_REF:-${CAVEMAN_REF:-main}}"
+export CAVEMAN_REPO="$REPO" CAVEMAN_REF="$PINNED_REF"
 # The CLI release the first run comes from when caveman is not installed;
 # kept equal to packages/cli/package.json (tests/installer/shim-security).
 CLI_VERSION="4.1.0"

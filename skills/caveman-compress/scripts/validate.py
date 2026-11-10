@@ -58,6 +58,41 @@ def read_file(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
+# Polarity and constraint markers. Structural validation (headings, code,
+# URLs, inline code, bullets) cannot catch the failure that actually costs
+# something when a CLAUDE.md is compressed: a rule that flips meaning. "Never
+# mock the DB" -> "Mock the DB" passes every structural check. So we also
+# require that a section which carried negation still carries negation, and
+# warn when its constraint words all vanish.
+# Asymmetric on purpose. What TRIGGERS the check is a prohibition in the
+# original — "never", "don't", "avoid", 금지, 절대. An incidental "if not
+# provided" or "not your preferred approach" is descriptive prose and must not
+# trigger anything, or honest compressions would fail.
+NEG_TRIGGER_EN_REGEX = re.compile(
+    r"\b(?:never|avoid|forbidden|prohibited|must\s+not|do\s*n[o']?t|"
+    r"does\s*n[o']?t|cannot|can\s*n[o']?t)",
+    re.IGNORECASE,
+)
+NEG_TRIGGER_KO_REGEX = re.compile(r"금지|절대|마라|말고|하지\s*마|안\s*된다|안\s*됨|불가")
+
+# What SATISFIES it is any negation at all, because compression legitimately
+# rewrites "Please don't use any" as "No `any`" and "never mock the DB" as
+# "DB 모킹 안 함". We only want to catch the drop to zero.
+NEG_ANY_EN_REGEX = re.compile(
+    r"\b(?:no|not|never|none|nor|neither|cannot|cant|dont|doesnt|isnt|arent|"
+    r"wont|avoid|without|forbidden|prohibited|skip|instead\s+of)\b|n['’]t\b",
+    re.IGNORECASE,
+)
+NEG_ANY_KO_REGEX = re.compile(r"금지|않|없|절대|말고|마라|아니|불가|안|못|대신")
+
+CONSTRAINT_EN_REGEX = re.compile(
+    r"\b(?:must|only|unless|before|after|until|require|requires|required|"
+    r"always|first|optional|least)\b",
+    re.IGNORECASE,
+)
+CONSTRAINT_KO_REGEX = re.compile(r"반드시|항상|필수|선택|먼저|전에|후에|때만|이상|이하|우선")
+
+
 # ---------- Extractors ----------
 
 
@@ -394,6 +429,82 @@ def validate_inline_codes(orig, comp, result):
             result.add_warning(f"Inline code added: {_render_spans(added)}")
 
 
+def strip_code(text):
+    """Drop fenced blocks and inline code — those are preserved verbatim, so a
+    `!=` or a `--no-verify` inside them is not prose polarity."""
+    text = re.sub(r"^(\s{0,3})(`{3,}|~{3,})[\s\S]*?^\s{0,3}\2", "", text, flags=re.MULTILINE)
+    text = re.sub(r"`[^`\n]+`", "", text)
+    return text
+
+
+def split_sections(text):
+    """Split markdown into positional (heading, body) pairs.
+
+    Body text before the first heading is section "" so a file with no
+    headings still yields one comparable chunk.
+    """
+    sections = []
+    title = ""
+    body = []
+    for line in text.split("\n"):
+        m = re.match(r"^(#{1,6})\s+(.*)", line)
+        if m:
+            sections.append((title, "\n".join(body)))
+            title = m.group(2).strip()
+            body = []
+        else:
+            body.append(line)
+    sections.append((title, "\n".join(body)))
+    return sections
+
+
+def count_markers(text, en_regex, ko_regex):
+    clean = strip_code(text)
+    return len(en_regex.findall(clean)) + len(ko_regex.findall(clean))
+
+
+
+def validate_polarity(orig, comp, result):
+    """Fail when a section that stated a prohibition no longer states one.
+
+    Deliberately lenient about *how* the negation is written — "don't use X"
+    compressing to "No X" is fine, both carry a marker. What it catches is the
+    drop to zero, which is the case where a rule silently inverts. Constraint
+    words (must/only/unless/before/먼저/반드시) get a warning instead of an
+    error: losing them muddies a rule without inverting it.
+    """
+    o_sections = split_sections(orig)
+    c_sections = split_sections(comp)
+
+    if len(o_sections) != len(c_sections):
+        # Heading counts already differ — validate_headings reports that. Fall
+        # back to a whole-document comparison so we still catch inversion.
+        o_sections = [("(document)", orig)]
+        c_sections = [("(document)", comp)]
+
+    for (o_title, o_body), (_, c_body) in zip(o_sections, c_sections):
+        where = f"section '{o_title}'" if o_title else "text before first heading"
+
+        o_neg = count_markers(o_body, NEG_TRIGGER_EN_REGEX, NEG_TRIGGER_KO_REGEX)
+        if o_neg:
+            c_neg = count_markers(c_body, NEG_ANY_EN_REGEX, NEG_ANY_KO_REGEX)
+            if c_neg == 0:
+                result.add_error(
+                    f"Negation lost in {where}: original had {o_neg} marker(s), "
+                    f"compressed has none — a prohibition may have flipped"
+                )
+
+        o_con = count_markers(o_body, CONSTRAINT_EN_REGEX, CONSTRAINT_KO_REGEX)
+        if o_con:
+            c_con = count_markers(c_body, CONSTRAINT_EN_REGEX, CONSTRAINT_KO_REGEX)
+            if c_con == 0:
+                result.add_warning(
+                    f"Constraint words lost in {where}: {o_con} -> 0 "
+                    f"(must/only/unless/before/반드시/먼저 …)"
+                )
+
+
+
 # ---------- Main ----------
 
 
@@ -409,6 +520,7 @@ def validate(original_path: Path, compressed_path: Path) -> ValidationResult:
     validate_paths(orig, comp, result)
     validate_bullets(orig, comp, result)
     validate_inline_codes(orig, comp, result)
+    validate_polarity(orig, comp, result)
 
     return result
 

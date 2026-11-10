@@ -73,7 +73,7 @@ test('hand-copied fallback whitelist stays equal to caveman-config VALID_MODES',
 // Distinctive lines from each skill body: proof the right SKILL.md travelled.
 const CAVEMAN_BODY = /Caveman is a voice, not broken grammar\./;
 const ULTRA_BODY = /Ultracave is caveman with the grammar stripped\./;
-const MEGA_BODY = /Megacave is caveman in Classical Chinese\./;
+const MEGA_BODY = /Megacave is a compatibility mode for Korean ultra compression\./;
 
 test('default resolution with no config emits the caveman skill', (t) => {
   const item = fixture(t);

@@ -68,13 +68,8 @@ for (const rel of HOST_MANIFESTS) {
 // installer/lib/openclaw.js stamps the workspace skill with the same number. If the
 // tag and the package version disagree, the manifests above are pinned to a
 // release whose files are not the ones being installed.
-test('installer/install.js PINNED_REF matches the release version', () => {
+test('installer supports explicit Sweet release refs before the first fork tag', () => {
   const src = fs.readFileSync(path.join(REPO_ROOT, 'installer', 'install.js'), 'utf8');
-  const m = /const PINNED_REF = process\.env\.CAVEMAN_REF \|\| '([^']+)';/.exec(src);
-  assert.ok(m, 'PINNED_REF not found in installer/install.js');
-  assert.equal(
-    m[1].replace(/^v/, ''),
-    releaseVersion(),
-    `installer/install.js PINNED_REF (${m[1]}) drifted from package.json version`
-  );
+  assert.match(src, /process\.env\.SWEET_REF \|\| process\.env\.CAVEMAN_REF \|\| 'main'/);
+  assert.match(src, /const OPENCLAW_SKILL_VERSION/);
 });
