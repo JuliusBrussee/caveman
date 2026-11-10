@@ -49,7 +49,7 @@ SCRIPT_VERSION = "1.1.0"
 SCRIPT_DIR = Path(__file__).parent
 REPO_DIR = SCRIPT_DIR.parent
 PROMPTS_PATH = SCRIPT_DIR / "prompts.json"
-SKILL_PATH = REPO_DIR / "skills" / "caveman" / "SKILL.md"
+SKILL_PATH = REPO_DIR / "skills" / "sweet" / "SKILL.md"
 README_PATH = REPO_DIR / "README.md"
 RESULTS_DIR = SCRIPT_DIR / "results"
 
@@ -85,7 +85,7 @@ def call_api(client, model, system, prompt, max_retries=3):
             response = client.messages.create(
                 model=model,
                 max_tokens=4096,
-                extra_body={"temperature": 0},
+                thinking={"type": "disabled"},
                 system=system,
                 messages=[{"role": "user", "content": prompt}],
             )
@@ -199,16 +199,16 @@ def pct(before, after):
 
 def format_prompt_label(prompt_id):
     labels = {
-        "react-rerender": "Explain React re-render bug",
-        "auth-middleware-fix": "Fix auth middleware token expiry",
-        "postgres-pool": "Set up PostgreSQL connection pool",
-        "git-rebase-merge": "Explain git rebase vs merge",
-        "async-refactor": "Refactor callback to async/await",
-        "microservices-monolith": "Architecture: microservices vs monolith",
-        "pr-security-review": "Review PR for security issues",
-        "docker-multi-stage": "Docker multi-stage build",
-        "race-condition-debug": "Debug PostgreSQL race condition",
-        "error-boundary": "Implement React error boundary",
+        "react-rerender": "React 리렌더링 버그 설명",
+        "auth-middleware-fix": "인증 미들웨어 토큰 만료 수정",
+        "postgres-pool": "PostgreSQL 커넥션 풀 구성",
+        "git-rebase-merge": "git rebase vs merge 설명",
+        "async-refactor": "콜백 → async/await 리팩터링",
+        "microservices-monolith": "아키텍처: 마이크로서비스 vs 모놀리스",
+        "pr-security-review": "PR 보안 리뷰",
+        "docker-multi-stage": "Docker 멀티 스테이지 빌드",
+        "race-condition-debug": "PostgreSQL race condition 디버깅",
+        "error-boundary": "React error boundary 구현",
     }
     return labels.get(prompt_id, prompt_id)
 
@@ -218,7 +218,7 @@ def format_table(rows, summary):
     skill itself buys. "vs baseline" is the skill plus the generic terseness ask,
     and quoting it alone credits the skill for both."""
     lines = [
-        "| Task | Baseline (tokens) | Terse (tokens) | Caveman (tokens) | vs terse | vs baseline |",
+        "| 작업 | 일반 (토큰) | 간결 지시 (토큰) | 스윗 (토큰) | 간결 지시 대비 | 일반 대비 |",
         "|------|-----------------:|--------------:|----------------:|--------:|-----------:|",
     ]
     for r in rows:
@@ -303,7 +303,7 @@ def main():
     parser.add_argument("--trials", type=int, default=3, help="Trials per prompt per mode (default: 3)")
     parser.add_argument("--dry-run", action="store_true", help="Print config, no API calls")
     parser.add_argument("--update-readme", action="store_true", help="Update README.md benchmark table")
-    parser.add_argument("--model", default="claude-sonnet-4-6", help="Model to use")
+    parser.add_argument("--model", default="claude-opus-5", help="Model to use")
     args = parser.parse_args()
 
     if args.trials < 1:

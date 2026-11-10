@@ -1,55 +1,56 @@
 {
-  "version": 1,
+  "version": 2,
+  "language": "ko",
   "prompts": [
     {
       "id": "react-rerender",
       "category": "debugging",
-      "prompt": "Why is my React component re-rendering on every state update even though the props haven't changed? I'm passing an object as a prop."
+      "prompt": "props가 안 바뀌었는데도 state 업데이트마다 React 컴포넌트가 리렌더링돼요. prop으로 객체를 넘기고 있는데 왜 이런 건가요?"
     },
     {
       "id": "auth-middleware-fix",
       "category": "bugfix",
-      "prompt": "My Express auth middleware is letting expired JWT tokens through. The expiry check uses Date.now() compared to the token's exp field. What's wrong and how do I fix it?"
+      "prompt": "Express 인증 미들웨어가 만료된 JWT 토큰을 통과시키고 있어요. 만료 검사는 Date.now()를 토큰의 exp 필드와 비교하는 방식입니다. 뭐가 잘못됐고 어떻게 고치면 되나요?"
     },
     {
       "id": "postgres-pool",
       "category": "setup",
-      "prompt": "How do I set up a PostgreSQL connection pool in Node.js with proper timeout and error handling configuration?"
+      "prompt": "Node.js에서 PostgreSQL 커넥션 풀을 타임아웃과 에러 핸들링 설정까지 제대로 갖춰서 구성하려면 어떻게 하나요?"
     },
     {
       "id": "git-rebase-merge",
       "category": "explanation",
-      "prompt": "Explain the difference between git rebase and git merge. When should I use each one and what are the tradeoffs?"
+      "prompt": "git rebase와 git merge의 차이를 설명해주세요. 각각 언제 쓰는 게 좋고 트레이드오프는 뭔가요?"
     },
     {
       "id": "async-refactor",
       "category": "refactor",
-      "prompt": "Refactor this callback-based Node.js function to use async/await:\n\nfunction getUser(id, callback) {\n  db.query('SELECT * FROM users WHERE id = ?', [id], function(err, rows) {\n    if (err) return callback(err);\n    if (!rows.length) return callback(new Error('Not found'));\n    callback(null, rows[0]);\n  });\n}"
+      "prompt": "이 콜백 기반 Node.js 함수를 async/await로 리팩터링해주세요:\n\nfunction getUser(id, callback) {\n  db.query('SELECT * FROM users WHERE id = ?', [id], function(err, rows) {\n    if (err) return callback(err);\n    if (!rows.length) return callback(new Error('Not found'));\n    callback(null, rows[0]);\n  });\n}"
     },
     {
       "id": "microservices-monolith",
       "category": "architecture",
-      "prompt": "We have a monolithic Django app that's getting slow. The team is debating microservices. What are the key factors to consider before splitting up the monolith?"
+      "prompt": "모놀리식 Django 앱이 점점 느려지고 있어서 팀에서 마이크로서비스 전환을 논의 중이에요. 모놀리스를 쪼개기 전에 고려해야 할 핵심 요소가 뭔가요?"
     },
     {
       "id": "pr-security-review",
       "category": "code-review",
-      "prompt": "Review this Express route handler for security issues:\n\napp.get('/api/users/:id', (req, res) => {\n  const query = `SELECT * FROM users WHERE id = ${req.params.id}`;\n  db.query(query).then(user => res.json(user));\n});"
+      "prompt": "이 Express 라우트 핸들러의 보안 문제를 리뷰해주세요:\n\napp.get('/api/users/:id', (req, res) => {\n  const query = `SELECT * FROM users WHERE id = ${req.params.id}`;\n  db.query(query).then(user => res.json(user));\n});"
     },
     {
       "id": "docker-multi-stage",
       "category": "devops",
-      "prompt": "Write a multi-stage Dockerfile for a Node.js TypeScript application that minimizes the final image size. The app uses npm and needs to compile TypeScript before running."
+      "prompt": "Node.js TypeScript 애플리케이션용 멀티 스테이지 Dockerfile을 작성해주세요. 최종 이미지 크기를 최소화해야 하고, 앱은 npm을 쓰며 실행 전에 TypeScript 컴파일이 필요합니다."
     },
     {
       "id": "race-condition-debug",
       "category": "debugging",
-      "prompt": "My Node.js API endpoint that increments a counter in PostgreSQL sometimes returns the same value for concurrent requests. How do I fix this race condition?"
+      "prompt": "PostgreSQL에서 카운터를 증가시키는 Node.js API 엔드포인트가 동시 요청일 때 가끔 같은 값을 반환해요. 이 race condition을 어떻게 고치나요?"
     },
     {
       "id": "error-boundary",
       "category": "implementation",
-      "prompt": "Implement a React error boundary component that catches render errors, shows a fallback UI with a retry button, and logs the error details."
+      "prompt": "렌더링 에러를 잡아서 재시도 버튼이 있는 fallback UI를 보여주고 에러 상세를 로깅하는 React error boundary 컴포넌트를 구현해주세요."
     }
   ]
 }

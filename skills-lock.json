@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "skills": {
+    "sweet": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweet/SKILL.md",
+      "computedHash": "f01e24ac2032484bad41e2ad0a37ba666e185328865c8fe999d1baade3ce9b0a"
+    },
+    "sweet-commit": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweet-commit/SKILL.md",
+      "computedHash": "c035498f10737d63ca5deaf1654157064ec390b5f6ce6e92ca44276218680ed8"
+    },
+    "sweet-compress": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweet-compress/SKILL.md",
+      "computedHash": "7c0a475cabfd40371a0ca58ed2e057e4ce3041f3c93c856e95bf9fd739248e96"
+    },
+    "sweet-help": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweet-help/SKILL.md",
+      "computedHash": "f21019d80615d9845493c9bfc79dfc33e0f21261a50b00683db5e0e71d3d9777"
+    },
+    "sweet-review": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweet-review/SKILL.md",
+      "computedHash": "664210623d90298b794ac4b2bb45122c036b458785cfd44f468ef910f106f4b1"
+    },
+    "sweet-stats": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweet-stats/SKILL.md",
+      "computedHash": "19c2f98d7a845e715d523626838d7905862c5bf57c00259568351786b222befe"
+    },
+    "sweetcrew": {
+      "source": "HDomi/sweet-agent",
+      "sourceType": "github",
+      "skillPath": "skills/sweetcrew/SKILL.md",
+      "computedHash": "3fc66a859c4407830767dec5f6cce13547539315fd03d080bc591fea81e1048d"
+    }
+  }
+}
