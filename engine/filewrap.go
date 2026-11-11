@@ -31,7 +31,12 @@ type fileWrapper struct {
 func unwrapFileWrapper(input []byte) ([]byte, fileWrapper) {
 	leftTrimmed := bytes.TrimLeftFunc(input, unicode.IsSpace)
 	start := len(input) - len(leftTrimmed)
-	end := len(bytes.TrimRightFunc(input, unicode.IsSpace))
+	// Derive end from leftTrimmed, not from input: when the whole input is
+	// whitespace, TrimRightFunc(input) is empty so end would be 0 while start
+	// is len(input), and input[start:end] panics. Trimming the already
+	// left-trimmed slice gives the same end otherwise, and start <= end here
+	// by construction.
+	end := start + len(bytes.TrimRightFunc(leftTrimmed, unicode.IsSpace))
 	trimmed := input[start:end]
 	if len(trimmed) < 9 {
 		return input, fileWrapper{}
