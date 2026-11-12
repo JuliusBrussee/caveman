@@ -132,3 +132,47 @@ func (c *panickingEstimator) EstimateSegment(seg []byte) (int, int) {
 	c.panicked++
 	panic("engine: slice bounds out of range [10:0]")
 }
+
+// TestCompressDoesNotSwallowAbortHandler keeps the guard from absorbing
+// net/http's deliberate control-flow sentinel. A recover() broad enough to eat
+// http.ErrAbortHandler turns an intended connection abort into a silent
+// success, which is the fail-open-validator shape this guard exists to avoid.
+func TestCompressDoesNotSwallowAbortHandler(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, chatRespBody)
+	}))
+	defer upstream.Close()
+
+	toolOutput := strings.Repeat(`[{"host":"alpha"},{"host":"beta"}]`, 16)
+	body := `{"model":"gpt-5.5","messages":[{"role":"user","content":"which host"},{"role":"tool","tool_call_id":"c1","content":` + quoteJSON(toolOutput) + `}]}`
+
+	srv := New(Config{
+		Adapters:       []providers.Adapter{openai.New(upstream.URL)},
+		Auth:           stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "compress"}},
+		Creds:          stubCreds{key: "sk-byok"},
+		Sink:           &captureSink{},
+		Compressor:     &abortingCompressor{},
+		RecoveryViaMCP: true,
+		HTTPClient:     &http.Client{},
+	})
+
+	var recovered any
+	func() {
+		defer func() { recovered = recover() }()
+		srv.Handler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodPost, "/v1/chat/completions", strings.NewReader(body)))
+	}()
+	if recovered != http.ErrAbortHandler {
+		t.Fatalf("recovered = %v, want http.ErrAbortHandler to propagate", recovered)
+	}
+}
+
+type abortingCompressor struct{ stubCompressor }
+
+func (c *abortingCompressor) CompressSegment(seg []byte) ([]byte, int, int) {
+	panic(http.ErrAbortHandler)
+}
+
+func (c *abortingCompressor) CompressSegmentQuery(seg []byte, query string) ([]byte, int, int) {
+	return c.CompressSegment(seg)
+}

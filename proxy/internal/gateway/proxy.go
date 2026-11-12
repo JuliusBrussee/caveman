@@ -1398,6 +1398,14 @@ type estimateOutcome struct {
 func (s *Server) safeEngineCall(what, requestID string, run func() ([]byte, int, int)) (out []byte, before, after int) {
 	defer func() {
 		if v := recover(); v != nil {
+			// http.ErrAbortHandler is deliberate control flow, not a defect:
+			// net/http uses it to drop a connection without logging. Absorbing
+			// it would turn an intended abort into a silent success, so it is
+			// re-raised untouched. The engine seam has no business raising it;
+			// this is here so a future caller on this path cannot be silenced.
+			if v == http.ErrAbortHandler {
+				panic(v)
+			}
 			out, before, after = nil, 0, 0
 			if s.logger != nil {
 				s.logger.Error("engine panic recovered; segment left unchanged",
