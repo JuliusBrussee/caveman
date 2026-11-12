@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import functools
 import asyncio
+import inspect
 import json
 import uuid
 from dataclasses import dataclass
@@ -42,12 +43,14 @@ def observe_response(response, attempt):
 
 
 def _append(client, middleware):
-    """``client.with_middleware(middleware)`` that keeps what AnthropicBedrock.copy() drops (anthropic 1.x): the
+    """``client.with_middleware(middleware)`` that keeps what AnthropicBedrock.copy() drops before anthropic 2.6: the
     caller's http_client (proxy/TLS settings) and ``aws_profile``, without which requests are SigV4-signed by
-    the default credential chain, a different AWS identity. AnthropicVertex.copy() keeps its credentials."""
+    the default credential chain, a different AWS identity. From 2.6 copy() takes ``aws_profile`` and keeps it
+    itself, so a second one through ``_extra_kwargs`` is a TypeError. AnthropicVertex.copy() keeps its credentials."""
     profile = getattr(client, "aws_profile", None)
+    dropped = profile is not None and "aws_profile" not in inspect.signature(client.copy).parameters
     return client.copy(middleware=[*client.middleware, middleware], http_client=getattr(client, "_client", None),
-                       **({"_extra_kwargs": {"aws_profile": profile}} if profile is not None else {}))
+                       **({"_extra_kwargs": {"aws_profile": profile}} if dropped else {}))
 
 
 class CavemanAnthropicMiddleware(Middleware):
