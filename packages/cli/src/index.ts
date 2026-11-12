@@ -9159,8 +9159,8 @@ function geminiNativeMutations(gw: string, mcpBinary: string): NativeMutation[] 
 // variable installed into a root the host never reads, while still reporting
 // success (#1441); the installer and the mode plugin resolve it the same way.
 function opencodeConfigDir(): string {
-  const selected = (process.env.OPENCODE_CONFIG_DIR ?? "").trim();
-  if (selected) return resolve(selected);
+  const selected = process.env.OPENCODE_CONFIG_DIR ?? "";
+  if (selected.trim()) return resolve(selected);
   return join(process.env.XDG_CONFIG_HOME || join(homedir(), ".config"), "opencode");
 }
 

@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -1378,6 +1379,46 @@ type estimateOutcome struct {
 	after  int
 }
 
+// safeEngineCall runs one engine transform for one segment and converts a panic
+// into a decline. The engine is a separate product reached through the
+// Compressor seam, and a defect there is reachable by payload shape alone:
+// #1508's whitespace-only listing body panicked inside unwrapFileWrapper, which
+// unwound the whole handler. net/http recovered so the process survived, but the
+// client connection closed with no response, nothing went upstream, and no row
+// or log line was written — invisible under `caveman wrap`, where stderr goes to
+// /dev/null. Every retry failed the same way because the block stayed in the
+// live zone, so the conversation could not recover.
+//
+// A decline is already a first-class outcome on both loops (out == nil keeps the
+// block raw, tb <= 0 skips the estimate), so recovering here lands the request on
+// the documented byte-safe fail-open path instead of dropping it. It is a
+// backstop for a defect, not an excuse for one: the panic is logged at error so
+// it stays findable, and the guard is per segment, so one bad block never costs
+// the rest of the request its compression.
+func (s *Server) safeEngineCall(what, requestID string, run func() ([]byte, int, int)) (out []byte, before, after int) {
+	defer func() {
+		if v := recover(); v != nil {
+			// http.ErrAbortHandler is deliberate control flow, not a defect:
+			// net/http uses it to drop a connection without logging. Absorbing
+			// it would turn an intended abort into a silent success, so it is
+			// re-raised untouched. The engine seam has no business raising it;
+			// this is here so a future caller on this path cannot be silenced.
+			if v == http.ErrAbortHandler {
+				panic(v)
+			}
+			out, before, after = nil, 0, 0
+			if s.logger != nil {
+				s.logger.Error("engine panic recovered; segment left unchanged",
+					"call", what,
+					"panic", fmt.Sprint(v),
+					"request_id", requestID,
+					"stack", string(debug.Stack()))
+			}
+		}
+	}()
+	return run()
+}
+
 // estimateRequest measures how many tokens compression would have removed from the
 // live-zone segments of a request, WITHOUT altering the forwarded bytes and WITHOUT
 // storing any CCR original. It runs only through the Estimator (engine Simulate)
@@ -1398,12 +1439,14 @@ func (s *Server) estimateRequest(adapter providers.Adapter, body []byte, meta pr
 	var before, after int
 	for _, seg := range segments {
 		cp := append([]byte(nil), seg...) // never let the estimator alias forwarded bytes
-		tb, ta := 0, 0
-		if queryAware && query != "" {
-			tb, ta = queryEst.EstimateSegmentQuery(cp, query)
-		} else {
-			tb, ta = est.EstimateSegment(cp)
-		}
+		_, tb, ta := s.safeEngineCall("estimate", "", func() ([]byte, int, int) {
+			if queryAware && query != "" {
+				b, a := queryEst.EstimateSegmentQuery(cp, query)
+				return nil, b, a
+			}
+			b, a := est.EstimateSegment(cp)
+			return nil, b, a
+		})
 		if tb <= 0 || ta >= tb {
 			continue
 		}
@@ -1659,20 +1702,20 @@ func (s *Server) rewriteRequest(
 			keepRaw(i, cacheScope)
 			continue
 		}
-		out, tb, ta := []byte(nil), 0, 0
-		if len(lockedRoutes) > 0 {
-			routeIndex := routeByBlock[i]
-			if routeIndex < 0 {
-				continue
-			}
-			route := lockedRoutes[routeIndex]
-			typed := s.compressor.(TypedCompressor)
-			out, tb, ta = typed.CompressSegmentType(block.content, route.ContentType)
-		} else if queryAware && query != "" {
-			out, tb, ta = queryComp.CompressSegmentQuery(block.content, query)
-		} else {
-			out, tb, ta = s.compressor.CompressSegment(block.content)
+		if len(lockedRoutes) > 0 && routeByBlock[i] < 0 {
+			continue
 		}
+		out, tb, ta := s.safeEngineCall("compress", requestID, func() ([]byte, int, int) {
+			if len(lockedRoutes) > 0 {
+				route := lockedRoutes[routeByBlock[i]]
+				typed := s.compressor.(TypedCompressor)
+				return typed.CompressSegmentType(block.content, route.ContentType)
+			}
+			if queryAware && query != "" {
+				return queryComp.CompressSegmentQuery(block.content, query)
+			}
+			return s.compressor.CompressSegment(block.content)
+		})
 		if out == nil || tb <= 0 || ta >= tb {
 			keepRaw(i, cacheScope)
 			continue

@@ -29,6 +29,11 @@ func TestUnwrapFileWrapper(t *testing.T) {
 		[]byte("plain text"),
 		[]byte("package main\nfunc f() {}\n"),
 		[]byte(`<html><body>x</body></html>`),
+		// Whitespace-only input: trimming from both ends used to compute
+		// start > end and panic slicing input[start:end] (#1508).
+		[]byte(""),
+		[]byte(" "),
+		[]byte("   \n\t  \n"),
 		[]byte(`<file>` + "\n" + string(goSrc) + "\n</file>\n<file>second</file>"),
 		[]byte(`<file name="a">`),
 		[]byte(`</file>`),
@@ -44,6 +49,22 @@ func TestUnwrapFileWrapper(t *testing.T) {
 		if !bytes.Equal(got, in) {
 			t.Fatalf("no-op path changed bytes: %q", in)
 		}
+	}
+}
+
+func TestUnwrapInputNumberedListingEmptyLines(t *testing.T) {
+	// Issue #1508: `seq 1 10` piped to `caveman-engine compress` panicked.
+	// unwrapListing strips the bare-number gutters and leaves a body that
+	// is only whitespace; unwrapFileWrapper then sliced input[start:end]
+	// with start > end. The listing must unwrap without panicking and the
+	// whitespace-only body must pass through untouched.
+	input := []byte("1\n2\n3\n4\n5\n6\n7\n8\n9\n10\n")
+	body, wrappers := unwrapInput(input)
+	if got := string(body); got != "\n\n\n\n\n\n\n\n\n\n" {
+		t.Fatalf("listing body mismatch: %q", got)
+	}
+	if len(wrappers) != 1 {
+		t.Fatalf("expected 1 wrapper (the listing), got %d", len(wrappers))
 	}
 }
 

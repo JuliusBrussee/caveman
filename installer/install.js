@@ -1531,8 +1531,8 @@ function opencodeConfigDir() {
   // host read nothing). Otherwise ~/.config/opencode on every platform (on
   // Windows that's %USERPROFILE%\.config\opencode via os.homedir()), NOT
   // %APPDATA% (#376). Same order as the CLI and the mode plugin.
-  const selected = (process.env.OPENCODE_CONFIG_DIR || '').trim();
-  if (selected) return path.resolve(selected);
+  const selected = process.env.OPENCODE_CONFIG_DIR || '';
+  if (selected.trim()) return path.resolve(selected);
   if (process.env.XDG_CONFIG_HOME) return path.join(process.env.XDG_CONFIG_HOME, 'opencode');
   return path.join(os.homedir(), '.config', 'opencode');
 }
