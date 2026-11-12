@@ -404,6 +404,8 @@ def test_anthropic_cloud_clients_keep_the_callers_credentials(monkeypatch):
     signed, auth = [], types.ModuleType("anthropic.lib.bedrock._auth")
     auth.get_auth_headers = lambda **request: signed.append(request["profile"]) or {}
     monkeypatch.setitem(sys.modules, "anthropic.lib.bedrock._auth", auth)  # SigV4 signing without boto3
+    # anthropic 2.7 moved the signer to anthropic.lib.aws._auth and binds it in the client module at import.
+    monkeypatch.setattr("anthropic.lib.bedrock._client.get_auth_headers", auth.get_auth_headers, raising=False)
     http = importlib.import_module(sdk_flavour(DefaultHttpxClient))
     provider = lambda _: http.Response(200, json={"id": "m", "type": "message", "role": "assistant", "model": "m", "stop_reason": "end_turn",
                                                   "stop_sequence": None, "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1, "output_tokens": 1}})
