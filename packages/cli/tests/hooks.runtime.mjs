@@ -1125,6 +1125,7 @@ function opencodeFixture(version) {
       ...process.env,
       NO_COLOR: "1",
       HOME: home,
+      USERPROFILE: home,
       CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")),
       PATH: `${bin}${delimiter}${process.env.PATH}`,
     },

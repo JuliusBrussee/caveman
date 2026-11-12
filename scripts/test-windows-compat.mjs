@@ -42,6 +42,7 @@ run("Node Windows contracts", process.execPath, [
   "packages/cli/tests/codex-home.runtime.mjs",
   "packages/cli/tests/codex-mcp-environment.runtime.mjs",
   "packages/cli/tests/opencode-wrap.runtime.mjs",
+  "packages/cli/tests/opencode-config-dir.runtime.mjs",
   "packages/cli/tests/hermes-direct.runtime.mjs",
   "packages/cli/tests/hermes-home.runtime.mjs",
   "packages/cli/tests/agent-config-home.runtime.mjs",

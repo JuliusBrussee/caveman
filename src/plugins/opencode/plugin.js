@@ -136,8 +136,8 @@ const { parseModeChange, INDEPENDENT_MODES } = loadParse();
 // is already correct cross-platform. The CLI and the installer resolve the same
 // order; a flag written under a root the host does not read is invisible to it.
 function opencodeConfigDir() {
-  const selected = (process.env.OPENCODE_CONFIG_DIR || '').trim();
-  if (selected) {
+  const selected = process.env.OPENCODE_CONFIG_DIR || '';
+  if (selected.trim()) {
     return path.resolve(selected);
   }
   if (process.env.XDG_CONFIG_HOME) {
