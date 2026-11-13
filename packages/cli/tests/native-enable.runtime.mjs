@@ -1874,6 +1874,35 @@ test("enable/disable hermes writes the route at the model block's own indent", a
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// #1486, the measurement edge: topLevelSection ends a block at the next
+// unquoted top-level key, so a document-end marker sits INSIDE the model span
+// at indent 0. Deriving the child indent as a plain minimum over the span would
+// read 0 there and emit `provider:`/`base_url:` at top level, outside model: —
+// a worse corruption than the four-space bug. The route keys must stay under
+// model: at the indent its real children use.
+test("enable/disable hermes measures the model indent past a document-end marker", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = ["model:", "  provider: openai", "..." , ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // Indented under model:, never at column 0.
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+  assert.doesNotMatch(installed, /^provider:/m, `provider must not escape model::\n${installed}`);
+  assert.doesNotMatch(installed, /^base_url:/m, `base_url must not escape model::\n${installed}`);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
 // #1486, the other half: a shape the lexical writer cannot place exactly must
 // be refused BEFORE any integration file is written, not rewritten on a guess.
 // The reporter named both of these as reaching the same writer.

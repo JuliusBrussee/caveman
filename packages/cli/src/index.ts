@@ -10396,15 +10396,27 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   // corrupted a config it was asked to extend. The restore side already
   // derives this width (hermesRestoreOwnedByValue); the writer was the one
   // place that still assumed it.
-  const modelIndent = yamlChildIndent(lines, model.start + 1, model.end) ?? 2;
+  // Measured over the span's INDENTED lines only. topLevelSection ends a block
+  // at the next unquoted top-level key, so a document-end `...`, a `---`
+  // separator or a quoted top-level key sits INSIDE the span at indent 0;
+  // taking a plain minimum there would yield 0 and emit the route keys at top
+  // level, outside model: — a worse corruption than the one being fixed. No
+  // indented line at all means the block is empty (we just created it), which
+  // takes the conventional two.
+  let measured: number | null = null;
   for (let i = model.start + 1; i < model.end; i++) {
-    if (/^\s*(?:#.*)?$/.test(lines[i]!)) continue;
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
     // YAML forbids tabs as indentation, so a tab here is not a document we can
     // measure — and emitting spaces into it would change its structure.
-    if (/^[ ]*\t/.test(lines[i]!)) {
+    if (/^[ ]*\t/.test(line)) {
       throw new Error("Hermes model: block is indented with tabs; refusing to rewrite it — set model.provider and model.base_url manually");
     }
+    const width = line.length - line.replace(/^[ ]*/, "").length;
+    if (width < 1) continue;
+    if (measured === null || width < measured) measured = width;
   }
+  const modelIndent = measured ?? 2;
   const routePad = " ".repeat(modelIndent);
   // Quoted route keys reach the same writer, so accept them the way the restore
   // regex does; capture group 2 is the bare key name.
