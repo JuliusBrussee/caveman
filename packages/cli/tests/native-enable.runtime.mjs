@@ -1814,6 +1814,90 @@ test("enable/disable hermes keeps a %YAML header and two-space list items valid"
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// #1486: the route scan matched a hardcoded `^  (provider|base_url):`, so a
+// valid `model:` block whose children use four spaces matched NOTHING. The old
+// provider was left in place and the two-space routing block was spliced in
+// above it, leaving the four-space line nested under the new `base_url` scalar
+// — a document PyYAML rejects. caveman corrupted a config it was asked to
+// extend, and the user's provider was never actually replaced.
+//
+// Structural assertions again, for the reason the #1405 test gives: no YAML
+// parser is declared for either runner.
+test("enable/disable hermes writes the route at the model block's own indent", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // The reporter's fixture, verbatim.
+  const original = ["model:", "    provider: openai-codex", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // openai-codex is a named OAuth provider, so it is kept and routed at /chatgpt.
+  assert.match(installed, /^ {4}provider: openai-codex$/m, installed);
+  assert.match(installed, /^ {4}base_url: "http:\/\/127\.0\.0\.1:8787\/chatgpt"$/m, installed);
+  // The defect's signature: the user's provider surviving BELOW our block, so
+  // model: ends up with two provider keys and one of them nested under a
+  // scalar. Exactly one direct child of model: may name provider.
+  const lines = installed.split("\n");
+  const modelAt = lines.indexOf("model:");
+  assert.ok(modelAt >= 0, installed);
+  const childIndents = [];
+  let providers = 0;
+  for (let i = modelAt + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "" || /^\s*#/.test(line)) continue;
+    const indent = line.length - line.replace(/^[ \t]*/, "").length;
+    if (indent === 0) break; // next top-level key
+    childIndents.push(indent);
+    if (/^ {4}provider\s*:/.test(line)) providers++;
+  }
+  assert.equal(providers, 1, `model: must carry exactly one provider key:\n${installed}`);
+  assert.equal(new Set(childIndents).size, 1,
+    `every child of model: must share one indent, got ${childIndents}:\n${installed}`);
+  // And that one indent is the document's four, not the writer's old two. The
+  // marker comments ride along at the same width.
+  assert.equal(childIndents[0], 4, `model: children must stay at four spaces:\n${installed}`);
+  assert.match(installed, /^ {4}# >>> caveman:native-hermes-routing$/m, installed);
+  assert.match(installed, /^ {4}# <<< caveman:native-hermes-routing$/m, installed);
+
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).components.routing, true);
+
+  // Reversible: disable restores the four-space document exactly.
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1486, the other half: a shape the lexical writer cannot place exactly must
+// be refused BEFORE any integration file is written, not rewritten on a guess.
+// The reporter named both of these as reaching the same writer.
+test("enable hermes refuses a model block it cannot rewrite exactly", async () => {
+  for (const [label, config, expected] of [
+    ["multiline route value", "model:\n  base_url: >\n    http://example.test/v1\n", /multiline value/],
+    ["tab-indented block", "model:\n\tprovider: openai\n", /indented with tabs/],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    writeFileSync(configPath, config);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `${label} must not install: ${enabled.stdout}`);
+    assert.match(enabled.stderr + enabled.stdout, expected, label);
+    // The refusal leaves the user's document and the journal alone.
+    assert.equal(readFileSync(configPath, "utf8"), config, `${label} rewrote the config`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false, label);
+  }
+});
+
 // #1410: ownership used to be keyed on the literal comment-delimited blocks we
 // wrote. A YAML round-trip that changes no value at all — an editor, a config
 // manager, `yaml.safe_dump(yaml.safe_load(...))` — drops those comments and

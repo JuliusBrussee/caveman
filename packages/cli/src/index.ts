@@ -10388,15 +10388,42 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     lines.splice(yamlBodyStart(lines), 0, "model:");
     model = topLevelSection(lines, "model")!;
   }
+  // The route keys sit at whatever indent THIS document gives model:'s direct
+  // children, not a hardcoded two (#1486). A valid `model:\n    provider: x`
+  // matched nothing, so the old provider stayed put and a two-space routing
+  // block was spliced in ABOVE it; the surviving four-space line then nested
+  // under the new base_url scalar and the document stopped parsing — caveman
+  // corrupted a config it was asked to extend. The restore side already
+  // derives this width (hermesRestoreOwnedByValue); the writer was the one
+  // place that still assumed it.
+  const modelIndent = yamlChildIndent(lines, model.start + 1, model.end) ?? 2;
+  for (let i = model.start + 1; i < model.end; i++) {
+    if (/^\s*(?:#.*)?$/.test(lines[i]!)) continue;
+    // YAML forbids tabs as indentation, so a tab here is not a document we can
+    // measure — and emitting spaces into it would change its structure.
+    if (/^[ ]*\t/.test(lines[i]!)) {
+      throw new Error("Hermes model: block is indented with tabs; refusing to rewrite it — set model.provider and model.base_url manually");
+    }
+  }
+  const routePad = " ".repeat(modelIndent);
+  // Quoted route keys reach the same writer, so accept them the way the restore
+  // regex does; capture group 2 is the bare key name.
+  const routeKey = new RegExp(`^[ ]{${modelIndent}}(["']?)(provider|base_url)\\1\\s*:(?=\\s|$)`);
   const routeIndexes: number[] = [];
   const previousRouteLines: string[] = [];
   for (let i = model.start + 1; i < model.end; i++) {
-    if (/^  (provider|base_url):/.test(lines[i]!)) {
-      routeIndexes.push(i);
-      previousRouteLines.push(lines[i]!);
+    if (!routeKey.test(lines[i]!)) continue;
+    // A route value continued on later lines (block scalar, nested mapping, a
+    // flow collection spanning lines) cannot be removed by dropping its key
+    // line: the continuation would be orphaned under the replacement block.
+    const next = i + 1 < model.end ? lines[i + 1] : undefined;
+    if (next !== undefined && /\S/.test(next) && next.length - next.replace(/^[ \t]*/, "").length > modelIndent) {
+      throw new Error("Hermes model provider/base_url carries a multiline value; refusing to rewrite it — set model.base_url manually");
     }
+    routeIndexes.push(i);
+    previousRouteLines.push(lines[i]!);
   }
-  if (new Set(routeIndexes.map((index) => lines[index]!.match(/^  ([^:]+):/)?.[1])).size !== routeIndexes.length) {
+  if (new Set(routeIndexes.map((index) => lines[index]!.match(routeKey)?.[2])).size !== routeIndexes.length) {
     throw new Error("Hermes model provider/base_url keys are duplicated; refusing ambiguous install");
   }
   const insertAt = routeIndexes[0] ?? model.start + 1;
@@ -10404,15 +10431,15 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   // A named OAuth provider selects a credential and a transport that the
   // generic custom route cannot carry, so keep it and route to the handler
   // that speaks it. `api_mode` is not a route key, so it already survives.
-  const providerLine = previousRouteLines.find((line) => /^  provider:/.test(line));
+  const providerLine = previousRouteLines.find((line) => /^[ ]*(["']?)provider\1\s*:/.test(line));
   const previousProvider = providerLine ? configValue(providerLine.slice(providerLine.indexOf(":") + 1)) : undefined;
   const keptProvider = previousProvider && HERMES_CHATGPT_OAUTH_PROVIDERS.has(previousProvider) ? previousProvider : null;
   const route = hermesGatewayBase(gw, keptProvider);
   const routeBlock = [
-    `  ${HERMES_NATIVE_ROUTE_BEGIN}`,
-    keptProvider ? `  provider: ${keptProvider}` : '  provider: "custom"',
-    `  base_url: ${yamlQuote(route)}`,
-    `  ${HERMES_NATIVE_ROUTE_END}`,
+    `${routePad}${HERMES_NATIVE_ROUTE_BEGIN}`,
+    keptProvider ? `${routePad}provider: ${keptProvider}` : `${routePad}provider: "custom"`,
+    `${routePad}base_url: ${yamlQuote(route)}`,
+    `${routePad}${HERMES_NATIVE_ROUTE_END}`,
   ];
   lines.splice(insertAt, 0, ...routeBlock);
 
