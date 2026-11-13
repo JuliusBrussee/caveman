@@ -6,19 +6,17 @@
 
 <table>
 <tr>
-<td align="center" width="33%"><h3>21% cheaper</h3>than Codex on Terminal-Bench 4<br><sub>GPT-6.1 Sol both sides, per solved task</sub></td>
-<td align="center" width="33%"><h3>14% cheaper</h3>than Claude Code on Terminal-Bench 4<br><sub>Opus 5.5 both sides, solved 97/180 vs 83/177</sub></td>
-<td align="center" width="33%"><h3>76% cheaper</h3>than Claude Code on a full workday<br><sub>3 day-long sessions, 4 connected apps</sub></td>
+<td align="center" width="33%"><h3>21% cheaper</h3>than Codex<br><sub>Terminal-Bench 4, per solved task</sub></td>
+<td align="center" width="33%"><h3>14% cheaper</h3>than Claude Code<br><sub>Terminal-Bench 4, 97 vs 83 runs solved</sub></td>
+<td align="center" width="33%"><h3>76% cheaper</h3>than Claude Code<br><sub>full workday across 4 connected apps</sub></td>
 </tr>
 </table>
 
-<sub>Our own runs, November 2026, at list prices. <a href="https://caveman.so/code">How we measured</a></sub>
+<sub>Same model on both sides: GPT-6.1 Sol against Codex, Opus 5.5 against Claude Code. Our own runs, November 2026, at list prices. <a href="https://caveman.so/code">How we measured</a></sub>
 
 Every coding agent in one window. Free on the subscriptions and keys you already have.
 
 **[Download Caveman Code for Mac](https://caveman.so/download) · [Read the launch post](https://caveman.so/news/introducing-caveman-code)**
-
-<br>
 
 ---
 
