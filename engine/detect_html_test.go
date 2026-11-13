@@ -1,6 +1,9 @@
 package engine_test
 
 import (
+	"bytes"
+	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/engine"
@@ -75,5 +78,39 @@ func TestDetectHTMLDeclarationNeedsATagBoundary(t *testing.T) {
 	capture := "<!doctype html>\n\x1b[31mERROR\x1b[0m render failed\n\x1b[32mok\x1b[0m retry\n"
 	if got := e.Detect([]byte(capture)); got != engine.TypeTerminal {
 		t.Errorf("Detect(ANSI capture) = %q, want %q", got, engine.TypeTerminal)
+	}
+}
+
+func TestHTMLDataPageCompressesAndRecoversExactly(t *testing.T) {
+	var b strings.Builder
+	b.WriteString("<!doctype html><html><head><title>Coverage</title></head><body><div><table>" +
+		"<thead><tr><th>File</th><th>Stmts</th><th>Miss</th><th>Cover</th></tr></thead><tbody>")
+	for i := 0; i < 300; i++ {
+		cover := "100%"
+		if i == 211 {
+			cover = "12%"
+		}
+		fmt.Fprintf(&b, "<tr><td><a href=\"f%d.html\">src/pkg/file_%03d.py</a></td><td>40</td><td>0</td><td>%s</td></tr>\n", i, i, cover)
+	}
+	b.WriteString("</tbody></table></div></body></html>")
+	page := []byte(b.String())
+
+	e := newEngine(t)
+	res, err := e.Compress(page, engine.Options{Mode: engine.ModeCompress})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.PassedThrough() || res.ContentType != engine.TypeHTML {
+		t.Fatalf("expected the html compressor to shrink a coverage table, got type %q passed-through=%v", res.ContentType, res.PassedThrough())
+	}
+	if !bytes.Contains(res.Output, []byte("|src/pkg/file_211.py|40|0|12%|")) {
+		t.Errorf("the one uncovered file must stay visible:\n%s", res.Output)
+	}
+	original, err := e.Retrieve(res.RecoveryHandle)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(original, page) {
+		t.Error("recovery must return the original page byte for byte")
 	}
 }
