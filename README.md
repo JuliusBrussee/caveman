@@ -7,8 +7,8 @@
 <table>
 <tr>
 <td align="center" width="33%"><h3>21% cheaper</h3>than Codex<br><sub>Terminal-Bench 4, per solved task</sub></td>
-<td align="center" width="33%"><h3>14% cheaper</h3>than Claude Code<br><sub>Terminal-Bench 4, 97 vs 83 runs solved</sub></td>
-<td align="center" width="33%"><h3>76% cheaper</h3>than Claude Code<br><sub>full workday across 4 connected apps</sub></td>
+<td align="center" width="33%"><h3>14% cheaper</h3>than Claude Code<br><sub>Terminal-Bench 4, 97 vs 83 solved</sub></td>
+<td align="center" width="33%"><h3>76% cheaper</h3>than Claude Code<br><sub>full workday, 4 connected apps</sub></td>
 </tr>
 </table>
 
