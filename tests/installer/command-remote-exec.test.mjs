@@ -64,6 +64,21 @@ test('#1525 caveman-init.md runs the plugin copy before giving up', () => {
     'the in-repo script must be tried before the plugin copy');
 });
 
+// #1529 review: the fallback is the full installer, whose provider loop runs
+// before the --with-init branch — so following it installs caveman for every
+// detected agent and writes user-level config, not just per-repo rule files.
+// An init-only request must not change user-wide state behind the user's back,
+// so the stub has to say what the command does and leave the choice to them.
+test('#1525 the install fallback discloses that it also installs agents', () => {
+  for (const { name, text } of stubs) {
+    if (!/--with-init/.test(text)) continue;
+    assert.match(text, /also installs caveman for every agent it detects/i,
+      `${name} offers --with-init without saying it also performs a user-level install`);
+    assert.match(text, /do not run it for them/i,
+      `${name} must leave running the installer to the user`);
+  }
+});
+
 test('#1525 the plugin root really ships the script the stub reaches for', () => {
   // marketplace.json pins the plugin source; the stub's path is relative to it.
   const marketplace = JSON.parse(fs.readFileSync(

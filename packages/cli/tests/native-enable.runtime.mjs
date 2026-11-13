@@ -1903,6 +1903,91 @@ test("enable/disable hermes measures the model indent past a document-end marker
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// #1529 review: topLevelSection ends a block only at the next UNQUOTED
+// top-level key, so a quoted top-level section and all of its children sit
+// inside the reported model span. Measuring over that tail read another
+// section's layout as model's own — and with narrower children it produced the
+// very corruption #1486 is about, in a document the old hardcoded writer
+// handled correctly. model's own children end at the first indent-0 line.
+test("enable/disable hermes ignores a quoted top-level section when measuring", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // `x` is ONE space deep: a plain minimum over the span would measure 1.
+  const original = ["model:", "  provider: openai", '"other":', " x: y", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // Measured from model's own child, so two — not one, and not zero.
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+  assert.doesNotMatch(installed, /^ {1}provider:/m, `route must not take the foreign section's indent:\n${installed}`);
+  // The old route is REPLACED, not left below the new block.
+  assert.doesNotMatch(installed, /provider: openai$/m, `the original provider must be replaced:\n${installed}`);
+  // The foreign section is untouched.
+  assert.match(installed, /^"other":$/m, installed);
+  assert.match(installed, /^ x: y$/m, installed);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review: YAML indents comments independently of the scalar above them,
+// so an indented comment after a route key is not a value continuation. The
+// multiline guard refused on one, rejecting a config it rewrites perfectly.
+test("enable hermes treats an indented comment as no continuation", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = ["model:", "  provider: openai", "    # model choice", "  base_url: https://api.openai.com/v1", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, `an indented comment must not refuse the install: ${enabled.stderr}`);
+  const installed = readFileSync(configPath, "utf8");
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review, the one that mattered most: hermesNativeMutations keyed its
+// map with a hardcoded `^  ([^:]+):`, which on a four-space line captures
+// "  provider". previous.provider was therefore undefined, refuseOwnEndpoint
+// got an undefined endpoint and returned without refusing — so the guard that
+// stops Caveman replacing a user's private gateway, and sending its requests
+// and key to the provider's public API, silently did not fire for any config
+// that did not use exactly two spaces.
+test("enable hermes still refuses a private endpoint at a non-two-space indent", async () => {
+  for (const indent of ["  ", "    "]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    const original = ["model:", `${indent}provider: custom`, `${indent}base_url: https://gateway.internal.example/v1`, ""].join("\n");
+    writeFileSync(configPath, original);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `${indent.length}-space private endpoint must be refused: ${enabled.stdout}`);
+    assert.match(enabled.stderr + enabled.stdout, /its own endpoint/,
+      `${indent.length}-space: refuseOwnEndpoint must see the real base_url`);
+    assert.match(enabled.stderr + enabled.stdout, /gateway\.internal\.example/,
+      `${indent.length}-space: the refusal must name the endpoint it protected`);
+    // Refusing writes nothing.
+    assert.equal(readFileSync(configPath, "utf8"), original, `${indent.length}-space rewrote the config`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false, `${indent.length}-space`);
+  }
+});
+
 // #1486, the other half: a shape the lexical writer cannot place exactly must
 // be refused BEFORE any integration file is written, not rewritten on a guess.
 // The reporter named both of these as reaching the same writer.

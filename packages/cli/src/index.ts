@@ -10396,15 +10396,28 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   // corrupted a config it was asked to extend. The restore side already
   // derives this width (hermesRestoreOwnedByValue); the writer was the one
   // place that still assumed it.
-  // Measured over the span's INDENTED lines only. topLevelSection ends a block
-  // at the next unquoted top-level key, so a document-end `...`, a `---`
-  // separator or a quoted top-level key sits INSIDE the span at indent 0;
-  // taking a plain minimum there would yield 0 and emit the route keys at top
-  // level, outside model: — a worse corruption than the one being fixed. No
-  // indented line at all means the block is empty (we just created it), which
-  // takes the conventional two.
-  let measured: number | null = null;
+  // topLevelSection ends a block only at the next UNQUOTED top-level key, so a
+  // document-end `...`, a `---` separator, or a quoted top-level key AND ALL OF
+  // ITS CHILDREN sit inside the reported span. Measuring or scanning over that
+  // tail reads another section's layout as model's own: `"other":\n x: y` after
+  // a two-space model block measures 1, the real `  provider:` then matches
+  // nothing, and the route goes in one space deep above a line two spaces deep
+  // — the same corruption this is fixing, in a document the old hardcoded
+  // writer handled correctly. model's own children all precede the first
+  // indent-0 line, so that is the real end of the block.
+  let modelBodyEnd = model.end;
   for (let i = model.start + 1; i < model.end; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    if (line.length - line.replace(/^[ \t]*/, "").length === 0) {
+      modelBodyEnd = i;
+      break;
+    }
+  }
+  // No indented line at all means the block is empty (we just created it),
+  // which takes the conventional two.
+  let measured: number | null = null;
+  for (let i = model.start + 1; i < modelBodyEnd; i++) {
     const line = lines[i]!;
     if (/^\s*(?:#.*)?$/.test(line)) continue;
     // YAML forbids tabs as indentation, so a tab here is not a document we can
@@ -10413,7 +10426,6 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
       throw new Error("Hermes model: block is indented with tabs; refusing to rewrite it — set model.provider and model.base_url manually");
     }
     const width = line.length - line.replace(/^[ ]*/, "").length;
-    if (width < 1) continue;
     if (measured === null || width < measured) measured = width;
   }
   const modelIndent = measured ?? 2;
@@ -10423,13 +10435,22 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   const routeKey = new RegExp(`^[ ]{${modelIndent}}(["']?)(provider|base_url)\\1\\s*:(?=\\s|$)`);
   const routeIndexes: number[] = [];
   const previousRouteLines: string[] = [];
-  for (let i = model.start + 1; i < model.end; i++) {
+  for (let i = model.start + 1; i < modelBodyEnd; i++) {
     if (!routeKey.test(lines[i]!)) continue;
     // A route value continued on later lines (block scalar, nested mapping, a
     // flow collection spanning lines) cannot be removed by dropping its key
     // line: the continuation would be orphaned under the replacement block.
-    const next = i + 1 < model.end ? lines[i + 1] : undefined;
-    if (next !== undefined && /\S/.test(next) && next.length - next.replace(/^[ \t]*/, "").length > modelIndent) {
+    // A blank line or a comment is not a continuation, whatever its indent —
+    // YAML indents comments independently of the scalar above them, so
+    // refusing on one rejected a config that rewrites perfectly well.
+    let continuation: string | undefined;
+    for (let next = i + 1; next < modelBodyEnd; next++) {
+      const line = lines[next]!;
+      if (/^\s*(?:#.*)?$/.test(line)) continue;
+      continuation = line;
+      break;
+    }
+    if (continuation !== undefined && continuation.length - continuation.replace(/^[ \t]*/, "").length > modelIndent) {
       throw new Error("Hermes model provider/base_url carries a multiline value; refusing to rewrite it — set model.base_url manually");
     }
     routeIndexes.push(i);
@@ -10443,7 +10464,7 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   // A named OAuth provider selects a credential and a transport that the
   // generic custom route cannot carry, so keep it and route to the handler
   // that speaks it. `api_mode` is not a route key, so it already survives.
-  const providerLine = previousRouteLines.find((line) => /^[ ]*(["']?)provider\1\s*:/.test(line));
+  const providerLine = previousRouteLines.find((line) => hermesRouteLineKey(line) === "provider");
   const previousProvider = providerLine ? configValue(providerLine.slice(providerLine.indexOf(":") + 1)) : undefined;
   const keptProvider = previousProvider && HERMES_CHATGPT_OAUTH_PROVIDERS.has(previousProvider) ? previousProvider : null;
   const route = hermesGatewayBase(gw, keptProvider);
@@ -10505,12 +10526,28 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   };
 }
 
+// The key of a model route line, whatever indent or quoting it carries. The
+// writer accepts both (#1486), so every reader of previous_route_lines has to
+// as well. hermesNativeMutations matched a hardcoded `^  ([^:]+):`, which on a
+// four-space line captured "  provider" — so `previous.provider` was undefined,
+// refuseOwnEndpoint was handed an undefined endpoint, and the refusal that
+// exists to stop Caveman replacing a user's private gateway silently did not
+// fire for any config that did not use exactly two spaces.
+function hermesRouteLineKey(line: string): string | null {
+  const match = line.replace(/^[ \t]+/, "").match(/^(["']?)(provider|base_url)\1\s*:/);
+  return match ? match[2]! : null;
+}
+
 function hermesNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const configPath = hermesConfigPath();
   const configBefore = fileBytes(configPath);
   const native = hermesNativeConfig(configBefore?.toString("utf8") ?? "", gw, mcpBinary);
   // A custom provider is the user's own endpoint; a named one is the vendor's.
-  const previous = Object.fromEntries((native.owned.previous_route_lines as string[]).map((line) => [line.match(/^  ([^:]+):/)![1]!, configValue(line.slice(line.indexOf(":") + 1))]));
+  const previous = Object.fromEntries((native.owned.previous_route_lines as string[])
+    .flatMap((line) => {
+      const key = hermesRouteLineKey(line);
+      return key ? [[key, configValue(line.slice(line.indexOf(":") + 1))] as const] : [];
+    }));
   if (!previous.provider || previous.provider === "custom" || previous.provider === "auto") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
   const pluginDir = hermesNativePluginDir();
   const manifestPath = join(pluginDir, "plugin.yaml");
