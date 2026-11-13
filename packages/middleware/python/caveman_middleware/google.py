@@ -15,10 +15,9 @@ import re
 import uuid
 from urllib.parse import urlsplit
 
-from ._versions import framework_import_failed
+from ._versions import VERSION, family_gate, framework_import_failed, installed_version
 
 try:
-    import httpx
     from google import genai
     from google.genai import types
     from google.genai.chats import Chat, AsyncChat
@@ -26,10 +25,90 @@ try:
 except ImportError as error:
     framework_import_failed("google", error, "Install caveman-middleware[google] to use the Google adapter")
 
+
+def _detect_google_http():
+    """Detect whether installed google-genai runs on httpx2 or httpx.
+
+    Resolution order follows Google GenAI SDK behavior:
+    1. GOOGLE_GENAI_HTTP_CLIENT environment variable:
+       - 'httpx': explicitly selects httpx; raises ImportError if not installed.
+       - 'httpx2': explicitly selects httpx2; raises ImportError if not installed.
+       - 'auto' or unset: proceeds to SDK auto-detection.
+       - unsupported value: raises ImportError indicating unsupported client.
+    2. SDK client class introspection:
+       - Inspects SyncHttpxClient / AsyncHttpxClient MRO in google.genai._api_client.
+         If httpx2 is in MRO, selects httpx2.
+         If httpx is in MRO, selects httpx.
+    3. Package version check:
+       - google-genai >= 3.0: defaults to httpx2 (falling back to httpx if unavailable).
+       - google-genai < 3.0 (e.g. 2.18, 2.33): defaults to httpx (falling back to httpx2).
+    """
+    import os
+    raw_env = os.environ.get("GOOGLE_GENAI_HTTP_CLIENT")
+    env_choice = raw_env.strip().lower() if raw_env is not None else None
+
+    if env_choice and env_choice != "auto":
+        if env_choice == "httpx":
+            import httpx
+            return httpx
+        elif env_choice == "httpx2":
+            import httpx2
+            return httpx2
+        else:
+            raise ImportError(
+                f"Unsupported GOOGLE_GENAI_HTTP_CLIENT='{raw_env}'. Supported clients are 'httpx', 'httpx2', or 'auto'."
+            )
+
+    try:
+        from google.genai import _api_client
+        for attr in ("SyncHttpxClient", "AsyncHttpxClient"):
+            client_cls = getattr(_api_client, attr, None)
+            if client_cls and hasattr(client_cls, "__mro__"):
+                mro_roots = {base.__module__.split(".")[0] for base in client_cls.__mro__}
+                if "httpx2" in mro_roots:
+                    import httpx2
+                    return httpx2
+                if "httpx" in mro_roots:
+                    import httpx
+                    return httpx
+    except Exception:
+        pass
+
+    version_str = installed_version("google-genai")
+    if version_str:
+        try:
+            major = int(version_str.split(".")[0])
+            if major >= 3:
+                try:
+                    import httpx2
+                    return httpx2
+                except ImportError:
+                    pass
+            else:
+                try:
+                    import httpx
+                    return httpx
+                except ImportError:
+                    pass
+        except (ValueError, IndexError):
+            pass
+
+    try:
+        import httpx
+        return httpx
+    except ImportError:
+        import httpx2
+        return httpx2
+
+
+try:
+    _http = _detect_google_http()
+except ImportError as error:
+    framework_import_failed("google", error, "Install caveman-middleware[google] to use the Google adapter")
+
 from caveman_cloud.middleware import Adapter, Candidate, MiddlewareError, ensure_async, ensure_sync, sha256
 from ._guard import fail_open, recovery_failed, recovery_name_conflict
 from ._native import Attempt, manifest, owner, plain
-from ._versions import VERSION, family_gate, installed_version
 from ._usage import usage
 from ._google_wire import parse, patch
 
@@ -318,7 +397,7 @@ def _prepare(request, runtime, default_scope, supported=True):
         if len(request.content) > 2 << 20:
             return attempt, None
         text = request.content.decode("utf-8")
-    except (httpx.RequestNotRead, UnicodeError):
+    except (_http.RequestNotRead, UnicodeError):
         return attempt, None
     parsed = parse(text)
     if not parsed:
@@ -374,11 +453,11 @@ def _apply(request, state, outcome):
                 headers = request.headers.copy()
                 if "content-length" in headers:
                     headers["content-length"] = str(len(content))
-                outgoing = httpx.Request(request.method, request.url, headers=headers, content=content, extensions=request.extensions)
+                outgoing = _http.Request(request.method, request.url, headers=headers, content=content, extensions=request.extensions)
                 attempt.optimization = outcome
     try:
         attempt.wire_sha256 = sha256(outgoing.content.decode("utf-8"))
-    except (httpx.RequestNotRead, UnicodeError):
+    except (_http.RequestNotRead, UnicodeError):
         pass
     return outgoing
 
@@ -435,7 +514,7 @@ class _Observed:
             self.attempt.observe(event, self.parser.finish() if event == "completed" else None)
 
 
-class _SyncStream(_Observed, httpx.SyncByteStream):
+class _SyncStream(_Observed, _http.SyncByteStream):
     def __iter__(self):
         try:
             for chunk in self.stream:
@@ -458,7 +537,7 @@ class _SyncStream(_Observed, httpx.SyncByteStream):
             self.finish("cancelled")
 
 
-class _AsyncStream(_Observed, httpx.AsyncByteStream):
+class _AsyncStream(_Observed, _http.AsyncByteStream):
     async def __aiter__(self):
         try:
             async for chunk in self.stream:
@@ -482,7 +561,7 @@ def _passive(runtime, reason):
     return Attempt(runtime, None, str(uuid.uuid4()), str(uuid.uuid4()), passive=True, reason=reason, adapter=ADAPTER_ID)
 
 
-class CavemanGoogleTransport(httpx.BaseTransport):
+class CavemanGoogleTransport(_http.BaseTransport):
     """Public HTTPX transport; original-content request hooks run before it.
 
     ``scope`` is only the default for calls not made through a wrapped client;
@@ -490,7 +569,7 @@ class CavemanGoogleTransport(httpx.BaseTransport):
     """
     def __init__(self, *, runtime, scope=None, provider_base_url="https://generativelanguage.googleapis.com", transport=None,
                  accept_framework_version=False):
-        self.runtime, self.scope, self.transport = ensure_sync(runtime), scope, transport or httpx.HTTPTransport()
+        self.runtime, self.scope, self.transport = ensure_sync(runtime), scope, transport or _http.HTTPTransport()
         self.base = urlsplit(provider_base_url)
         self.supported = family_gate(self.runtime, "google", ADAPTER_ID, accept_framework_version)
 
@@ -525,11 +604,11 @@ class CavemanGoogleTransport(httpx.BaseTransport):
         self.transport.close()
 
 
-class CavemanGoogleAsyncTransport(httpx.AsyncBaseTransport):
+class CavemanGoogleAsyncTransport(_http.AsyncBaseTransport):
     """Async HTTPX transport with the runtime's bounded async execution path."""
     def __init__(self, *, runtime, scope=None, provider_base_url="https://generativelanguage.googleapis.com", transport=None,
                  accept_framework_version=False):
-        self.runtime, self.scope, self.transport = ensure_async(runtime), scope, transport or httpx.AsyncHTTPTransport()
+        self.runtime, self.scope, self.transport = ensure_async(runtime), scope, transport or _http.AsyncHTTPTransport()
         self.base = urlsplit(provider_base_url)
         self.supported = family_gate(self.runtime, "google", ADAPTER_ID, accept_framework_version)
 

@@ -562,19 +562,18 @@ def test_google_wrap_returns_idempotent_clones_with_per_call_scope():
     """D11: the caller's Client is never mutated, re-wrapping never stacks, one transport serves many scopes."""
     require_adapter("google")
     import gc
-    import httpx
     from google import genai
     from google.genai import types
     from caveman_cloud.middleware import Scope
-    from caveman_middleware.google import CavemanGoogleTransport, unwrap_google, with_caveman_google
+    from caveman_middleware.google import CavemanGoogleTransport, unwrap_google, with_caveman_google, _http
     from test_behavior import ORIGINAL
 
     def provider(request):
-        return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP"}]})
+        return _http.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP"}]})
 
     runtime = peer_runtime()
-    client = genai.Client(api_key="test", http_options=types.HttpOptions(httpx_client=httpx.Client(
-        transport=CavemanGoogleTransport(runtime=runtime, transport=httpx.MockTransport(provider)))))
+    client = genai.Client(api_key="test", http_options=types.HttpOptions(httpx_client=_http.Client(
+        transport=CavemanGoogleTransport(runtime=runtime, transport=_http.MockTransport(provider)))))
     native_generate = client.models.generate_content
     first = with_caveman_google(client, runtime=runtime, scope=Scope("tests", "alice@example.com"))
     second = with_caveman_google(first, runtime=runtime, scope=Scope("tests", "bob"))
@@ -713,3 +712,247 @@ def test_mcp_host_never_raises_at_construction_for_an_unusable_scope():
     host = CavemanMCPHost(runtime=runtime, scope=Scope("tests", ""), server_id="server", protocol_version="2025-06-18")
     assert host.recovery is None and host.register([]) == []
     runtime.close()
+
+
+def test_google_transport_uses_the_sdks_own_http_library():
+    """D1: google-genai 2.x runs on httpx, 3.x on httpx2; CavemanGoogleTransport follows the active library."""
+    require_adapter("google")
+    from google import genai
+    from caveman_middleware import google as adapter
+
+    version = getattr(genai, "__version__", None) or adapter.FRAMEWORK_VERSION
+    try:
+        expected = "httpx2" if version and int(version.split(".")[0]) >= 3 else "httpx"
+    except (ValueError, TypeError):
+        expected = "httpx"
+    assert adapter.CavemanGoogleTransport.__mro__[1].__module__.split(".")[0] in (expected, "google")
+    assert isinstance(adapter.CavemanGoogleTransport(runtime=peer_runtime(), transport=__import__(expected).HTTPTransport()), __import__(expected).BaseTransport)
+
+
+def _make_mock_http(name):
+    from types import ModuleType
+    mod = ModuleType(name)
+    mod.BaseTransport = type("BaseTransport", (), {})
+    mod.AsyncBaseTransport = type("AsyncBaseTransport", (), {})
+    mod.SyncByteStream = type("SyncByteStream", (), {})
+    mod.AsyncByteStream = type("AsyncByteStream", (), {})
+    mod.HTTPTransport = type("HTTPTransport", (), {})
+    mod.AsyncHTTPTransport = type("AsyncHTTPTransport", (), {})
+    mod.Request = type("Request", (), {})
+    mod.RequestNotRead = type("RequestNotRead", (Exception,), {})
+    return mod
+
+
+def _setup_mock_google(monkeypatch, version, client_mro):
+    import sys
+    from types import ModuleType
+    google = ModuleType("google")
+    genai_mod = ModuleType("google.genai")
+    types_mod = ModuleType("google.genai.types")
+    chats_mod = ModuleType("google.genai.chats")
+    client_mod = ModuleType("google.genai.client")
+    api_client_mod = ModuleType("google.genai._api_client")
+
+    genai_mod.__version__ = version
+    genai_mod.Client = type("Client", (), {})
+    client_mod.AsyncClient = type("AsyncClient", (), {})
+    chats_mod.Chat = type("Chat", (), {})
+    chats_mod.AsyncChat = type("AsyncChat", (), {})
+    types_mod.GenerateContentConfig = type("GenerateContentConfig", (), {})
+    types_mod.FunctionCallingConfigMode = type("FunctionCallingConfigMode", (), {"AUTO": "AUTO"})
+    api_client_mod.SyncHttpxClient = type("SyncHttpxClient", client_mro, {})
+
+    genai_mod.types = types_mod
+    genai_mod.chats = chats_mod
+    genai_mod.client = client_mod
+    genai_mod._api_client = api_client_mod
+    google.genai = genai_mod
+
+    monkeypatch.setitem(sys.modules, "google", google)
+    monkeypatch.setitem(sys.modules, "google.genai", genai_mod)
+    monkeypatch.setitem(sys.modules, "google.genai.types", types_mod)
+    monkeypatch.setitem(sys.modules, "google.genai.chats", chats_mod)
+    monkeypatch.setitem(sys.modules, "google.genai.client", client_mod)
+    monkeypatch.setitem(sys.modules, "google.genai._api_client", api_client_mod)
+    monkeypatch.delitem(sys.modules, "caveman_middleware.google", raising=False)
+    from caveman_middleware import _versions
+    monkeypatch.setattr(_versions, "installed_version", lambda name: version if name == "google-genai" else None)
+
+
+def test_google_detect_http_selects_httpx2_for_genai_3(monkeypatch):
+    """Issue #1482 regression: when google-genai >= 3 is installed, httpx2 is selected even if httpx is absent."""
+    import importlib
+    import sys
+
+    mock_httpx2 = _make_mock_http("httpx2")
+    monkeypatch.setitem(sys.modules, "httpx2", mock_httpx2)
+    monkeypatch.setitem(sys.modules, "httpx", None)
+    monkeypatch.delenv("GOOGLE_GENAI_HTTP_CLIENT", raising=False)
+
+    _setup_mock_google(monkeypatch, "3.0.0", (mock_httpx2.BaseTransport,))
+
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx2
+    assert issubclass(google.CavemanGoogleTransport, mock_httpx2.BaseTransport)
+    assert issubclass(google.CavemanGoogleAsyncTransport, mock_httpx2.AsyncBaseTransport)
+
+
+def test_google_detect_http_selects_httpx_for_genai_2(monkeypatch):
+    """Backward compatibility: when google-genai 2.x is installed, httpx is selected even if httpx2 is absent."""
+    import importlib
+    import sys
+
+    mock_httpx = _make_mock_http("httpx")
+    monkeypatch.setitem(sys.modules, "httpx", mock_httpx)
+    monkeypatch.setitem(sys.modules, "httpx2", None)
+    monkeypatch.delenv("GOOGLE_GENAI_HTTP_CLIENT", raising=False)
+
+    _setup_mock_google(monkeypatch, "2.25.0", (mock_httpx.BaseTransport,))
+
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx
+    assert issubclass(google.CavemanGoogleTransport, mock_httpx.BaseTransport)
+    assert issubclass(google.CavemanGoogleAsyncTransport, mock_httpx.AsyncBaseTransport)
+
+
+def test_google_detect_http_honors_env_override(monkeypatch):
+    """GOOGLE_GENAI_HTTP_CLIENT=httpx forces httpx even if httpx2 is also present."""
+    import importlib
+    import sys
+
+    mock_httpx = _make_mock_http("httpx")
+    mock_httpx2 = _make_mock_http("httpx2")
+
+    monkeypatch.setitem(sys.modules, "httpx", mock_httpx)
+    monkeypatch.setitem(sys.modules, "httpx2", mock_httpx2)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "httpx")
+
+    _setup_mock_google(monkeypatch, "3.0.0", (mock_httpx2.BaseTransport,))
+
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx
+    assert issubclass(google.CavemanGoogleTransport, mock_httpx.BaseTransport)
+    assert issubclass(google.CavemanGoogleAsyncTransport, mock_httpx.AsyncBaseTransport)
+
+
+def test_google_detect_http_genai_2_18_default(monkeypatch):
+    """google-genai 2.18 default HTTP client is httpx."""
+    import importlib
+    import sys
+
+    mock_httpx = _make_mock_http("httpx")
+    monkeypatch.setitem(sys.modules, "httpx", mock_httpx)
+    monkeypatch.setitem(sys.modules, "httpx2", None)
+    monkeypatch.delenv("GOOGLE_GENAI_HTTP_CLIENT", raising=False)
+
+    _setup_mock_google(monkeypatch, "2.18.0", (mock_httpx.BaseTransport,))
+
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx
+
+
+def test_google_detect_http_genai_2_33_default(monkeypatch):
+    """google-genai 2.33 default HTTP client is httpx when GOOGLE_GENAI_HTTP_CLIENT is unset."""
+    import importlib
+    import sys
+
+    mock_httpx = _make_mock_http("httpx")
+    mock_httpx2 = _make_mock_http("httpx2")
+    monkeypatch.setitem(sys.modules, "httpx", mock_httpx)
+    monkeypatch.setitem(sys.modules, "httpx2", mock_httpx2)
+    monkeypatch.delenv("GOOGLE_GENAI_HTTP_CLIENT", raising=False)
+
+    # In 2.33 default, SyncHttpxClient uses httpx
+    _setup_mock_google(monkeypatch, "2.33.0", (mock_httpx.BaseTransport,))
+
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx
+
+
+def test_google_detect_http_genai_2_33_with_httpx2_env(monkeypatch):
+    """google-genai 2.33 selects httpx2 when GOOGLE_GENAI_HTTP_CLIENT=httpx2."""
+    import importlib
+    import sys
+
+    mock_httpx = _make_mock_http("httpx")
+    mock_httpx2 = _make_mock_http("httpx2")
+    monkeypatch.setitem(sys.modules, "httpx", mock_httpx)
+    monkeypatch.setitem(sys.modules, "httpx2", mock_httpx2)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "httpx2")
+
+    _setup_mock_google(monkeypatch, "2.33.0", (mock_httpx2.BaseTransport,))
+
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx2
+    assert issubclass(google.CavemanGoogleTransport, mock_httpx2.BaseTransport)
+
+
+def test_google_detect_http_auto_and_case_insensitivity(monkeypatch):
+    """GOOGLE_GENAI_HTTP_CLIENT is case-insensitive and supports 'auto'."""
+    import importlib
+    import sys
+
+    mock_httpx = _make_mock_http("httpx")
+    mock_httpx2 = _make_mock_http("httpx2")
+    monkeypatch.setitem(sys.modules, "httpx", mock_httpx)
+    monkeypatch.setitem(sys.modules, "httpx2", mock_httpx2)
+
+    # Upper case HTTPX on 3.0
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", " HTTPX ")
+    _setup_mock_google(monkeypatch, "3.0.0", (mock_httpx2.BaseTransport,))
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx
+
+    # Upper case HTTPX2 on 2.33
+    monkeypatch.delitem(sys.modules, "caveman_middleware.google", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "HTTPX2")
+    _setup_mock_google(monkeypatch, "2.33.0", (mock_httpx2.BaseTransport,))
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx2
+
+    # 'auto' on 3.0 follows SDK default (httpx2)
+    monkeypatch.delitem(sys.modules, "caveman_middleware.google", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "auto")
+    _setup_mock_google(monkeypatch, "3.0.0", (mock_httpx2.BaseTransport,))
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx2
+
+    # 'AUTO' on 2.33 follows SDK default (httpx)
+    monkeypatch.delitem(sys.modules, "caveman_middleware.google", raising=False)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "AUTO")
+    _setup_mock_google(monkeypatch, "2.33.0", (mock_httpx.BaseTransport,))
+    google = importlib.import_module("caveman_middleware.google")
+    assert google._http is mock_httpx
+
+
+def test_google_detect_http_explicit_missing_raises(monkeypatch):
+    """When an HTTP client is explicitly requested via env var but missing, raises ImportError."""
+    import importlib
+    import pytest
+    import sys
+
+    # httpx requested but missing
+    monkeypatch.setitem(sys.modules, "httpx", None)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "httpx")
+    _setup_mock_google(monkeypatch, "3.0.0", ())
+    with pytest.raises(ImportError):
+        importlib.import_module("caveman_middleware.google")
+
+    # httpx2 requested but missing
+    monkeypatch.delitem(sys.modules, "caveman_middleware.google", raising=False)
+    monkeypatch.setitem(sys.modules, "httpx2", None)
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "httpx2")
+    _setup_mock_google(monkeypatch, "2.33.0", ())
+    with pytest.raises(ImportError):
+        importlib.import_module("caveman_middleware.google")
+
+
+def test_google_detect_http_unsupported_client_raises(monkeypatch):
+    """Unsupported GOOGLE_GENAI_HTTP_CLIENT value raises ImportError."""
+    import importlib
+    import pytest
+
+    monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", "requests")
+    _setup_mock_google(monkeypatch, "3.0.0", ())
+    with pytest.raises(ImportError, match="Unsupported GOOGLE_GENAI_HTTP_CLIENT"):
+        importlib.import_module("caveman_middleware.google")
