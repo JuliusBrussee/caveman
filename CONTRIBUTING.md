@@ -38,8 +38,8 @@ authorship and DCO sign-off.
 
 ## Before you open a PR
 
-- Build and test the package you touched (`go test ./...`, `pnpm test`, or
-  `pytest`, depending on the directory).
+- Build and test the package you touched (`npm test` for the installer and
+  hooks, `go test ./...`, `pnpm test`, or `pytest`, depending on the directory).
 - Keep it byte-safe: compressors must round-trip or degrade gracefully. Never
   silently corrupt a payload. On any parse problem, pass the bytes through
   untouched.
