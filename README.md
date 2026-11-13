@@ -1,31 +1,24 @@
 <div align="center">
 
-<table>
-<tr>
-<td align="center">
-
 ## New: Caveman Code. Free.
 
 **The most efficient coding agent.** Same model, same work, smaller bill.
 
 <table>
 <tr>
-<td align="center" width="33%"><h3>21% cheaper</h3>than Codex on Terminal-Bench 4<br><sub>GPT-6.1 Sol on both sides, cost per solved task</sub></td>
-<td align="center" width="33%"><h3>14% cheaper</h3>than Claude Code on Terminal-Bench 4<br><sub>Claude Opus 5.5 on both sides, and more solved: 97 of 180 runs vs 83 of 177</sub></td>
-<td align="center" width="33%"><h3>76% cheaper</h3>than Claude Code on a full workday<br><sub>three day-long sessions across four connected apps, $1.83 vs $7.65 each</sub></td>
+<td align="center"><h3>21% cheaper</h3>than Codex<br><sub>Terminal-Bench 4, per solved task</sub></td>
+<td align="center"><h3>14% cheaper</h3>than Claude Code<br><sub>Terminal-Bench 4, 97 vs 83 solved</sub></td>
+<td align="center"><h3>76% cheaper</h3>than Claude Code<br><sub>full workday, 4 connected apps</sub></td>
 </tr>
 </table>
 
-<sub>Our own runs, November 2026. List prices, metered at one proxy. <a href="https://caveman.so/code">How we measured</a></sub>
+<sub>Same model on both sides: GPT-6.1 Sol against Codex, Opus 5.5 against Claude Code. Our own runs, November 2026, at list prices. <a href="https://caveman.so/code">How we measured</a></sub>
 
-**Every coding agent in one window.** Chat with Caveman, Claude, Codex, Cursor, OpenCode and more, side by side. A Chief runs the chats for you.<br>
-Free on the subscriptions and keys you already have. Mac app or in your browser.
+Every coding agent in one window. Free on the subscriptions and keys you already have.
 
-### [Download Caveman Code for Mac](https://caveman.so/download) · [Read the launch post](https://caveman.so/news/introducing-caveman-code)
+**[Download Caveman Code for Mac](https://caveman.so/download) · [Read the launch post](https://caveman.so/news/introducing-caveman-code)**
 
-</td>
-</tr>
-</table>
+---
 
 <img src="docs/assets/caveman-logo-banner.png" alt="Caveman" width="720">
 
