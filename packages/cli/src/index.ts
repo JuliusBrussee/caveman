@@ -11291,23 +11291,21 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     // shape the scoped reader will not decode.
     if (text.includes(routeBlock)) {
       text = text.replace(routeBlock, previousRouteLines.filter((line): line is string => typeof line === "string").join("\n"));
-      const crlf = text.includes("\r\n");
-      let lines = yamlLines(text);
       for (const key of ["plugin_block", "mcp_block"] as const) {
         const block = operation.owned?.[key];
         if (block === null || block === undefined) continue;
         if (typeof block !== "string" || !text.includes(block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
-        // Not a raw string replace: the block carries the `plugins:` /
+        // Not a bare replace with "": the block carries the `plugins:` /
         // `mcp_servers:` / `enabled:` keys enable created, and dropping those
         // along with our entry orphaned every sibling the user had added under
-        // them since (#1488). removeJournalledYamlBlock puts back the ones the
-        // surviving lines still need.
-        if (!removeJournalledYamlBlock(lines, block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
+        // them since (#1488). This substitutes the ancestor keys the surviving
+        // lines still need, and leaves every other byte — line endings
+        // included — exactly where it was.
+        const removed = removeJournalledYamlBlock(text, block);
+        if (removed === null) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
+        text = removed;
       }
-      const rebuilt = yamlText(lines);
-      // yamlText joins with \n, so a Windows user's config must not come back
-      // converted — the same obligation hermesRestoreOwnedByValue carries.
-      return Buffer.from(crlf ? rebuilt.replace(/\n/g, "\r\n") : rebuilt);
+      return Buffer.from(text);
     }
     if (!hermesRouteOwned(text, operation.owned)) throw new Error("Hermes routing block changed after enable; refusing destructive disable");
     // An absent block is a journal that never wrote one: nothing of ours to
@@ -14589,43 +14587,26 @@ function yamlKeyHasChildren(lines: string[], keyAt: number, end: number): boolea
   return false;
 }
 
-// The index at which `run` appears in `lines` as a contiguous block, or -1.
-function indexOfLineRun(lines: string[], run: string[]): number {
-  if (run.length === 0) return -1;
-  for (let i = 0; i + run.length <= lines.length; i++) {
-    let hit = true;
-    for (let j = 0; j < run.length; j++) {
-      if (lines[i + j] !== run[j]) { hit = false; break; }
-    }
-    if (hit) return i;
-  }
-  return -1;
-}
-
 // Remove a journalled block that is still present byte for byte, keeping any
 // parent key it created that the user has since put something else under
-// (#1488). The block's own key lines are the ancestor chain it introduced:
-// after the removal, whatever indent the next surviving line carries says
-// which of them that line still needs, so those go back and the rest stay out.
-// Returns false when the block is not present as one contiguous run, which
-// leaves the caller's existing refusal to fire.
-function removeJournalledYamlBlock(lines: string[], block: string): boolean {
-  const blockLines = yamlLines(block);
-  const at = indexOfLineRun(lines, blockLines);
-  if (at < 0) return false;
-  const createdKeys = blockLines.filter((line) => /^[ \t]*(["']?)[^:"'\s][^:"']*\1\s*:\s*(?:#.*)?$/.test(line));
-  lines.splice(at, blockLines.length);
-  let survivor: string | undefined;
-  for (let i = at; i < lines.length; i++) {
-    if (/^\s*(?:#.*)?$/.test(lines[i]!)) continue;
-    survivor = lines[i]!;
-    break;
-  }
-  if (survivor === undefined) return true;
-  const width = survivor.length - survivor.replace(/^[ \t]*/, "").length;
-  const needed = createdKeys.filter((line) => line.length - line.replace(/^[ \t]*/, "").length < width);
-  if (needed.length) lines.splice(at, 0, ...needed);
-  return true;
+// (#1488). The block's own key-only lines are the ancestor chain it
+// introduced: whatever indent the first line after the block carries says
+// which of them that line still needs, so those are substituted back in the
+// block's place and the rest go. Everything outside the block — comments,
+// siblings, line endings — is untouched, so this stays the byte-preserving
+// path it has always been. null when the block is not there, which leaves the
+// caller's existing refusal to fire.
+function removeJournalledYamlBlock(text: string, block: string): string | null {
+  const at = text.indexOf(block);
+  if (at < 0) return null;
+  const indentOf = (line: string) => line.length - line.replace(/^[ \t]*/, "").length;
+  const createdKeys = yamlLines(block).filter((line) => /^[ \t]*(["']?)[^:"'\s][^:"']*\1\s*:\s*(?:#.*)?$/.test(line));
+  const after = text.slice(at + block.length);
+  const survivor = yamlLines(after).find((line) => !/^\s*(?:#.*)?$/.test(line));
+  const needed = survivor === undefined
+    ? []
+    : createdKeys.filter((line) => indentOf(line) < indentOf(survivor));
+  return `${text.slice(0, at)}${needed.join("\n")}${after}`;
 }
 
 // Span of the direct child `name` inside [start, end): its own line through the

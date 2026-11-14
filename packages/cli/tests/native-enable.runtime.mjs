@@ -2481,6 +2481,103 @@ test("hermes lifecycle hooks read inactive for a plugin the config disables", as
   assert.equal(disabled.code, 0, disabled.stderr);
 });
 
+// #1488, literal path. Enable created `plugins:` itself, so its journalled
+// block carries the parent key. Removing that block byte-for-byte takes the
+// parent with it — and a list the user added under it afterwards is left
+// dangling at two spaces under whatever section now precedes it. Here it lands
+// under `platforms:`, which is valid YAML saying something the user never
+// wrote: disable silently moved their plugin deny-list into another section.
+test("hermes disable keeps a foreign sibling the user added under a parent we created", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // No plugins:, no mcp_servers: — enable creates both parents.
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  // The user adds their own deny-list under the plugins: we created, after our
+  // end marker, so every byte of our journalled block is still intact.
+  const installed = readFileSync(configPath, "utf8");
+  const endMarker = /^(.*caveman:native-hermes:plugin.*<<<.*|.*<<<.*caveman:native-hermes:plugin.*)$/m.exec(installed)
+    ?? /^.*<<<.*plugin.*$/m.exec(installed);
+  assert.ok(endMarker, `could not find the plugin end marker:\n${installed}`);
+  const edited = installed.replace(endMarker[0], `${endMarker[0]}\n  disabled:\n    - foreign_plugin`);
+  writeFileSync(configPath, edited);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  disabled:\n    - foreign_plugin$/m,
+    `the user's own list must survive:\n${restored}`);
+  // ... and must still be a child of plugins:, not of whatever section the
+  // removal left above it.
+  assert.match(restored, /^plugins:\n(?:\s*(?:#.*)?\n)*  disabled:\n    - foreign_plugin$/m,
+    `the user's list lost its parent:\n${restored}`);
+  assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+});
+
+// #1488, by-value path. Same defect, reached through the reserialised-document
+// branch: hermesRestoreOwnedByValue drops the `enabled:` row and the `plugins:`
+// row whenever enable created them, without asking whether anything is still
+// under them. A second plugin the user enabled afterwards is enough.
+test("hermes value-restore keeps a second enabled plugin under a parent we created", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // Markers gone (the #1410 round-trip), and the user has enabled one of their
+  // own plugins beside ours.
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: custom",
+    "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+    "_config_version: 52",
+    "plugins:",
+    "  enabled:",
+    "  - caveman_native",
+    "  - herdr-agent-state",
+    "mcp_servers:",
+    "  caveman-native:",
+    `    command: ${command}`,
+    "    enabled: true",
+    "",
+  ].join("\n"));
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^plugins:\n  enabled:\n  - herdr-agent-state$/m,
+    `the user's own plugin lost its parent keys:\n${restored}`);
+  assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
