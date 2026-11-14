@@ -2296,6 +2296,94 @@ test("hermes disable removes an owned MCP block whose command folds onto a #-lea
   assert.match(restored, /^_config_version: 52$/m);
 });
 
+// Found reproducing #1492, and the reason that issue's own baseline could not
+// be asserted: `caveman enable hermes` SUCCEEDS and the install then reads
+// `degraded` straight away, with Core, lifecycle and recovery all inactive —
+// for any config whose plugins.enabled list puts its items at two spaces.
+//
+// hermesPluginListContains scans for the next sibling mapping key BEFORE it
+// skips comments, and `/^  [^ ].*?:/` matches a two-space comment whose text
+// contains a colon. Caveman writes exactly one of those: the item-indent-padded
+// `# >>> caveman:native-hermes-plugin` marker. So our own marker ended the item
+// scan one line short of our own entry, hermesPluginOwned read false, and
+// ownedHealthy collapsed every component with it.
+//
+// Two spaces is not an exotic layout: it is what `yaml.safe_dump` emits and
+// what this suite's own round-trip fixture carries. Four spaces hid the bug
+// because the comment skip is reached first when the marker is deeper.
+test("hermes install reads healthy when plugins.enabled items sit at two spaces", async () => {
+  for (const [label, items] of [
+    ["two-space items", ["  - herdr-agent-state"]],
+    ["four-space items", ["    - herdr-agent-state"]],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    writeFileSync(configPath, [
+      "model:",
+      "  default: gpt-5.5",
+      "  provider: openai",
+      "  base_url: https://api.openai.com/v1",
+      "plugins:",
+      "  enabled:",
+      ...items,
+      "mcp_servers:",
+      "  keep:",
+      "    command: keep-mcp",
+      "    enabled: true",
+      "",
+    ].join("\n"));
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+    assert.equal((await run(["enable", "hermes"], env)).code, 0, label);
+
+    const doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+    assert.equal(doctor.state, "installed",
+      `${label}: a fresh install must not read degraded:\n${readFileSync(configPath, "utf8")}`);
+    assert.equal(doctor.components.lifecycle_hooks, true, `${label}: ${JSON.stringify(doctor.components)}`);
+    assert.equal(doctor.components.mcp_recovery, true, `${label}: ${JSON.stringify(doctor.components)}`);
+    assert.equal(doctor.core_active, true, `${label}: Core must be active`);
+
+    // And the install is still fully reversible.
+    assert.equal((await run(["disable", "hermes"], env)).code, 0, label);
+    const restored = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(restored, /caveman_native|caveman-native/, label);
+    assert.match(restored, /^  provider: openai$/m, label);
+    assert.match(restored, /- herdr-agent-state$/m, label);
+  }
+});
+
+// Same reader, fail-open direction: a comment between `disabled:` and its items
+// ended the scan, so an explicit deny read as "not listed" and enable installed
+// over it — the #1489 class, reached through a comment rather than an escape.
+test("hermes enable refuses a deny entry behind a comment line", async () => {
+  for (const list of [
+    ["plugins:", "  disabled:", "  # off for now: see notes", "  - caveman_native"],
+    ["plugins:", "  enabled: []", "  disabled:", "  # off for now: see notes", "  - caveman_native"],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    const config = [
+      "model:",
+      "  default: gpt-5.5",
+      "  provider: openai",
+      "  base_url: https://api.openai.com/v1",
+      ...list,
+      "",
+    ].join("\n");
+    writeFileSync(configPath, config);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `an explicit deny must stop the install:\n${enabled.stdout}${enabled.stderr}`);
+    assert.match(enabled.stderr + enabled.stdout, /disabled|unsupported/i);
+    assert.equal(readFileSync(configPath, "utf8"), config, "the refusal must not rewrite the config");
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+  }
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";

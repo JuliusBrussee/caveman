@@ -11291,13 +11291,23 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
     // shape the scoped reader will not decode.
     if (text.includes(routeBlock)) {
       text = text.replace(routeBlock, previousRouteLines.filter((line): line is string => typeof line === "string").join("\n"));
+      const crlf = text.includes("\r\n");
+      let lines = yamlLines(text);
       for (const key of ["plugin_block", "mcp_block"] as const) {
         const block = operation.owned?.[key];
         if (block === null || block === undefined) continue;
         if (typeof block !== "string" || !text.includes(block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
-        text = text.replace(block, "");
+        // Not a raw string replace: the block carries the `plugins:` /
+        // `mcp_servers:` / `enabled:` keys enable created, and dropping those
+        // along with our entry orphaned every sibling the user had added under
+        // them since (#1488). removeJournalledYamlBlock puts back the ones the
+        // surviving lines still need.
+        if (!removeJournalledYamlBlock(lines, block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
       }
-      return Buffer.from(text);
+      const rebuilt = yamlText(lines);
+      // yamlText joins with \n, so a Windows user's config must not come back
+      // converted — the same obligation hermesRestoreOwnedByValue carries.
+      return Buffer.from(crlf ? rebuilt.replace(/\n/g, "\r\n") : rebuilt);
     }
     if (!hermesRouteOwned(text, operation.owned)) throw new Error("Hermes routing block changed after enable; refusing destructive disable");
     // An absent block is a journal that never wrote one: nothing of ours to
@@ -11850,12 +11860,32 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   // or `mcp_servers:` key appearing in the plugin manifest later must not be
   // able to answer for the one in config.yaml.
   const hermesRouteFileText = agent === "hermes" && routeOperation ? fileBytes(routeOperation.file)?.toString("utf8") ?? "" : "";
+  // #1492 / #1490: `ownedHealthy` answers whether what we wrote is still ours,
+  // which disable needs and health must not be satisfied by. Two Hermes
+  // questions it cannot answer:
+  //   - would Hermes LOAD the plugin? It applies `disabled` first, so a user
+  //     who lists caveman_native there has not taken our plugins.enabled entry
+  //     away (hermesPluginOwned stays true, and disable must still undo the
+  //     install) but the plugin does not run, and neither do its hooks.
+  //   - is the MCP server still REGISTERED? See hermesMcpServerConfigured.
+  // Both read the config file the route operation names, not every journalled
+  // file concatenated, for the reason hermesRouteFileText already does.
+  const hermesPluginLoadable = agent !== "hermes" || !installed
+    || hermesNamedPluginMembership(hermesRouteFileText, HERMES_NATIVE_PLUGIN_NAME) === "enabled";
+  const hermesMcpPresent = agent !== "hermes" || !installed || hermesMcpServerConfigured(hermesRouteFileText);
+  if (agent === "hermes" && installed && !hermesPluginLoadable) {
+    warnings.push(`Hermes lists ${HERMES_NATIVE_PLUGIN_NAME} in plugins.disabled, so it loads no Caveman lifecycle hooks; remove that entry to turn them back on (\`caveman disable hermes\` still undoes the install)`);
+  }
+  if (agent === "hermes" && installed && !hermesMcpPresent) {
+    warnings.push(`Hermes has no enabled ${HERMES_NATIVE_MCP_SERVER} MCP server configured, so compressed context cannot be recovered; run \`caveman enable hermes\` to re-register it`);
+  }
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? hermesRouteOwned(hermesRouteFileText, routeOperation?.owned) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
-    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
-    core: coreActive,
-    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable,
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted && hermesPluginLoadable,
+    // Core rides on those hooks, the way it rides on Codex trusting them.
+    core: coreActive && hermesPluginLoadable,
+    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable && hermesMcpPresent,
     // Codex is false for the same reason hermes is: no command rewrite happens.
     // Since #1037 shrinkHook declines every Codex tool event, so Codex gets no
     // shrink-hook entry; an older install's entry reads degraded until --fix.
@@ -14176,8 +14206,14 @@ function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "
     try {
       if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
       // A null block: the user's own caveman-native entry was already there.
-      // Read by value, so a reserialised config still counts (#1410).
-      if (agent === "hermes") return hermesMcpOwned(current.toString("utf8"), operation.owned);
+      // Read by value, so a reserialised config still counts (#1410) — AND by
+      // presence, because that sentinel is true forever once journalled, so on
+      // its own it kept counting a registration the user had since deleted
+      // (#1490). Ownership and presence are different questions.
+      if (agent === "hermes") {
+        const text = current.toString("utf8");
+        return hermesMcpOwned(text, operation.owned) && hermesMcpServerConfigured(text);
+      }
       if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
       const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
       return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
@@ -14526,6 +14562,72 @@ function yamlMappingChildren(lines: string[], start: number, end: number): Map<s
   return children;
 }
 
+// Does the key at lines[keyAt] still have anything under it? #1488: native
+// disable removes `plugins:`, `plugins.enabled:` or `mcp_servers:` whenever
+// enable created that key — unconditionally, so a child the user added
+// afterwards survived as text and lost its parent. At best it reparents into
+// the section above (a plugin deny-list silently becoming part of
+// `platforms:`); at worst the document stops parsing and Hermes will not start.
+// A key we created is only ours to remove while it is still empty.
+function yamlKeyHasChildren(lines: string[], keyAt: number, end: number): boolean {
+  const key = lines[keyAt];
+  if (key === undefined) return false;
+  const indent = key.length - key.replace(/^[ \t]*/, "").length;
+  for (let i = keyAt + 1; i < Math.min(end, lines.length); i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (width > indent) return true;
+    // A block sequence may be written at its OWN key's indent — `enabled:`
+    // followed by `- name` two spaces deep is one key with a list under it,
+    // which is the layout PyYAML emits and Hermes itself writes. Reading that
+    // item as a sibling called the key empty and removed it, leaving the list
+    // parentless: the very corruption this guard exists to stop.
+    if (width === indent && /^[ \t]*-(?:\s|$)/.test(line)) return true;
+    return false;
+  }
+  return false;
+}
+
+// The index at which `run` appears in `lines` as a contiguous block, or -1.
+function indexOfLineRun(lines: string[], run: string[]): number {
+  if (run.length === 0) return -1;
+  for (let i = 0; i + run.length <= lines.length; i++) {
+    let hit = true;
+    for (let j = 0; j < run.length; j++) {
+      if (lines[i + j] !== run[j]) { hit = false; break; }
+    }
+    if (hit) return i;
+  }
+  return -1;
+}
+
+// Remove a journalled block that is still present byte for byte, keeping any
+// parent key it created that the user has since put something else under
+// (#1488). The block's own key lines are the ancestor chain it introduced:
+// after the removal, whatever indent the next surviving line carries says
+// which of them that line still needs, so those go back and the rest stay out.
+// Returns false when the block is not present as one contiguous run, which
+// leaves the caller's existing refusal to fire.
+function removeJournalledYamlBlock(lines: string[], block: string): boolean {
+  const blockLines = yamlLines(block);
+  const at = indexOfLineRun(lines, blockLines);
+  if (at < 0) return false;
+  const createdKeys = blockLines.filter((line) => /^[ \t]*(["']?)[^:"'\s][^:"']*\1\s*:\s*(?:#.*)?$/.test(line));
+  lines.splice(at, blockLines.length);
+  let survivor: string | undefined;
+  for (let i = at; i < lines.length; i++) {
+    if (/^\s*(?:#.*)?$/.test(lines[i]!)) continue;
+    survivor = lines[i]!;
+    break;
+  }
+  if (survivor === undefined) return true;
+  const width = survivor.length - survivor.replace(/^[ \t]*/, "").length;
+  const needed = createdKeys.filter((line) => line.length - line.replace(/^[ \t]*/, "").length < width);
+  if (needed.length) lines.splice(at, 0, ...needed);
+  return true;
+}
+
 // Span of the direct child `name` inside [start, end): its own line through the
 // last line indented deeper than it.
 function yamlChildSpan(lines: string[], start: number, end: number, name: string): { start: number; end: number } | null {
@@ -14576,16 +14678,25 @@ function hermesOwnedValues(text: string): { model: Map<string, string> | null; m
   };
 }
 
-// The `command` the journalled MCP block registered, read back out of the block
+// Every child the journalled MCP block registered, read back out of the block
 // itself so no journal format change is needed: an install made before this fix
-// is checked by value too.
-function hermesJournaledMcpCommand(block: string): string | null {
+// is checked by value too. The block may or may not carry the `mcp_servers:`
+// parent (it does when enable created the section), so the entry is found at
+// whatever depth it sits rather than as a direct child of a known span.
+function hermesJournaledMcpValues(block: string): Map<string, string> | null {
   const lines = yamlLines(block);
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*command\s*:/.test(lines[i]!)) continue;
-    return yamlScalarAfterKey(lines, i).value;
+  const key = new RegExp(`^[ \\t]*(["']?)${escapeRegExp(HERMES_NATIVE_MCP_SERVER)}\\1\\s*:(?=\\s|$)`);
+  const at = lines.findIndex((line) => key.test(line));
+  if (at < 0) return null;
+  const indent = lines[at]!.length - lines[at]!.replace(/^[ \t]*/, "").length;
+  let end = at + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (/^\s*(?:#.*)?$/.test(line)) break;
+    if (line.length - line.replace(/^[ \t]*/, "").length <= indent) break;
+    end++;
   }
-  return null;
+  return yamlMappingChildren(lines, at + 1, end);
 }
 
 // Does this config still carry Caveman's own Hermes routing, by value?
@@ -14607,10 +14718,35 @@ function hermesMcpOwned(text: string, owned: NativeJournal["operations"][number]
   if (block === null) return true;
   if (typeof block !== "string") return false;
   if (text.includes(block)) return true;
-  const command = hermesJournaledMcpCommand(block);
-  if (command === null) return false;
+  // #1487: the whole field set, not just `command` and `enabled`. Proving our
+  // two values are unchanged says nothing about what the user has ADDED, and
+  // the by-value restore removes the entry's whole span — so a `cwd` they added
+  // to launch the server from somewhere else was deleted with it, silently,
+  // under a check that had just called the entry unmodified. Hermes launches
+  // stdio servers with cwd, so that is a semantic edit; an entry carrying
+  // anything we did not write is no longer ours to remove, exactly as a changed
+  // command already was not.
+  const journalled = hermesJournaledMcpValues(block);
+  if (!journalled || journalled.size === 0) return false;
   const values = hermesOwnedValues(text).mcp;
-  return values?.get("command") === command && values.get("enabled") === "true";
+  if (!values || values.size !== journalled.size) return false;
+  for (const [name, value] of journalled) {
+    if (values.get(name) !== value) return false;
+  }
+  return true;
+}
+
+// Is a `caveman-native` MCP server configured in this document AT ALL? The
+// ownership helpers answer a different question (#1490): `mcp_block: null` is
+// the non-ownership sentinel — the user's own entry was already there, so
+// disable never owned it and never has to prove it — and it stays true after
+// they delete that entry. Anything asking whether Hermes still HAS a server to
+// launch has to read the file, so status stops claiming recovery against a
+// registration that is gone. An explicit `enabled: false` is Hermes declining
+// to launch it, which is the same answer; a missing key is not.
+function hermesMcpServerConfigured(text: string): boolean {
+  const values = hermesOwnedValues(text).mcp;
+  return Boolean(values) && values!.get("enabled") !== "false";
 }
 
 // Is the journalled `caveman_native` plugin still enabled? Same null rule.
@@ -14699,8 +14835,15 @@ function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operation
     }
     if (itemAt < 0) throw new Error("Hermes plugin entry is gone; refusing destructive disable");
     lines.splice(itemAt, 1);
-    if (createdEnabled) lines.splice(enabledAt, 1);
-    if (createdSection) lines.splice(plugins.start, 1);
+    // Only while they are still empty: #1488 again, on the by-value path. A
+    // second plugin the user enabled beside ours is enough to make dropping
+    // `enabled:` — and then `plugins:` — produce a document that no longer
+    // parses. Each check runs against the array as it now stands, and the
+    // splices stay in descending order so the earlier indices remain valid.
+    if (createdEnabled && !yamlKeyHasChildren(lines, enabledAt, lines.length)) {
+      lines.splice(enabledAt, 1);
+      if (createdSection && !yamlKeyHasChildren(lines, plugins.start, lines.length)) lines.splice(plugins.start, 1);
+    }
   }
 
   // --- MCP registration ---
@@ -14712,7 +14855,7 @@ function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operation
     const native = yamlChildSpan(lines, servers.start + 1, servers.end, HERMES_NATIVE_MCP_SERVER);
     if (!native) throw new Error("Hermes MCP entry is gone; refusing destructive disable");
     lines.splice(native.start, native.end - native.start);
-    if (createdSection) lines.splice(servers.start, 1);
+    if (createdSection && !yamlKeyHasChildren(lines, servers.start, lines.length)) lines.splice(servers.start, 1);
   }
 
   // yamlText joins with \n. The literal path edits the raw string and so keeps
@@ -19231,12 +19374,29 @@ function hermesFlowSequenceItems(raw: string): string[] | null | false {
   return null;
 }
 
+// A comment is never a key, and this reader has to say so BEFORE it asks
+// whether a line opens the next sibling mapping. `^  [^ ].*?:` matches a
+// two-space comment the moment its text contains a colon, and Caveman writes
+// exactly such a line: the item-indent-padded `# >>> caveman:native-hermes-plugin`
+// marker. So our own marker was read as the key after `enabled:` and ended the
+// item scan one line above our own entry — hermesPluginOwned went false on a
+// config we had just written, ownedHealthy collapsed every component with it,
+// and `enable hermes` reported success into an install `doctor` called
+// `degraded`. In the deny direction the same break fails OPEN: a comment
+// between `disabled:` and its items made an explicit deny read as "not listed"
+// and enable installed over it. Four-space lists never showed either, because
+// the comment skip below is reached first when the marker is deeper.
+function hermesCommentOrBlank(line: string): boolean {
+  return /^\s*(?:#.*)?$/.test(line);
+}
+
 function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean | "unhandled" {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
   if (!plugins) return false;
   let listKeyCount = 0;
   for (let i = plugins.start + 1; i < plugins.end; i++) {
+    if (hermesCommentOrBlank(lines[i]!)) continue;
     const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
     if (!match) continue;
     const key = hermesScalarValue(match[1]!);
@@ -19244,6 +19404,7 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
     if (key === listName && ++listKeyCount > 1) return "unhandled";
   }
   for (let i = plugins.start + 1; i < plugins.end; i++) {
+    if (hermesCommentOrBlank(lines[i]!)) continue;
     const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
     if (!match) continue;
     const key = hermesScalarValue(match[1]!);
@@ -19264,8 +19425,9 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
     let sequenceIndent: number | null = null;
     for (let next = i + 1; next < plugins.end; next++) {
       const line = lines[next]!;
+      // Blanks and comments first: see hermesCommentOrBlank above.
+      if (hermesCommentOrBlank(line)) continue;
       if (/^  [^ ].*?:/.test(line)) break;
-      if (!line.trim() || /^\s*#/.test(line)) continue;
       const item = line.match(/^(\s*)-\s*(.*?)\s*$/);
       if (!item) {
         const indent = line.search(/\S/);
