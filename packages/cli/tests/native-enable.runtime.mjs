@@ -2409,6 +2409,78 @@ test("hermes disable refuses an MCP entry the user has added a field to", async 
   assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), true, "journal must survive");
 });
 
+// #1490: `mcp_block: null` is the NON-OWNERSHIP sentinel — the user's own
+// caveman-native entry was already there, so disable never has to prove or
+// remove it. hermesMcpOwned returns true for it, which is right for disable and
+// wrong for everything that asks whether the server is still REGISTERED: delete
+// the entry and status keeps claiming recovery against a server Hermes has no
+// configuration to launch.
+test("hermes status stops claiming MCP recovery once a pre-existing entry is removed", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const preexisting = [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "mcp_servers:",
+    "  caveman-native:",
+    "    command: their-own-caveman-mcp",
+    "    enabled: true",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, preexisting);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  const config = journal.operations.find((operation) => operation.kind === "hermes-config");
+  assert.equal(config.owned.mcp_block, null, "the fixture must reach the non-ownership sentinel");
+
+  // Healthy to start with: the entry is there, whoever wrote it.
+  const before = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(before.components.mcp_recovery, true, JSON.stringify(before.components));
+
+  // The user removes their own entry. Hermes now has no caveman-native server.
+  writeFileSync(configPath, readFileSync(configPath, "utf8")
+    .replace("  caveman-native:\n    command: their-own-caveman-mcp\n    enabled: true\n", ""));
+  assert.doesNotMatch(readFileSync(configPath, "utf8"), /caveman-native/, "the probe must remove the entry");
+
+  const after = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(after.components.mcp_recovery, false,
+    `recovery must not be claimed with no server configured: ${JSON.stringify(after.components)}`);
+});
+
+// #1492: ownership and loadability are two questions (see the round-trip test
+// above, which pins that a user-added deny entry must NOT break disable). The
+// health side has the opposite obligation, and the comment over lifecycle_hooks
+// already states it — "a plugin the host cannot load runs no hooks" — while the
+// expression carries no membership term at all. Hermes applies `disabled` first
+// and refuses to load the plugin, so its hooks cannot run.
+test("hermes lifecycle hooks read inactive for a plugin the config disables", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  const healthy = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(healthy.components.lifecycle_hooks, true, JSON.stringify(healthy.components));
+
+  // The user switches the plugin off the Hermes way, leaving our enabled entry
+  // (and so our ownership, and so a working disable) exactly where it is.
+  const installed = readFileSync(configPath, "utf8");
+  const edited = installed.replace(/^plugins:$/m, "plugins:\n  disabled:\n    - caveman_native");
+  assert.notEqual(edited, installed, "the probe must add a disabled list");
+  writeFileSync(configPath, edited);
+
+  const status = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(status.components.lifecycle_hooks, false,
+    `a plugin Hermes refuses to load runs no hooks: ${JSON.stringify(status.components)}`);
+  // Ownership is untouched: disable must still be able to undo the install.
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
