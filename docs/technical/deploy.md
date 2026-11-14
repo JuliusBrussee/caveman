@@ -90,7 +90,7 @@ curl -s http://localhost:8787/v1/messages \
   -H 'x-cave-api-key: <token>' \
   -H 'anthropic-version: 2023-06-01' \
   -H 'content-type: application/json' \
-  -d '{"model":"claude-sonnet-4-5","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
+  -d '{"model":"claude-sonnet-4-6","max_tokens":64,"messages":[{"role":"user","content":"hi"}]}'
 ```
 
 ## Docker Compose
