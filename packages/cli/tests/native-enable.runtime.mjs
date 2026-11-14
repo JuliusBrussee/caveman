@@ -1814,6 +1814,204 @@ test("enable/disable hermes keeps a %YAML header and two-space list items valid"
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// #1486: the route scan matched a hardcoded `^  (provider|base_url):`, so a
+// valid `model:` block whose children use four spaces matched NOTHING. The old
+// provider was left in place and the two-space routing block was spliced in
+// above it, leaving the four-space line nested under the new `base_url` scalar
+// — a document PyYAML rejects. caveman corrupted a config it was asked to
+// extend, and the user's provider was never actually replaced.
+//
+// Structural assertions again, for the reason the #1405 test gives: no YAML
+// parser is declared for either runner.
+test("enable/disable hermes writes the route at the model block's own indent", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // The reporter's fixture, verbatim.
+  const original = ["model:", "    provider: openai-codex", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // openai-codex is a named OAuth provider, so it is kept and routed at /chatgpt.
+  assert.match(installed, /^ {4}provider: openai-codex$/m, installed);
+  assert.match(installed, /^ {4}base_url: "http:\/\/127\.0\.0\.1:8787\/chatgpt"$/m, installed);
+  // The defect's signature: the user's provider surviving BELOW our block, so
+  // model: ends up with two provider keys and one of them nested under a
+  // scalar. Exactly one direct child of model: may name provider.
+  const lines = installed.split("\n");
+  const modelAt = lines.indexOf("model:");
+  assert.ok(modelAt >= 0, installed);
+  const childIndents = [];
+  let providers = 0;
+  for (let i = modelAt + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "" || /^\s*#/.test(line)) continue;
+    const indent = line.length - line.replace(/^[ \t]*/, "").length;
+    if (indent === 0) break; // next top-level key
+    childIndents.push(indent);
+    if (/^ {4}provider\s*:/.test(line)) providers++;
+  }
+  assert.equal(providers, 1, `model: must carry exactly one provider key:\n${installed}`);
+  assert.equal(new Set(childIndents).size, 1,
+    `every child of model: must share one indent, got ${childIndents}:\n${installed}`);
+  // And that one indent is the document's four, not the writer's old two. The
+  // marker comments ride along at the same width.
+  assert.equal(childIndents[0], 4, `model: children must stay at four spaces:\n${installed}`);
+  assert.match(installed, /^ {4}# >>> caveman:native-hermes-routing$/m, installed);
+  assert.match(installed, /^ {4}# <<< caveman:native-hermes-routing$/m, installed);
+
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).components.routing, true);
+
+  // Reversible: disable restores the four-space document exactly.
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1486, the measurement edge: topLevelSection ends a block at the next
+// unquoted top-level key, so a document-end marker sits INSIDE the model span
+// at indent 0. Deriving the child indent as a plain minimum over the span would
+// read 0 there and emit `provider:`/`base_url:` at top level, outside model: —
+// a worse corruption than the four-space bug. The route keys must stay under
+// model: at the indent its real children use.
+test("enable/disable hermes measures the model indent past a document-end marker", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = ["model:", "  provider: openai", "..." , ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // Indented under model:, never at column 0.
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+  assert.doesNotMatch(installed, /^provider:/m, `provider must not escape model::\n${installed}`);
+  assert.doesNotMatch(installed, /^base_url:/m, `base_url must not escape model::\n${installed}`);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review: topLevelSection ends a block only at the next UNQUOTED
+// top-level key, so a quoted top-level section and all of its children sit
+// inside the reported model span. Measuring over that tail read another
+// section's layout as model's own — and with narrower children it produced the
+// very corruption #1486 is about, in a document the old hardcoded writer
+// handled correctly. model's own children end at the first indent-0 line.
+test("enable/disable hermes ignores a quoted top-level section when measuring", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // `x` is ONE space deep: a plain minimum over the span would measure 1.
+  const original = ["model:", "  provider: openai", '"other":', " x: y", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // Measured from model's own child, so two — not one, and not zero.
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+  assert.doesNotMatch(installed, /^ {1}provider:/m, `route must not take the foreign section's indent:\n${installed}`);
+  // The old route is REPLACED, not left below the new block.
+  assert.doesNotMatch(installed, /provider: openai$/m, `the original provider must be replaced:\n${installed}`);
+  // The foreign section is untouched.
+  assert.match(installed, /^"other":$/m, installed);
+  assert.match(installed, /^ x: y$/m, installed);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review: YAML indents comments independently of the scalar above them,
+// so an indented comment after a route key is not a value continuation. The
+// multiline guard refused on one, rejecting a config it rewrites perfectly.
+test("enable hermes treats an indented comment as no continuation", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = ["model:", "  provider: openai", "    # model choice", "  base_url: https://api.openai.com/v1", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, `an indented comment must not refuse the install: ${enabled.stderr}`);
+  const installed = readFileSync(configPath, "utf8");
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review, the one that mattered most: hermesNativeMutations keyed its
+// map with a hardcoded `^  ([^:]+):`, which on a four-space line captures
+// "  provider". previous.provider was therefore undefined, refuseOwnEndpoint
+// got an undefined endpoint and returned without refusing — so the guard that
+// stops Caveman replacing a user's private gateway, and sending its requests
+// and key to the provider's public API, silently did not fire for any config
+// that did not use exactly two spaces.
+test("enable hermes still refuses a private endpoint at a non-two-space indent", async () => {
+  for (const indent of ["  ", "    "]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    const original = ["model:", `${indent}provider: custom`, `${indent}base_url: https://gateway.internal.example/v1`, ""].join("\n");
+    writeFileSync(configPath, original);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `${indent.length}-space private endpoint must be refused: ${enabled.stdout}`);
+    assert.match(enabled.stderr + enabled.stdout, /its own endpoint/,
+      `${indent.length}-space: refuseOwnEndpoint must see the real base_url`);
+    assert.match(enabled.stderr + enabled.stdout, /gateway\.internal\.example/,
+      `${indent.length}-space: the refusal must name the endpoint it protected`);
+    // Refusing writes nothing.
+    assert.equal(readFileSync(configPath, "utf8"), original, `${indent.length}-space rewrote the config`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false, `${indent.length}-space`);
+  }
+});
+
+// #1486, the other half: a shape the lexical writer cannot place exactly must
+// be refused BEFORE any integration file is written, not rewritten on a guess.
+// The reporter named both of these as reaching the same writer.
+test("enable hermes refuses a model block it cannot rewrite exactly", async () => {
+  for (const [label, config, expected] of [
+    ["multiline route value", "model:\n  base_url: >\n    http://example.test/v1\n", /multiline value/],
+    ["tab-indented block", "model:\n\tprovider: openai\n", /indented with tabs/],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    writeFileSync(configPath, config);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `${label} must not install: ${enabled.stdout}`);
+    assert.match(enabled.stderr + enabled.stdout, expected, label);
+    // The refusal leaves the user's document and the journal alone.
+    assert.equal(readFileSync(configPath, "utf8"), config, `${label} rewrote the config`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false, label);
+  }
+});
+
 // #1410: ownership used to be keyed on the literal comment-delimited blocks we
 // wrote. A YAML round-trip that changes no value at all — an editor, a config
 // manager, `yaml.safe_dump(yaml.safe_load(...))` — drops those comments and
@@ -2096,6 +2294,298 @@ test("hermes disable removes an owned MCP block whose command folds onto a #-lea
   assert.match(restored, /^  - herdr-agent-state$/m);
   assert.match(restored, /^# a comment of the user's own, after the block$/m);
   assert.match(restored, /^_config_version: 52$/m);
+});
+
+// Found reproducing #1492, and the reason that issue's own baseline could not
+// be asserted: `caveman enable hermes` SUCCEEDS and the install then reads
+// `degraded` straight away, with Core, lifecycle and recovery all inactive —
+// for any config whose plugins.enabled list puts its items at two spaces.
+//
+// hermesPluginListContains scans for the next sibling mapping key BEFORE it
+// skips comments, and `/^  [^ ].*?:/` matches a two-space comment whose text
+// contains a colon. Caveman writes exactly one of those: the item-indent-padded
+// `# >>> caveman:native-hermes-plugin` marker. So our own marker ended the item
+// scan one line short of our own entry, hermesPluginOwned read false, and
+// ownedHealthy collapsed every component with it.
+//
+// Two spaces is not an exotic layout: it is what `yaml.safe_dump` emits and
+// what this suite's own round-trip fixture carries. Four spaces hid the bug
+// because the comment skip is reached first when the marker is deeper.
+test("hermes install reads healthy when plugins.enabled items sit at two spaces", async () => {
+  for (const [label, items] of [
+    ["two-space items", ["  - herdr-agent-state"]],
+    ["four-space items", ["    - herdr-agent-state"]],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    writeFileSync(configPath, [
+      "model:",
+      "  default: gpt-5.5",
+      "  provider: openai",
+      "  base_url: https://api.openai.com/v1",
+      "plugins:",
+      "  enabled:",
+      ...items,
+      "mcp_servers:",
+      "  keep:",
+      "    command: keep-mcp",
+      "    enabled: true",
+      "",
+    ].join("\n"));
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+    assert.equal((await run(["enable", "hermes"], env)).code, 0, label);
+
+    const doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+    assert.equal(doctor.state, "installed",
+      `${label}: a fresh install must not read degraded:\n${readFileSync(configPath, "utf8")}`);
+    assert.equal(doctor.components.lifecycle_hooks, true, `${label}: ${JSON.stringify(doctor.components)}`);
+    assert.equal(doctor.components.mcp_recovery, true, `${label}: ${JSON.stringify(doctor.components)}`);
+    assert.equal(doctor.core_active, true, `${label}: Core must be active`);
+
+    // And the install is still fully reversible.
+    assert.equal((await run(["disable", "hermes"], env)).code, 0, label);
+    const restored = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(restored, /caveman_native|caveman-native/, label);
+    assert.match(restored, /^  provider: openai$/m, label);
+    assert.match(restored, /- herdr-agent-state$/m, label);
+  }
+});
+
+// Same reader, fail-open direction: a comment between `disabled:` and its items
+// ended the scan, so an explicit deny read as "not listed" and enable installed
+// over it — the #1489 class, reached through a comment rather than an escape.
+test("hermes enable refuses a deny entry behind a comment line", async () => {
+  for (const list of [
+    ["plugins:", "  disabled:", "  # off for now: see notes", "  - caveman_native"],
+    ["plugins:", "  enabled: []", "  disabled:", "  # off for now: see notes", "  - caveman_native"],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    const config = [
+      "model:",
+      "  default: gpt-5.5",
+      "  provider: openai",
+      "  base_url: https://api.openai.com/v1",
+      ...list,
+      "",
+    ].join("\n");
+    writeFileSync(configPath, config);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `an explicit deny must stop the install:\n${enabled.stdout}${enabled.stderr}`);
+    assert.match(enabled.stderr + enabled.stdout, /disabled|unsupported/i);
+    assert.equal(readFileSync(configPath, "utf8"), config, "the refusal must not rewrite the config");
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+  }
+});
+
+// #1487: ownership proves OUR value is still there; it must not also claim
+// nothing of the user's has been ADDED. hermesMcpOwned compares `command` and
+// `enabled` only, so a user who adds `cwd` to the normalised caveman-native
+// entry still reads as unmodified — and the by-value restore then splices out
+// the whole server span, that field with it. Hermes launches stdio servers with
+// cwd, so this is a semantic edit, not formatting: disable must refuse, the way
+// it already refuses a CHANGED command.
+test("hermes disable refuses an MCP entry the user has added a field to", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  const edited = HERMES_ROUND_TRIPPED(command)
+    .replace("    enabled: true\n  keep:", `    enabled: true\n    cwd: ${join(fx.home, "custom-workdir")}\n  keep:`);
+  assert.match(edited, /^    cwd: /m, "the probe must actually add a field");
+  writeFileSync(configPath, edited);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.notEqual(disabled.code, 0, `an added MCP field must refuse destructive disable\n${disabled.stdout}${disabled.stderr}`);
+  // Refusing is only safe if it is atomic: the user's field and the journal
+  // that can still undo the install both survive.
+  assert.equal(readFileSync(configPath, "utf8"), edited, "config must be untouched");
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), true, "journal must survive");
+});
+
+// #1490: `mcp_block: null` is the NON-OWNERSHIP sentinel — the user's own
+// caveman-native entry was already there, so disable never has to prove or
+// remove it. hermesMcpOwned returns true for it, which is right for disable and
+// wrong for everything that asks whether the server is still REGISTERED: delete
+// the entry and status keeps claiming recovery against a server Hermes has no
+// configuration to launch.
+test("hermes status stops claiming MCP recovery once a pre-existing entry is removed", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const preexisting = [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "mcp_servers:",
+    "  caveman-native:",
+    "    command: their-own-caveman-mcp",
+    "    enabled: true",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, preexisting);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  const config = journal.operations.find((operation) => operation.kind === "hermes-config");
+  assert.equal(config.owned.mcp_block, null, "the fixture must reach the non-ownership sentinel");
+
+  // Healthy to start with: the entry is there, whoever wrote it.
+  const before = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(before.components.mcp_recovery, true, JSON.stringify(before.components));
+
+  // The user removes their own entry. Hermes now has no caveman-native server.
+  writeFileSync(configPath, readFileSync(configPath, "utf8")
+    .replace("  caveman-native:\n    command: their-own-caveman-mcp\n    enabled: true\n", ""));
+  assert.doesNotMatch(readFileSync(configPath, "utf8"), /caveman-native/, "the probe must remove the entry");
+
+  const after = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(after.components.mcp_recovery, false,
+    `recovery must not be claimed with no server configured: ${JSON.stringify(after.components)}`);
+});
+
+// #1492: ownership and loadability are two questions (see the round-trip test
+// above, which pins that a user-added deny entry must NOT break disable). The
+// health side has the opposite obligation, and the comment over lifecycle_hooks
+// already states it — "a plugin the host cannot load runs no hooks" — while the
+// expression carries no membership term at all. Hermes applies `disabled` first
+// and refuses to load the plugin, so its hooks cannot run.
+test("hermes lifecycle hooks read inactive for a plugin the config disables", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  const healthy = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(healthy.components.lifecycle_hooks, true, JSON.stringify(healthy.components));
+
+  // The user switches the plugin off the Hermes way, leaving our enabled entry
+  // (and so our ownership, and so a working disable) exactly where it is.
+  const installed = readFileSync(configPath, "utf8");
+  const edited = installed.replace(/^plugins:$/m, "plugins:\n  disabled:\n    - caveman_native");
+  assert.notEqual(edited, installed, "the probe must add a disabled list");
+  writeFileSync(configPath, edited);
+
+  const status = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(status.components.lifecycle_hooks, false,
+    `a plugin Hermes refuses to load runs no hooks: ${JSON.stringify(status.components)}`);
+  // Ownership is untouched: disable must still be able to undo the install.
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+});
+
+// #1488, literal path. Enable created `plugins:` itself, so its journalled
+// block carries the parent key. Removing that block byte-for-byte takes the
+// parent with it — and a list the user added under it afterwards is left
+// dangling at two spaces under whatever section now precedes it. Here it lands
+// under `platforms:`, which is valid YAML saying something the user never
+// wrote: disable silently moved their plugin deny-list into another section.
+test("hermes disable keeps a foreign sibling the user added under a parent we created", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // No plugins:, no mcp_servers: — enable creates both parents.
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  // The user adds their own deny-list under the plugins: we created, after our
+  // end marker, so every byte of our journalled block is still intact.
+  const installed = readFileSync(configPath, "utf8");
+  const endMarker = /^(.*caveman:native-hermes:plugin.*<<<.*|.*<<<.*caveman:native-hermes:plugin.*)$/m.exec(installed)
+    ?? /^.*<<<.*plugin.*$/m.exec(installed);
+  assert.ok(endMarker, `could not find the plugin end marker:\n${installed}`);
+  const edited = installed.replace(endMarker[0], `${endMarker[0]}\n  disabled:\n    - foreign_plugin`);
+  writeFileSync(configPath, edited);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  disabled:\n    - foreign_plugin$/m,
+    `the user's own list must survive:\n${restored}`);
+  // ... and must still be a child of plugins:, not of whatever section the
+  // removal left above it.
+  // `[ \t]*` rather than `\s*`, and `#[^\n]*` rather than `#.*`: with `\s*`
+  // able to eat the newline the group itself then requires, a run of N blank
+  // lines has 2^(N-1) partitions and the engine tries them all before failing.
+  // Measured on the previous form with a near-matching tail: 74ms at 22 blank
+  // lines, 1.2s at 26, 18s at 30 (CodeQL alert 119). Neither class can match a
+  // newline now, so each repetition consumes exactly one line and the match is
+  // linear. Semantics are unchanged — verified against this assertion's accept
+  // cases (direct child, blank and comment lines between, an indented comment)
+  // and its reject cases (another key between, a reparented list, a deeper
+  // nesting), which are what give it its teeth.
+  assert.match(restored, /^plugins:\n(?:[ \t]*(?:#[^\n]*)?\n)*  disabled:\n    - foreign_plugin$/m,
+    `the user's list lost its parent:\n${restored}`);
+  assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+});
+
+// #1488, by-value path. Same defect, reached through the reserialised-document
+// branch: hermesRestoreOwnedByValue drops the `enabled:` row and the `plugins:`
+// row whenever enable created them, without asking whether anything is still
+// under them. A second plugin the user enabled afterwards is enough.
+test("hermes value-restore keeps a second enabled plugin under a parent we created", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // Markers gone (the #1410 round-trip), and the user has enabled one of their
+  // own plugins beside ours.
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: custom",
+    "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+    "_config_version: 52",
+    "plugins:",
+    "  enabled:",
+    "  - caveman_native",
+    "  - herdr-agent-state",
+    "mcp_servers:",
+    "  caveman-native:",
+    `    command: ${command}`,
+    "    enabled: true",
+    "",
+  ].join("\n"));
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^plugins:\n  enabled:\n  - herdr-agent-state$/m,
+    `the user's own plugin lost its parent keys:\n${restored}`);
+  assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
 });
 
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
