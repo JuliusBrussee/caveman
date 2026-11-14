@@ -2523,7 +2523,17 @@ test("hermes disable keeps a foreign sibling the user added under a parent we cr
     `the user's own list must survive:\n${restored}`);
   // ... and must still be a child of plugins:, not of whatever section the
   // removal left above it.
-  assert.match(restored, /^plugins:\n(?:\s*(?:#.*)?\n)*  disabled:\n    - foreign_plugin$/m,
+  // `[ \t]*` rather than `\s*`, and `#[^\n]*` rather than `#.*`: with `\s*`
+  // able to eat the newline the group itself then requires, a run of N blank
+  // lines has 2^(N-1) partitions and the engine tries them all before failing.
+  // Measured on the previous form with a near-matching tail: 74ms at 22 blank
+  // lines, 1.2s at 26, 18s at 30 (CodeQL alert 119). Neither class can match a
+  // newline now, so each repetition consumes exactly one line and the match is
+  // linear. Semantics are unchanged — verified against this assertion's accept
+  // cases (direct child, blank and comment lines between, an indented comment)
+  // and its reject cases (another key between, a reparented list, a deeper
+  // nesting), which are what give it its teeth.
+  assert.match(restored, /^plugins:\n(?:[ \t]*(?:#[^\n]*)?\n)*  disabled:\n    - foreign_plugin$/m,
     `the user's list lost its parent:\n${restored}`);
   assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
   assert.match(restored, /^  provider: openai$/m, "routing must be restored");
