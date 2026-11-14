@@ -2384,6 +2384,31 @@ test("hermes enable refuses a deny entry behind a comment line", async () => {
   }
 });
 
+// #1487: ownership proves OUR value is still there; it must not also claim
+// nothing of the user's has been ADDED. hermesMcpOwned compares `command` and
+// `enabled` only, so a user who adds `cwd` to the normalised caveman-native
+// entry still reads as unmodified — and the by-value restore then splices out
+// the whole server span, that field with it. Hermes launches stdio servers with
+// cwd, so this is a semantic edit, not formatting: disable must refuse, the way
+// it already refuses a CHANGED command.
+test("hermes disable refuses an MCP entry the user has added a field to", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  const edited = HERMES_ROUND_TRIPPED(command)
+    .replace("    enabled: true\n  keep:", `    enabled: true\n    cwd: ${join(fx.home, "custom-workdir")}\n  keep:`);
+  assert.match(edited, /^    cwd: /m, "the probe must actually add a field");
+  writeFileSync(configPath, edited);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.notEqual(disabled.code, 0, `an added MCP field must refuse destructive disable\n${disabled.stdout}${disabled.stderr}`);
+  // Refusing is only safe if it is atomic: the user's field and the journal
+  // that can still undo the install both survive.
+  assert.equal(readFileSync(configPath, "utf8"), edited, "config must be untouched");
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), true, "journal must survive");
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
