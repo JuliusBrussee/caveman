@@ -10,11 +10,13 @@ import codecs
 import contextvars
 import copy
 import functools
+import importlib
 import json
 import re
 import uuid
 from urllib.parse import urlsplit
 
+from ._httpx2 import sdk_flavour
 from ._versions import VERSION, family_gate, framework_import_failed, installed_version
 
 try:
@@ -22,87 +24,29 @@ try:
     from google.genai import types
     from google.genai.chats import Chat, AsyncChat
     from google.genai.client import AsyncClient
+    from google.genai import _api_client
 except ImportError as error:
     framework_import_failed("google", error, "Install caveman-middleware[google] to use the Google adapter")
 
 
-def _detect_google_http():
-    """Detect whether installed google-genai runs on httpx2 or httpx.
+def _google_http():
+    """The HTTPX flavour this google-genai install runs on: ``httpx2`` (3.x) or ``httpx`` (2.x).
 
-    Resolution order follows Google GenAI SDK behavior:
-    1. GOOGLE_GENAI_HTTP_CLIENT environment variable:
-       - 'httpx': explicitly selects httpx; raises ImportError if not installed.
-       - 'httpx2': explicitly selects httpx2; raises ImportError if not installed.
-       - 'auto' or unset: proceeds to SDK auto-detection.
-       - unsupported value: raises ImportError indicating unsupported client.
-    2. SDK client class introspection:
-       - Inspects SyncHttpxClient / AsyncHttpxClient MRO in google.genai._api_client.
-         If httpx2 is in MRO, selects httpx2.
-         If httpx is in MRO, selects httpx.
-    3. Package version check:
-       - google-genai >= 3.0: defaults to httpx2 (falling back to httpx if unavailable).
-       - google-genai < 3.0 (e.g. 2.18, 2.33): defaults to httpx (falling back to httpx2).
+    google-genai 3 moved to httpx2 and kept httpx as an optional extra, so both
+    libraries can be importable at once (httpx is a transitive dependency of many
+    stacks) and "whichever is installed" picks the wrong one. The SDK resolves the
+    backend itself, from ``GOOGLE_GENAI_HTTP_CLIENT`` then its own default, so we
+    ask it which classes it resolved rather than re-deriving the rule: our
+    transports and byte streams must subclass the same library its client uses.
+    Releases without that resolver (2.x) are httpx-only.
     """
-    import os
-    raw_env = os.environ.get("GOOGLE_GENAI_HTTP_CLIENT")
-    env_choice = raw_env.strip().lower() if raw_env is not None else None
-
-    if env_choice and env_choice != "auto":
-        if env_choice == "httpx":
-            import httpx
-            return httpx
-        elif env_choice == "httpx2":
-            import httpx2
-            return httpx2
-        else:
-            raise ImportError(
-                f"Unsupported GOOGLE_GENAI_HTTP_CLIENT='{raw_env}'. Supported clients are 'httpx', 'httpx2', or 'auto'."
-            )
-
-    try:
-        from google.genai import _api_client
-        for attr in ("SyncHttpxClient", "AsyncHttpxClient"):
-            client_cls = getattr(_api_client, attr, None)
-            if client_cls and hasattr(client_cls, "__mro__"):
-                mro_roots = {base.__module__.split(".")[0] for base in client_cls.__mro__}
-                if "httpx2" in mro_roots:
-                    import httpx2
-                    return httpx2
-                if "httpx" in mro_roots:
-                    import httpx
-                    return httpx
-    except Exception:
-        pass
-
-    version_str = installed_version("google-genai")
-    if version_str:
-        try:
-            major = int(version_str.split(".")[0])
-            if major >= 3:
-                try:
-                    import httpx2
-                    return httpx2
-                except ImportError:
-                    pass
-            else:
-                try:
-                    import httpx
-                    return httpx
-                except ImportError:
-                    pass
-        except (ValueError, IndexError):
-            pass
-
-    try:
-        import httpx
-        return httpx
-    except ImportError:
-        import httpx2
-        return httpx2
+    resolve = getattr(_api_client, "_get_http_client_classes", None)
+    resolved = resolve()[0] if resolve is not None else None  # ImportError here means neither library is installed
+    return importlib.import_module(sdk_flavour(resolved) if isinstance(resolved, type) else "httpx")
 
 
 try:
-    _http = _detect_google_http()
+    _http = _google_http()
 except ImportError as error:
     framework_import_failed("google", error, "Install caveman-middleware[google] to use the Google adapter")
 
