@@ -33,7 +33,7 @@ func decodeChatGPTMetadataBody(wire []byte, encoding string, limit int) ([]byte,
 	if err == nil {
 		return decoded, true
 	}
-	if errors.Is(err, errChatGPTBodyOverLimit) {
+	if errors.Is(err, errChatGPTBodyOverLimit) || strings.EqualFold(strings.TrimSpace(encoding), "zstd") {
 		return nil, false
 	}
 	return providers.DecodeBody(wire, encoding, limit)

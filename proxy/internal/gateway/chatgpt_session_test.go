@@ -128,3 +128,25 @@ func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
 		}
 	}
 }
+
+func TestChatGPTMetadataRejectsOversizedZstdWindow(t *testing.T) {
+	var encoded bytes.Buffer
+	writer, err := zstd.NewWriter(&encoded, zstd.WithWindowSize(16<<20), zstd.WithSingleSegment(false))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = writer.Write([]byte(`{"model":"gpt-6.1-sol","input":"Explain E_TIMEOUT."}`))
+	if err := writer.Flush(); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var frame zstd.Header
+	if err := frame.Decode(encoded.Bytes()); err != nil || frame.WindowSize != 16<<20 {
+		t.Fatalf("fixture window=%d, want 16 MiB: %v", frame.WindowSize, err)
+	}
+	if _, ok := decodeChatGPTMetadataBody(encoded.Bytes(), "zstd", 32<<20); ok {
+		t.Fatal("metadata decoder accepted zstd window above the existing 8 MiB bound")
+	}
+}
