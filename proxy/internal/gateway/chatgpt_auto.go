@@ -314,9 +314,10 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 	_, _ = reqCapture.Write(sent)
 	rawHash := sha256.Sum256(body)
 	sentHash := sha256.Sum256(sent)
+	evidence.originalBody = body
 	record := func(status int, errCode string, respCapture *cappedBuffer, respBytes int64, stream bool) {
 		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, status, errCode, reqCapture, rawHash[:], sentHash[:], true, respCapture, respBytes, stream, transform.OptimizerIDs, comp, eligible, sent, "",
-			&chatGPTRoute{from: AutoModel, answer: route, model: model})
+			&chatGPTRoute{from: AutoModel, answer: route, model: model}, evidence)
 	}
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
@@ -556,6 +557,8 @@ func (s *Server) chatGPTAutoDoor(w http.ResponseWriter, r *http.Request, rc Requ
 	if err == nil && len(raw) <= maxBytes {
 		body, tooLarge, ok := chatGPTAutoBody(raw, encoding)
 		if ok {
+			r = r.Clone(r.Context())
+			r.Header.Del("Content-Encoding")
 			s.chatGPTAuto(w, r, rc, requestID, traceID, upstreamURL, suffix, start, evidence, body)
 			return
 		}
@@ -601,7 +604,7 @@ func (s *Server) chatGPTAutoDoor(w http.ResponseWriter, r *http.Request, rc Requ
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
 		httpx.Error(w, r, http.StatusBadGateway, "cave_upstream_unreachable", "ChatGPT upstream is unreachable.")
-		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, nil, nil, false, nil, 0, false, nil, nil, false, nil, "", route)
+		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, nil, nil, false, nil, 0, false, nil, nil, false, nil, "", route, evidence)
 		return
 	}
 	defer resp.Body.Close()
@@ -614,7 +617,7 @@ func (s *Server) chatGPTAutoDoor(w http.ResponseWriter, r *http.Request, rc Requ
 	copySafeResponseHeaders(w.Header(), resp.Header)
 	w.WriteHeader(resp.StatusCode)
 	counter, errCode := s.streamResponse(w, r, src, stream, requestID, nil)
-	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, errCode, reqCapture, nil, nil, false, nil, counter.n, stream, nil, nil, false, nil, "", route)
+	s.recordChatGPT(rc, r, requestID, traceID, suffix, start, resp.StatusCode, errCode, reqCapture, nil, nil, false, nil, counter.n, stream, nil, nil, false, nil, "", route, evidence)
 	if errCode != "" {
 		panic(http.ErrAbortHandler)
 	}
