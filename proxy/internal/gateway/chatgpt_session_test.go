@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/proxy/internal/nativeruntime"
+	"github.com/klauspost/compress/zstd"
 )
 
 func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
@@ -23,7 +24,7 @@ func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, model := range []string{"gpt-6.1-sol", AutoModel} {
-		for _, encoding := range []string{"identity", "gzip", "zstd"} {
+		for _, encoding := range []string{"identity", "gzip", "zstd", "zstd-8m"} {
 			for _, tc := range []struct {
 				name, context, header, session, basis string
 			}{
@@ -47,12 +48,32 @@ func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
 						t.Fatal(err)
 					}
 					headers := map[string]string{"x-cave-session": tc.header}
-					if encoding != "identity" {
+					if encoding == "zstd-8m" {
+						var encoded bytes.Buffer
+						writer, err := zstd.NewWriter(&encoded, zstd.WithWindowSize(8<<20), zstd.WithSingleSegment(false))
+						if err != nil {
+							t.Fatal(err)
+						}
+						_, _ = writer.Write(body)
+						if err := writer.Flush(); err != nil {
+							t.Fatal(err)
+						}
+						if err := writer.Close(); err != nil {
+							t.Fatal(err)
+						}
+						body = encoded.Bytes()
+						var frame zstd.Header
+						if err := frame.Decode(body); err != nil || frame.WindowSize != 8<<20 {
+							t.Fatalf("fixture window=%d, want 8 MiB: %v", frame.WindowSize, err)
+						}
+						headers["Content-Encoding"] = "zstd"
+					} else if encoding != "identity" {
 						body = encodedBody(t, encoding, body)
 						headers["Content-Encoding"] = encoding
 					}
-					// The fixed-model route streams the caller's encoded bytes
-					// unchanged. The stub must decode them like the real provider.
+					// A valid marker is stripped before provider delivery. Bodies
+					// without one retain their original encoded bytes.
+					stripsMarker := tc.name == "signed" || tc.name == "signed-over-header" || tc.name == "conflicting-markers"
 					handler := upstream.upstream.Config.Handler
 					upstream.upstream.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 						wire, err := io.ReadAll(r.Body)
@@ -61,8 +82,8 @@ func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
 							w.WriteHeader(http.StatusBadRequest)
 							return
 						}
-						if model != AutoModel && !bytes.Equal(wire, body) {
-							t.Error("session accounting changed the forwarded request bytes")
+						if model != AutoModel && !stripsMarker && !bytes.Equal(wire, body) {
+							t.Error("unmarked or invalid-marker request bytes changed")
 						}
 						decoded, _, err := decodeChatGPTRequestBody(wire, r.Header.Get("Content-Encoding"), chatGPTCaptureLimit)
 						if r.Header.Get("Content-Encoding") == "gzip" {
@@ -77,6 +98,13 @@ func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
 							t.Errorf("invalid provider body: %v", err)
 							w.WriteHeader(http.StatusBadRequest)
 							return
+						}
+						if stripsMarker && bytes.Contains(decoded, []byte("caveman-session-v1")) {
+							t.Error("signed native marker reached provider")
+						}
+						var payload map[string]any
+						if err := json.Unmarshal(decoded, &payload); err != nil || payload["input"] != "Explain E_TIMEOUT." {
+							t.Errorf("technical payload changed: %v", err)
 						}
 						r.Body = io.NopCloser(bytes.NewReader(decoded))
 						handler.ServeHTTP(w, r)

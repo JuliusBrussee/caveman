@@ -189,7 +189,7 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 	var last *RouteLast
 	if s.cloud != nil && turn {
 		exact := ""
-		if evidence.SessionCorrelationBasis == "explicit_header" {
+		if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
 			exact = evidence.SessionID
 		}
 		run = newRouteRun(r.Header, exact, "/v1/responses", asked)
@@ -314,7 +314,6 @@ func (s *Server) chatGPTAuto(w http.ResponseWriter, r *http.Request, rc RequestC
 	_, _ = reqCapture.Write(sent)
 	rawHash := sha256.Sum256(body)
 	sentHash := sha256.Sum256(sent)
-	evidence.originalBody = body
 	record := func(status int, errCode string, respCapture *cappedBuffer, respBytes int64, stream bool) {
 		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, status, errCode, reqCapture, rawHash[:], sentHash[:], true, respCapture, respBytes, stream, transform.OptimizerIDs, comp, eligible, sent, "",
 			&chatGPTRoute{from: AutoModel, answer: route, model: model}, evidence)

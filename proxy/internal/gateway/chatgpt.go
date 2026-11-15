@@ -35,6 +35,50 @@ const DefaultChatGPTUpstream = "https://chatgpt.com/backend-api/codex"
 // up, and that turn must still re-send the replacements earlier turns cached.
 const chatGPTCaptureLimit = 4 << 20
 
+// prepareChatGPTSession resolves native identity before hashes, captures or
+// provider delivery. Uninspectable and oversized bodies retain their wire
+// bytes; a partial capture cannot prove that another signed identity is absent.
+func (s *Server) prepareChatGPTSession(r *http.Request, evidence requestEvidence) (*http.Request, requestEvidence, error) {
+	if evidence.SessionID != "" {
+		evidence.SessionCorrelationBasis = "explicit_header"
+	}
+	if r.Method != http.MethodPost || r.Body == nil || len(s.sessionMarkerKey) == 0 {
+		return r, evidence, nil
+	}
+	original := r.Body
+	limit := env.Int("CAVE_MAX_REQUEST_BYTES", 33554432)
+	wire, err := io.ReadAll(io.LimitReader(original, int64(limit)+1))
+	if err != nil {
+		_ = original.Close()
+		return r, evidence, err
+	}
+	r = r.Clone(r.Context())
+	r.Body = struct {
+		io.Reader
+		io.Closer
+	}{io.MultiReader(bytes.NewReader(wire), original), original}
+	if len(wire) > limit {
+		return r, evidence, nil
+	}
+	logical, ok := decodeChatGPTMetadataBody(wire, r.Header.Get("Content-Encoding"), limit)
+	if !ok {
+		return r, evidence, nil
+	}
+	stripped, sessionID, changed := nativeruntime.StripSessionMarkers(logical, s.sessionMarkerKey)
+	if sessionID != "" {
+		evidence.SessionID, evidence.SessionCorrelationBasis = sessionID, "signed_marker"
+	}
+	if changed {
+		_ = original.Close()
+		r.Body = io.NopCloser(bytes.NewReader(stripped))
+		r.ContentLength = int64(len(stripped))
+		r.TransferEncoding, r.GetBody = nil, nil
+		r.Header.Del("Content-Encoding")
+		r.Header.Del("Content-Length")
+	}
+	return r, evidence, nil
+}
+
 // chatgpt is the ChatGPT-subscription Codex route. It preserves the agent's OAuth
 // headers and streams responses unchanged. An entitled local compress run with
 // agent-owned MCP recovery may apply the same schema-aware, deterministic live-zone
@@ -67,6 +111,11 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	}
 	rc.AgentSlug = chatGPTAgent(r.Header)
 	evidence := requestEvidenceFromHeaders(r.Header)
+	r, evidence, err = s.prepareChatGPTSession(r, evidence)
+	if err != nil {
+		httpx.Error(w, r, http.StatusBadRequest, "cave_request_read_failed", "Request body could not be read completely.")
+		return
+	}
 	lockedRoutes, compiledPlanAllowed := compiledPlanRoutes(r.Header)
 
 	suffix := strings.TrimPrefix(r.URL.Path, "/chatgpt")
@@ -416,23 +465,9 @@ func (s *Server) recordChatGPT(rc RequestContext, r *http.Request, requestID, tr
 	}
 	var originalLogicalBody []byte
 	if requestHashComplete && reqCapture != nil && !reqCapture.truncated {
-		if decoded, ok := providers.DecodeBody(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), chatGPTCaptureLimit); ok {
+		if decoded, ok := decodeChatGPTMetadataBody(reqCapture.buf.Bytes(), r.Header.Get("Content-Encoding"), chatGPTCaptureLimit); ok {
 			originalLogicalBody = decoded
 		}
-	}
-	// Join only explicit evidence, never another active session guessed from
-	// timing. Auto retains its complete decoded input separately from the
-	// bounded accounting capture, whose bytes may have been rewritten.
-	correlationBody := originalLogicalBody
-	if evidence.originalBody != nil {
-		correlationBody = evidence.originalBody
-	}
-	if evidence.SessionID != "" {
-		evidence.SessionCorrelationBasis = "explicit_header"
-	}
-	if _, sessionID, _ := nativeruntime.StripSessionMarkers(correlationBody, s.sessionMarkerKey); sessionID != "" {
-		evidence.SessionID = sessionID
-		evidence.SessionCorrelationBasis = "signed_marker"
 	}
 	// Empty when unread (over the capture limit, not JSON, or an encoding
 	// this side cannot decode): Cloud never gets "unknown" as a model id; the

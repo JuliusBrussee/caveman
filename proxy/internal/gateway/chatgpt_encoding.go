@@ -4,6 +4,7 @@ import (
 	"errors"
 	"strings"
 
+	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/klauspost/compress/zstd"
 )
 
@@ -21,6 +22,22 @@ var (
 	errChatGPTBodyOverLimit = errors.New("decoded request body exceeds the limit")
 	errChatGPTUndecodable   = errors.New("request content encoding cannot be decoded")
 )
+
+// Keep the request decoder's zstd window support. Other accounting encodings
+// use the existing bounded decoder, without enabling their recompression.
+func decodeChatGPTMetadataBody(wire []byte, encoding string, limit int) ([]byte, bool) {
+	if limit <= 0 || len(wire) > limit {
+		return nil, false
+	}
+	decoded, _, err := decodeChatGPTRequestBody(wire, encoding, limit)
+	if err == nil {
+		return decoded, true
+	}
+	if errors.Is(err, errChatGPTBodyOverLimit) {
+		return nil, false
+	}
+	return providers.DecodeBody(wire, encoding, limit)
+}
 
 func decodeChatGPTRequestBody(wire []byte, contentEncoding string, limit int) ([]byte, chatGPTRequestEncoding, error) {
 	switch encoding := chatGPTRequestEncoding(strings.ToLower(strings.TrimSpace(contentEncoding))); encoding {
