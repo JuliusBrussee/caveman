@@ -393,6 +393,22 @@ func TestTestReportPytestCollectionErrors(t *testing.T) {
 		t.Errorf("interrupted collection lost its reason:\n%s", out)
 	}
 
+	// pytest on Windows writes its longrepr lines CRLF-separated, and the
+	// reason is the line AFTER the frames, so a stray \r would ride into the
+	// summary with it.
+	out, ok = c.Compress([]byte("{\"tests\":[{\"nodeid\":\"t.py::a\",\"outcome\":\"passed\"}]," +
+		"\"collectors\":[{\"nodeid\":\"test_bad.py\",\"outcome\":\"failed\"," +
+		"\"longrepr\":\"test_bad.py:1: in <module>\\r\\n    import nope\\r\\nE   ModuleNotFoundError: No module named 'nope'\"}]}"))
+	if !ok {
+		t.Fatal("expected a CRLF longrepr to compress")
+	}
+	if !bytes.Contains(out, []byte("ModuleNotFoundError: No module named 'nope'")) {
+		t.Errorf("CRLF longrepr lost its reason:\n%s", out)
+	}
+	if bytes.Contains(out, []byte("\r")) {
+		t.Errorf("a bare CR rode into the summary:\n%q", out)
+	}
+
 	// A clean run carries only passed collectors; none of them may become an
 	// error, and the summary must be byte-identical to the no-collectors form.
 	withCollectors, ok1 := c.Compress([]byte(`{"exitcode":0,"tests":[{"nodeid":"t.py::a","outcome":"passed"}],
