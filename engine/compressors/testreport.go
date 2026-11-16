@@ -399,6 +399,8 @@ func parseJestJSON(input []byte) (*testReport, error) {
 		NumPendingTests int `json:"numPendingTests"`
 		TestResults     []struct {
 			Name             string `json:"name"`
+			Status           string `json:"status"`
+			Message          string `json:"message"`
 			AssertionResults []struct {
 				AncestorTitles  []string `json:"ancestorTitles"`
 				Title           string   `json:"title"`
@@ -425,8 +427,10 @@ func parseJestJSON(input []byte) (*testReport, error) {
 	}
 
 	for _, suite := range doc.TestResults {
+		failedTests := 0
 		for _, test := range suite.AssertionResults {
 			if test.Status == "failed" {
+				failedTests++
 				name := test.FullName
 				if name == "" {
 					name = strings.Join(append(test.AncestorTitles, test.Title), " › ")
@@ -457,9 +461,37 @@ func parseJestJSON(input []byte) (*testReport, error) {
 				})
 			}
 		}
+		// A suite Jest could not run (a module that fails to load, a throwing
+		// beforeAll/afterAll) is "failed" with no failed test of its own. Its
+		// reason lives only in the suite message and it never reaches
+		// numFailedTests, so without this a red run summarizes as all-passing.
+		if suite.Status == "failed" && failedTests == 0 {
+			report.Errors++
+			report.Failures = append(report.Failures, jestSuiteFailure(suite.Name, suite.Message))
+		}
 	}
 
 	return report, nil
+}
+
+// jestSuiteFailure turns a suite-level Jest message into an error entry. The
+// first line after Jest's "● Test suite failed to run" header is the reason;
+// "at …" lines are the stack. Jest colors the message when stdout is a TTY or
+// FORCE_COLOR is set.
+func jestSuiteFailure(name, message string) testFailure {
+	msg := ""
+	stack := []string{}
+	for _, line := range strings.Split(ansiRe.ReplaceAllString(message, ""), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "", strings.HasSuffix(line, "Test suite failed to run"):
+		case strings.HasPrefix(line, "at "):
+			stack = append(stack, line)
+		case msg == "":
+			msg = line
+		}
+	}
+	return testFailure{Name: name, Message: msg, Type: "error", Stack: trimStack(stack)}
 }
 
 // trimStack keeps first + last few frames, eliding the middle if too long.

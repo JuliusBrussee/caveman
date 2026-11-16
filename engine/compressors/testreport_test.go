@@ -293,6 +293,50 @@ func TestTestReportJestJSON(t *testing.T) {
 	}
 }
 
+// TestTestReportJestSuiteFailures pins that a suite Jest could not run — a
+// module that fails to load, a throwing afterAll — reaches the summary as an
+// error. Jest records those only on the suite (status "failed" plus a message,
+// counted in numFailedTestSuites), never in numFailedTests, so a summary built
+// from the assertion counts alone reported a red run as all-passing. Messages
+// trimmed from real `jest --json` output (Jest 29.7.0; the first one was
+// captured with FORCE_COLOR=1, so it carries ANSI escapes).
+func TestTestReportJestSuiteFailures(t *testing.T) {
+	c := compressors.NewTestReport()
+	out, ok := c.Compress([]byte(`{"numFailedTests":0,"numPassedTests":3,"numPendingTests":0,"numFailedTestSuites":2,"success":false,"testResults":[
+		{"name":"/repo/src/user.test.js","status":"failed","assertionResults":[],
+		 "message":"  \u001b[1m● \u001b[22mTest suite failed to run\n\n    Cannot find module './db' from 'src/user.test.js'\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m \u001b[36mconst\u001b[39m db \u001b[33m=\u001b[39m require(\u001b[32m'./db'\u001b[39m)\u001b[33m;\u001b[39m"},
+		{"name":"/repo/src/hook.test.js","status":"failed","assertionResults":[{"fullName":"works","status":"passed"}],
+		 "message":"\n\n  ● Test suite failed to run\n\n    afterAll boom: pool not closed\n\n    > 1 | afterAll(() => { throw new Error('afterAll boom: pool not closed'); });\n\n      at Object.<anonymous> (src/hook.test.js:1:24)"},
+		{"name":"/repo/src/ok.test.js","status":"passed","message":"","assertionResults":[{"fullName":"adds","status":"passed"},{"fullName":"subs","status":"passed"}]}]}`))
+	if !ok {
+		t.Fatal("expected Jest JSON compression")
+	}
+	for _, want := range []string{
+		"TEST SUMMARY: 3 passed, 2 errors",
+		"ERROR: /repo/src/user.test.js\n  Cannot find module './db' from 'src/user.test.js'",
+		"ERROR: /repo/src/hook.test.js\n  afterAll boom: pool not closed",
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if bytes.Contains(out, []byte("\x1b")) {
+		t.Errorf("ANSI escape leaked into the summary:\n%q", out)
+	}
+
+	// A suite that failed because one of its own tests failed is already
+	// reported through that test; it must not be counted a second time.
+	out, ok = c.Compress([]byte(`{"numFailedTests":1,"numPassedTests":1,"numPendingTests":0,"testResults":[
+		{"name":"/repo/src/math.test.js","status":"failed","message":"  ● math › divides\n\n    expect(received).toBe(expected)",
+		 "assertionResults":[{"fullName":"math adds","status":"passed"},{"fullName":"math divides","status":"failed","failureMessages":["expect(received).toBe(expected)"]}]}]}`))
+	if !ok {
+		t.Fatal("expected Jest JSON compression")
+	}
+	if !bytes.Contains(out, []byte("TEST SUMMARY: 1 passed, 1 failed\n")) || bytes.Contains(out, []byte("ERROR:")) {
+		t.Errorf("assertion failure double-counted as a suite error:\n%s", out)
+	}
+}
+
 // Test detection
 
 func TestTestReportDetection(t *testing.T) {
