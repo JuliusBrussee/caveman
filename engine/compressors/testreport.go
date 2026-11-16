@@ -299,6 +299,14 @@ func parsePytestJSON(input []byte) (*testReport, error) {
 			Call     pytestStage `json:"call"`
 			Teardown pytestStage `json:"teardown"`
 		} `json:"tests"`
+		// A module pytest could not collect is recorded only here: tests[]
+		// never gets an entry for it and the json-report summary has no error
+		// key, so this is the sole record that the run was red.
+		Collectors []struct {
+			NodeID   string `json:"nodeid"`
+			Outcome  string `json:"outcome"`
+			Longrepr string `json:"longrepr"`
+		} `json:"collectors"`
 	}
 
 	if err := json.Unmarshal(input, &doc); err != nil {
@@ -384,7 +392,57 @@ func parsePytestJSON(input []byte) (*testReport, error) {
 		}
 	}
 
+	// A collector pytest could not run — an unimportable test module, a module
+	// body that raises, a broken conftest — is "failed" with no entry in
+	// tests[], so without this a run pytest itself reported as red ("2 passed,
+	// 1 error", exit 1) summarized as all-passing. Reachable under
+	// --continue-on-collection-errors, which leaves the surviving tests in
+	// tests[] so the payload is compressed rather than passed through on the
+	// 0-tests check.
+	//
+	// Only "failed" counts. Parent collectors of a failed module stay "passed",
+	// so a failure is reported once, by the node that produced it; a module
+	// skipped at collection is "skipped", which pytest counts as a skip and not
+	// as an error.
+	for _, col := range doc.Collectors {
+		if col.Outcome != "failed" {
+			continue
+		}
+		report.Errors++
+		report.Failures = append(report.Failures, pytestCollectionFailure(col.NodeID, col.Longrepr))
+	}
+
 	return report, nil
+}
+
+// pytestCollectionFailure turns a failed collector's longrepr into an error
+// entry. pytest's own short summary names the exception, so the "E " line is
+// preferred as the reason; a longrepr without one (a plain collection message)
+// falls back to its first non-frame line. Frames are the ".py:" lines, matching
+// the two branches above.
+func pytestCollectionFailure(nodeID, longrepr string) testFailure {
+	msg, fallback := "", ""
+	stack := []string{}
+	for _, line := range strings.Split(longrepr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "E "):
+			if msg == "" {
+				msg = strings.TrimSpace(strings.TrimPrefix(line, "E "))
+			}
+		case strings.Contains(line, ".py:"):
+			stack = append(stack, line)
+		case fallback == "":
+			fallback = line
+		}
+	}
+	if msg == "" {
+		msg = fallback
+	}
+	return testFailure{Name: nodeID, Message: msg, Type: "error", Stack: trimStack(stack)}
 }
 
 type pytestStage struct {

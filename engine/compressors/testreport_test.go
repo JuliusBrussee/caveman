@@ -337,6 +337,75 @@ func TestTestReportJestSuiteFailures(t *testing.T) {
 	}
 }
 
+// TestTestReportPytestCollectionErrors pins the pytest sibling of the Jest gap
+// above. A test module pytest could not import is recorded only under
+// `collectors[]` (outcome "failed", reason in longrepr); it never reaches
+// `tests[]` and the json-report `summary` has no error key either, so a report
+// built from `tests[]` alone summarized a red run as all-passing.
+//
+// Reachable whenever pytest is told to keep going after a collection error:
+// `--continue-on-collection-errors` leaves the surviving tests in `tests[]`, so
+// the payload has tests and is compressed rather than passed through. Shapes and
+// longreprs below are trimmed from real runs (pytest 9.2.0, pytest-json-report
+// 1.5.0); that run printed "1 passed, 1 skipped, 2 errors" and exited 1.
+func TestTestReportPytestCollectionErrors(t *testing.T) {
+	c := compressors.NewTestReport()
+	out, ok := c.Compress([]byte(`{"exitcode":1,"duration":0.03,
+		"summary":{"passed":1,"total":1,"collected":1},
+		"tests":[{"nodeid":"test_ok.py::test_a","outcome":"passed"}],
+		"collectors":[
+			{"nodeid":"","outcome":"passed","result":[]},
+			{"nodeid":"test_bad1.py","outcome":"failed","longrepr":"ImportError while importing test module '/repo/test_bad1.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/lib/python3.11/importlib/__init__.py:126: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\ntest_bad1.py:1: in <module>\n    import nope_one\nE   ModuleNotFoundError: No module named 'nope_one'"},
+			{"nodeid":"test_bad2.py","outcome":"failed","longrepr":"test_bad2.py:1: in <module>\n    raise RuntimeError(\"module body exploded\")\nE   RuntimeError: module body exploded"},
+			{"nodeid":"test_modskip.py","outcome":"skipped","longrepr":"Skipped: needs hardware"},
+			{"nodeid":"test_ok.py","outcome":"passed","result":[]},
+			{"nodeid":".","outcome":"passed","result":[]}]}`))
+	if !ok {
+		t.Fatal("expected pytest JSON compression")
+	}
+	for _, want := range []string{
+		"TEST SUMMARY: 1 passed, 2 errors",
+		"ERROR: test_bad1.py\n  ModuleNotFoundError: No module named 'nope_one'",
+		"ERROR: test_bad2.py\n  RuntimeError: module body exploded",
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// Only the two failed collectors count. A passed collector is not an
+	// error, and a module skipped at collection is not one either — pytest
+	// reported that one as a skip, not as the third error.
+	if bytes.Contains(out, []byte("3 errors")) || bytes.Contains(out, []byte("ERROR: test_modskip.py")) ||
+		bytes.Contains(out, []byte("ERROR: test_ok.py")) || bytes.Contains(out, []byte("ERROR: .")) {
+		t.Errorf("counted a collector that did not fail:\n%s", out)
+	}
+
+	// pytest's default: collection aborts, tests[] is empty. Previously the
+	// whole payload passed through on the 0-tests check; the error is now
+	// reported, matching what the Jest sibling does for a load failure.
+	out, ok = c.Compress([]byte(`{"exitcode":2,"summary":{"total":0,"collected":2},"tests":[],
+		"collectors":[{"nodeid":"test_bad1.py","outcome":"failed","longrepr":"test_bad1.py:1: in <module>\n    import nope_one\nE   ModuleNotFoundError: No module named 'nope_one'"}]}`))
+	if !ok {
+		t.Fatal("expected an interrupted collection to compress, not pass through")
+	}
+	if !bytes.Contains(out, []byte("TEST SUMMARY: 1 errors")) ||
+		!bytes.Contains(out, []byte("ModuleNotFoundError: No module named 'nope_one'")) {
+		t.Errorf("interrupted collection lost its reason:\n%s", out)
+	}
+
+	// A clean run carries only passed collectors; none of them may become an
+	// error, and the summary must be byte-identical to the no-collectors form.
+	withCollectors, ok1 := c.Compress([]byte(`{"exitcode":0,"tests":[{"nodeid":"t.py::a","outcome":"passed"}],
+		"collectors":[{"nodeid":"","outcome":"passed"},{"nodeid":"t.py","outcome":"passed"}]}`))
+	without, ok2 := c.Compress([]byte(`{"exitcode":0,"tests":[{"nodeid":"t.py::a","outcome":"passed"}]}`))
+	if !ok1 || !ok2 {
+		t.Fatal("expected both passing reports to compress")
+	}
+	if !bytes.Equal(withCollectors, without) {
+		t.Errorf("passed collectors changed a green summary:\n%s\nvs\n%s", withCollectors, without)
+	}
+}
+
 // Test detection
 
 func TestTestReportDetection(t *testing.T) {
