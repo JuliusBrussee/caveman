@@ -15,7 +15,7 @@ const path = require('path');
 
 const PAYLOAD_DIR = 'caveman';
 const HOOK_SCRIPT = 'caveman-host-session-start.js';
-const HOOK_FILES = [HOOK_SCRIPT, 'caveman-config.js', 'package.json'];
+const HOOK_FILES = [HOOK_SCRIPT, 'caveman-config.js', 'cursor-dedupe-tools.js', 'package.json'];
 const RULESET_SKILLS = ['caveman', 'ultracave', 'megacave'];
 
 // One owned directory, so uninstall removes it whole and the digest covers
