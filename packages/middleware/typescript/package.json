@@ -257,7 +257,9 @@
     ],
     "@google/genai": [
       "2.21.0",
-      "2.24.0"
+      "2.24.0",
+      "3.0.0",
+      "3.3.0"
     ],
     "langchain": [
       "1.5.10",
@@ -288,7 +290,7 @@
     "@ai-sdk/provider": ">=4.0.11 <5",
     "openai": ">=7.12.1 <8",
     "@anthropic-ai/sdk": ">=0.124.0 <2",
-    "@google/genai": ">=2.21.0 <3",
+    "@google/genai": ">=2.21.0 <4",
     "langchain": ">=1.5.10 <2",
     "@langchain/core": ">=1.2.9 <2",
     "@strands-agents/sdk": ">=1.17.0 <2",
