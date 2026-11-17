@@ -10376,6 +10376,9 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     if (source.includes(marker)) throw new Error("existing Hermes Caveman native block is unjournaled; run `caveman doctor hermes`");
   }
   const nativePluginMembership = hermesNamedPluginMembership(source, HERMES_NATIVE_PLUGIN_NAME);
+  if (nativePluginMembership === "unhandled") {
+    throw new Error("Hermes plugins.enabled or plugins.disabled uses unsupported YAML; refusing to modify configuration");
+  }
   if (nativePluginMembership === "disabled") {
     throw new Error(`Hermes plugin ${HERMES_NATIVE_PLUGIN_NAME} is explicitly disabled in plugins.disabled; remove that entry before enabling Caveman`);
   }
@@ -10418,8 +10421,8 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   if (plugins) {
     let enabled = -1;
     for (let i = plugins.start + 1; i < plugins.end; i++) {
-      if (/^  enabled:\s*\[/.test(lines[i]!)) throw new Error("Hermes plugins.enabled uses inline YAML; refusing unsafe native merge");
-      if (/^  enabled:\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*\[/.test(lines[i]!)) throw new Error("Hermes plugins.enabled uses inline YAML; refusing unsafe native merge");
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
     }
     if (enabled >= 0) {
       if (nativePluginMembership !== "enabled") {
@@ -14547,7 +14550,7 @@ function hermesPluginOwned(text: string, owned: NativeJournal["operations"][numb
   const block = owned?.plugin_block;
   if (block === null) return true;
   if (typeof block !== "string") return false;
-  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME);
+  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME) === true;
 }
 
 // Indent shared by the direct children of [start, end), or null when there are
@@ -19019,16 +19022,90 @@ def register(ctx):
 `;
 }
 
-type HermesPluginMembership = "enabled" | "disabled" | "not-enabled";
+type HermesPluginMembership = "enabled" | "disabled" | "not-enabled" | "unhandled";
 
-function hermesFlowSequenceItems(raw: string): string[] | null {
+// Decode the quoted scalar subset used for plugin names. Unknown YAML escapes
+// are not guessed: membership callers must stop before making install writes.
+function hermesWithoutInlineComment(raw: string): string {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let end = raw.length;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (quote === '"' && escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === '"' && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'" && char === "'" && raw[i + 1] === "'") {
+      i++;
+      continue;
+    }
+    if (quote && char === quote) {
+      quote = null;
+      continue;
+    }
+    if (!quote && (char === "'" || char === '"')) {
+      quote = char;
+      continue;
+    }
+    if (!quote && char === "#" && (i === 0 || /\s/.test(raw[i - 1]!))) {
+      end = i;
+      break;
+    }
+  }
+  return raw.slice(0, end);
+}
+
+function hermesScalarValue(raw: string): string | null {
+  const value = hermesWithoutInlineComment(raw).trim();
+  if (value.startsWith('"') || value.endsWith('"')) {
+    if (!value.startsWith('"') || !value.endsWith('"')) return null;
+    const source = value.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i]!;
+      if (char !== "\\") {
+        if (char === '"') return null;
+        decoded += char;
+        continue;
+      }
+      const next = source[++i];
+      if (next === '"' || next === "\\") decoded += next;
+      else if (next === "x" && /^[0-9a-fA-F]{2}/.test(source.slice(i + 1, i + 3))) {
+        decoded += String.fromCharCode(Number.parseInt(source.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else return null;
+    }
+    return decoded;
+  }
+  if (value.startsWith("'") || value.endsWith("'")) {
+    if (!value.startsWith("'") || !value.endsWith("'")) return null;
+    const source = value.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] === "'") {
+        if (source[i + 1] !== "'") return null;
+        decoded += "'";
+        i++;
+      } else decoded += source[i];
+    }
+    return decoded;
+  }
+  if (value.includes('"') || value.includes("'") || /^[\[{&*!|>]/.test(value) || /:\s/.test(value)) return null;
+  return value;
+}
+
+function hermesFlowSequenceItems(raw: string): string[] | null | false {
   const start = raw.indexOf("[");
   if (start < 0) return null;
   const items: string[] = [];
   let item = "";
   let quote: "'" | '"' | null = null;
   let escaped = false;
-  let depth = 0;
   for (let i = start + 1; i < raw.length; i++) {
     const char = raw[i]!;
     if (quote) {
@@ -19058,26 +19135,17 @@ function hermesFlowSequenceItems(raw: string): string[] | null {
       item += char;
       continue;
     }
-    if (char === "[" || char === "{") {
-      depth++;
-      item += char;
-      continue;
-    }
+    if (char === "[" || char === "{") return false;
     if (char === "]") {
-      if (depth === 0) {
-        items.push(item);
-        return items.map(configValue).filter((value): value is string => value !== undefined);
-      }
-      depth--;
-      item += char;
-      continue;
+      items.push(item);
+      const trailing = raw.slice(i + 1).replace(/^\s+/, "");
+      if (trailing && !trailing.startsWith("#")) return false;
+      const values = items.map(hermesScalarValue);
+      if (values.some((value) => value === null)) return false;
+      return values as string[];
     }
-    if (char === "}" && depth > 0) {
-      depth--;
-      item += char;
-      continue;
-    }
-    if (char === "," && depth === 0) {
+    if (char === "}") return false;
+    if (char === ",") {
       items.push(item);
       item = "";
       continue;
@@ -19087,14 +19155,25 @@ function hermesFlowSequenceItems(raw: string): string[] | null {
   return null;
 }
 
-function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean {
+function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean | "unhandled" {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
   if (!plugins) return false;
+  let listKeyCount = 0;
   for (let i = plugins.start + 1; i < plugins.end; i++) {
-    const match = lines[i]!.match(/^  (enabled|disabled):(?:\s*(.*))?$/);
-    if (!match || match[1] !== listName) continue;
-    const raw = (match[2] ?? "").replace(/\s+#.*$/, "").trim();
+    const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
+    if (!match) continue;
+    const key = hermesScalarValue(match[1]!);
+    if (key === null) return "unhandled";
+    if (key === listName && ++listKeyCount > 1) return "unhandled";
+  }
+  for (let i = plugins.start + 1; i < plugins.end; i++) {
+    const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
+    if (!match) continue;
+    const key = hermesScalarValue(match[1]!);
+    if (key === null) return "unhandled";
+    if (key !== listName) continue;
+    const raw = hermesWithoutInlineComment(match[2] ?? "").trim();
     if (raw.startsWith("[")) {
       let flow = raw;
       let items = hermesFlowSequenceItems(flow);
@@ -19102,22 +19181,28 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
         flow += `\n${lines[next]}`;
         items = hermesFlowSequenceItems(flow);
       }
-      return items?.includes(name) ?? false;
+      if (!items) return "unhandled";
+      return items.includes(name);
     }
-    if (raw && !raw.startsWith("#")) return false;
+    if (raw && raw !== "null" && raw !== "~") return "unhandled";
     let sequenceIndent: number | null = null;
     for (let next = i + 1; next < plugins.end; next++) {
       const line = lines[next]!;
-      if (/^  [A-Za-z0-9_-]+:\s*/.test(line)) break;
+      if (/^  [^ ].*?:/.test(line)) break;
       if (!line.trim() || /^\s*#/.test(line)) continue;
       const item = line.match(/^(\s*)-\s*(.*?)\s*$/);
       if (!item) {
-        if (sequenceIndent !== null && line.search(/\S/) > sequenceIndent) continue;
+        const indent = line.search(/\S/);
+        if (sequenceIndent !== null && indent > sequenceIndent) return "unhandled";
+        if (indent > 2) return "unhandled";
         break;
       }
       const indent = item[1]!.length;
       if (sequenceIndent === null) sequenceIndent = indent;
-      if (indent === sequenceIndent && configValue(item[2]) === name) return true;
+      if (indent !== sequenceIndent) return "unhandled";
+      const value = hermesScalarValue(item[2]!);
+      if (value === null) return "unhandled";
+      if (value === name) return true;
     }
     return false;
   }
@@ -19125,15 +19210,22 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
 }
 
 function hermesNamedPluginMembership(text: string, name: string): HermesPluginMembership {
-  if (hermesPluginListContains(text, "disabled", name)) return "disabled";
-  if (hermesPluginListContains(text, "enabled", name)) return "enabled";
+  const disabled = hermesPluginListContains(text, "disabled", name);
+  if (disabled === "unhandled") return "unhandled";
+  if (disabled) return "disabled";
+  const enabled = hermesPluginListContains(text, "enabled", name);
+  if (enabled === "unhandled") return "unhandled";
+  if (enabled) return "enabled";
   return "not-enabled";
 }
 
 function hermesEnabledListIsInline(text: string): boolean {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
-  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => /^  enabled:\s*\[/.test(line)));
+  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => {
+    const match = line.match(/^  ([^ ].*?):\s*(.*)$/);
+    return match && hermesScalarValue(match[1]!) === "enabled" && match[2]!.trim().startsWith("[");
+  }));
 }
 
 function hermesPluginInstallConfigReady(): boolean {
@@ -19148,6 +19240,10 @@ function hermesPluginInstallConfigReady(): boolean {
     }
   }
   const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "unhandled") {
+    console.error(`${mark("warn")} ${path} uses an unsupported plugins.enabled or plugins.disabled YAML form; refusing to install the Hermes plugin`);
+    return false;
+  }
   if (membership === "disabled") {
     console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; no hook was installed`);
     return false;
@@ -19171,6 +19267,10 @@ function enableHermesPluginInConfig(): boolean {
     }
   }
   const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "unhandled") {
+    console.error(`${mark("warn")} ${path} uses an unsupported plugins.enabled or plugins.disabled YAML form; refusing to modify Hermes configuration`);
+    return false;
+  }
   if (membership === "disabled") {
     console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; remove that entry before installing`);
     return false;
@@ -19184,11 +19284,11 @@ function enableHermesPluginInConfig(): boolean {
     let inlineEnabled = false;
     for (let i = plugins.start + 1; i < plugins.end; i++) {
       const line = lines[i]!;
-      if (/^  enabled:\s*(?:#.*)?$/.test(line)) {
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*(?:#.*)?$/.test(line)) {
         enabledLine = i;
         break;
       }
-      if (/^  enabled:\s*\[/.test(line)) {
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*\[/.test(line)) {
         enabledLine = i;
         inlineEnabled = true;
         break;
