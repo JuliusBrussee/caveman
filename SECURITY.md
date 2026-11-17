@@ -391,7 +391,7 @@ available locally.
   instructions only: no scripts, no network calls, no extra tool access.
   By default `caveman-compress` sends only the file you name to Anthropic
   (through the API or your `claude` CLI) and writes back only that file and its
-  backup. If you opt in with `CAVEMAN_COMPRESS_PROVIDER=opencode` or
+  backup. If you opt in with `CAVEMAN_COMPRESS_PROVIDER=codex`, `opencode` or
   `openai-compat`, the file goes to that provider, or to the endpoint you set in
   `CAVEMAN_COMPRESS_ENDPOINT`, instead (opencode also gets the prompt through a
   temporary file that is deleted afterwards); see
