@@ -195,7 +195,7 @@ Changed your mind: `npx -y github:JuliusBrussee/caveman -- --uninstall` (on npm 
 
 Only grabbed the skill? `npx skills remove JuliusBrussee/caveman -g` take it back out.
 
-Install broke? Open your agent in this repo and say *"Read CLAUDE.md and INSTALL.md, install caveman for me."* Agent fix own brain.
+Install broke? Open your agent in this repo and say *"Read INSTALL.md, install caveman for me."* Agent fix own brain.
 
 </details>
 

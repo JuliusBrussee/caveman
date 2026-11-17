@@ -1,8 +1,7 @@
-# Caveman technical documentation
+# Caveman documentation
 
-This manual explains the public Caveman repository from installation through
-runtime behavior. It covers the files and interfaces that users can inspect in
-this repository. Hosted-service implementation details are outside its scope.
+How the public Caveman repository works, from install to runtime. Hosted-service
+internals are out of scope. Why it is built this way: [WHY.md](./WHY.md).
 
 ## Start here
 
@@ -10,7 +9,7 @@ this repository. Hosted-service implementation details are outside its scope.
 - [Architecture](./technical/architecture.md): request path, local processes,
   storage, and failure behavior
 - [Install and update](./technical/install-and-update.md): skill-only and local
-  runtime installs
+  runtime installs; [Windows fallback](./install-windows.md)
 - [CLI reference](./technical/cli-reference.md): command groups and output
   contracts
 - [Configuration](./technical/configuration.md): capability keys, local files,
@@ -20,29 +19,34 @@ this repository. Hosted-service implementation details are outside its scope.
 
 - [Agent wrapping](./technical/agent-wrapping.md): supported agents, routing,
   recovery requirements, and profile format
+- [Agent-profile registry](./technical/agent-profile-registry.md): profile
+  fields, injection tiers, and the profile compiler
 - [Compression Engine](./technical/engine.md): detection, compressors, safety
   classes, token counts, and pass-through rules
 - [Context recovery](./technical/context-recovery.md): CCR handles, storage,
   retrieval, and retention limits
 - [Local proxy and providers](./technical/proxy-and-providers.md): routes,
-  credentials, usage parsing, and network boundaries
+  credentials, reliability, usage parsing, and network boundaries
+- [Provider authentication](./technical/provider-authentication.md): which
+  credential the proxy forwards, per provider
 - [Deploy the proxy for a team](./technical/deploy.md): shared VPC and cloud
   deployment, inbound token, containers, and manifests
 - [TOON and Pixel](./technical/toon-and-pixel.md): structured-data and image
   transforms
 - [Cache planner](./technical/cache-planner.md): provider prompt caching
+- [Local stats](./technical/stats-accounting.md): what `caveman stats` counts
+  and how savings are priced
 - Framework middleware: [TypeScript](../packages/middleware/typescript/README.md)
-  and [Python](../packages/middleware/python/README.md) adapters that wrap one call
-  in your own app; hosted guide at https://docs.caveman.so/integrations/frameworks
+  and [Python](../packages/middleware/python/README.md) adapters, and the
+  normative [middleware protocol](./technical/middleware-protocol.md)
 
 ## Agent-facing tools
 
-- [Skills, hooks, and plugins](./technical/skills-hooks-and-plugins.md): response
-  style, Claude Code hooks, opencode integration, extension behavior, and
-  compressed subagents
+- [Skills, hooks, and plugins](./technical/skills-hooks-and-plugins.md): modes,
+  plugin layout, Claude Code hooks, the installer, and how each agent gets
+  caveman
 - [Memory, MCP, browser, and shrink](./technical/local-tools.md): durable memory,
-  five recovery tools, accessibility snapshots, command output, and tool
-  catalogs
+  recovery tools, accessibility snapshots, command output, and tool catalogs
 - [Exploration and delegation](./technical/exploration-and-delegation.md):
   read-only repository search, compact return contracts, and delegation limits
 
@@ -55,13 +59,25 @@ this repository. Hosted-service implementation details are outside its scope.
 - [Accounting and evidence](./technical/accounting-and-evidence.md): `inferred`,
   provider-reported, benchmark, and `verified` labels
 - [Security and privacy](./technical/security-and-privacy.md): data flows and
-  secrets; local files; SSRF controls; binary verification
+  secrets, local files, SSRF controls, binary verification
 - [Testing and benchmarks](./technical/testing-and-benchmarks.md): local gates,
-  benchmark boundaries, and reproducibility
+  evals, benchmark rules, and reproducibility
 - [Extending Caveman](./technical/extending.md): agent profiles, compressors,
   providers, schemas, and prices
-- [Glossary](./technical/glossary.md): every Caveman-specific term used by this
-  manual
+- [Glossary](./technical/glossary.md): every Caveman-specific term used here
 
-Package READMEs remain the narrow API references. This manual supplies the
-cross-component model and links to those references where details belong.
+## Published numbers
+
+- [Honest numbers](./HONEST-NUMBERS.md): what the voice saves and where it loses
+- [Wrap benchmark](./WRAP-BENCHMARK.md): input tokens with and without the
+  runtime, six tool-output workloads
+- [Auto benchmark](./AUTO-BENCHMARK.md): model routing against Opus at xhigh
+
+## Contributing and releasing
+
+- [Contributing agent profiles](./CONTRIBUTING_PROFILES.md)
+- [Package releases](./PACKAGE_RELEASES.md): tags, publish lanes, signing, and
+  release order
+- [Release notes](./releases/)
+
+Package READMEs stay the narrow API references.

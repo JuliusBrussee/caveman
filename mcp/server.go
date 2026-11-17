@@ -43,7 +43,7 @@ type Tool struct {
 	// paths (caveman_retrieve) set it, because the CCR store is shared with a
 	// gateway that has no matching ceiling, so an original can legitimately
 	// exceed the cap and failing it closed would make elided content
-	// unrecoverable (root CLAUDE.md rule #2: recovery returns the original unchanged).
+	// unrecoverable (docs/WHY.md ruling 6: recovery returns the original unchanged).
 	ExemptResultCap bool
 }
 

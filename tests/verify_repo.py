@@ -137,7 +137,7 @@ def verify_shipped_skills_are_documented() -> None:
 
     docs = "\n".join(
         (ROOT / name).read_text(encoding="utf-8")
-        for name in ("README.md", "CLAUDE.md")
+        for name in ("README.md", "AGENTS.md")
     )
     # Only count a skill as documented when it is named in a code span — a
     # path, a table cell, a slash command. A bare substring search over the
@@ -152,7 +152,7 @@ def verify_shipped_skills_are_documented() -> None:
     ensure(
         not undocumented,
         "these skills ship to users but are named in neither README.md nor "
-        f"CLAUDE.md: {', '.join(undocumented)}. Document them, or move them "
+        f"AGENTS.md: {', '.join(undocumented)}. Document them, or move them "
         "out of skills/ so they stop auto-installing.",
     )
 
@@ -593,7 +593,7 @@ def verify_python_text_io_encoding() -> None:
         "node_modules", ".git", ".venv", "venv", "__pycache__",
         "build", ".mypy_cache", "target", "dist",
     }
-    # Routed to other repositories by CLAUDE.md, or a CI-generated mirror of a
+    # Routed to other repositories, or a CI-generated mirror of a
     # source this check already covers — a violation there is not fixable from
     # this repo, so failing the build on one would only strand the next run.
     skip_prefixes = (

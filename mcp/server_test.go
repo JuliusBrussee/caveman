@@ -734,7 +734,7 @@ func TestOversizedResultRejectedWithCaveCode(t *testing.T) {
 // Recovery must NEVER fail closed on size. The CCR store is shared with the
 // gateway, which has no 16 MiB ceiling, so a handle's original can exceed
 // maxResultBytes; caveman_retrieve must still return the exact original,
-// not cave_payload_too_large (root CLAUDE.md rule #2). Regression for
+// not cave_payload_too_large (docs/WHY.md ruling 6). Regression for
 // the review finding on the #139 fix.
 func TestRetrievePayoutExemptFromResultCap(t *testing.T) {
 	original := strings.Repeat("z", defaultMaxResultBytes+4096) // > 16 MiB
