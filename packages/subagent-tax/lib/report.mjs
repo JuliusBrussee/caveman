@@ -83,8 +83,7 @@ function walk(dir, base = dir, acc = []) {
 }
 
 // The repro pack's integrity anchor: a sha256 of every artifact in the out dir.
-// This is a hash manifest, not a signature — CaveBench Ed25519 signing is a
-// separate, founder-keyed step that runs only at publish time.
+// This is a hash manifest, not a signature.
 export function writeManifest(outDir) {
   const entries = walk(outDir).sort();
   const lines = entries.map((rel) => `${sha256File(join(outDir, rel))}  ${rel}`);

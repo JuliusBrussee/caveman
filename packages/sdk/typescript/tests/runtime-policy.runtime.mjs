@@ -1,9 +1,9 @@
 /**
- * Runtime tests for the TS SDK runtime-policy client (spec §21.2, issue #88).
+ * Runtime tests for the TS SDK runtime-policy client.
  *
  * Drives EVERY section of ../../parity/runtime-policy.fixtures.json: the fetch
  * wire, the signature cases, all assignment vectors (exact float equality
- * against the Go sampling.Fraction) and all decision cases. Run with:
+ * against the server's sampling function) and all decision cases. Run with:
  *   pnpm --filter @caveman-ai/sdk build && node --test tests/runtime-policy.runtime.mjs
  */
 import { test } from "node:test";

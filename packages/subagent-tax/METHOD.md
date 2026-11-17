@@ -150,9 +150,7 @@ create.
 paths, skill lists, MCP tool names, and any global instruction files. Review
 before publishing a repro pack.
 
-**Signing:** the manifest is a hash chain, not a signature. Publishing signed
-results goes through the CaveBench Ed25519 receipt path and its governance
-(`docs/cavebench/GOVERNANCE.md`), founder-keyed, at publish time only.
+**Signing:** the manifest is a hash chain, not a signature.
 
 ## Known limitations
 

@@ -768,9 +768,10 @@ test("doctor codex reports Caveman's hooks untrusted until /hooks trusts them", 
 // way for Caveman's at the same index: that hash is the installer's, so Codex
 // runs neither, and doctor must not read it as trusted.
 test("doctor codex reads a trust hash recorded for another hook at the same position as untrusted", async () => {
-  // What codex 0.161.0 recorded in /hooks for this command.
-  const recorded = { hooks: [{ type: "command", command: "'/tmp/cvx-codex-test.b7mQlW/gobin/caveman-proxy' native-hook codex --adapter '/Users/julb/Desktop/GitHub/caveman-v4-stability/packages/cli/dist/native-hook-fast.js' --node '/Users/julb/.local/share/fnm/node-versions/v22.22.2/installation/bin/node'" }] };
-  assert.equal(codexHookHash(recorded), "sha256:02d7c695f1ad13472c0bb36bf859bded8187e5976c06efe7cf4b6febdddc5de9");
+  // The command shape codex 0.161.0 recorded in /hooks, with generic paths;
+  // the hash is codexHookHash's for this exact string.
+  const recorded = { hooks: [{ type: "command", command: "'/tmp/cvx-codex-test.b7mQlW/gobin/caveman-proxy' native-hook codex --adapter '/Users/dev/src/caveman/packages/cli/dist/native-hook-fast.js' --node '/Users/dev/.local/share/fnm/node-versions/v22.22.2/installation/bin/node'" }] };
+  assert.equal(codexHookHash(recorded), "sha256:31e1802ee3591164d6bc9e98f347d97e35c7ca137b74cc4c96d211fe2a67562b");
   const fx = fixture();
   mkdirSync(join(fx.home, ".codex"), { recursive: true });
   const hooksPath = join(fx.home, ".codex", "hooks.json");

@@ -1,4 +1,4 @@
-# CaveBench Wrap benchmark
+# Wrap benchmark
 
 ## Result
 
@@ -40,7 +40,7 @@ counted.
 
 ## Method
 
-- Six immutable MCP fixtures, each 60–95 KB: logs; deployment JSON; fraud CSV;
+- Six immutable MCP fixtures, each 61 to 72 KB: logs; deployment JSON; fraud CSV;
   test output; configuration YAML; dashboard HTML.
 - Three rotated repetitions for direct Claude Code, Caveman, and Headroom: 54
   total agent runs and 18 direct/Caveman pairs.
@@ -80,7 +80,7 @@ counted.
   `5c71768780582708c00fa1d6862a6a5b93fc33fc23655ff430b0edb8fee1e790`
 - Claude binary SHA-256:
   `4163c57c719e27680336f323ebdcd2ba8aa48a683fdfa427240ec4b506a21e45`
-- Harness Git commit: `630e157246b68b63559fb8baab29b87042db996b`
+- Harness Git commit: private harness, hash recorded
 - Dirty worktree at execution: `false`
 
 ## Reproduction availability
@@ -116,7 +116,7 @@ through `engine.Simulate` in compress mode, with the case question as the query.
 That is the path the proxy's query-aware `CompressSegmentQuery` takes. Tokens
 are counted with the engine's `o200k_base` counter. No model call, no recovery.
 
-| Case | Shape | File tokens | Today's engine (caveman `aeb45e2f`) | Engine at the run above (Caveman-Cloud `630e1572`, `public/`) |
+| Case | Shape | File tokens | Today's engine (caveman `aeb45e2f`) | Engine at the run above (August 2026 build) |
 |---|---|---:|---:|---:|
 | `fraud-csv-outlier` | CSV | 28,041 | 314 (98.9% smaller) | 170 (99.4% smaller) |
 | `sre-log-needle` | log | 22,810 | 348 (98.5% smaller) | 224 (99.0% smaller) |
@@ -137,6 +137,5 @@ prompt, tool definitions, conversation, and caveman skill, and any recovery read
 counts. All five compressed files use S4 transforms, which need the local
 recovery store.
 
-Reproduce: generate the payloads with `CorpusCases()` from Caveman-Cloud
-`internal/wrapbench/corpus.go`, then call
+Payload generator not yet published. With a payload, call
 `engine.New(nil, nil).Simulate(payload, engine.Options{Mode: engine.ModeCompress, Query: question})`.

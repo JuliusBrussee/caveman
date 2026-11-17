@@ -8,15 +8,15 @@ import (
 
 func TestClaudeSessionSourceUsesTranscriptCWDForHyphenatedRepo(t *testing.T) {
 	root := t.TempDir()
-	realRepo := "/Users/julb/Desktop/GitHub/Caveman-Cloud"
-	otherRepo := "/Users/julb/Desktop/GitHub/Other-Repo"
+	realRepo := "/Users/dev/src/project-a"
+	otherRepo := "/Users/dev/src/other-repo"
 	for _, fixture := range []struct {
 		slug, file, cwd, id string
 	}{
-		{"-Users-julb-Desktop-GitHub-Caveman-Cloud", "a.jsonl", realRepo, "a"},
-		{"-Users-julb-Desktop-GitHub-Caveman-Cloud", "b.jsonl", realRepo, "b"},
-		{"-Users-julb-Desktop-GitHub-Other-Repo", "c.jsonl", otherRepo, "c"},
-		{"-Users-julb-Desktop-GitHub-Other-Repo", "d.jsonl", otherRepo, "d"},
+		{"-Users-dev-src-project-a", "a.jsonl", realRepo, "a"},
+		{"-Users-dev-src-project-a", "b.jsonl", realRepo, "b"},
+		{"-Users-dev-src-other-repo", "c.jsonl", otherRepo, "c"},
+		{"-Users-dev-src-other-repo", "d.jsonl", otherRepo, "d"},
 	} {
 		writeClaudeProject(t, root, fixture.slug, fixture.file, []string{
 			`{"type":"assistant","cwd":"` + fixture.cwd + `","timestamp":"2026-08-10T12:00:00Z","message":{"id":"` + fixture.id + `","model":"claude-sonnet-4-6","usage":{"input_tokens":1000}}}`,
@@ -32,13 +32,13 @@ func TestClaudeSessionSourceUsesTranscriptCWDForHyphenatedRepo(t *testing.T) {
 		t.Fatalf("repos = %+v, want two merged real cwd rows", repos)
 	}
 	for _, repo := range repos {
-		if strings.Contains(repo.Repo, "/Caveman/Cloud") || strings.Contains(repo.Repo, "/Other/Repo") {
+		if strings.Contains(repo.Repo, "/project/a") || strings.Contains(repo.Repo, "/other/repo") {
 			t.Fatalf("fabricated dash-decoded repo survived: %+v", repos)
 		}
 	}
 
 	filtered := behaviorScan{SkillUse: map[string]int{}, SessionsBySource: map[string]int{}}
-	source := repoFilteredSource{sessionSource: claudeSessionSource{root: root}, filter: "Caveman-Cloud"}
+	source := repoFilteredSource{sessionSource: claudeSessionSource{root: root}, filter: "project-a"}
 	if truncated := scanSessionSourceUntil(source, time.Time{}, nil, &filtered, newRecurringMiner(), nil); truncated {
 		t.Fatal("filtered fixture scan truncated")
 	}

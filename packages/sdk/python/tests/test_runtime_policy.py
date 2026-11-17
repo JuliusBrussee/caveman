@@ -2,8 +2,8 @@
 
 Drives every section of the shared fixtures
 (../../parity/runtime-policy.fixtures.json): the fetch wire, the signature
-cases, all assignment vectors (pinning this port of the Go
-Caveman-Cloud ``shared/platform/sampling.Fraction`` bit-for-bit — exact float equality), and
+cases, all assignment vectors (pinning this port of the Caveman Cloud
+server's sampling function bit-for-bit — exact float equality), and
 all decision cases. The TypeScript half runs the SAME fixtures; a case passing
 here and missing there is a release-gate failure.
 

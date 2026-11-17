@@ -1,5 +1,5 @@
 /**
- * Type-level tests for the TS SDK runtime-policy client (spec §21.2, issue #88).
+ * Type-level tests for the TS SDK runtime-policy client.
  *
  * Compiled by `tsc --project tsconfig.test.json`; runtime assertions live in
  * tests/runtime-policy.runtime.mjs.
