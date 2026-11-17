@@ -156,7 +156,7 @@ func newCacheWarmer(enabled func() bool, send func(context.Context, *warmRequest
 // begin marks a real request of stream key and stops the stream's warming.
 // A session's request leaves its subagents' warms alone: a subagent can still
 // be running when its parent talks, and on the measured sessions stopping
-// them cost more misses than the warms it spared (proxy/CLAUDE.md has the
+// them cost more misses than the warms it spared (proxy/AGENTS.md has the
 // numbers); the table already plans few warms for a subagent that is done.
 // It never waits: a warm already in flight finishes in the background. The
 // gap since the stream's last request is counted in the table, after the

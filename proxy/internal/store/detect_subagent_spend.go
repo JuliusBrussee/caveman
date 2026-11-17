@@ -11,7 +11,7 @@ import (
 // growing line item in an agent bill and the one users have least visibility
 // into: a subagent's tokens are invisible in the main conversation.
 //
-// It is bounded by a standing decree (see proxy/CLAUDE.md): spawn count cannot
+// It is bounded by a standing decree (see proxy/AGENTS.md): spawn count cannot
 // prove any spawn was unnecessary, and this sink must never reactivate the
 // retired context-exploration-offload opportunity. Measuring COST is not
 // claiming WASTE — so this reports the split and the per-type medians, carries

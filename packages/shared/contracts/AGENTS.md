@@ -1,49 +1,36 @@
-# packages/shared/contracts — shared wire contracts (JSON Schema)
+# packages/shared/contracts
 
-Source-of-truth schemas for cross-service/SDK wire shapes:
-`schemas/policy.schema.json` covers tenant policy and
-`schemas/practice.schema.json` covers practice-library records.
+`@caveman-ai/contracts` (npm): the JSON Schema 2020-12 and OpenAPI wire contracts shared by the proxy, the SDKs, the middleware packages and the hosted service. No compiled output; the package ships `schemas/`, `openapi/`, `CHANGELOG.md`, `LICENSE` and `NOTICE`.
 
 ## Layout
 
-- `schemas/policy.schema.json` — JSON Schema 2020-12 for the tenant policy object (required: version, runtime_mode, fail_policy, providers, limits, retention, optimizers, telemetry, sdk)
-- `schemas/practice.schema.json` — strict JSON Schema 2020-12 for one practice record; unknown fields and enums fail closed
-- `schemas/adapter-conformance.schema.json` — static Pi/Claude contract-record
-  shape; `evidence: static_contract_only` explicitly denies executable proof
-- `schemas/middleware-*.schema.json` + `openapi/middleware.openapi.json` — the
-  framework middleware protocol. Normative prose (negotiation, status/error and
-  reason catalogs, N-1 policy) is `docs/technical/middleware-protocol.md`;
-  executable vectors are `packages/sdk/parity/middleware-v1_1.fixtures.json`.
-  Additive changes keep `schema_version` 1; unknown `limits` keys must stay
-  positive safe integers because SDK 1.1.0 rejects anything else
-- `scripts/validate-schemas.mjs` — compiles every schema with AJV, validates
-  adapter fixtures, middleware fixture examples, `$id` = raw GitHub URL of the
-  file at tag `contracts-v<package.json version>` (bump both together),
-  relative cross-schema `$ref`s only, and every OpenAPI `$ref`
-- `package.json` — `@caveman-ai/contracts`; build/lint/test run both validators (no compiled output)
+- `schemas/policy.schema.json`: the tenant policy object.
+- `schemas/practice.schema.json`: one practice-library record; strict, unknown fields and enums fail closed.
+- `schemas/middleware-*.schema.json` and `openapi/middleware.openapi.json`: the framework middleware protocol. Prose rules live in `docs/technical/middleware-protocol.md`; executable vectors in `packages/sdk/parity/middleware-v1_1.fixtures.json`.
+- `schemas/route-ask-v1.schema.json`, `runtime-event-v1.schema.json`: what the proxy's route stage sends to Caveman Cloud.
+- `schemas/canonical-span.schema.json` (`caveman.span.v1`), `agent-run-receipt.schema.json` (content-blind per-run receipt, not a verified-savings receipt), `continuous-improvement-report.schema.json`, `adapter-conformance.schema.json` (`evidence: static_contract_only` denies executable proof) and the rest of `schemas/`.
+- `scripts/validate-schemas.mjs`: compiles every schema with AJV, validates fixtures and middleware examples, checks `$id`s, relative cross-schema `$ref`s and every OpenAPI `$ref`.
+- `scripts/validate.mjs`: every `X.json` with a sibling `X.schema.json` must satisfy it.
+- `conformance/run.mjs`: black-box HTTP conformance kit for any middleware runtime (see `conformance/README.md`).
 
-## Key schema fields
+## Build and test
 
-- `capabilities` — `{ compress?, cache_hints?, routing? }` booleans, `additionalProperties: false`; the authoritative description of what a project optimizes. An unordered SET, not a stage — the three compose
-- `pass_through` — boolean; forbids every transform. Outranks `capabilities`, which are retained so operator toggles keep their remembered positions
-- `runtime_mode` — `record | recommend | shadow | canary | active | compress`; **a DERIVED display string, not an input**. Still `required` for the compat window (removal 2026-10-01) because `projects.runtime_mode` and the telemetry write validator read it. A doc carrying `capabilities` is authoritative and its `runtime_mode` derives from them; a legacy doc carrying only `runtime_mode` derives the capability set
-- `fail_policy` — `fail_open | fail_closed`; unknown values fail closed (honesty rule)
-- `limits.monthly_usd` — `{ soft, hard }` spend caps per tenant
-- `telemetry.sample_rate` — float 0–1, validated by schema minimum/maximum
-- `additionalProperties: true` — intentional; services and optimizers may extend the object
+```bash
+pnpm --filter @caveman-ai/contracts test    # both validators; build and lint run the same
+```
 
-## Conventions
+CI: `middleware-conformance.yml`. Releases: `contracts-v*` tags through `release-packages.yml`.
 
-- Schema version is an integer; `policy_schema_version` returned by `cloud/control-api/internal/httpapi/server.go:372`
-- Adding a new required field is a **breaking change** — bump `version` and coordinate across control-api, SDKs, web
-- No TypeScript types generated from schema yet; the web dashboard manually mirrors the shape
+## Invariants
 
-## Gotchas
+- Every schema `$id` is the raw GitHub URL of the file at tag `contracts-v<package.json version>`. Bump the version and the `$id`s together.
+- Adding a required field is a breaking change: bump the schema `version` and update the proxy, both SDKs and the middleware packages together.
+- Middleware changes stay additive under `schema_version` 1. Unknown `limits` keys must stay positive safe integers, because SDK 1.1.0 rejects anything else.
+- Policy `capabilities` (`compress`, `cache_hints`, `routing`) is an unordered set and the authority on what a project optimizes. `pass_through: true` forbids every transform and outranks it.
+- `runtime_mode` (`record | recommend | shadow | canary | active | compress`) is a derived display string, still `required` for older readers. The values are not ordered: comparing them by rank is a bug, and `shadow`/`canary` are labels, not traffic splits. `record` is always pass-through.
+- `fail_policy` is `fail_open | fail_closed`; unknown values fail closed.
+- `runtime_policies` guard ops are a closed set (`eq|ne|gt|gte|lt|lte|in`, AND-ed). `budget` is an advisory cap, never a savings figure. A structurally invalid policy is dropped whole; stripping only the broken guard or experiment would widen who it applies to.
+- The policy object keeps `additionalProperties: true` on purpose so services can extend it.
+- The validators check schemas and static fixtures only; they do not prove cross-harness behavior.
 
-- `fail_policy: fail_closed` aligns with repo honesty rule: unknown enum cases must fail closed, not pass through
-- `runtime_mode: record` is always pass-through (byte-safe rule); never treat it as an optimizer mode
-- The six `runtime_mode` values are **not ordered**. Code comparing them for rank (`mode >= "canary"`) is a bug; the four middle values are behaviourally identical, and `shadow`/`canary` are display labels rather than traffic splits. The derivation lives in exactly one place, `cloud/internal/capability`, because the gateway, control-api, and the worker must never disagree about what a document means
-- Build script validates schemas and static fixtures; it emits no artifact and
-  does not prove executable Pi/Claude parity
-
-See ../../../CLAUDE.md (root)
+See the root `AGENTS.md` for repo-wide rules.

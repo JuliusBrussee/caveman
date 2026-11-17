@@ -1,36 +1,36 @@
-# mcp — the Caveman MCP server (Go core + launcher, Apache-2.0)
+# mcp: the Caveman MCP server
 
-A thin **stdio JSON-RPC** adapter exposing the compression [engine](../engine/CLAUDE.md) as
-five MCP tools to any host (Claude Code, Cursor, …). It owns only the MCP framing; all
-compression is the engine's, linked **in-process** (no subprocess, no drift). Local-only — it
-opens no network connection — and everything it reports is `inferred`, never `verified`.
+A stdio JSON-RPC adapter that exposes the [engine](../engine/AGENTS.md) as five MCP tools to any
+host (Claude Code, Cursor, Codex and others). It owns only the MCP framing; compression runs in
+process through the engine package. It opens no network connection, and every figure it reports
+is `inferred`. cavemem and browse reuse its server through `mcp.NewServer`.
 
 ## Layout
-- `server.go` — the `Server`: JSON-RPC loop, dispatch, the five tool handlers. Takes an injectable `Engine` interface so the framing is testable without the real compressors.
-- `protocol.go` — JSON-RPC + MCP tool-result types, `toolText`/`toolError` helpers, the exact `tools/list` definitions.
-- `cmd/caveman-mcp/` — binary: opens shared file CCR store (`CAVEMAN_CCR_DB`,
-  else `CAVEMAN_HOME/ccr.db`/`~/.caveman/ccr.db`) so proxy handles resolve across
-  processes, then serves stdin↔stdout. `CAVEMAN_MCP_EPHEMERAL=1` opts into an
-  isolated in-memory store for tests/sessions that do not need proxy recovery.
-- `bin/caveman-mcp.mjs` + `package.json` — the `npx caveman-mcp` launcher that execs the prebuilt Go binary.
+- `server.go`: the generic `Server`. JSON-RPC loop, batching, notifications, size caps, panic containment, `initialize`.
+- `engine_tools.go`: the five tools (`EngineTools`) and their handlers, behind an injectable `Engine` interface so framing is testable without real compressors.
+- `protocol.go`: JSON-RPC and MCP result types, `ToolText`/`ToolError` helpers, error codes.
+- `cmd/caveman-mcp/`: the binary. Opens the shared file CCR store (`CAVEMAN_CCR_DB`, else `$CAVEMAN_HOME/ccr.db`, else `~/.caveman/ccr.db`) so proxy handles resolve here. `CAVEMAN_MCP_EPHEMERAL=1` uses an in-memory store instead.
+- `bin/caveman-mcp.mjs`, `package.json`: the `npx caveman-mcp` launcher that runs the prebuilt Go binary.
 
-## The five tools (exact names, case-sensitive)
-- `caveman_compress(input)` → compressed text + inferred ratio + `recovery_handle`. Lossy (S4), recoverable, and fail-closed: incompressible/malformed/not-smaller input returns unchanged, `ratio:0`, `recovery_handle:null` — never an error.
-- `caveman_retrieve(recovery_handle)` → the byte-exact original. Unknown handle → `isError:true` + a `cave_snake_code`, never a fabricated payload.
-- `caveman_stats()` → `basis:"inferred"`, `scope:"session"`; the string `verified` never appears.
-- `caveman_toon_encode(input)` → explicit JSON→TOON re-encoding with input/output sizes; returns pass-through plus note when encoding fails.
-- `caveman_toon_decode(input)` → TOON→JSON; invalid TOON returns `isError:true`, never raw input as JSON.
+## The five tools (exact, case-sensitive names)
+- `caveman_compress(input)`: compressed text, inferred ratio, `recovery_handle`. Incompressible, malformed or not-smaller input comes back unchanged with `ratio:0` and `recovery_handle:null`, never an error.
+- `caveman_retrieve(recovery_handle, query?, verify_only?)`: the byte-exact original, or a query-narrowed view of whole records. Every valid call runs, including repeats: hosts compact their context without restarting the MCP process, so the server cannot know what the model still holds. An unknown handle returns `isError:true` with a `cave_` code, never a made-up payload.
+- `caveman_stats()`: this process's counts, `basis:"inferred"`, `scope:"session"`.
+- `caveman_toon_encode(input)`: JSON to TOON with both sizes; input that cannot round-trip comes back unchanged with a note.
+- `caveman_toon_decode(input)`: TOON to JSON; invalid TOON returns `isError:true`, never the raw input as JSON.
 
-## Conventions
-- Build/test: `make product-build PRODUCT=mcp` / `make product-test PRODUCT=mcp`.
-- **stdout is the protocol channel** — logs go to stderr only (a dedicated test guards this).
+## Build and test (from the repo root)
+- `go build ./mcp/...` and `go test ./mcp/...`.
+- `pnpm --filter caveman-mcp test` runs the launcher tests.
 
-## Gotchas (honesty invariants)
-- **un-killable transport** — the stdio server survives everything short of EOF (issue #139). Framing is line-delimited: a malformed line is answered `-32700` and the loop RESYNCHRONIZES to the next newline (never `return`); a handler panic is contained by `recover()` → `cave_tool_panicked` (dispatch panics → `cave_internal_error`); JSON-RPC batch arrays are handled per spec (one array response); id-less/`"id":null` requests are notifications and get no reply; and both inbound lines and generated tool output (compress/toon) are size-capped (`cave_payload_too_large`, `maxInboundBytes`/`maxResultBytes`, 16 MiB default) — but `caveman_retrieve` is exempt (`Tool.ExemptResultCap`): recovery returns the byte-exact original and must never fail closed on size, since the shared gateway store has no matching ceiling. A dead server is worse than a slow one — the proxy keeps eliding content that no longer has a `caveman_retrieve` to expand it.
-- **fail-open** — engine error or malformed input → byte-identical pass-through, never a protocol error.
-- **fail-closed** — unknown tool/handle → `isError` + cave_snake_code; unknown JSON-RPC method → `-32601`.
-- **zero-egress** — the adapter imports no `net`/`net/http`/`os/exec`; a test parses the source to enforce it.
-- v1 is **stdio-only**, **string payloads only** (the engine detects type); HTTP transport + `caveman mcp` subcommand are v2.
-- **protocol negotiation must never error.** The adapter implements the 2024-11-05 contract and echoes that version back; a client asking for a newer one gets 2024-11-05 in the initialize result and decides for itself, per the MCP lifecycle. It previously answered `-32602: unsupported protocol version`, which made Claude Code (and every other current client) drop the server — and because `caveman wrap` reads recovery availability from an install-time marker rather than from the live agent, the proxy kept eliding content that no longer had a `caveman_retrieve` to expand it. Declining to echo an unimplemented version is right; refusing to speak is not.
+## Invariants
+- **stdout is the protocol channel.** Logs go to stderr only; a test guards this.
+- **The transport cannot be killed short of EOF.** A malformed line gets `-32700` and the loop resyncs at the next newline (never `return`). A handler panic becomes `cave_tool_panicked`; a dispatch panic becomes `cave_internal_error`. Batches get one array response. Requests without an id are notifications and get no reply. A dead server is worse than a slow one: the proxy keeps eliding content that then has no `caveman_retrieve` to expand it.
+- **Size caps, except recovery.** Inbound lines and generated tool output are capped at 16 MiB (`cave_payload_too_large`). `caveman_retrieve` sets `ExemptResultCap`: it returns the original bytes and must never fail on size, since the shared store has no matching ceiling.
+- **Protocol negotiation never errors.** The server implements 2024-11-05 and answers `initialize` with that version whatever the client asks for; the client decides. Rejecting a newer version made current clients drop the server.
+- **Fail open on content, fail closed on names.** Engine errors and malformed input pass through byte-identical. Unknown tools and handles return `isError` with a `cave_` code; unknown methods return `-32601`.
+- **Zero egress.** The adapter's own source imports no `net`, `net/http`, `net/rpc` or `os/exec`; `TestZeroEgressNoNetworkImports` parses the source to enforce it.
+- **Five tools are a measured prefix cost.** Every registered tool schema rides in the wrapped agent's prompt prefix on every call (about 11k tokens per call for these five). `caveman wrap` gates injection with the `execute.mcp` setting (`auto`, `marker-only`, `off`). Adding a sixth tool raises that cost for every wrapped agent.
+- **Stdio only, string payloads only.** The engine detects the type.
 
-See ../../CLAUDE.md (root) · ../engine/CLAUDE.md
+See the root [AGENTS.md](../AGENTS.md).

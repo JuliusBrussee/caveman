@@ -81,7 +81,7 @@ evicted.
 Engine source ships under Apache-2.0, like the rest of the repository. See
 `LICENSE` and `../LICENSING.md`.
 
-Build/test inside this repository:
-`make product-build PRODUCT=engine` / `make product-test PRODUCT=engine`.
+Build and test from the repository root:
+`go build ./engine/...` and `go test ./engine/...`.
 
 Registry id: `engine`.

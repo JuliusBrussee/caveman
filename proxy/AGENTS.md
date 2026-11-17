@@ -1,327 +1,118 @@
-# proxy — the byte-safe standalone `caveman` proxy (commercial, binary-distributed)
+# proxy
 
-A base-URL-swap reverse proxy: match → authenticate → inspect → byte-safe transform → upstream
-→ meter. Single-operator, BYOK, **zero cloud dependencies**. It shares its provider adapters with
-the managed gateway (the managed gateway imports them from here). `caveman start` launches the
-`caveman-proxy` binary.
+The standalone Caveman proxy, built as the `caveman-proxy` binary. An agent points its provider base URL at it (default `127.0.0.1:8787`); it matches the route, authenticates, applies byte-safe transforms, forwards upstream with the caller's own credential (BYOK) and records spend in a local SQLite store. It needs no cloud service. `caveman start` and `caveman wrap` launch it.
 
 ## Layout
-- `providers/` — the shared, public byte-safe adapter set: `Adapter` interface + `Base` embed + `UsageScanner`/`ParseUsageBytes` (`adapter.go`), and `anthropic`/`openai`/`gemini`/`azureopenai`/`bedrock`/`vertex`/`openaicompat`. `ResolveUpstreamURL` takes `providers.RouteContext` (no control-plane coupling). Anthropic + OpenAI carry both prefixed and bare routes (`/v1/messages`, `/v1/chat/completions`). `vertex` preserves caller OAuth bearer or Express-mode Google API-key credentials for Gemini + Claude on Vertex AI (no signing, no environment-key fallback, no custom usage parser). `MatchRoute` is POST-only; read-only model discovery (`GET /v1/models`, `/v1/models/{id}`) is a separate GET-only allowlist, `Base.MetadataRoutes`, declared by `openai`/`anthropic`/`openaicompat` and forwarded unchanged with no body, no transform and no spend row. Bare `/v1/models` belongs to both `openai` and `anthropic`, so they implement `MetadataRequestMatcher` and choose by wire protocol (`anthropic-version` or `x-api-key` present → anthropic; a Google key matches neither), never by registration order (#1187). `Base.OAuthTokenRoutes` (anthropic: `POST /v1/oauth/token`, bare and prefixed) relays a user OAuth profile's token refresh byte-for-byte with no provider credential attached and no spend row.
-- `internal/gateway/` — the request lifecycle (`server.go` + `proxy.go`) behind three injected seams: `Authenticator`, `CredentialResolver`, `TelemetrySink`. Ports the managed loop with the fail-open fix. `serve` sets `Config.AsyncRecord`: a row's request token count, sink write (batched) and Cloud observe run after the handler returns, in record order (`recorder.go`). A reader that must see the request it follows calls `Server.Flush` first (session receipts do); close the server before the sink.
-- `internal/config/` — `caveman.yaml` loader + BYOK env-key resolution; unknown mode fails closed to `record`.
-- `internal/store/` — `~/.caveman/caveman.db` SQLite spend store (`modernc.org/sqlite`, cgo-free); implements `TelemetrySink` and `BatchSink`. `RecordBatch` commits request rows with `synchronous=NORMAL` on its own connection (WAL): a power loss or OS crash can drop the last batches, a process crash or clean exit loses none; every other table keeps FULL. A request's cache component digest list goes to `request_cache_components` in the same transaction as its row, never into `requests`.
-- `internal/standalone/` — wiring: static `Auth`, BYOK `Creds`, adapter set, and the always-on SSRF-guarded client.
-- `internal/identity/` — who calls the framework middleware routes (legacy token, token map, OIDC/JWT, mTLS) and the reloadable TLS listener config.
-- `cmd/caveman-proxy/` — binary: `serve` (default), `stats`, and content-blind
-  `agent-evidence --session --build --plan`. Evidence query returns only exact
-  provider usage, request hashes, declared context/plan identity, ordered
-  provider-prefix component hashes, actual transform IDs/counts, and CCR handle;
-  basis is always `inferred`, verified dollars always zero.
-  `caveman.agent.evidence.v1` carries `provider_cache_components_available` on
-  every request: true only when the ordered component list is present and
-  valid. The list lives in `request_cache_components`, not the `requests` row
-  (#1371: it is up to 66 KB and slowed every stats read), and expires after
-  14 days; `serve` moves legacy lists there in the background. An empty or
-  unavailable list is never evidence of an unchanged cache prefix, and output
-  from an older binary without the flag must not be read as available.
 
-## Conventions
-- Build/test: `make product-build PRODUCT=proxy` / `make product-test PRODUCT=proxy`.
-- Tests inject a plain `*http.Client` to reach loopback stubs; the binary uses the SSRF-guarded client.
-- New provider/optimizer work goes in `providers/` (shared) — change it once, both proxies get it.
+- `providers/`: the byte-safe adapters (`anthropic`, `openai`, `gemini`, `azureopenai`, `bedrock`, `vertex`, `openaicompat`) and, in `adapter.go`, the `Adapter` interface, `Base`, `UsageScanner`, `ParseUsageBytes` and `IsRecoveryToolName`. The managed gateway imports this package too, so a provider fix goes here once. `ResolveUpstreamURL` takes `providers.RouteContext`; keep control-plane types out.
+- `internal/gateway/`: the request lifecycle (`server.go`, `proxy.go`) behind three seams, `Authenticator`, `CredentialResolver`, `TelemetrySink`. Also compression, cache safety (`prefix_monitor.go`, `raw_pin.go`), pixel, the harm tripwire (`ledger.go`), cache warming (`cache_warm*.go`) and the route stage (`route*.go`, `chatgpt_auto.go`).
+- `internal/config/`: `caveman.yaml` loader and BYOK env-key resolution.
+- `internal/store/`: `~/.caveman/caveman.db` (`modernc.org/sqlite`, no cgo): spend rows, the replacement and prefix caches, `caveman learn`, and the Postgres middleware store.
+- `internal/standalone/`: wiring: static `Auth`, BYOK `Creds`, the adapter set and the SSRF-guarded client.
+- `internal/identity/`, `internal/middleware/`: who may call the framework middleware routes (legacy token, token map, OIDC/JWT, mTLS) and the reloadable TLS listener.
+- `internal/nativeruntime/`, `internal/nativehook/`: local agent lifecycle, Task Contract, Decision Ledger, CCR capture and masking, receipts, the user-only Unix socket / Windows named pipe.
+- `internal/repointel/`: deterministic repository map and task evidence. No model or network calls.
+- `internal/nativepack/`: embeds `native-pack.generated.json`, written by `node skills/compile.mjs`. Do not edit it by hand.
+- `internal/gitsafe/`: the only way to run `git` against a user directory.
+- `internal/cloudlink/`, `internal/pool/`, `internal/translate/`: optional Auto routing through Caveman Cloud, the provider logins a user adds, and wire translation between Messages, Responses and chat.
+- `cmd/caveman-proxy/`: `serve` (default), `stats`, `agent-evidence`, `learn`, `status`, `version` and helper subcommands.
 
-## Gotchas (honesty invariants — correctness, not style)
+## Build and test
 
-- **listener lifetime is not session lifetime**: `serve` never exits because a
-  wrapper, native session, heartbeat, or idle timer expires. Legacy
-  `CAVEMAN_NATIVE_IDLE_TIMEOUT` does not arm shutdown. The CLI never restarts a
-  shared listener to change mode/recovery; an incompatible new wrap runs direct.
-  Failed local startup also runs direct. Native session correlation entries may
-  age out without affecting API traffic.
-- **no default generation deadline**: `CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS` defaults
-  to `0` (no total request deadline). A positive value is an explicit operator
-  cap and includes response streaming. Client cancellation still cancels upstream;
-  connection setup, inbound header/upload limits, and idle keep-alive socket
-  cleanup remain bounded separately. The replacement bound for an upstream that
-  connects and then goes silent is the transport's response-header deadline
-  (`CAVE_GATEWAY_RESPONSE_HEADER_TIMEOUT_MS`, default 900000, `0` disables) —
-  headers only, so it never truncates a live stream.
-- **response protocol controls streaming**: SSE/event-stream responses flush
-  headers and chunks even without a JSON `stream` flag. Encoded requests keep
-  `Content-Encoding` and bypass transforms. Interrupted response copies record
-  an error and abort HTTP framing; they never become a clean successful EOF.
-- **replay only when non-delivery is proven**: proxy transport retries are
-  limited to connection-setup failures — `*net.OpError` with `Op` `dial` or
-  `proxyconnect` (a proxy that is down fails as the latter, never as a dial). A failed upload/header read or truncated response
-  does not prove an inference was unprocessed; do not automatically replay it.
-  An explicit transformed-request 4xx still retries once with original bytes —
-  except a 429 that carries `Retry-After` (a rate limit; Anthropic sends its
-  `anthropic-ratelimit-*` headers on every response, so they prove nothing),
-  which is returned as-is; an accepted retry pins the conversation raw
-  (`internal/gateway/raw_pin.go`).
-  See `docs/technical/proxy-reliability.md` at the repository root.
-- **byte-safe**: `record` mode never transforms; on transform error the ORIGINAL bytes are forwarded (HTTP 200, fail-open) — never a 400. The one carve-out: bytes the provider already cached in replaced form are re-sent replaced, because forwarding the original there busts the prefix (see cache safety).
-- **request-wide opt-out**: `x-cave-transforms: caveman.pass-through.v1` suppresses every request transform path — compress, pixel, and provider-native — not only compiled plan routes. Tests cover all three modes.
-- **no-fake-savings**: standalone records `Basis: "inferred"` on every row; it never writes `verified` and never re-projects to a monthly figure.
-- **practice join**: local learn sinks carry additive `practice_id`; one
-  fail-closed mapping table owns sink→practice and unknown sinks keep `""`.
-  The historical `subagent_overuse` sink is count-only and deliberately has no
-  practice id: spawn count cannot reactivate the retired
-  `context-exploration-offload` opportunity or prove any spawn unnecessary.
-- **local trial heuristics are not actuation evidence**: a model name never emits
-  the retired `model-right-sizing` id, and provider plus positive cost never
-  emits a cache move because neither proves stable-prefix eligibility. Legacy
-  rows for those identities are hidden at read time. Compression replay reports
-  one trial's local engine `estimated_engine_o200k` before/after shape with zero
-  dollars and low confidence; it is not provider-counted, a rate, an invoice,
-  causal/verified savings, or task-outcome evidence.
-- **Anthropic automatic caching is experimental observation only**:
-  `anthropic-automatic-prompt-cache` is a typed, default-off manual policy
-  experiment and may add only Anthropic's top-level 5-minute marker on direct
-  Messages API requests. Managed traffic additionally requires server-attested
-  official Anthropic origin; custom or provenance-unknown origins lose the flag
-  before the adapter. It is mutually
-  exclusive with the explicit `anthropic-cache-breakpoints` transform and any
-  caller `cache_control`; Bedrock and count-tokens requests stay byte-identical.
-  An applied marker records only its optimizer id plus actual provider usage and
-  cost. It has no practice, recipe, generic mode/candidate activation, ledger
-  tuple, inferred savings, or verified-savings path (cache-only and forged IDs
-  are excluded from the counted-baseline method too); evaluate it by manual
-  paired observation because shared provider cache state can contaminate an A/B.
-- **SSRF always on**: `standalone.StandaloneHTTPClient` guards every upstream dial (not gated on `CAVE_ENV`) using `ssrf.SelfHostedConfig` — NOT ManagedConfig, which ignores the allowlist and would make the escape hatch a silent no-op. `CAVE_SSRF_ALLOWLIST` opts loopback/private hosts back in (local model servers like Ollama; `localhost` as an entry covers 127.0.0.0/8 + ::1); metadata/link-local stay blocked in every mode. Provider traffic honours `HTTPS_PROXY`/`NO_PROXY` by default (#1001) — `upstream_proxy: env|off|<url>` / `CAVE_UPSTREAM_PROXY` — via `ssrf.Config.Proxy`, which validates IP-literal/localhost destinations before proxy selection and dials the (operator-configured) proxy address unguarded; `ssrf.NewHTTPClient` itself stays direct unless a caller sets `Proxy`, and a managed-mode Config carrying one is refused loudly (every request fails with `ssrf.ErrProxyInManagedMode`) rather than silently dialing direct. Adapters that pre-flight a resolved endpoint (bedrock, vertex) read the selector off the request context (`providers.WithUpstreamProxy`, published by `gateway.Handler` from the upstream transport) and use `ssrf.ValidateURLNoResolve` for proxied destinations: a proxy-only network has no outbound DNS, so resolving there failed the request before the proxy was ever consulted. `ca_bundle` / `CAVE_CA_BUNDLE` plus inherited `SSL_CERT_FILE`/`REQUESTS_CA_BUNDLE`/`NODE_EXTRA_CA_CERTS` append private roots for TLS inspection through `shared/platform/cabundle` (fail-closed parser shared with chhttp).
-- **inbound token is consumed, never forwarded**: `CAVEMAN_AUTH_TOKEN` gates non-loopback listens (a middleware token map, OIDC issuer or TLS client CA also makes one legal; provider routes still accept only the token, and without it `Auth.closed` refuses every provider request off loopback); `standalone.Auth` deletes the matching `x-cave-api-key`/`Authorization` header before `Creds.Resolve` so the shared token can never be forwarded to a provider or classified as a provider credential; a bearer that is not the token survives untouched (Claude OAuth, `/chatgpt/`). `Authenticate` runs BEFORE `matchAdapter` so the 401/404 split cannot be used to enumerate routes, and every 401 goes through `Server.rejectUnauthorized`, which counts `cave_proxy_unauthorized_total` and warns with the path and remote host only. Health and the no-op `/caveman/keepalive` beacon stay unauthenticated, `/metrics` too unless `CAVEMAN_METRICS_TOKEN` is set; the `X-Caveman-Instance` header on `/health/live` is published only on a loopback bind. A token on a LOOPBACK listener is honored too (the local `caveman wrap` path sends none, so `runServe` warns). Bedrock credentials then come from `shared/platform/awscreds` (env → web identity → container → IMDSv2), never from the request; a PARTIAL env pair fails closed instead of falling through to an ambient role, and the winning source is logged once.
-- **middleware identity is server-side and per route**: `middleware.Config.Identify` resolves an `identity.Principal` from the credential alone (bearer decides when present, else a verified client certificate); `ServeHTTP`'s `decode` checks `Principal.Allows(scope.Namespace)` on EVERY scoped route, so a new route that skips `decode` skips authorization. The legacy token stays `single_operator` with every namespace; JWT and certificate principals may never be named `single_operator`. Token and hash comparisons are constant-time over every entry. A token map or TLS file that fails to reload keeps the previous one. Tests: `identity/*_test.go` (negative JWT and mTLS cases), `middleware/identity_test.go`.
-- **Postgres middleware store keeps SQLite's single-writer semantics per authority**: `store.PostgresMiddleware` serializes writers of one authority with a transaction-scoped advisory lock taken by `Scope` (then re-read), `SaveScope`, `Revoke`, `PurgeBatch`, `Receipt` and `SaveOriginal`; the sweep is one-replica (try-lock) and skips busy authorities and row-locked scopes. Counters are statement-level transition-table triggers striped by txid; a per-row trigger goes quadratic on bulk statements. Lock keys include `current_schema()`. Run the store suite against both backends with `CAVEMAN_TEST_POSTGRES_URL`; `middleware_concurrency_test.go` fails without the locks.
-- **Auth scheme is preserved**: a key from an inbound `Authorization: Bearer` keeps `Scheme:"bearer"` on the `providers.Credential`; Anthropic and Gemini forward bearer credentials as bearer credentials (Claude/Gemini OAuth breaks if remapped to an API-key header). BYOK env keys and inbound `x-api-key` keep provider API-key mapping.
-  On a named compat mount the header follows the wire protocol of the path:
-  `/compat/<name>/v1/messages` gets `x-api-key` plus a default
-  `anthropic-version`, every other path gets Bearer. A real inbound Bearer stays
-  Bearer on every path. OpenCode Go rejects Bearer
-  on `/v1/messages` (401 `Missing API key.`, 2026-09-03). The gateway env
-  fallback puts the key in the header that the adapter emitted, so the upstream
-  never gets two credentials.
-- **fail-closed**: unknown route → 404; unknown mode → `record`.
-- **subscription AND oauth compression is NOT account-gated**: non-PAYG sessions from Claude Code, Codex ChatGPT, Gemini CLI, and other routed clients take live-zone compression with no Caveman account, entitlement, or seat. `CAVEMAN_WRAP_ENTITLED` and every `WrapEntitled` field are **deleted**, not merely ignored — do not reintroduce them. Exactly four conditions remain, all technical and all fail-closed (`liveZoneCompressionAllowed`): the operator `subscription_compress` switch (empty/`live_zone` allow, `off` and any unknown value close it), the adapter must implement schema-aware `PrefixStabilizer` zones, recovery must run through the agent's own MCP `caveman_retrieve`, and a durable prefix cache must be wired. The dedicated Codex `/chatgpt/responses` route uses the OpenAI Responses stabilizer while preserving OAuth and `ChatGPT-Account-ID` headers; recovery is proven by the `CAVEMAN_RECOVERY=mcp` stamp or the decoded request's own `mcp__caveman__caveman_retrieve` (top-level `tools` or Codex's `input[]` `additional_tools`, flat or under an MCP namespace); zstd bodies decode → transform → re-encode, anything else forwards the original wire bytes, and the `chatgpt_proxy` log carries `skip_reason`; transformed 4xx responses retry once with exact original bytes (never a rate-limit 429; an accepted retry pins the conversation raw). Legacy savings fields remain **tokens-only** — `compression_tokens_before/after` + `estimated_engine_o200k`, never booked compression dollars. New request-comparison and price-snapshot fields support separately labeled API equivalents in local stats; those values never enter subscription spend or legacy saved-dollar fields. LOCAL wrap only; managed gateway non-PAYG behavior is unchanged.
-- **cache safety is byte-stable replacement**: THE INVARIANT (#1105): for accepted requests P then R of one conversation, if R's client bytes over P's cached prefix (system, tools and messages through P's last `cache_control` marker; the whole prompt for implicit caches) equal P's, R's forwarded bytes over that range equal P's, and every request caches at least what its client asked for (a dropped breakpoint is a bust too). Two exceptions, both re-caching the range raw: a request the provider rejected transformed and accepted through the raw retry, and a compressed PAYG conversation without MCP recovery that streams (the server-side retrieve tool cannot ride a stream, so the conversation stays raw from there). A raw retry splits a range into a raw and a replaced form, and a later request follows the LONGEST lineage it extends, ties going raw: it is held to the raw request (raw pin) unless it repeats a longer prefix that went out replaced, like a sibling subagent started with the same task. Pins are taken only on a conversation's own bytes (past system and tools); pins and lineages live in the PrefixCache (`rawpin` and `lineage` scopes, pin rows never evicted) and in memory. `internal/gateway/cache_prefix_invariant_test.go` (Anthropic compress, PAYG, pixel and Codex Responses scenarios + `FuzzCachePrefixInvariant`) proves it; keep it green. A compressed live-zone turn becomes prefix on the next request, so the replacement is a pure function of segment content (deterministic compressor + content-hash CCR marker), memoised in the durable replacement cache, and the FIRST decision for a block wins — replaced or raw (`RawDecisionHandle`); a request whose write finds a row on record sends that row, not its own candidate. A frozen block with no decision (a `--resume` history, an evicted row) goes out raw and raw becomes its decision; a failed memo write keeps the block raw for the process (`rawMemory`, consulted only on a store miss and written through once the store takes it); new rows are remembered only once the request's splice holds. Raw decisions are global and durable, a known savings cost: a block declined once (frozen at first sight, a compressor decline, a CCR failure, a non-newest parallel tool output) stays raw in every conversation. Bounding them needs a TTL of at least the longest provider retention (24 h for OpenAI extended caching) plus time-aware store interfaces, or per-conversation rows keyed on a stable conversation identity with a scope rollover. Substitution is never gated: the derived epoch gate is gone, and an explicit framework epoch may veto only NEW compression. Pixel renders and the tool-schema strip are memoised the same way. New compression stays live-zone-only. The runtime tripwire (`prefix_monitor.go`, on the provider routes and `/chatgpt`) checks the same rule on live traffic and records `requests.cache_bust_cause`: `client` (DEBUG); `raw_retry`, `stream_switch`, and `lever_freeze` (the harm tripwire's one-time strip rollover), all WARN; `caveman` (ERROR `caveman changed bytes the provider already cached` or `caveman dropped a cache breakpoint the client set`, counted as `caveman_cache_bust_requests` and raised by `caveman status`) — any `caveman` row is a bug. A request is held only to anchors accepted before its own forwarding decision. Cross-turn stability covers **anthropic, openai, azureopenai/openaicompat, and gemini** through `ExtractStabilizable`; `bedrock` and `vertex` expose no compressible blocks and stay pass-through. Anthropic uses declared `cache_control`; OpenAI/Gemini use latest-user/latest-tool zones against implicit provider caches. Replacement cache is SQLite spend store and must retain `journal_mode(WAL)` + `busy_timeout`; a hit rewrites `last_used_at` only once the row is 10 minutes stale, and pixel rows have their own cap inside the table's.
-- **cache warming is predicted per stream, and replays only what Anthropic can answer at zero output** (`internal/gateway/cache_warm.go`, `cache_warm_table.go`): after a successful Anthropic Messages response on `api.anthropic.com` (never Bedrock, Vertex, Azure, a compat mount, a custom base URL, the pass-through header or an encoded body), the exact bytes and headers sent upstream (after compression, routing marks, heals and fail-open retries) are kept in memory only (LRU 1024 streams and 256 MiB, never stored, logged or captured) and may be replayed with `max_tokens: 0` and `stream: false` at `min(0.9*ttl, ttl-10s)` steps from the real request's start (wall time, so laptop sleep never sends a stale warm). Not replayable, so never warmed: `thinking.type: "enabled"`, `tool_choice` `tool`/`any`, `output_config.format`, no `cache_control`, a `ttl` other than `5m`/`1h`, mixed `5m` and `1h` markers, writes of another lifetime than the markers (one lifetime or no warm; the simulator classes by the same rule and none of the measured requests mixed them); the request scan reads top-level fields and cache_control markers only, no full parse. WHETHER to warm is optimal stopping, not a threshold: `cache_warm_table.json` holds the return-time distribution (30 s bins to 2 h) per stream class `main|subagent / tool|end / 5m|1h` (the class comes from the session key and whether the answer's `stop_reason` was `tool_use`, scanned off the plain bytes with a rolling tail; the proxy forwards the agent's `accept-encoding`, so an answer that comes back with a `Content-Encoding` is not classed: it is planned as whichever of the two classes warms less and its gap teaches neither), measured on 364,048 request transitions of real Claude Code sessions (2026-08-30 to 2026-10-08, `.blocks/cache-warm-sim.py`, aggregate probabilities only) and shrunk toward the parent class; the proxy learns each user's own gaps online (counts only, `$CAVEMAN_HOME/cache-warm-gaps.json`, 0600, written outside the warmer's lock, flushed by `Server.Close` at shutdown, symlink-refused, any implausible count drops the whole file; two proxies on one home are last-writer-wins) and blends them in with the defaults worth 100 observations. A stream evicted or still waiting at shutdown is counted as returning later than it was seen silent (spread over the later bins by the class's own distribution, "never" past 2 h): dropping it would keep only the returns and drift the table toward over-warming. At arm time the whole chain is planned by backward induction with the catalog price of the model sent (warm = read x prefix + input x uncached tail; avoided miss = (write_ttl - read) x prefix x the class's measured realized share, taken over the gaps that DID return: the window probability already leaves out the streams that never do), so the cumulative cost of every warm is counted before the first; unknown price, class or lifetime = no warm. Subscription traffic is valued at list prices as plan-usage equivalent. Stops: any real request of the stream (every model; it never waits for a warm in flight), any warm error, a warm reading `cache_read_input_tokens == 0`, the plan, 60 min, or the switch; the held request (body and credential headers) is released the moment its chain ends. A parent session's request does NOT stop its subagents' warms: a subagent can still be running, and on the test half that stop cost $565.52 net (below). A 429 (warm or real) pauses warming on that credential for the response's `Retry-After`, else until its `anthropic-ratelimit-unified-reset`, else 1 h for a subscription/OAuth login and 60 s for an API key; a 529 or 5xx on a warm pauses it for the `Retry-After`, else 5 min. Never sent while a real request of the same stream is in flight (retry every 5 s until its deadline). At most two warms are in flight process-wide (same retry; one with no slot by its deadline is dropped), and each fires up to 5 s before its planned time, never after. Warm rows are tagged `cache-warm`: spend, never a saving, never an agent request (excluded from request counts, session usage, trial origins, exported spans, receipts and `caveman sync` uploads; counted as `cache_warm_requests`), never fed to the harm-tripwire ledger, never sent to Cloud. Switch: on unless `$CAVEMAN_HOME/cloud.json` has `modules["waste-fixes"]: false` (re-read on change); `CAVEMAN_CACHE_WARM=off` kills it for the process. Every answered stream request logs one line `cache warm plan` (info when warms are planned, debug when skipped: session hash, model, class, ttl, planned warms, skip reason: `response_error`, `off`, `not_anthropic_api`, `not_replayable`, `lifetime_mismatch`, `unpriced`, `not_worth_it`). Replay on the owner's data (test half, after 2026-10-03, 161,325 transitions): net $1,896.65 list-price equivalent at $385.31 of warms (9,628 warms, 7,280 wasted) vs $1,294.18 at $1,372.15 (45,343 warms) for the first fixed rule; the same policy with the parent stop for every subagent $1,331.13 at $197.28 (3,461 warms), with it only for subagents whose last answer was not a tool call $1,852.99 at $378.90 (9,518 warms). A test pins the plan to the simulator's on the shipped table (`TestCacheWarmPlanMatchesTheSimulator`; regenerate both together).
-- **pixel mode**: S4 lossy text→PNG (`pxpipe` port). Default allowlist is `claude-fable-5,gpt-5.6` via `CAVE_PIXEL_MODELS`; savings stay inferred-only. Renders keep the compress rules: the first decision for a text (render or text) is re-sent on every turn, a raw pin keeps the conversation text, and a NEW render is remembered only once its request goes out, with the original stored in CCR and the splice holding. If either fails, the new content goes out as text and records that, and earlier renders still go. A rendered block's `cache_control` moves to its last image. An Anthropic request carries at most 20 images, client images included (`anthropicManyImages`): past 20 the API rejects any image over 2000 px, and the renders are 2573 px wide, so a new render past the cap stays text.
-- **route stage is optional and fails open** (`internal/cloudlink`, `internal/gateway/route.go`):
-  it asks Cloud `POST /v1/route` only for requests naming Auto (`AutoModel`, `caveman-auto`, also with Claude Code's `[1m]` suffix, the
-  picker entry the CLI adds while `modules.routing: true` in `$CAVEMAN_HOME/cloud.json`), while the
-  CLI is signed in with that switch on, for Anthropic Messages / OpenAI chat or responses requests on
-  an API key or a subscription alike; any other model goes as sent (`route.outcome: off`), the
-  session's marks and heal still applied. Auto goes upstream as the provider's `autoFallback` model
-  (Anthropic `claude-sonnet-5-5`, OpenAI `gpt-6.1-sol`; count_tokens too, and with no Cloud link),
-  which is also the asked model the ask carries and what a failure runs (a transient Cloud failure, that is a timeout, an unreachable or 5xx Cloud, an unreadable answer or the pause after one, instead runs the model the session's previous request went to, `heldModel`, never for a side request; no previous request on that provider, one that was a compaction or came after one, a held model that then did not serve (any non-2xx: the next attempt runs the fallback), signed out, routing off, an expired or refused login, a limit and a provider's refusal keep the fallback); Auto on any other
-  provider is a 400 (`cave_auto_unavailable`), and an encoded body naming Auto is decoded first. A
-  named model records `route.outcome: off`, reason `named_model`. OpenAI Auto (API key and ChatGPT
-  login) runs only `AutoOpenAIModels` (`gpt-6.1-sol`, `gpt-6-astra`, `gpt-6-luna`): the ask's
-  `Models` lists those alone and the pool drops other OpenAI models, and an answer naming any other
-  runs `gpt-6.1-sol` at its effort (`auto_model_refused`, `translate.FitEffort`); an Auto row's `RouteFrom` and
-  `x-caveman-routed-from` say `caveman-auto`. A move on a subscription stays on the provider's own
-  API on that subscription's credential; pool entries go out on their own login or the Cloud
-  gateway key, never on it, and never with the agent's `oauth-*` betas. On a ChatGPT login
-  (`/chatgpt`, `chatgpt_auto.go`; OpenCode's ChatGPT login lands there too) `/models` gains an Auto
-  entry (a copy of `gpt-6.1-sol`'s, listed last, fetched without `If-None-Match`, served without
-  `ETag`) while the link reports `AutoOffered` (signed in, routing on). Every POST there has its
-  first 64 KiB read (decoded when gzip, deflate or zstd; a br body is never looked into) for a
-  top-level `"model":"caveman-auto"`; any other streams on unchanged. `/responses` naming Auto asks
-  with `NoPool`, keeps live-zone compression, replays `gpt-6.1-sol`'s bytes on a 4xx (a rate-limit 429, a 401 and a 403 are returned instead; a served replay pins the conversation raw, and the decision is rejected only then or when the replay is itself a 429; a 5xx on a moved model is returned and rejects the decision, a rate-limit 429 keeps it: the plan's limit holds for every model); any other
-  path (Codex compaction) runs `gpt-6.1-sol` unasked; a body over `CAVE_MAX_REQUEST_BYTES` streams
-  with only its model changed. The agent reads the Auto id it sent. Every `/chatgpt` row (Auto or
-  not) is offered to Cloud like any other, as its agent (`x-cave-agent`, else Codex by its
-  `originator` or User-Agent), with model ids in `route_from`/`route_to`; a model it could not read
-  goes to Cloud as none. The
-  ask starts before compression (parse, ask, compress, route), waits at most 800 ms (the CLI's
-  keychain credential is read when the runtime starts, `Link.Start`, never on a request goroutine;
-  a request that lands while a read runs with no secret cached waits for it, leaving the ask at
-  least 500 ms, else goes as `credential_loading` without an ask or a pause), carries the
-  caller's models, counts, what the request declares (the raw values of eleven allowlisted agent
-  headers, never cut: a value over 256 bytes, 16 KiB for Codex's turn metadata, which also comes
-  from the body's `client_metadata`, is left out; a forked Claude Code child's spawn-call
-  `subagent_type` as `x-caveman-agent`; its tool names, effort and thinking type), what the
-  session's previous request ran (the served model, the effort in force, the provider's input and
-  cache token counts, its age) and Cloud's opaque per-session state, plus, on a turn's first ask,
-  the raw text of the latest human turn, the one before it and the end of the agent's last reply
-  (contracts `route-ask-v1`; Cloud picks the model and the effort and no routing logic lives
-  here). Its answer is cached per ask until 30 min after its last use (session, or without one agent and
-  endpoint, provider, model, turn number, latest human text;
-  an input group carrying a tool result is no human turn, text riding along included) so a tool
-  loop never switches model or effort mid-turn (an ask first seen during a pause keeps the paused answer for its turn); a request the agent labels compaction or auxiliary
-  (Claude Code's request class and compaction flag, OpenCode's title/summary/compaction agent,
-  Codex's subagent kind and turn-metadata request kind) is asked on its own, without the text. The
-  session is `x-cave-session`, else the agent's session header (a Codex thread, `thread-id`, is
-  its own, its parent `x-codex-parent-thread-id`); a Claude Code child (`x-claude-code-agent-id`)
-  is a session of its own and sends its parent's state; a session id guessed from timing is not
-  used. State, previous-request facts and marks live in bounded in-memory LRUs (1024), never on
-  disk. The answer sets Responses `reasoning.effort`, chat `reasoning_effort` or Anthropic
-  `output_config.effort`; Anthropic `effort_mode: message` instead inserts the byte-identical mark
-  `{"role":"system","content":[],"output_config":{"effort":…}}` (beta
-  `mid-conversation-output-config-2026-07-01` appended to `anthropic-beta`) before the last user
-  turn, or at the end after a tool result; on OpenAI Responses (GPT-6) the mark is a
-  `{"type":"configuration_update","reasoning":{"effort":…}}` input item before the last user
-  message while nothing has answered it yet, never at the end and never next to another one (no
-  place, as mid tool loop: the effort in force holds), no beta, and none at all where OpenAI forbids
-  it (`truncation: "auto"`, `context_management`, a non-false `multi_agent`: Cloud's effort goes
-  top-level); a 400 naming a configuration update heals like a refused mark. Effort state made on
-  one wire starts afresh on the other. Only `effort_mode: message` ever starts marks; a "top"
-  answer on history carrying the session's marks goes in as one more mark (never wiping them; for
-  a compaction or side request, that request's only), and on any other history sets the top-level
-  field. Marks are remembered per session with a salted hash of the message before each
-  (`cache_control` and thinking blocks left out, so a heal's strip keeps them) and replayed at the
-  same places on every later request to a model that already took them (the agent resends history
-  without them), count_tokens of a known session or a forked child's parent included (it adds
-  nothing to a history without marks). Without an effort from Cloud (a failure, routing off,
-  effort "") a history without the session's marks goes as the agent sent it, top-level field
-  included (one cache restart where Cloud's was, nothing inserted, no beta), except that a
-  remembered heal (drop_block with its beta, or a strip) keeps applying. One with marks runs at
-  the request's own top-level effort, or, when it sets none, at the model's default effort
-  (Cloud's `default_effort`, kept per session, a forked child taking its parent's), marked when it
-  differs from the one in force; only with no default known does such a request go as the agent
-  sent it, without the marks, which the session then forgets (its later thinking blocks then lose
-  their binding) unless the request went to another model. The top-level field is fixed at the
-  session's first per-message request: the routed effort on a fresh conversation whose request
-  sets one (kept there, also for later requests that set none), else the request's own; a routed
-  effort for a request that sets none goes in as a mark, first on a fresh conversation. An anchor
-  that no longer matches drops that mark and every later one; compaction and side requests never
-  change them, and a body matching none of them (an unlabeled side request, compacted history)
-  gets marks of its own, kept for up to four request shapes (first message, length, last message),
-  which take the session over only from a longer request continuing that conversation (same first
-  message, its last one where it was); the session's marks and fixed top-level field then wait
-  there in turn. A thinking-binding 400 on the asked model of a `/messages` request retries once
-  only on a session the route stage changed (it was on for the request, the session carries its
-  marks or heal, or another model served one of its requests) whose body sets no
-  `thinking.block_binding`: with `thinking.block_binding.prefix_mismatch_behavior: "drop_block"`
-  (beta `thinking-binding-controls-2026-08-01`) when the block is bound to a different
-  conversation and the request's thinking is adaptive or enabled, then sent on every later request
-  (count_tokens and forked children included); else (Sonnet 5.5 `between_tools`, no thinking
-  field, a tampered signature) without thinking blocks from the failing message on, and later
-  requests on the same history (same first message, same message at its end) strip the same range
-  up front (a second strip widens it; the strip stays, the history as served, even if the agent
-  later sets its own `block_binding`). A drop_block retry refused with a 400 naming the binding,
-  `block_binding` or its beta moves the session to the strip path, a strip refused that way ends
-  its heals (the first lasts for the session, as it depends on the model and thinking type; the
-  second goes with the marks, cleared when they are forgotten; a side request never clears either,
-  nor the strip; a 429, 5xx or other 400 on the retry teaches nothing). Routing switched off after
-  a restart surfaces that 400. A refused mark retries once with top-level effort only and, once
-  served, latches per-message effort off for the session (a model that refused takes Cloud's
-  effort top-level); compressed 400s are decoded first. A Cloud error, timeout, 401/403,
-  `allowance` or `billing_limit` answer keeps the asked model (the held model above for a transient failure) and pauses new asks (1 min; 10 min
-  for 401/403 and billing_limit; until the 1st for allowance). Refusals and limits land in
-  `$CAVEMAN_HOME/route-state.json` (with Cloud's notice) for `caveman status`; a new login lifts
-  the pause. A route failure blames a model only on evidence (Cloud ADR 0110). A provider 4xx on
-  the routed model replays the original bytes on the asked model, except a 401 (the login, not the
-  model: returned as is); a 403 replays (a plan refuses a model it does not carry with one). Only a
-  served replay of bytes that differed from the original in the model alone blames the routed model
-  (`Reject(true)`, `provider_rejected_routed_model`): it leaves the ask's pool for that scope
-  (session, or without one agent and endpoint, and provider and asked model) for 30 min, while
-  the ask still goes with the models left. A served replay after compression or effort also
-  changed the bytes records `replayed_original` and blames no model; a replay that fails too
-  records `replay_failed`. The rest of the ask moves back to the asked model (`Reject(false)`,
-  never remembered) when the replay is served, or is itself a 429 (so the agent's own retries send
-  one request each); a rate-limit 429 (with Retry-After) or a 5xx on the routed model is returned
-  as is, never replayed, and moves it back too, as do a transport error, a provider error event
-  and an upstream break before the provider reported usage; a client cancel never does, so the
-  agent's own retry runs the asked model; a
-  429 on the asked model of a request whose bytes the route stage changed (effort, marks, strip,
-  drop_block, a heal retry) is returned as is. When the model moved, the agent's copy of the
-  answer names the model it asked for (Claude Code drops its thinking on another name): a JSON
-  answer's top-level `model`, and in a stream every `"model":"<sent>"` pair, rewritten
-  incrementally across reads (an Auto request names Auto, moved or not); the upstream is asked for an identity answer (on the original-bytes replay of an Auto request too), a compressed one is
-  left as it is, and usage, stats and `last` read the provider's bytes. The pass-through header
-  and encoded bodies never route, nor does any origin but the provider's own API (Azure,
-  OpenRouter, LiteLLM, a custom base URL); record mode does (routing is its own module). A limit
-  pause asks `/me` at most every 15 min and lifts once routing is no longer limited or the plan
-  changed. runtime/v1 events go whenever signed in, routing on or not, unless the CLI telemetry
-  opt-out is set (ADR 0085 §5; `route.outcome: off` when no route stage ran): in-memory batches of
-  at most 500, dropped on failure, at `/me`'s `data.level`. The runtime never invents a level:
-  none in `/me` means `counts`, an unreadable `/me` lowers it to `counts`, `off` or no level sends
-  nothing. Model ids from other origins go as `custom`. Signing in or out never changes another
-  stage.
-- **the route path is kept hot** (`internal/cloudlink/warm.go`, contract `route-warm-v1`): the link
-  has its own transport (HTTP/2 tried, idle connections kept 10 min and pinged after 15 s of
-  silence, proxy from the environment; a warm is marked replayable, so a dead kept connection is
-  retried on a new one, an ask never: the server may already have decided and counted it). A warm
-  is `POST {gateway}/v1/route` with `x-cave-warm: 1`, the asks' credential and no body; it goes,
-  one at a time and only from a started runtime signed in with routing on, at start and at every
-  login, when a native `session.start` or `prompt.submit` comes after 30 s without contact (an
-  answered ask or a warm engine), and every minute without contact while asks came in the last
-  15 min. Only a 204 with `x-cave-edge-engine: warm` is warm (timeout, error, cold and off are 204s
-  too); it ends a pause a timeout, an unreachable Cloud or a 5xx caused, never a 401/403 or limit
-  pause. Any other status is an origin without the edge (a customer install): no pause, logged at
-  debug, and three in a row stop warming until the next login or start. Each ask logs `route ask`
-  (info): the ms this side measured, whether it reused a connection, the status, `x-cave-edge` and
-  the edge's `server-timing`. The 800 ms budget stays the cap.
-- **pool routing** (`internal/pool`, `internal/translate`, `internal/gateway/route_pool.go`):
-  the provider keys and logins a person adds (`caveman providers add|login`;
-  `$CAVEMAN_HOME/provider-logins.json` lists ids, where each secret lives and the `cloud` switch,
-  written under `provider-logins.json.lock` by the CLI and the runtime alike; the secret is in the
-  keychain service `caveman-provider` or a 0600 file under `provider-logins/`, never both) become
-  the ask's additive `pool` (`harness/<model>`, then `<host>/<model>` per login times the static
-  catalog models its host serves, on a wire `translate.Supported` reaches from the caller's
-  grammar; at most 64; left out when no login adds one; only a 400 naming `pool` is asked again
-  without it, and pool then stays off for that login). An answer's `pool_id` + `via`: a harness
-  entry applies like `model`; a login entry goes straight to that host on that login
-  (`RouteTarget`, translated when its grammar differs, the unstripped body so each host gets its own
-  reasoning back, top-level effort, the agent's copy naming the asked model); `via: cloud`
-  (`cloud:<provider>:<model>`) sends the agent's own bytes in its grammar to the Cloud gateway
-  (`gatewayUrl`, else `baseURL`) with `x-caveman-route` (and `x-caveman-effort` when the answer
-  carries one) on the project gateway key only (the gateway
-  refuses login tokens; no key, or `caveman providers cloud off`, runs the asked model), and that
-  whole request DOES pass through Caveman Cloud. Route asks to the gateway use the project key too.
-  Any failure before content reaches the agent (refused translation, translator panic, connect
-  error, non-2xx, or a 2xx that fails or ends first: `translate.ErrNotServed`, the translator holds
-  its output until the first content, for at most `gateHold` (10 s) even while the host sends only
-  comments or pings; after it the headers go and pings start, only between the upstream's events)
-  falls back to the asked model on the harness credential, at the answered effort fitted to that
-  model's levels (`translate.FitEffort`: the Claude table, the catalog's `effort_levels`, high at
-  most with thinking off), and marks the ask rejected; a stream cut after content aborts HTTP
-  framing and never closes a half-finished tool call, while the host's own failure event after
-  content ends the stream as sent, without an abort (`pool_upstream_failed`). The row keeps
-  `route_pool_id`, `route_reason` and the host's answer id (`upstream_response_id`, e.g.
-  OpenRouter's `gen-…`); each failure is logged. A translated Messages stream's `message_start`
-  carries an input estimate (`x-caveman-input-tokens: estimated`) that `message_delta`'s exact
-  count replaces. A pool turn is not `last` and books no dollars off Anthropic/OpenAI list
-  prices. Every request to Anthropic's/OpenAI's own API (not pass-through) drops reasoning another host
-  wrote (`translate.AnthropicNative`/`OpenAINative`, byte for byte when there is none; a Responses
-  host's encrypted reasoning is route-tagged so only that host gets it back; per-message effort
-  marks are untouched). OpenAI (key or ChatGPT login) is Responses-only: Messages and chat callers reach it
-  through Messages→Responses and chat→Responses, and chat callers (OpenCode, Aider) reach Claude through
-  chat→Messages; a chat caller gets another host's reasoning as `reasoning_content` plus a
-  `reasoning_details` envelope that goes back only to that host, and every chat API (on the harness path
-  too, whatever the origin and with routing off, `translate.ChatNative`) gets both removed. Documents, structured output,
-  `disable_parallel_tool_use`/`parallel_tool_calls` and refusals cross every direction; a part the target
-  cannot take (a document by URL on chat, an OpenAI file id on Claude, audio) refuses the translation, so
-  the pool falls back. A refusal reaches Codex as `response.incomplete` `content_filter` (its own
-  content-filter path); a max-tokens stop stays `response.completed` (Codex retries any other incomplete). Terms: no Claude Pro/Max, Google or Copilot login is ever added; every OAuth row
-  in `providers.json` carries a terms note.
-- **cache mechanics** (`internal/gateway/route_cache.go`): the ask's
-  `request.cache_ttl` is the longest Anthropic `cache_control` ttl (none = 5m), else OpenAI
-  `prompt_cache_options.ttl` / `prompt_cache_retention` (24h; in_memory = 5m); Cloud's generic
-  400 (`cave_router_request_invalid`, which names no field) or one naming the field is asked
-  again without `cache_ttl`, then `pool` (never a field a 200 already came back for), and the field
-  whose removal got the 200 stays off for the login. Record mode gets none of the cache mechanics
-  below (no `prompt_cache_key`, no OpenRouter pin, host affinity headers keyed on the session
-  itself as before, no fan-out wait); the routing answer itself (model, effort, marks,
-  `configuration_update`) still applies there, as above. Elsewhere: host affinity headers key on
-  the session family (the parent's for a child): hashed `x-session-id` (OpenRouter),
-  `x-session-affinity` (Fireworks), `x-grok-conv-id` (xAI). An OpenAI request the route stage is
-  on for (a stateful chain, answered off for a reason, included) that carries no
-  `prompt_cache_key` gets the session's own (hashed, added before the effort so a heal keeps it;
-  the original-bytes retry keeps it unless the 4xx names it, which also latches the key off for
-  the session; a request it only keyed is never replayed); routing off and signed out stay byte
-  for byte. Once an OpenRouter pool entry reports cache reads or writes, the session pins the
-  provider its answer named (`provider.order:[p]`, `allow_fallbacks:false`); a pinned failure
-  drops the pin, and a pinned non-2xx is sent once more to the same entry unpinned before the
-  asked model runs (a transport error is never resent: it may come after the request was
-  written). Fresh sibling children of one parent on the same model, tools, system prompt and
-  `prompt_cache_key` go one first and the rest wait for its first content (a JSON answer's first
-  byte; an event stream's first event past comments, pings, message_start and
-  response.created/in_progress; 5 s at most, or their own cancellation): one cache write, not N;
-  a prefix with content in the last 5 min waits for nobody. `signals.context_tokens` is the
-  request's bytes times the provider's own tokens per byte, the parent session's first.
-  Live check: `CAVEMAN_LIVE_OPENROUTER_KEY=<key file> go test ./proxy/internal/cloudlink -run
-  TestLiveOpenRouterCache -v` (throwaway home, $0.50 cap).
-- **boundary**: this is public code — it must never import the managed-cloud lane. `make check-boundaries` enforces it.
+From the repo root:
 
-See ../../CLAUDE.md (root)
+```bash
+go build ./proxy/...
+go test ./proxy/...
+go test -count=1 -race ./proxy/internal/store/... ./proxy/internal/middleware/...
+CAVEMAN_TEST_POSTGRES_URL=postgres://... go test ./proxy/internal/store/...   # Postgres backend too
+python tests/verify_repo.py   # git hardening and wrap recovery tool name checks
+```
+
+`engine-ci.yml` runs `go build/vet/test ./...` and the race run against Postgres; `ci.yml` runs the Go suite on macOS and builds the Docker image. Tests inject a plain `*http.Client` to reach loopback stubs; the binary always uses the SSRF-guarded client.
+
+## Invariants
+
+Reliability (details in `docs/technical/proxy-and-providers.md#reliability`):
+- `serve` never exits because a wrapper, session, heartbeat or idle timer ends; `CAVEMAN_NATIVE_IDLE_TIMEOUT` does not arm shutdown. The CLI never restarts a shared listener to change mode; an incompatible wrap or a failed start runs direct.
+- No total request deadline by default: `CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS=0`. A silent upstream is bounded by `CAVE_GATEWAY_RESPONSE_HEADER_TIMEOUT_MS` (default 900000, headers only, so it never cuts a live stream).
+- An event-stream response is flushed as it arrives, whatever the request's `stream` flag. An interrupted copy records an error and aborts HTTP framing; it never ends as a clean EOF.
+- Retry only when non-delivery is proven: `*net.OpError` with `Op` `dial` or `proxyconnect`. A failed upload or truncated response may already have run the inference; never replay it.
+- A transformed request that gets a 4xx retries once with the original bytes, except a 429 with `Retry-After`, which is returned as is. An accepted retry pins the conversation raw.
+
+Byte safety and honesty:
+- `record` mode never transforms. A transform error forwards the original bytes (fail-open), never a 400. Unknown route is 404; unknown mode fails closed to `record`.
+- `x-cave-transforms: caveman.pass-through.v1` turns off every request transform: compress, pixel and provider-native.
+- Encoded request bodies keep `Content-Encoding` and skip transforms (the `/chatgpt` route decodes zstd, transforms and re-encodes).
+- Standalone rows are always `Basis: "inferred"`. Nothing here writes `verified` or projects a monthly figure. `GET /health/ready` advertises `billing: "byok"`; SDK dollar budgets fail closed on missing or unknown billing.
+- `caveman learn` prices spend only from provider-counted usage at the dated `shared/provider-catalog` rate (basis `provider_counted_x_published_rate`). A model with no catalog row is never priced at a sibling's rate. Savings need an attribution rung (`learn_attribution.go`), and totals are never summed across rungs. Subscription traffic has no marginal cost and every priced surface says so.
+- Learn sinks carry `practice_id` through one fail-closed mapping. `subagent_overuse` and the subagent spend sink are count/cost only, with no practice id: spawn count cannot prove a spawn was unnecessary, so they must not revive the retired `context-exploration-offload` opportunity.
+- A model name or a positive cost is not evidence for the retired `model-right-sizing` or a cache move. Compression replay reports local `estimated_engine_o200k` with zero dollars.
+- `anthropic-automatic-prompt-cache` is a default-off experiment: top-level 5-minute marker on direct Messages requests only, exclusive with `anthropic-cache-breakpoints` and any caller `cache_control`, and it mints no savings. `openai-prompt-cache-key` is routing metadata only, not savings proof.
+- The cache-breakpoint planner defaults to `frontier` in optimization modes (`breakpoint_plan: off` / `CAVEMAN_BREAKPOINT_PLAN=off`; unknown values mean off) and never runs in record, compress or pixel mode. It changes no model-visible bytes and `cache-breakpoint-plan` stays out of `cacheOptimizerIDs`.
+
+Cache safety (#1105). Keep `internal/gateway/cache_prefix_invariant_test.go` (with `FuzzCachePrefixInvariant`) green:
+- If request R repeats the bytes of an earlier request P's cached prefix, R's forwarded bytes over that range equal P's, and every request caches at least what the client asked for. Exceptions, both re-caching raw: a raw retry, and a compressed PAYG conversation without MCP recovery that streams.
+- Replacement is a pure function of block content, memoised in the durable replacement cache, and the first decision for a block (replaced or raw, `RawDecisionHandle`) wins forever. A frozen block with no decision goes out raw. Raw decisions are global and durable; bounding them needs a TTL of at least 24 h (OpenAI extended caching).
+- After a raw retry, a later request follows the longest lineage it extends, ties going raw. Pins and lineages live in the PrefixCache (`rawpin`, `lineage`).
+- New compression is live-zone only. The tripwire in `prefix_monitor.go` records `requests.cache_bust_cause`; any `caveman` value is a bug.
+- Cross-turn stability covers anthropic, openai, azureopenai/openaicompat and gemini through `ExtractStabilizable`; bedrock and vertex stay pass-through.
+- The replacement cache must keep `journal_mode(WAL)` and `busy_timeout`.
+- A `tool_result` answering the agent's own `caveman_retrieve` is never compressed (`providers.IsRecoveryToolName`): the memoised elision would come straight back and the agent could never read its data. Tests: `internal/gateway/recovery_exempt_test.go`; `verify_repo.py` pins the wrap plugin's tool name.
+
+Compression gates:
+- Subscription and OAuth compression is not account-gated. `CAVEMAN_WRAP_ENTITLED` and `WrapEntitled` were deleted; do not bring them back. `liveZoneCompressionAllowed` has exactly four fail-closed conditions: `subscription_compress` allows it (empty or `live_zone`), the adapter implements `PrefixStabilizer`, recovery runs through the agent's MCP `caveman_retrieve`, and a durable prefix cache is wired. Savings fields stay tokens-only.
+- The tool-schema strip is default off (`toolschema_strip: annotations` / `CAVEMAN_TOOLSCHEMA_STRIP`). It needs those four conditions plus `ledger.LeverAllowed`, covers the anthropic-messages shape only (`ExtractToolCatalog`), never touches a tool envelope, `annotations`, `_meta` or vendor extensions, and mints no savings.
+- Harm tripwire (`ledger.go`): an LRU of 1024 sessions keyed on `x-cave-session`; no header means it is inert. A lever earns a strike when the next request's `cache_creation_input_tokens` exceeds both 50k and 3x the session baseline; 3 strikes freeze it for the session, one way. The baseline excludes anomalous calls, or persistent regressions go unseen.
+- Pixel mode: default models `claude-fable-5,gpt-5.6` (`CAVE_PIXEL_MODELS`), savings inferred only, same first-decision rules as compress. At most 20 images per Anthropic request, client images included (`anthropicManyImages`), because past 20 the API rejects images over 2000 px and renders are 2573 px wide.
+- `nativeruntime.afterTool` does not mask outputs that `Engine.Detect` classes as `json`, `tabular` or `log`: the elision engine summarizes those in place, and masking them cost every fact plus a full recovery read. No classifier means mask. Tests: `mask_elidable_test.go`.
+
+Repository evidence and git:
+- A "Likely implementation path" line is injected only for items whose own file name or symbol contains a task term (`StrengthDirect`). Matching the whole path would let `src` or `internal` mark everything. `StrengthMetadata` items are never shown or stored; `Bundle.DirectOnly()` strips them before the object is written. Terms are at least 3 characters (`NormalizeTerms`). A decline records `repository_evidence_declined_no_direct_match`. `Scout.Status` is advice and must not gate injection (#899).
+- `listFiles` prefers `git ls-files`, falls back to a walk on an empty listing, and runs the content-based dependency filter (`directoryFilter`) on both paths. Environments are found by contents (`conda-meta`, `pyvenv.cfg`); `build`, `dist`, `vendor` and similar are excluded only when a sibling manifest proves the ecosystem. Git gets at most half the time budget (`gitListBudget`) so the walk can still finish.
+- Every `git` call against a user directory goes through `internal/gitsafe.Command` or `packages/cli/src/git-safe.ts`, which pass `-c` overrides (`core.fsmonitor`, `core.hooksPath`, `credential.helper` and others) and strip `GIT_*`. A cloned repo's `.git/config` can run code on `git status`. `verify_repo.py` fails on a new raw `git -C` call.
+
+Auth, identity and network:
+- `standalone.StandaloneHTTPClient` guards every upstream dial with `ssrf.SelfHostedConfig` (not `ManagedConfig`, which ignores the allowlist). `CAVE_SSRF_ALLOWLIST` re-allows loopback/private hosts; metadata and link-local stay blocked. `HTTPS_PROXY`/`NO_PROXY` apply by default (`upstream_proxy` / `CAVE_UPSTREAM_PROXY`); a managed config with a proxy fails with `ssrf.ErrProxyInManagedMode`. Bedrock and vertex use `ssrf.ValidateURLNoResolve` behind a proxy. `ca_bundle` / `CAVE_CA_BUNDLE` add private roots via `shared/platform/cabundle`.
+- `CAVEMAN_AUTH_TOKEN` is required for a non-loopback listen (a token map, OIDC issuer or TLS client CA also qualify). `standalone.Auth` deletes the matching header before `Creds.Resolve`, so the token is never forwarded. `Authenticate` runs before `matchAdapter`, so 401 vs 404 cannot enumerate routes. Health, `/caveman/keepalive` and `/metrics` (unless `CAVEMAN_METRICS_TOKEN`) stay open.
+- Bedrock credentials come from `shared/platform/awscreds`, never the request; a partial env pair fails closed.
+- An inbound `Authorization: Bearer` keeps `Scheme:"bearer"` (Claude and Gemini OAuth break if remapped). On `/compat/<name>/v1/messages` a key goes as `x-api-key`, elsewhere as Bearer. When the same key arrives as both `x-api-key` and an identical Bearer, `openai_compatible` keeps bearer (#1215); differing values resolve `x-api-key` first.
+- Middleware routes authorize every scoped route in `decode` via `Principal.Allows`; a route that skips `decode` skips authorization. JWT and certificate principals may never be `single_operator`. A failed token map or TLS reload keeps the previous one.
+- `store.PostgresMiddleware` keeps SQLite's single-writer semantics per authority with transaction advisory locks; `middleware_concurrency_test.go` fails without them.
+
+Store:
+- `RecordBatch` commits request rows with `synchronous=NORMAL` (WAL); other tables keep FULL. A request's cache component list goes to `request_cache_components` (14-day retention), never into `requests` (#1371: up to 66 KB, slowed every stats read).
+- `agent-evidence` is content-blind and always `inferred`. `provider_cache_components_available` is true only when the ordered list is present and valid; an empty list is never evidence of an unchanged prefix.
+- With `AsyncRecord`, a reader that must see the request it follows calls `Server.Flush` first. Close the server before the sink.
+- The HMAC native session marker is emitted only after local runtime and route proof and is stripped before capture, hashing and the provider.
+
+Cache warming (`cache_warm.go`, `cache_warm_table.go`):
+- Only Anthropic Messages on `api.anthropic.com`. The exact upstream bytes are held in memory only (1024 streams, 256 MiB) and replayed with `max_tokens: 0`. Requests that cannot be answered at zero output are never warmed.
+- Whether to warm is planned from `cache_warm_table.json` by backward induction at catalog prices; unknown price, class or lifetime means no warm. `TestCacheWarmPlanMatchesTheSimulator` pins the plan to the table; regenerate both together.
+- A parent's request does not stop its subagents' warms: a subagent may still run, and on the replay test half that stop cost $565.52 net.
+- Stops on any real request of the stream, any warm error, a warm with `cache_read_input_tokens == 0`, or 60 min. A 429 pauses that credential. At most two warms in flight.
+- Warm rows are tagged `cache-warm`: spend, never a saving or an agent request, never fed to the tripwire, never sent to Cloud. `CAVEMAN_CACHE_WARM=off` or `modules["waste-fixes"]: false` in `cloud.json` turns it off.
+
+Route stage (`internal/cloudlink`, `internal/gateway/route*.go`; optional, fails open):
+- Asks Cloud `POST /v1/route` (contract `route-ask-v1`) only for requests naming `caveman-auto`, while the CLI is signed in with `modules.routing: true`. Cloud picks the model and effort; no routing logic lives here. A named model records `route.outcome: off`.
+- Auto goes upstream as `autoFallback` (`route.go`); a transient Cloud failure runs the session's previous model (`heldModel`). Auto on another provider is a 400 `cave_auto_unavailable`. OpenAI Auto runs only `AutoOpenAIModels`.
+- The ask waits at most 800 ms. The keychain credential is read in `Link.Start`, never on a request goroutine. The answer is cached per turn so a tool loop never switches model or effort mid-turn.
+- Session state, effort marks and heals live in in-memory LRUs (1024), never on disk.
+- Effort marks (`effort_mode: message`) are replayed at the same anchors on later requests because the agent resends history without them. No OpenAI mark where OpenAI forbids it (`truncation: "auto"`, `context_management`, non-false `multi_agent`).
+- A thinking-binding 400 retries once, only on a session the route stage changed: `drop_block`, else strip thinking blocks from the failing message on.
+- Cloud errors, 401/403, `allowance` and `billing_limit` keep the asked model and pause asks; state goes to `$CAVEMAN_HOME/route-state.json`.
+- A provider 4xx on a routed model replays the original bytes on the asked model (not a 401). Only a replay that differed in the model alone blames it (`provider_rejected_routed_model`). A rate-limit 429 or 5xx is returned as is.
+- When the model moved, the agent's copy names the model it asked for (Claude Code drops its thinking otherwise); usage and stats read the provider's bytes.
+- The pass-through header and origins other than the provider's own API never route. Record mode does.
+- Telemetry level comes from `/me`; none or unreadable means `counts`, `off` sends nothing. Never invent a level.
+- A route warm (`x-cave-warm: 1`, `warm.go`) may be retried on a new connection; an ask never is (Cloud may have counted it).
+
+Pool and translation (`internal/pool`, `internal/translate`, `route_pool.go`, `route_cache.go`):
+- Logins from `caveman providers add|login` are listed in `$CAVEMAN_HOME/provider-logins.json` (written under its `.lock`); the secret is in keychain service `caveman-provider` or a 0600 file, never both. At most 64 pool entries.
+- `via: cloud` goes through the Cloud gateway on the project key only. Any failure before content reaches the agent falls back to the asked model; the translator holds output up to `gateHold` (10 s). A stream cut after content aborts framing and never closes a half-finished tool call.
+- Requests to Anthropic's or OpenAI's own API drop reasoning another host wrote (`translate.AnthropicNative`, `OpenAINative`, `ChatNative`). A part the target cannot take refuses translation.
+- Never add Claude Pro/Max, Google or Copilot logins to the pool; every OAuth row in `internal/pool/providers.json` carries a terms note.
+- Record mode gets no cache mechanics (`prompt_cache_key`, OpenRouter pin, sibling wait). With routing off or signed out, requests stay byte for byte.
+- Live check: `CAVEMAN_LIVE_OPENROUTER_KEY=<key file> go test ./proxy/internal/cloudlink -run TestLiveOpenRouterCache -v` (spends real money, $0.50 cap).
+
+See the root `AGENTS.md` for repo-wide rules.

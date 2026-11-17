@@ -1,33 +1,33 @@
-# mem — cavemem, durable agent memory (Go core + clients, Apache-2.0)
+# mem: cavemem, durable agent memory
 
-Durable, cross-session memory: `remember` / `recall` / `supersede` / `history` / `forget`. A local SQLite store holds the
-**raw** memories (the source of truth); recall ranks them with deterministic **BM25** behind a
-conservative threshold and compresses each hit through the [engine](../engine/CLAUDE.md) so the
-inferred token cost is honest and the dropped detail stays recoverable via CCR. Everything is
-`inferred`.
+Cross-session memory with five verbs: remember, recall, supersede, history, forget. A local SQLite
+store holds the raw memories, which are the source of truth. Recall ranks them with deterministic
+BM25 behind a conservative threshold and compresses each hit through the
+[engine](../engine/AGENTS.md), so the token cost is honest and dropped detail stays recoverable
+through CCR. Every figure is `inferred`.
 
 ## Layout
-- `store.go` — `Remember`/`Recall`/`Supersede`/`History`/`Forget`/`Recover` over SQLite + engine; legacy schemas migrate in place.
-- `bm25.go` — deterministic tokenizer + BM25 scorer (non-negative scores, so the threshold is meaningful).
-- `cmd/cavemem/` — MCP server + `remember`/`recall`/`supersede`/`history`/`forget` CLI subcommands (JSON).
-- `js/` + `py/` — thin TS and Python clients that shell out to the binary (mirrored libraries; they reimplement nothing).
+- `store.go`: `Open`, `Remember`, `Recall`, `Supersede`, `History`, `Forget`, `Recover` over SQLite plus the engine. Older schemas migrate in place.
+- `bm25.go`: deterministic tokenizer and BM25 scorer (scores are non-negative, so the threshold means something).
+- `cmd/cavemem/`: the binary. With no arguments or `mcp` it serves MCP through `mcp.NewServer`; otherwise CLI subcommands that print JSON (`remember`, `recall`, `supersede`, `history`, `forget`, `recover`, `version --json`).
+- `js/`, `py/`: thin JS and Python clients that run the binary (`CAVEMEM_BIN` or `PATH`). They reimplement nothing.
 
-## The cavemem_* MCP tools
-`cavemem_remember(text)` · `cavemem_recall(query, limit?, token_budget?)` ·
-`cavemem_supersede(id, text)` · `cavemem_history(id)` · `cavemem_forget(id)`,
-served through `mcp.NewServer` so the framing matches caveman-mcp exactly.
+MCP tools: `cavemem_remember(text)`, `cavemem_recall(query, limit?, token_budget?)`,
+`cavemem_supersede(id, text)`, `cavemem_history(id)`, `cavemem_forget(id)`.
 
-## Conventions
-- Build/test: `make product-build PRODUCT=mem` / `make product-test PRODUCT=mem`
-  for the Go core; root `make test` also runs mirrored JS/Python wrapper tests.
-- The wrappers shell out to the gated binary — keep recall/scoring logic in Go, never forked into TS/Python.
+## Build and test
+- `go build ./mem/...` and `go test ./mem/...` from the repo root.
+- `pnpm --filter cavemem test` for the JS client; `python -m pytest -q tests` from `mem/py` for the Python client (CI's `root-surfaces` job).
 
-## Gotchas (honesty invariants)
-- **byte-safe write** — raw text is written to SQLite before any engine call, so a memory is never lost; compression is transient, at recall time only.
-- **bounded recall** — omitted/Go-zero `TokenBudget` defaults to 2000 inferred tokens. Public CLI/MCP/JS/Python callers must explicitly pass `token_budget=0` for unlimited recall; adapters map it to `UnlimitedTokenBudget`.
-- **fail toward nothing** — a query below the threshold (or with no term overlap) recalls nothing, never a guess.
-- **current-only recall** — superseded versions stay auditable through `History` but never enter normal recall.
-- **inferred-only** — `tokens_added`, score, and basis are inferred estimates; never `verified`.
-- **reversible** — a compressed recall hit carries a CCR `recovery_handle`; `Recover` returns the byte-exact original.
+## Invariants
+- **Byte-safe write.** Raw text reaches SQLite before any engine call, so a memory is never lost. Compression happens only at recall time.
+- **Logic stays in Go.** The clients send memory text through `remember --stdin` (never one huge argv element) and keep no validation, recall or scoring logic of their own.
+- **Single-writer store.** `mem.db` and `ccr.db` open with `SetMaxOpenConns(1)` and `ccr.SQLiteDSN` (`busy_timeout(5000)`, `journal_mode(WAL)`). Schema setup, migration and the `Remember` insert run inside `ccr.RetryOnBusy` (30 s wall budget) because a fan-out of fresh `cavemem remember` processes can outlast one busy timeout. Without it, concurrent writes are dropped as `SQLITE_BUSY`.
+- **Bounded recall.** `Recall` packs hits in BM25 rank order under `RecallOptions.TokenBudget` (`DefaultTokenBudget` = 2000) using `engine/contextwindow`. An omitted or Go-zero budget stays bounded; public CLI, MCP, JS and Python callers must pass `token_budget=0` explicitly for unlimited, which adapters map to `UnlimitedTokenBudget`. A top hit too large for the budget comes back as a compressed head plus a CCR `recovery_handle`, never its whole body (one unbounded recall once returned 440,000 tokens).
+- **Bounded remember.** One memory is capped at `MaxMemoryBytes` (256 KiB) and fails closed with `cave_memory_too_large` (`ErrMemoryTooLarge`). The CLI exits 65 and both clients export `MEMORY_TOO_LARGE_EXIT_CODE`. A memory is a fact, not a file dump.
+- **Version-gated `supersede --stdin`.** `version --json` advertises the `supersede-stdin` capability. An older build reads `--stdin` as the replacement text, stores the literal flag, expires the real memory and exits 0. Clients and `caveman mem` send replacements by argv when they fit and require the capability before using stdin, refusing before any write when it is absent.
+- **Fail toward nothing.** A query below the threshold or with no term overlap recalls nothing, never a guess.
+- **Current-only recall.** Superseded versions stay visible through `History` but never enter normal recall.
+- **Reversible and inferred.** A compressed hit carries a `recovery_handle`; `Recover` returns the byte-exact original. `tokens_added`, score and basis are estimates, never `verified`.
 
-See ../../CLAUDE.md (root) · ../engine/CLAUDE.md · ../mcp/CLAUDE.md
+See the root [AGENTS.md](../AGENTS.md) and [mcp/AGENTS.md](../mcp/AGENTS.md).

@@ -1,37 +1,40 @@
-# shared/provider-catalog — provider + model pricing catalog
+# shared/provider-catalog
 
-Single source of truth for token prices (input, output, cache-read, cache-write, reasoning,
-batch) consumed by the gateway and optimizer for cost accounting and savings math. No runtime
-code — data + schema only.
+Dated provider and model prices (input, output, cache read/write, reasoning, batch, long context) plus model capabilities. The proxy prices spend rows, routing and `caveman learn` from it through `shared/platform/catalog`, which embeds `catalog/current.yaml` via `embed.go`. This folder holds data and validators only.
 
 ## Layout
 
-- `catalog/current.yaml` — live catalog (44 exact provider/model/region rows across OpenAI, Anthropic, Gemini, Bedrock, Vertex); loaded by services
-- `catalog/YYYY-MM-DD.yaml` — dated snapshots kept alongside current; **never delete a snapshot any current row's `verified_at` names.** One narrow exception, already exercised: a snapshot minted by a mistaken *re-attest* — no row references it once the dates are reverted, and it never shipped — is removed in the same change that reverts those dates, because keeping it asserts a price re-check nobody performed (`2026-07-30.yaml`, removed 2026-08-01)
-- `schemas/provider-catalog.schema.json` — JSON Schema (draft 2020-12) that every catalog file must satisfy
+- `catalog/current.yaml`: the live catalog, one row per provider/model/region.
+- `catalog/YYYY-MM-DD.yaml`: immutable dated snapshots. Never edit one, and never delete a snapshot that a current row's `verified_at` names.
+- `schemas/provider-catalog.schema.json`: JSON Schema 2020-12 for every catalog file.
+- `validate_catalog.py`, `tests/test_validate_catalog.py`: the Python validator and its failure-mode tests.
+- `catalog_test.go`: Go checks on the current rows (routing fields, Bedrock and Mistral regional prices, null-capability notes).
+- `CONTRIBUTING.md`: how to submit a price change.
 
-## Conventions
+## Test
 
-- Each entry requires: `provider`, `model`, `region`, `currency`, `pricing`, `capabilities`, `sources`, `verified_at`. `capabilities_verified_at` is optional (older snapshots predate it) but every current row should carry one.
-- `pricing` fields that don't apply to a model must be `null`, not omitted (schema allows `["number","null"]`)
-- **`verified_at` and `capabilities_verified_at` are two different kinds of provenance and must never be conflated:**
-  - `verified_at` means exactly one thing — the date this row's **pricing** was last checked against the vendor's published pricing page. It is the sole input to `catalogVersion()` (`public/shared/platform/catalog/catalog.go`), which is embedded in cost reports and **signed receipts**. Bump it only when you re-check prices; never as a side effect of a capability or source edit.
-  - `capabilities_verified_at` means the date the capability data this row ASSERTS was last checked against the vendor's own model docs. It is not read by any cost/receipt path — it is embedded in nothing money-related.
-    - "Asserts" is load-bearing and narrower than it looks: a key whose value is explicit `null` asserts nothing, so it is **outside** what this date covers. That is what keeps the date honest on the 20 Bedrock rows whose `tools`/`vision`/`json_mode` were never checked — the date still truthfully covers `context_window_tokens` and the other sourced keys those rows do assert. Any row carrying a `null` routing capability MUST also carry a comment naming the unverified keys; `TestNullCapabilitiesCarryAnUnverifiedNote` enforces that pairing, so the narrowing cannot become a loophole.
-  - A capability-only edit (adding/correcting `tools`/`vision`/`json_mode`/`context_window_tokens`/capability `sources`) bumps `capabilities_verified_at` and leaves `verified_at` untouched. A price-only edit does the reverse. Only bump both when you genuinely re-checked both against their respective vendor pages the same day.
-  - **WITHDRAWING a claim is not a verification and does not bump the date.** Replacing an unverified value with `null` removes an assertion rather than checking one, so `capabilities_verified_at` stays where it was — bumping it would be the same date-attests-work-nobody-did mistake the `verified_at` rule above exists to prevent, one field over.
-- Adding a new model: add to `current.yaml` AND copy to a new dated snapshot (e.g. `2026-07-01.yaml`)
-- `go test ./public/shared/platform/catalog` requires every current row's **pricing-relevant fields** (`provider`, `model`, `region`, `currency`, `pricing`, `verified_at`, **plus every key in `catalog.PriceAffectingCapabilities`**) to be byte-semantically identical to the immutable snapshot named by its `verified_at` date; never reuse an old `verified_at` date for a row whose price actually changed. The *rest* of `capabilities`, plus `capabilities_verified_at` and `sources`, are deliberately excluded from that comparison — they're free to differ from the archived snapshot, which is exactly what lets a capability-only edit skip minting a new price-dated snapshot.
-- **Some `capabilities` keys are price, not capability.** `catalog.PriceAffectingCapabilities` (`public/shared/platform/catalog/catalog.go`) is the authoritative list — today `regional_processing_multiplier`, `inference_geo_us_multiplier` (both multiply the row's token rates via `PricingMultiplier` → `scaleStandaloneTokenRates`) and `region_agnostic_pricing` (decides whether a global row's price answers a regional lookup at all, `PriceForRegionOrAgnostic`). Editing any of them **is** a price edit: bump `verified_at` and mint a dated snapshot exactly as if you had edited `pricing`. `TestTamperedPriceCapabilityBreaksTheSnapshotPin` reproduces what their old exclusion cost — a 1.10 → 1.95 edit inflated every OpenAI us/eu rate by 77%, and deleting one `region_agnostic_pricing` line drops a whole Vertex region's spend to zero, both passing every gate including the snapshot pin a signed receipt's `catalog_version` stands on.
-- **Adding a price-affecting capability: register it, or it does nothing.** `PricingMultiplier` returns `(0, false)` for any key absent from `PriceAffectingCapabilities`, and the Python mirror is asserted equal to the Go slice by the test suite. That is deliberate: registration is what pins the key, so an unregistered multiplier cannot silently move money past the snapshot.
-- Other `capabilities` keys are free-form (mostly booleans, some numeric); match the provider's actual API surface (e.g. `prompt_cache`, `explicit_cache`, `batch`)
-- **Unknown is not `false`.** `tools`/`vision`/`json_mode` are explicitly nullable. Write `null` when the vendor's own model docs do not state the answer, with a YAML comment naming what you checked. The router (`candidateSupports` → `boolCap`) treats `null` exactly like absent, so an honest unknown only costs a routing candidate — while a guessed `true` routes traffic to a model that may not support the feature, and a guessed `false` silently deletes a candidate. 20 Bedrock rows carry `null` today for exactly this reason.
+From the repo root:
 
-## Gotchas
+```bash
+go test ./shared/provider-catalog ./shared/platform/catalog
+python -m pip install -r shared/provider-catalog/requirements-dev.txt
+python shared/provider-catalog/validate_catalog.py
+python -m unittest discover -s shared/provider-catalog/tests -p 'test_*.py'
+```
 
-- **no-fake-savings**: prices here feed the Cave Plan headline — wrong prices → wrong inferred savings. Always verify against the cited provider pricing page before committing a change.
-- `cache_write_input_per_million` is `null` for OpenAI and Gemini (they don't charge a separate write fee); Anthropic charges both read and write.
-- `batch_discount_fraction: 0.50` means 50 % off, not 50 % of the listed rate — keep that interpretation consistent.
-- `build`/`lint`/`test` scripts in `package.json` only parse the schema JSON; they do NOT validate catalog YAML.
+`provider-catalog.yml` runs the Python checks on any PR touching `catalog/`. That lane requires the PR to change `current.yaml`, add one new dated snapshot, and touch nothing else, so price review stays separate from code review.
 
-See ../../../CLAUDE.md (root)
+## Invariants
+
+- Every row needs `provider`, `model`, `region`, `currency`, `pricing`, `capabilities`, `sources`, `verified_at`. Pricing fields that do not apply are `null`, not omitted.
+- `verified_at` means one thing: the date this row's price was last checked against the vendor's pricing page. It alone feeds `catalogVersion()`, which goes into cost reports and signed receipts. Bump it only when you re-check the price, and never reuse an old date for a changed price. It may not be in the future or older than 120 days.
+- Every current row's price identity (`provider`, `model`, `region`, `currency`, `pricing`, `verified_at` and the price-affecting capabilities) must equal the snapshot named by its `verified_at` date. A price change therefore adds a new dated snapshot.
+- `capabilities_verified_at` dates the capability data a row asserts against the vendor's model docs. A capability-only edit bumps it and leaves `verified_at` alone. Replacing a guess with `null` withdraws a claim, which is not a check, so it does not bump the date.
+- Some `capabilities` keys are price: `catalog.PriceAffectingCapabilities` (`regional_processing_multiplier`, `inference_geo_us_multiplier`, `region_agnostic_pricing`). Editing one is a price edit. A new price-affecting key must be registered there or `PricingMultiplier` ignores it; the Python list in `validate_catalog.py` must match (a test parses the Go file).
+- Unknown is not `false`. `tools`, `vision` and `json_mode` are `null` when the vendor's docs do not say, with a YAML comment naming the unverified keys (`TestNullCapabilitiesCarryAnUnverifiedNote`). A guessed `true` routes traffic to a model that may lack the feature; a guessed `false` removes a candidate.
+- An unknown provider, model or region is priced at zero with `unpriced:` provenance. Never borrow a sibling model's price.
+- A row carrying a `# proposed-by:` marker fails validation until a reviewer checks the price against the provider's page and removes the marker.
+- `batch_discount_fraction: 0.50` means 50% off the listed rate.
+- Wrong prices produce wrong spend and wrong inferred savings. Cite provider-owned HTTPS pages in `sources`.
+
+See the root `AGENTS.md` for repo-wide rules.

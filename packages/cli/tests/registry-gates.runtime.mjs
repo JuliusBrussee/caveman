@@ -50,7 +50,7 @@ test("integration compile fails closed when code pins a model not declared in mo
 });
 
 // The passing path (a catalog-present model compiles cleanly) is covered by the real
-// `node public/integrations/compile.mjs` in the CLI build/test; it is not re-run here
+// `node integrations/compile.mjs` in the CLI build/test; it is not re-run here
 // because that compiler also writes the committed recipes.json + web copy to fixed paths.
 
 // ---- #135: injection_completeness gate (declared tier must match the CLI's real routing) ----
