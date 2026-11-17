@@ -274,8 +274,12 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
   const upgradedCellarNode = path.join(upgradedCellarBin, 'node');
   const stableNode = path.join(stableBin, 'node');
 
+  // The versioned "Cellar" nodes are symlinks to this node, not hard links: a
+  // dynamically linked node (Homebrew's loads libnode from ../lib) cannot start
+  // from another directory, so a linked copy aborted before the installer ran
+  // and settings.json was never written.
   try {
-    fs.linkSync(process.execPath, cellarNode);
+    fs.symlinkSync(process.execPath, cellarNode);
     fs.symlinkSync(cellarNode, stableNode);
     const r = spawnSync(stableNode, [
       INSTALLER, '--only', 'claude', '--with-hooks', '--skip-skills',
@@ -284,6 +288,7 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
       env: { ...isolatedEnv(path.join(dir, 'home')), PATH: stableBin, CLAUDE_CONFIG_DIR: configDir },
       encoding: 'utf8',
     });
+    assert.ok(!r.error && !r.signal, `installer did not run: ${r.error?.message || r.signal} ${r.stderr}`);
     assert.notEqual(r.status, 2, `installer aborted on argv parse: ${r.stderr}`);
 
     const settings = JSON.parse(fs.readFileSync(path.join(configDir, 'settings.json'), 'utf8'));
@@ -292,8 +297,10 @@ test('standalone hooks keep a stable PATH node symlink', { skip: process.platfor
       'hook command should preserve the stable node path found on PATH');
     assert.doesNotMatch(command, new RegExp(cellarNode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
       'hook command must not persist the versioned node target');
+    assert.ok(!command.includes(`"${fs.realpathSync(process.execPath)}"`),
+      'hook command must not persist the resolved node binary');
 
-    fs.linkSync(process.execPath, upgradedCellarNode);
+    fs.symlinkSync(process.execPath, upgradedCellarNode);
     fs.unlinkSync(stableNode);
     fs.symlinkSync(upgradedCellarNode, stableNode);
     fs.rmSync(path.join(dir, 'Cellar', 'node', '26.5.0'), { recursive: true });
