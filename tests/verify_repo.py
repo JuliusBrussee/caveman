@@ -1112,7 +1112,7 @@ def verify_release_metadata() -> None:
     # Every published artifact carries LICENSE and NOTICE: npm packages list both
     # in `files`, Python packages in `license-files`.
     unpublished = {
-        "packages/device-auth", "mem/js", "shared/provider-catalog", "src/hooks",  # not published from here
+        "packages/device-auth", "mem/js", "src/hooks",  # not published from here
     }
     tracked = run(["git", "ls-files", "-z", "--", "*package.json", "*pyproject.toml"]).stdout.split("\0")
     missing = []
