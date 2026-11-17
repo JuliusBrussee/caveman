@@ -13,8 +13,12 @@ stores. Do not put API keys in either configuration file.
 Global feature configuration lives at:
 
 ```text
-~/.caveman-cloud/config.json
+~/.caveman/cloud.json
 ```
+
+`CAVEMAN_HOME` moves it with the rest of `~/.caveman`. Older CLIs kept it in
+`~/.caveman-cloud/config.json`; the first read copies that file over and leaves
+the original in place for any older CLI still on `PATH`.
 
 A project can add a restricted overlay at:
 

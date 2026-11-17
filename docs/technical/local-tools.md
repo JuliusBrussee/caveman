@@ -132,7 +132,7 @@ Local proxy and tools commonly use:
 ~/.caveman/mem/mem.db
 ~/.caveman/mem/ccr.db
 ~/.caveman/caveman.yaml
-~/.caveman-cloud/config.json
+~/.caveman/cloud.json
 ```
 
 Project overlays use `./.caveman/config.json`. Back up or delete these files only

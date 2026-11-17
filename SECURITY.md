@@ -251,8 +251,9 @@ runtime events, but opted-in telemetry needs `CAVEMAN_TELEMETRY=0` or
 
 ## Local storage
 
-Caveman stores runtime data under `~/.caveman/` and account/config state under
-`~/.caveman-cloud/` unless a documented environment override changes a path.
+Caveman stores runtime data and CLI configuration under `~/.caveman/`
+(`CAVEMAN_HOME`), and scan sync state under `~/.caveman-cloud/`, unless a
+documented environment override changes a path.
 Important files include:
 
 - `~/.caveman/caveman.db`: per-request metadata, usage, local savings estimates,
@@ -267,8 +268,10 @@ Important files include:
 - local learn/first-run scans read supported Claude Code and Codex history files
   and write aggregate reports/state locally. Raw session content is not included
   in CLI telemetry or authenticated scan sync.
-- `~/.caveman-cloud/config.json`: endpoints, project/account pointers, telemetry
-  decision, and other CLI state.
+- `~/.caveman/cloud.json`: endpoints, project/account pointers, telemetry
+  decision, and other CLI state. Older CLIs used `~/.caveman-cloud/config.json`;
+  the current CLI copies it once, leaves it in place, and mirrors its own
+  setting changes into it while it exists.
 - account credentials: macOS Keychain when available, otherwise
   `~/.caveman/credentials` with file mode `0600`. `CAVE_TOKEN` remains owned by
   the parent environment.

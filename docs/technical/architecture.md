@@ -55,7 +55,8 @@ Default local state lives under `~/.caveman`:
 | `caveman.yaml` | Proxy mode; loopback listener; provider endpoints; optimizer switches |
 | `receipts/` | Local native-agent run receipts when produced |
 
-Connected CLI state uses `~/.caveman-cloud`. Credentials use the macOS
+Connected CLI settings live in `~/.caveman/cloud.json`; scan sync state stays
+in `~/.caveman-cloud`. Credentials use the macOS
 Keychain when available, with an owner-only file fallback. Configuration stores
 pointers and non-secret settings. See [security and privacy](./security-and-privacy.md)
 for deletion and permission details.

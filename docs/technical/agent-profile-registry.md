@@ -110,9 +110,10 @@ convention** — `convert` skips the agent with an honest note, never guesses a 
   keys/values, and paths outside the profile's own hidden home directory fail
   compile — never a guessed protocol, redirect, loader override, or arbitrary
   file read/write.
-- The compiler runs in the CLI build **and** test (`node ../agents/compile.mjs`); the generated
+- The compiler runs in the CLI build **and** test (`node packages/cli/scripts/compile-registries.mjs`
+  runs `agents/compile.mjs`, `integrations/compile.mjs` and `skills/compile.mjs`); the generated
   `agents.generated.ts` is committed and must stay in sync.
 - `wire_protocol` must be one the proxy speaks natively (anthropic-messages · openai-chat ·
   openai-responses · gemini-generatecontent) — we don't translate protocols in the wrap path.
 
-See ../../CLAUDE.md (root) · ../../packages/cli/CLAUDE.md
+See also [AGENTS.md](../../AGENTS.md) and [packages/cli/AGENTS.md](../../packages/cli/AGENTS.md).

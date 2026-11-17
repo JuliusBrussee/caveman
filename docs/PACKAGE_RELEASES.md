@@ -16,17 +16,17 @@ provenance and PyPI attestations automatically.
 Tags must be annotated, GitHub-verified, and point to a commit on `main`. The
 workflow rejects a tag whose version differs from the package metadata.
 
-| Tag | Artifact | Latest published (2026-11-06) | Version in main (Caveman 4.1.0) | GitHub Release |
-|---|---|---|---|---|
-| `sdk-ts-v*` | npm `@caveman-ai/sdk` | `1.2.0` | `1.2.0` | Yes |
-| `sdk-python-v*` | PyPI `caveman-sdk` | `1.2.0` | `1.2.0` | Yes |
-| `middleware-ts-v*` | npm `@caveman-ai/middleware` | `1.0.1` | `1.1.0` | Yes |
-| `middleware-python-v*` | PyPI `caveman-middleware` | `1.0.0` | `1.0.1` | Yes |
-| `contracts-v*` | npm `@caveman-ai/contracts` | `2.0.0` | `2.1.0` | Yes |
-| `pi-v*` | npm `@caveman-ai/pi` | `0.3.1` | `0.3.2` | No |
-| `bin-v*` | Go binaries and container image | `bin-v4.0.2` | `bin-v4.1.0` (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
-| `cli-v*` | npm `@caveman-ai/cli` | `4.0.1` | `4.1.0` | No |
-| `v*` | Caveman product (installer, plugin, skills) | `v4.0.1` | `v4.1.0` | Yes, "Latest" |
+| Tag | Artifact | GitHub Release |
+|---|---|---|
+| `sdk-ts-v*` | npm `@caveman-ai/sdk` | Yes |
+| `sdk-python-v*` | PyPI `caveman-sdk` | Yes |
+| `middleware-ts-v*` | npm `@caveman-ai/middleware` | Yes |
+| `middleware-python-v*` | PyPI `caveman-middleware` | Yes |
+| `contracts-v*` | npm `@caveman-ai/contracts` | Yes |
+| `pi-v*` | npm `@caveman-ai/pi` | No |
+| `bin-v*` | Go binaries and container image (pinned in `packages/cli/BINARY_RELEASE`) | Yes, with the binaries |
+| `cli-v*` | npm `@caveman-ai/cli` | No |
+| `v*` | Caveman product (installer, plugin, skills) | Yes, "Latest" |
 
 `tests/verify_repo.py` checks that each SDK and middleware package's version,
 version constant (`SDK_VERSION`, `MIDDLEWARE_VERSION`), and top `CHANGELOG.md`
@@ -112,9 +112,6 @@ under `release-<major>.x` instead. A prerelease publishes under its channel,
 `alpha`, `beta`, or `rc`, and any other prerelease identifier under `next`. So
 `npm install <package>` never resolves a prerelease once the package has a
 stable version, and never moves backwards.
-
-`@caveman-ai/middleware@latest` points at stable `1.0.1`. Its earlier
-`0.1.0-alpha.2` publication remains available by exact version.
 
 PyPI has no dist-tags: pip skips prereleases (`0.1.0a1`) unless the user pins
 one or passes `--pre`.
@@ -270,249 +267,70 @@ mirrors. To fill a mirror, copy the pinned GitHub Release's assets as they are,
 for example
 `gh release download <bin-vX.Y.Z> --repo JuliusBrussee/caveman --dir <mirror>/<bin-vX.Y.Z>`.
 
-## Repository settings the release path depends on
+## Registry setup
 
-These live in GitHub settings, not in this repository, and only the owner can
-change them. State checked with `gh api` on 2026-09-23.
+Every release workflow refuses an unsigned, lightweight, or off-`main` tag.
+The `npm`, `pypi`, and `binary-release` GitHub environments each need the
+maintainer's approval and accept only their own tag patterns.
+`binary-release` holds `CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM`, which must
+match `packages/cli/BINARY_SIGNING_PUBKEY.pub`.
 
-Required, and in place:
+Trusted publishers (identity fields are case-sensitive): npm = owner
+`JuliusBrussee`, repository `caveman`, workflow `release-packages.yml`,
+environment `npm`; PyPI = the same owner, repository, and workflow with
+environment `pypi`. After the first trusted publish, set the npm package's
+publishing access to require 2FA and disallow tokens. The Python SDK's import
+name stays `caveman_cloud`.
 
-- Environments `npm`, `pypi`, and `binary-release` each require approval from
-  `JuliusBrussee` and accept deployments only from their own release tag
-  patterns (`npm` today: `sdk-ts-v*`, `middleware-ts-v*`, `pi-v*`, plus the
-  stale `agent-v*` and `create-agent-v*`; `pypi`: `sdk-python-v*`,
-  `middleware-python-v*`; `binary-release`: `bin-v*`). The `npm` policy still
-  needs `contracts-v*` and `cli-v*` added and the two agent patterns removed
-  (the Agent SDK no longer releases from this repository).
-- `binary-release` holds `CAVEMAN_BINARY_SIGNING_PRIVATE_KEY_PEM`, matching
-  `packages/cli/BINARY_SIGNING_PUBKEY.pub`.
-- Private vulnerability reporting is on.
+### First publish of a new npm package
 
-Required, and **not** in place yet. The two ruleset items block the 3.0.0
-release; turn on immutable releases before it too:
-
-- **`main` rulesets.** `main` is unprotected and has no rulesets, yet every
-  release gate trusts `git merge-base --is-ancestor <tag> origin/main`. Anyone
-  who can push to `main` can rewrite what that check accepts. Create two
-  rulesets on the default branch: one that blocks force-pushes and deletion
-  with no bypass, and one that requires a pull request and the required status
-  checks, with a repository-admin bypass for the maintainer. `sync-skill.yml`
-  pushes its mirror commit straight to `main` as `github-actions[bot]`, so the
-  pull-request ruleset needs a bypass for the GitHub Actions app, or that
-  workflow has to stop pushing (see the note below).
-- **Release-tag ruleset.** Tags `v*` and `*-v*` can be moved or deleted today.
-  A ruleset on those patterns should block update and deletion, and restrict
-  creation to the maintainer. The installer pins `v3.0.0` and the hook checksum
-  manifest comes from that same tag, so a moved tag would change what a
-  detached install downloads.
-- **Immutable releases** (Settings, General, Releases). Off today; every
-  release reports `immutable: false`. With it on, a published release's assets
-  and tag cannot change.
-- Dependabot alerts and Dependabot security updates (Settings, Code security).
-  Both are off; `.github/dependabot.yml` only configures version updates.
-- CodeQL default setup must stay **off** (it is today): `codeql.yml` is the
-  advanced setup, and GitHub refuses advanced-setup uploads while default setup
-  is on.
-
-`sync-skill.yml` note: bypassing the pull-request rule for the GitHub Actions
-app lets any workflow holding `contents: write` push to `main`, not only the
-sync job. The narrower alternative is to stop auto-pushing: commit the mirrors
-in the pull request itself and have CI fail when they drift.
-
-Recommended:
-
-- The Apple and Windows signing secrets above, once the certificates exist.
-
-Registry side, per package (identity fields are case-sensitive): npm trusted
-publisher = owner `JuliusBrussee`, repository `caveman`, workflow
-`release-packages.yml`, environment `npm`; PyPI trusted publisher = the same
-owner, repository, and workflow with environment `pypi`. `@caveman-ai/cli`
-exists on npm (hand-published so far) and needs this trusted publisher added
-before `cli-v2.0.0`. After the first trusted publish, set each npm package's
-publishing access to require 2FA and disallow tokens. References:
-[npm trusted publishing](https://docs.npmjs.com/trusted-publishers/) and
-[PyPI OIDC from GitHub](https://docs.github.com/en/actions/how-tos/secure-your-work/security-harden-deployments/oidc-in-pypi).
-The Python SDK's import name stays `caveman_cloud`.
-
-### First publish of a new npm package (`@caveman-ai/contracts`)
-
-npm can only attach a trusted publisher to a package that already exists, and
-it does not yet allow a first publish through OIDC
-([npm/cli#8544](https://github.com/npm/cli/issues/8544), open). So a brand-new
-package needs one manual publish first. **Manual, owner-only, once per new
-package.** Publish a placeholder, not the real version, so the real release
-still comes from CI with provenance:
+npm attaches a trusted publisher only to a package that already exists, and
+does not allow a first publish through OIDC
+([npm/cli#8544](https://github.com/npm/cli/issues/8544)). A new package needs
+one manual, owner-only placeholder publish, so the real version still comes
+from CI with provenance:
 
 ```sh
-dir="$(mktemp -d)" && cd "$dir"
-cat > package.json <<'EOF'
-{"name":"@caveman-ai/contracts","version":"0.0.0-bootstrap.0","description":"Name placeholder for trusted publishing. Use 2.0.0 or later.","license":"Apache-2.0","repository":{"type":"git","url":"git+https://github.com/JuliusBrussee/caveman.git","directory":"packages/shared/contracts"}}
+dir="$(mktemp -d)"
+cat > "$dir/package.json" <<'EOF'
+{"name":"@caveman-ai/<name>","version":"0.0.0-bootstrap.0","description":"Name placeholder for trusted publishing.","license":"Apache-2.0","repository":{"type":"git","url":"git+https://github.com/JuliusBrussee/caveman.git","directory":"<package dir>"}}
 EOF
 npm login                       # interactive, 2FA; no token is stored in CI
-npm publish --access public --tag bootstrap
+npm publish "$dir" --access public --tag bootstrap
 ```
 
-Then, on npmjs.com, add the trusted publisher above to `@caveman-ai/contracts`,
-push `contracts-v2.0.0`, and once it is live run
-`npm deprecate @caveman-ai/contracts@0.0.0-bootstrap.0 "placeholder; use 2.0.0 or later"`.
-The publish job's dist-tag rule gives `2.0.0` `latest`, whether or not the
-registry had pointed `latest` at the placeholder.
+Then add the trusted publisher on npmjs.com, add the tag pattern to the `npm`
+environment's policy, push the real tag, and once it is live deprecate the
+placeholder with `npm deprecate`. The dist-tag rule gives the real version
+`latest`.
 
-## Caveman 3.0.0 release runbook
+## Release order
 
-The `feat/middleware-enterprise` branch is the 3.0.0 release: the Apache-2.0
-relicense plus stable middleware. Its last commit is the release commit. Run
-these in order from a clean, up-to-date `main` checkout with a signing key
-configured for `git tag -s` (every release workflow refuses unsigned,
-lightweight, or off-`main` tags). Each `git tag` is followed by
-`git push origin <tag>`.
+Dependencies decide the order. Each `git tag -s` is followed by
+`git push origin <tag>`; each run waits for environment approval.
 
-**Why this order.** The binaries come first because everything else names
-them: `packages/cli/BINARY_RELEASE` and the npm launchers already pin
-`bin-v2.0.0`, and `deploy/*` names its image. The SDKs publish before the
-middleware because middleware 1.0.0 needs SDK 1.2.0 (`^1.2.0` /
-`caveman-sdk>=1.2,<2`); published first, a middleware install would fail to
-resolve. `v3.0.0` goes out right after the merge because the README and
-INSTALL one-liners (`raw.githubusercontent.com/.../v3.0.0/install.sh`) 404
-until it exists, and the installer at that ref needs nothing unpublished.
+1. Merge to `main`. Wait for `sync-skill.yml` to push its `[skip ci]` mirror
+   commit, then pull.
+2. Push the product tag `v*` right away and create its GitHub Release
+   (`gh release create <tag> --verify-tag --latest --notes-file <notes>`). The
+   README and INSTALL one-liners pin this tag and 404 until it exists. Notes
+   live in `docs/releases/<version>.md`.
+3. Runtime binaries (`bin-v*`). `release-binaries.yml` checks that
+   `packages/cli/BINARY_RELEASE` already names the tag; run
+   `node packages/cli/scripts/gen-binaries.mjs --check` first. Confirm every
+   asset downloads anonymously (`packages/cli/PUBLISHING.md`).
+4. To move `deploy/*` to the new image, pin its signed digest
+   (`tag@sha256:...`) in a small PR, after `cosign verify` as above.
+5. SDKs before middleware, because the middleware packages depend on the SDK
+   version in this repository. Wait until `npm view` and `pip index versions`
+   show the SDK.
+6. Middleware, contracts, and Pi, one `release-packages.yml` run each.
+7. The CLI last. Its lane refuses to build until every asset of the pinned
+   binary release downloads. Run `node agents/probe-installed.mjs --all --json`
+   on the release machine first.
 
-1. **Merge** the branch to `main` (merge commit or fast-forward; the release
-   commit must stay intact). Wait for `sync-skill.yml` to push its
-   `[skip ci]` commit, then `git pull`.
-
-2. **Product tag, immediately.**
-
-   ```sh
-   git tag -s v3.0.0 -m "Caveman 3.0.0"
-   git push origin v3.0.0
-   gh release create v3.0.0 --verify-tag --latest --title "Caveman 3.0.0" --notes-file <notes.md>
-   ```
-
-   The one-liners now resolve. `deploy/*` at this tag still carries
-   `@sha256:REPLACE_AT_RELEASE`, so those manifests fail to pull (by design)
-   until step 4; the docs point readers at `main`.
-
-3. **Runtime binaries.** `release-binaries.yml` checks that
-   `packages/cli/BINARY_RELEASE` already equals the tag (it does):
-
-   ```sh
-   node packages/cli/scripts/gen-binaries.mjs --check
-   git tag -s bin-v2.0.0 -m "bin-v2.0.0"
-   git push origin bin-v2.0.0
-   gh run watch "$(gh run list --workflow release-binaries.yml --limit 1 --json databaseId --jq '.[0].databaseId')"
-   ```
-
-   Approve the `binary-release` environment. Then, without any GitHub
-   credential, confirm anonymous HTTP 200 for all 36 binaries,
-   `checksums.txt`, `checksums.txt.keysig` and
-   `THIRD_PARTY_GO_LICENSES.tar.gz` (`packages/cli/PUBLISHING.md`, step 3).
-
-4. **Pin the image digest** in a small PR to `main` (no script exists; this is
-   the whole change):
-
-   ```sh
-   digest="$(docker buildx imagetools inspect ghcr.io/juliusbrussee/caveman-proxy:bin-v2.0.0 --format '{{json .Manifest}}' | jq -r .digest)"
-   cosign verify "ghcr.io/juliusbrussee/caveman-proxy@$digest" \
-     --certificate-identity-regexp '^https://github.com/JuliusBrussee/caveman/.github/workflows/release-binaries.yml@refs/tags/bin-v' \
-     --certificate-oidc-issuer https://token.actions.githubusercontent.com
-   sed -i.bak "s/sha256:REPLACE_AT_RELEASE/${digest}/" deploy/kubernetes.yaml deploy/kubernetes-ha.yaml deploy/aws-ecs-task-definition.json
-   rm deploy/*.bak
-   git grep -n REPLACE_AT_RELEASE -- deploy   # must print nothing
-   ```
-
-   The CLI and launcher pins (`packages/cli/BINARY_RELEASE`, generated by
-   `node packages/cli/scripts/gen-binaries.mjs` and
-   `node packages/cli/scripts/gen-wedge-installer.mjs`) already name
-   `bin-v2.0.0` in the release commit; re-run both with `--check` / `git diff
-   --exit-code` to prove nothing drifted.
-
-5. **SDKs, and wait for both to publish** (approve `npm` and `pypi`):
-
-   ```sh
-   git tag -s sdk-ts-v1.2.0 -m "@caveman-ai/sdk 1.2.0" && git push origin sdk-ts-v1.2.0
-   git tag -s sdk-python-v1.2.0 -m "caveman-sdk 1.2.0" && git push origin sdk-python-v1.2.0
-   npm view @caveman-ai/sdk@1.2.0 version        # 1.2.0
-   pip index versions caveman-sdk                # lists 1.2.0
-   ```
-
-6. **Packages** (each is its own `release-packages.yml` run; approve each):
-
-   ```sh
-   for tag in middleware-ts-v1.0.0 middleware-python-v1.0.0 contracts-v2.0.0 pi-v0.2.0; do
-     git tag -s "$tag" -m "$tag" && git push origin "$tag"
-   done
-   ```
-
-   `contracts-v2.0.0` needs `contracts-v*` in the `npm` environment's tag
-   policy and the one-time bootstrap in
-   [First publish of a new npm package](#first-publish-of-a-new-npm-package-cavemanaicontracts).
-   Then the CLI. Its lane refuses to build until every `bin-v2.0.0` asset
-   downloads, and needs `cli-v*` in the `npm` tag policy plus the CLI's
-   trusted publisher:
-
-   ```sh
-   node agents/probe-installed.mjs --all --json   # release-machine check
-   git tag -s cli-v2.0.0 -m "@caveman-ai/cli 2.0.0" && git push origin cli-v2.0.0
-   ```
-
-7. **Environment approvals.** Every run above waits on JuliusBrussee:
-   `binary-release` once (step 3), `npm` for `sdk-ts`, `middleware-ts`,
-   `contracts`, `pi`, `cli`, and `pypi` for `sdk-python`, `middleware-python`. A
-   rejected or failed run publishes nothing; fix forward with a new version,
-   never re-tag.
-
-8. **Post-release checks.**
-   - `npm view @caveman-ai/middleware dist-tags` shows `latest: 1.0.0` (moved
-     off `0.1.0-alpha.2`); `@caveman-ai/sdk` `latest: 1.2.0`;
-     `@caveman-ai/contracts` `latest: 2.0.0`; `@caveman-ai/pi` `latest: 0.2.0`;
-     `@caveman-ai/cli` `latest: 2.0.0`, each with provenance on its npm page.
-   - `pip install 'caveman-middleware[langchain]==1.0.0'` in a fresh venv pulls
-     `caveman-sdk` 1.2.0, and `python -c "import caveman_middleware; print(caveman_middleware.__version__)"` prints `1.0.0`.
-   - Each package's GitHub Release exists with its SBOM, and none took
-     "Latest" (that is `v3.0.0`).
-   - `node tests/middleware-e2e/skew.mjs` passes against the published
-     clients; set `N1_RUNTIME` there to `bin-v2.0.0` only when the next
-     runtime release makes it N-1.
-   - The README one-liners install from `v3.0.0` on macOS, Linux and Windows;
-     `caveman setup --install` fetches `bin-v2.0.0`; the image runs from its
-     pinned digest (`docker run --rm ghcr.io/juliusbrussee/caveman-proxy@<digest> version`
-     prints `bin-v2.0.0`) and lists `/licenses/third_party`.
-   - Then the checks in [Post-publish proof](#post-publish-proof).
-
-**User-owned before or during the release** (GitHub settings and other repos;
-agents cannot change these):
-
-- The `main` rulesets, the release-tag ruleset, and immutable releases
-  ([settings above](#repository-settings-the-release-path-depends-on)).
-- Dependabot alerts and security updates.
-- The Apple and Windows signing secrets, if platform-signed binaries are
-  wanted for this release (the workflow skips signing without them).
-- In the `npm` environment's deployment tag policy: add `contracts-v*` and
-  `cli-v*`, remove `agent-v*` and `create-agent-v*`.
-- npm trusted publishers for `@caveman-ai/cli` and (after the bootstrap
-  publish) `@caveman-ai/contracts`.
-- The docs.caveman.so pages: middleware 1.0 / SDK 1.2 install lines, the
-  Apache-2.0 license, and the pages the package READMEs link.
-- The same Apache-2.0 relicense in `caveman-browse` (source of `browse/`;
-  otherwise the next sync reverts it) and in the Agent SDK's own repository.
-
-**Operator migration notes** (put these in the `bin-v2.0.0` and `v3.0.0`
-release notes):
-
-- **Principal names carry their source.** OIDC principals are now
-  `oidc:<issuer>#<claim>` and certificate principals
-  `mtls:{uri,dns,cn}:<name>`. Rename token-map entries that configure them,
-  and expect sessions such principals created before the upgrade to be
-  unreachable (`404`). Steps: [deploy.md, Identity](technical/deploy.md#identity).
-- **Python log prefix.** The middleware warn-once line now reads
-  `Caveman middleware passed content through unchanged: adapter=… reason=…`,
-  the same as TypeScript. Log filters matching the old
-  `Caveman middleware decision:` prefix need updating.
-- **First 1.1 deploy resets persisted choices once**, because scope ids
-  changed: the first call per session after the upgrade compresses from
-  scratch. Grants a 1.0 runtime issued keep reading from the shared recovery
-  store until they expire, and `sessions/delete` reports
-  `originals_deleted: false` for sessions that hold them.
+A rejected or failed run publishes nothing. Fix forward with a new version;
+never re-tag.
 
 ## Post-publish proof
 

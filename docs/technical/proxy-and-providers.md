@@ -180,7 +180,6 @@ private cache, replay, attribution and stream-validation decisions. Supported
 custom routes also require compatible transport settings and headers. The
 wrapper reports when proxy compression is off; keeping a host operational on
 direct transport is not a claim that its traffic was compressed. See the
-[compatibility audit](provider-compatibility-audit.md) and
 [Pi extension contract](../../packages/pi-extension/README.md).
 
 A mount pointing at a loopback relay (litellm, ollama, llama.cpp) also needs a
@@ -226,6 +225,39 @@ compress, and pixel; other modes support controlled evaluation paths.
 
 Proxy preserves provider streaming protocols and status behavior. Request
 transforms finish before upstream dispatch; streaming response stays streaming.
+
+## Reliability
+
+The proxy keeps a live agent's endpoint open and never fakes a result:
+
+- The serve loop has no idle exit. Only an explicit stop or a process failure
+  ends it, even when an old install still exports `CAVEMAN_NATIVE_IDLE_TIMEOUT`.
+- A wrapper never restarts a shared listener to change mode or recovery
+  settings. An incompatible new run launches with its own direct provider
+  configuration instead, and a failed local start also launches direct rather
+  than exporting a dead endpoint.
+- No total upstream deadline by default, so a long stream is never cut off.
+  `CAVE_GATEWAY_UPSTREAM_TIMEOUT_MS` sets an explicit cap. An upstream that
+  connects and then sends nothing is bounded by the response-header deadline,
+  `CAVE_GATEWAY_RESPONSE_HEADER_TIMEOUT_MS` (default 900,000 ms; `0` removes it).
+- Streams are detected from the response `Content-Type` (SSE, Bedrock event
+  streams, JSON-line streams), not from the request's `stream` flag. Headers
+  flush at once and unknown events pass through unchanged.
+- An interrupted upstream stream aborts the client's HTTP framing. The proxy
+  records the error and never fabricates a clean end or replays a partial stream.
+- Retries cover connection setup only (the TCP dial and the `CONNECT` to an
+  outbound HTTP proxy). Ambiguous upload or header failures and truncated
+  bodies are not replayed. A complete 4xx on a transformed request can fall
+  back once to the original bytes.
+- An encoded request (`Content-Encoding`) keeps its header and bypasses
+  optimization.
+- Buffers are bounded: non-streaming responses up to 64 MiB
+  (`CAVE_MAX_RESPONSE_BUFFER_BYTES`). The ChatGPT route reads a
+  compress-eligible request whole up to 32 MiB and streams a larger one through
+  untransformed.
+
+An agent cannot move off a proxy process the OS killed. Native prompt hooks can
+start a missing local proxy again; there is no mid-stream migration.
 
 ## Credentials
 

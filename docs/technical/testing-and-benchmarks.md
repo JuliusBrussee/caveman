@@ -96,6 +96,25 @@ unsupported and rejected cases; raw pass rate is not a market-ranking result.
 `packages/subagent-tax` runs local fixtures without provider requests. Its
 counterfactual results apply to exact fixture, assembly method and token counter.
 
+### Response-skill evals
+
+`evals/` compares three arms per prompt: no system prompt (`__baseline__`),
+`Answer concisely.` (`__terse__`), and `Answer concisely.` plus the skill. The
+honest delta is skill against terse, never skill against baseline, because
+baseline mixes the skill with plain terseness. `evals/llm_run.py` runs
+`claude -p` with host settings, plugins and MCP isolated and stores text plus
+Claude-reported usage in `evals/snapshots/`; `evals/measure.py` reads the
+snapshot offline. A new `skills/<name>/SKILL.md` is picked up automatically; a
+new prompt is one line in `evals/prompts/en.txt`. Snapshots are committed, so
+CI needs no API calls. Regenerate only when a SKILL.md or a prompt changes. See
+[`evals/README.md`](../../evals/README.md).
+
+`benchmarks/run.py` sends real prompts through the Claude API and writes raw
+token counts to `benchmarks/results/`
+(`uv run python benchmarks/run.py`, `ANTHROPIC_API_KEY` in `.env.local`). The
+README benchmark table between the `BENCHMARK-TABLE` markers is generated from
+those results.
+
 ### Wrap report
 
 Published wrap benchmark documents one recorded comparison and provenance. See
@@ -142,7 +161,9 @@ assert that behavior, not only successful compression.
 
 Documentation changes need:
 
-- relative-link check;
+- relative-link check: `node .github/scripts/check-doc-links.mjs <files>`
+  (CI runs it on every README, INSTALL, SECURITY, LICENSING and
+  `docs/technical` page);
 - command and path check against current help and package tree;
 - private or internal reference scan;
 - stale claim scan against code and committed evidence;

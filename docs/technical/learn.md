@@ -92,7 +92,7 @@ All paths are under `$CAVEMAN_HOME` (default `~/.caveman`) unless noted.
 | `learn experiment start/arm/stop` | rows in `experiments`, `experiment_arms` |
 | `learn export` | `reports/caveman-learn-digest.json` (or `--out <path>`) |
 | Autopilot | `runtime/learn-autopilot.json`, `.lock`, `-nudge.json`, `-nudge.inflight.json`, `-announced.json`, and its own report, snapshots and trend history under `runtime/learn-autopilot/reports/` |
-| `learn autopilot on/off` | key `learnAutopilot` in `~/.caveman-cloud/config.json` |
+| `learn autopilot on/off` | key `learnAutopilot` in `~/.caveman/cloud.json` |
 | `learn implement` | the skill file, only if missing: `./.claude/skills/caveman-learn/SKILL.md` (Claude Code) or `$CODEX_HOME/skills/caveman-learn/SKILL.md` (Codex) |
 
 Report files are created with mode `0600`.
@@ -189,7 +189,7 @@ Autopilot rescans in the background and tells you about new findings without you
 | Scan | `learn scan --write-report --no-remember --reports-home $CAVEMAN_HOME/runtime/learn-autopilot` with the default window and sources, killed at `CAVE_LEARN_TIMEOUT`. |
 | Proxy check | Before scanning, the detached child runs `caveman-proxy learn capabilities` and needs `no_remember`, `reports_home` and `memory_health`. An older proxy would ignore those flags and write cavemem and the canonical report, so it never scans: `last_error` becomes "proxy too old for autopilot (needs learn capabilities)" and `learn autopilot status` shows it. The result is cached per proxy path, mtime and size, so an upgrade re-probes. The `SessionEnd` hook itself never probes. |
 | Writes | Its own report files, the `caveman.db` plan tables every scan updates, and its own `runtime/learn-autopilot*` state. Never cavemem memories or `learnings` rows: `--no-remember` skips them, because sink titles carry changing counts and each unattended run would add a near-duplicate. |
-| Enable precedence | `CAVEMAN_LEARN_AUTOPILOT` env (`0`, `false`, `off`, `no` disable; anything else enables) → `learnAutopilot` in `~/.caveman-cloud/config.json` → off when `CI` is set (not `0`/`false`) or under `NODE_TEST_CONTEXT` → on. |
+| Enable precedence | `CAVEMAN_LEARN_AUTOPILOT` env (`0`, `false`, `off`, `no` disable; anything else enables) → `learnAutopilot` in `~/.caveman/cloud.json` → off when `CI` is set (not `0`/`false`) or under `NODE_TEST_CONTEXT` → on. |
 | Opt out | `caveman learn autopilot off`, or `CAVEMAN_LEARN_AUTOPILOT=0`. |
 | State | `$CAVEMAN_HOME/runtime/learn-autopilot*.json`. Writes are temp-file + rename and refuse symlinked parents. |
 | Status | `caveman learn autopilot status`: on/off and why, last scan, next scan, last error, last line shown, and a line waiting to show. |
