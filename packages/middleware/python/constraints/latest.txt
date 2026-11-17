@@ -14,7 +14,7 @@ langgraph-prebuilt==1.1.0
 anthropic==2.1.0
 # Newer LiteLLM branches currently require filelock<4; retain the security floor.
 litellm==1.103.10
-google-genai==2.25.0
+google-genai==3.0.0
 strands-agents==1.57.0
 agno==3.0.11
 crewai==1.15.22
