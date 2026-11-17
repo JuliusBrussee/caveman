@@ -4038,6 +4038,11 @@ function isEphemeralPath(path: string): boolean {
   return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
 }
 
+// fnm puts a per-shell link to the active node version on PATH; the link is a
+// temp path that vanishes with its shell (and on reboot). The dir it links to
+// lasts as long as that node version is installed.
+const FNM_MULTISHELL = /[\\/]fnm_multishells[\\/]/i;
+
 function cliIsEphemeral(): boolean {
   return isEphemeralPath(fileURLToPath(import.meta.url));
 }
@@ -4058,8 +4063,12 @@ function durableCavemen(withPrivate = true): string[] {
   const found: string[] = [];
   for (const dir of [...(process.env.PATH ?? "").split(delimiter), ...(withPrivate ? [privateCliBin()] : [])]) {
     if (!dir || isEphemeralPath(dir)) continue;
+    let stableDir = dir;
+    if (FNM_MULTISHELL.test(dir)) {
+      try { stableDir = realpathSync(dir); } catch { continue; }
+    }
     for (const candidate of executableCandidateNames("caveman")) {
-      const full = join(dir, candidate);
+      const full = join(stableDir, candidate);
       if (!isExecutable(full) || found.includes(full)) continue;
       try { if (isEphemeralPath(realpathSync(full))) continue; } catch { continue; }
       found.push(full);
@@ -7914,7 +7923,7 @@ export function nativeHookInvocation(
 // per-shell temp paths that vanish with the shell, so never those.
 function stableNodePath(): string {
   const onPath = which("node");
-  return onPath && !/[\\/]fnm_multishells[\\/]/i.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
+  return onPath && !FNM_MULTISHELL.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
 }
 
 export function hookExecutableInvocation(
