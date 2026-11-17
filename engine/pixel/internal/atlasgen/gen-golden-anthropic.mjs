@@ -6,9 +6,9 @@ import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const scriptDir = path.dirname(fileURLToPath(import.meta.url));
-const repoRoot = path.resolve(scriptDir, '../../../../../');
+const repoRoot = path.resolve(scriptDir, '../../../../');
 const outDir = process.env.CAVEMAN_PIXEL_ANTHROPIC_OUT ??
-  path.join(repoRoot, 'public/engine/pixel/testdata/transform_anthropic');
+  path.join(repoRoot, 'engine/pixel/testdata/transform_anthropic');
 
 const pxpipeRoot = process.cwd();
 const transformModule = await import(pathToFileURL(path.join(pxpipeRoot, 'src/core/transform.ts')).href);

@@ -3,7 +3,8 @@
 // Command caveman-wasm is the engine compiled for the browser. It registers
 // JS-callable globals — cavemanCompress, cavemanDetect, cavemanRetrieve — backed
 // by the same compressors as the native engine, with an in-memory CCR store.
-// Build it with `make engine-wasm`. Token figures are local estimates.
+// Build it with `GOOS=js GOARCH=wasm go build ./engine/cmd/caveman-wasm`. Token
+// figures are local estimates.
 package main
 
 import (

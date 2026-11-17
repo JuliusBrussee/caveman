@@ -9,15 +9,15 @@ const HEADER = {
 };
 
 function usage() {
-  console.error('usage: node public/engine/pixel/internal/atlasgen/extract-atlas.mjs <pxpipe-root>');
+  console.error('usage: node engine/pixel/internal/atlasgen/extract-atlas.mjs <pxpipe-root>');
   process.exit(2);
 }
 
 const pxpipeRoot = process.argv[2] ? resolve(process.argv[2]) : '';
 if (!pxpipeRoot) usage();
 
-const repoRoot = resolve(new URL('../../../../..', import.meta.url).pathname);
-const outDir = join(repoRoot, 'public/engine/pixel/assets');
+const repoRoot = resolve(new URL('../../../..', import.meta.url).pathname);
+const outDir = join(repoRoot, 'engine/pixel/assets');
 mkdirSync(outDir, { recursive: true });
 
 function readSource(rel) {

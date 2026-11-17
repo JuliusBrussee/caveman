@@ -7,9 +7,9 @@ const enc = new TextEncoder();
 const dec = new TextDecoder();
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '../../../../..');
+const repoRoot = resolve(here, '../../../..');
 const pxpipeRoot = resolve(process.cwd());
-const outDir = join(repoRoot, 'public/engine/pixel/testdata/transform_openai');
+const outDir = join(repoRoot, 'engine/pixel/testdata/transform_openai');
 
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });

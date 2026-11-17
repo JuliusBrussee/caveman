@@ -4,7 +4,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 function usage() {
-  console.error('usage: pnpm exec tsx public/engine/pixel/internal/atlasgen/gen-golden.mjs <pxpipe-root>');
+  console.error('usage: pnpm exec tsx engine/pixel/internal/atlasgen/gen-golden.mjs <pxpipe-root>');
   process.exit(2);
 }
 
@@ -12,8 +12,8 @@ const pxpipeRoot = process.argv[2] ? resolve(process.argv[2]) : '';
 if (!pxpipeRoot) usage();
 
 const here = dirname(fileURLToPath(import.meta.url));
-const repoRoot = resolve(here, '../../../../..');
-const outDir = join(repoRoot, 'public/engine/pixel/testdata/golden');
+const repoRoot = resolve(here, '../../../..');
+const outDir = join(repoRoot, 'engine/pixel/testdata/golden');
 rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
 
