@@ -13,7 +13,6 @@ export const RESERVED_VERBS = new Set<string>([
   "convert",
   "costs",
   "deploy",
-  "dev",
   "disable",
   "doctor",
   "enable",

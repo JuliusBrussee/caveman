@@ -304,7 +304,7 @@ function agentTraffic(): { target: WrapMode; line: string; fix?: string; next?: 
 }
 
 // Known agents `caveman wrap` can launch by short id come from the agent-profile
-// registry (public/agents/profiles/*.json, compiled to agents.generated.ts). The
+// registry (agents/profiles/*.json, compiled to agents.generated.ts). The
 // data drives detection, the interactive picker, the install hint, and — crucially
 // — HOW each agent is pointed at the gateway (env vs inline-config injection). So
 // adding an agent is a new profile file, not a code change. Any other command
@@ -549,17 +549,7 @@ const LEGACY_HANDLERS: Record<string, CommandHandler> = {
   update: (argv) => update(argv),
   opportunities: (argv) => argv[0] === "list" ? get("/api/v1/opportunities").then(print) : commandUsage("opportunities list"),
   snippets,
-  dev: (argv) => {
-    if (argv[0] === "up") return shellHint("make dev");
-    if (argv[0] === "down") return shellHint("make down");
-    if (argv[0] === "reset") return shellHint("make reset-local");
-    return commandUsage("dev up|down|reset");
-  },
-  deploy: (argv) => {
-    if (argv[0] === "aws") return shellHint("make deploy-aws");
-    if (argv[0] === "status") return get("/api/v1/system/status").then(print);
-    return commandUsage("deploy aws|status");
-  },
+  deploy: (argv) => argv[0] === "status" ? get("/api/v1/system/status").then(print) : commandUsage("deploy status"),
   start: (argv) => start(argv),
   wrap,
   run: wrap,
@@ -868,7 +858,7 @@ const TELEMETRY_TOKEN_READ_TIMEOUT_MS = Number(process.env.CAVEMAN_TELEMETRY_TOK
 const SYNC_DISCLOSURE =
   "sync uploads span metadata to your org's dashboard — tokens, cost, latency, model, status. Imported standalone observations never affect managed budgets, verified savings, or billing. Subscription/OAuth sessions carry token counts only — no dollar figure. Never prompt or response bytes.";
 const TELEMETRY_COMMAND_ALLOWLIST = [
-  "agent", "audit", "billing", "browse", "compress", "convert", "costs", "deploy", "dev", "doctor", "evals", "experiments",
+  "agent", "audit", "billing", "browse", "compress", "convert", "costs", "deploy", "doctor", "evals", "experiments",
   "explore", "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem", "opportunities", "plan",
   "projects", "providers", "receipts", "retrieve", "score", "sdk", "setup", "shrink", "shrink-hook", "skills",
   "run", "snippets", "start", "stats", "status", "sync", "telemetry", "toon", "traces", "trial", "unknown", "update", "usage", "verify", "version", "welcome", "whoami", "wrap",
@@ -876,9 +866,9 @@ const TELEMETRY_COMMAND_ALLOWLIST = [
 ] as const;
 const TELEMETRY_COMMANDS = new Set<string>(TELEMETRY_COMMAND_ALLOWLIST);
 const TELEMETRY_SUBCOMMANDS = new Set([
-  "act", "apply", "aws", "charges", "create", "decode", "down", "encode", "eval", "export", "forget", "import",
+  "act", "apply", "charges", "create", "decode", "encode", "eval", "export", "forget", "import",
   "catalog", "implement", "install", "link", "list", "off", "on", "recall", "recover", "refresh", "remember", "report", "reset", "revoke",
-  "run", "show", "snippet", "status", "uninstall", "unlink", "up", "verify",
+  "run", "show", "snippet", "status", "uninstall", "unlink", "verify",
 ]);
 const TELEMETRY_START_MS = Date.now();
 let telemetryCommandSent = false;
@@ -13278,7 +13268,7 @@ type SqliteDb = InstanceType<SqliteCtor>;
 
 // dbFingerprint returns a stable identity for THIS local spend DB so the sync
 // high-water mark is scoped to the specific database it was measured against.
-// If the DB is deleted and recreated (e.g. `make reset-local` wipes ~/.caveman),
+// If the DB is deleted and recreated (for example ~/.caveman is wiped),
 // SQLite rowids restart at 1; without a per-DB fingerprint the stale watermark
 // in ~/.caveman-cloud/sync.json would make `WHERE id > watermark` skip every new
 // span forever. We persist a random UUID in a CLI-owned marker table on the
@@ -23140,10 +23130,6 @@ function print(value: unknown) {
   console.log(JSON.stringify(value, null, 2));
 }
 
-function shellHint(commandLine: string) {
-  console.log(commandLine);
-}
-
 export const HELP_SCREEN = `caveman
 
 run
@@ -23370,14 +23356,6 @@ function which(cmd: string): string | null {
     }
   }
   return null;
-}
-
-// dockerState reports whether the Docker daemon is reachable, so `caveman start`
-// can give an honest hint about the `make dev` path.
-function dockerState(): "running" | "stopped" | "absent" {
-  if (!which("docker")) return "absent";
-  try { execFileSync("docker", ["info"], { stdio: "ignore", timeout: 4000 }); return "running"; }
-  catch { return "stopped"; }
 }
 
 // portListening probes a TCP port with a short timeout — used to detect whether

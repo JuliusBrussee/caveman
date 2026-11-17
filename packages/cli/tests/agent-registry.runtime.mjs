@@ -232,7 +232,7 @@ test("reserved command source covers every dispatched and namespace token", () =
   const actual = JSON.parse(readFileSync(join(agentsDir, "reserved-verbs.json"), "utf8")).verbs;
   const expected = [
     "--help", "agent", "audit", "billing", "browse", "cloud", "compress", "config",
-    "convert", "costs", "deploy", "disable", "dev", "doctor", "enable", "evals", "experiments", "explore",
+    "convert", "costs", "deploy", "disable", "doctor", "enable", "evals", "experiments", "explore",
     "help", "hooks", "init", "keys", "learn", "login", "logout", "mcp", "mem", "off", "on",
     "opportunities", "plan", "practices", "projects", "providers", "receipts", "retrieve", "run",
     "score", "sdk", "setup", "shrink", "shrink-hook", "skills", "snippets", "start",

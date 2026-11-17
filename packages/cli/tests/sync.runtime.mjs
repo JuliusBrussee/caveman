@@ -579,7 +579,7 @@ test("login still uploads pending local scan when local spend DB is corrupt", as
   server.close();
 });
 
-// A local DB reset (e.g. `make reset-local` wipes ~/.caveman) restarts rowids at
+// A local DB reset (for example wiping ~/.caveman) restarts rowids at
 // 1. The watermark must be keyed to the DB's identity, so the next sync re-reads
 // from the start instead of silently reporting "nothing new" and dropping spans.
 test("sync re-reads from the start after the local DB is reset", async () => {
@@ -599,7 +599,7 @@ test("sync re-reads from the start after the local DB is reset", async () => {
   assert.match(run1.stdout, /synced 2 spans/, "first sync uploads both spans");
   assert.equal(imports.length, 1, "one import so far");
 
-  // Simulate `make reset-local`: delete the DB (and any sidecar files), then a
+  // Simulate a local reset: delete the DB (and any sidecar files), then a
   // fresh proxy recreates it — rowids restart at 1.
   const dbFile = join(caveDir, "caveman.db");
   unlinkSync(dbFile);
