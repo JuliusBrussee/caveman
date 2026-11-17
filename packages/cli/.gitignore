@@ -1,2 +1,15 @@
 dist/
 node_modules/
+
+# Artifacts the runtime test suite writes into the package dir. They are
+# machine-local state, not fixtures: backups/ fills with
+# .claude.json.backup.<epoch> copies, and the policy-limits / remote-settings
+# pairs are fetched-then-cached config. Every `pnpm test` recreates them, so
+# before this they showed up as untracked files in every contributor's tree
+# and invited an accidental commit of local config into a PR.
+backups/
+policy-limits.json
+policy-limits.json.signature.json
+policy-limits.json.stamp.json
+remote-settings.json
+remote-settings.json.synced-at
