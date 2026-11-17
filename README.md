@@ -2,17 +2,16 @@
 
 ## New: Caveman Code. Free.
 
-**The most efficient coding agent.** Same model, same work, smaller bill.
+**21% less than Codex per solved task on Terminal-Bench 4.** Same model on both sides.
 
 <table>
 <tr>
-<td align="center"><h3>21% cheaper</h3>than Codex<br><sub>Terminal-Bench 4, per solved task</sub></td>
-<td align="center"><h3>14% cheaper</h3>than Claude Code<br><sub>Terminal-Bench 4, 97 vs 83 solved</sub></td>
-<td align="center"><h3>76% cheaper</h3>than Claude Code<br><sub>full workday, 4 connected apps</sub></td>
+<td align="center"><h3>21% cheaper</h3>than Codex<br><sub>Terminal-Bench 4, per solved task, GPT-6.1 Sol: $1.21 vs $1.52, 90 of 192 runs solved both</sub></td>
+<td align="center"><h3>Level</h3>with Claude Code within noise<br><sub>Terminal-Bench 4, Opus 5.5: 97 of 180 runs solved vs 83 of 177; $5.19 vs $6.04 per solved task, 95% interval 0.70x to 1.02x</sub></td>
 </tr>
 </table>
 
-<sub>Same model on both sides: GPT-6.1 Sol against Codex, Opus 5.5 against Claude Code. Our own runs, November 2026, at list prices. <a href="https://caveman.so/code">How we measured</a></sub>
+<sub>Measured build, benchmark settings on, not the shipped app: the app ships the same harness with three benchmark-only settings turned off. Same model on both sides: GPT-6.1 Sol against Codex, Opus 5.5 against Claude Code. Our own runs, November 2026, at list prices. <a href="https://caveman.so/code#benchmarks">How we measured</a></sub>
 
 Every coding agent in one window. Free on the subscriptions and keys you already have.
 
