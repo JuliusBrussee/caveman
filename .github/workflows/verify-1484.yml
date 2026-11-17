@@ -15,7 +15,7 @@ permissions:
 
 env:
   CAVEMAN_TELEMETRY: "0"
-  DO_NOT_TRACK: "1"
+  CAVEMAN_TELEMETRY_URL: http://127.0.0.1:9/disabled
 
 jobs:
   targeted:
@@ -71,6 +71,26 @@ jobs:
       - run: pnpm --dir packages/cli test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
+      - name: Reproduce original verification-environment failures on upstream
+        if: inputs.revision != ''
+        shell: bash
+        run: |
+          node --input-type=module <<'NODE'
+          import { spawnSync } from 'node:child_process';
+          import assert from 'node:assert/strict';
+          const result = spawnSync(process.execPath, [
+            '--test', '--test-force-exit',
+            '--test-name-pattern=cloud MCP telemetry carries|namespaced telemetry emits',
+            'packages/cli/tests/agent-mcp.runtime.mjs',
+            'packages/cli/tests/porcelain.runtime.mjs',
+          ], { env: { ...process.env, DO_NOT_TRACK: '1' }, encoding: 'utf8' });
+          process.stdout.write(result.stdout);
+          process.stderr.write(result.stderr);
+          assert.equal(result.status, 1);
+          assert.match(result.stdout, /not ok .*cloud MCP telemetry carries/);
+          assert.match(result.stdout, /not ok .*namespaced telemetry emits/);
+          assert.match(result.stdout, /# fail 2/);
+          NODE
 
   root:
     strategy:
