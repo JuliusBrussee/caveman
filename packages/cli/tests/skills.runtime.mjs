@@ -59,7 +59,7 @@ test("skills install writes caveman-learn SKILL.md, matching the canonical artif
   assert.equal(
     written,
     readFileSync(canonicalLearn, "utf8"),
-    "the CLI-embedded skill must stay byte-identical to public/skills/caveman-learn/SKILL.md",
+    "the CLI-embedded skill must stay byte-identical to skills/caveman-learn/SKILL.md",
   );
 });
 

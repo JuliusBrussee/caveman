@@ -26,11 +26,11 @@ REQUIRED_KEYS = {
 # provenance (tools/vision/json_mode/context_window_tokens last checked
 # against the vendor's model docs) separately from verified_at (price
 # provenance, the only field catalogVersion()/receipts read — see
-# public/shared/platform/catalog/catalog.go). Older immutable dated snapshots
+# shared/platform/catalog/catalog.go). Older immutable dated snapshots
 # predate this field and must keep validating without it.
 TOP_LEVEL_KEYS = REQUIRED_KEYS | {"capabilities_verified_at"}
 # The fields the immutable dated snapshot actually pins (mirrors
-# pricingIdentity in public/shared/platform/catalog/catalog_test.go).
+# pricingIdentity in shared/platform/catalog/catalog_test.go).
 # capabilities_verified_at, sources, and every capability EXCEPT the
 # price-affecting ones below are deliberately excluded so a capability-only edit
 # doesn't have to mint a new price-dated snapshot just to keep this check
@@ -47,7 +47,7 @@ PRICING_IDENTITY_KEYS = ("provider", "model", "region", "currency", "pricing", "
 # catalog_version a signed receipt attests — stayed put.
 #
 # MUST stay equal to catalog.PriceAffectingCapabilities in
-# public/shared/platform/catalog/catalog.go, which is the source of truth. The
+# shared/platform/catalog/catalog.go, which is the source of truth. The
 # test suite asserts that equality by parsing the Go file, so the two lists
 # cannot drift apart the way this one drifted from the reader that consumed it.
 PRICE_AFFECTING_CAPABILITY_KEYS = (
@@ -70,7 +70,8 @@ PRICING_KEYS = {
     "long_context_output_multiplier",
 }
 IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$")
-# scripts/catalog_sync_modelsdev.py proposes price changes by editing
+# The models.dev price sync (automation not shipped in this repository)
+# proposes price changes by editing
 # current.yaml AND bumping verified_at, then marking every row it touched with a
 # comment line starting with this literal. verified_at is price provenance — the
 # catalog_version a signed receipt attests — so a proposal that merges with its
@@ -78,7 +79,8 @@ IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:@/-]*$")
 # the reviewer's statement that they confirmed the number against the provider's
 # own pricing page; until then, the catalog is invalid.
 # MUST stay a prefix of REVIEW_MARKER_PREFIX in that script (the test suite
-# asserts it), or a renamed marker would sail past this rule.
+# asserts it wherever the script is present), or a renamed marker would sail
+# past this rule.
 REVIEW_MARKER = "# proposed-by:"
 
 

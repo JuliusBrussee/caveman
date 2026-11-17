@@ -1,7 +1,7 @@
 // verbs-gate.runtime.mjs — proves the skills-verbs drift gate catches skills
 // that reference a CLI command, MCP tool, or SDK call the shipped surfaces do
 // not expose, and passes clean skills. The gate itself lives in
-// public/skills/verbs-gate.mjs and is wired into public/skills/compile.mjs's
+// skills/verbs-gate.mjs and is wired into skills/compile.mjs's
 // fail-closed path (run by compile-registries during the CLI build/test).
 
 import { test } from "node:test";

@@ -181,7 +181,7 @@ func TestCurrentMistralRegionalPricingAndCapabilities(t *testing.T) {
 	}
 }
 
-// cave-auto's contextFits gate (public/proxy/routing.go) rejects any candidate
+// cave-auto's contextFits gate (in the hosted router) rejects any candidate
 // whose catalog capabilities lack a positive context_window_tokens, and
 // candidateSupports gates tool/vision/json_mode requests on explicit booleans.
 // Before this test, only 3 of the 41 entries carried context_window_tokens at

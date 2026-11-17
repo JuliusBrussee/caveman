@@ -6,7 +6,7 @@ body) and the derived result. The TypeScript half (tests/parity.runtime.mjs) run
 the SAME fixtures. If TS and Python diverge on any field, one side fails — so this
 file plus the fixtures are a release gate.
 
-Run with: pytest (from public/sdk/python, or via `make product-test PRODUCT=sdk-python`).
+Run with: pytest (from packages/sdk/python).
 """
 
 from __future__ import annotations

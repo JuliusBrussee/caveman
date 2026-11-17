@@ -1,21 +1,14 @@
 // Package optimizers is the single source of truth for the mutex families that
 // group overlapping-headroom optimizer IDs.
 //
-// Two independent services dedup on these families:
-//   - cloud/worker's detectors collapse overlapping opportunities at WRITE time
-//     (detectors.go dedupeMutexFamilies), and
-//   - cloud/control-api's Cave Architect collapses them again at READ time
-//     (caveplan.go dedupeFamilies).
+// Every service that dedups opportunities on these families, whether when it
+// writes them or when it reads them back, MUST agree on which optimizer IDs
+// share a family AND on the family ORDERING (the integer index is part of each
+// dedup key). If they disagreed, the same headroom would be double-counted or
+// silently dropped, a no-fake-savings violation. Keeping the membership here,
+// imported by all of them, makes that drift impossible.
 //
-// Both MUST agree on which optimizer IDs share a family AND on the family
-// ORDERING (the integer index is part of each dedup key). If they disagreed, the
-// same headroom would be double-counted or silently dropped — a no-fake-savings
-// violation. Keeping the membership here, imported by both, makes that drift
-// impossible.
-//
-// This package is pure (no dependencies) and lives under public/ so both the
-// public and private modules may import it without crossing the publish boundary
-// (tools/check-boundaries.sh).
+// This package is pure (no dependencies) so any module may import it.
 package optimizers
 
 // HeadroomCapVersion marks opportunities whose combined cross-family high band

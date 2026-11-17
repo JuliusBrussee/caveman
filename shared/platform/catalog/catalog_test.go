@@ -827,9 +827,8 @@ func TestListReturnsFullCatalog(t *testing.T) {
 // change what a request COSTS — the two rate multipliers and the flag deciding
 // whether a global row's price answers a regional lookup.
 //
-// Deliberately out of scope, and the residual to keep in view: the worker's
-// detector layer (cloud/worker/internal/detectors/detectors.go, catalogGenerationModel
-// and catalogContextFits) reads responses_api / chat_completions / messages_api /
+// Deliberately out of scope, and the residual to keep in view: the hosted
+// worker's detector layer (catalogGenerationModel and catalogContextFits) reads responses_api / chat_completions / messages_api /
 // generate_content / context_window_tokens / max_input_tokens to pick which
 // cheaper model a Cave Plan move proposes. Those keys do not change any row's
 // price — they change which row's price gets compared — so they move INFERRED

@@ -32,7 +32,7 @@ test("background lifecycle and storage changes keep toolbar badge truthful", asy
     },
   };
   const source = await readFile(new URL("../src/background.js", import.meta.url), "utf8");
-  vm.runInNewContext(source, { chrome }, { filename: "public/extension/src/background.js" });
+  vm.runInNewContext(source, { chrome }, { filename: "extension/src/background.js" });
 
   listeners.installed();
   assert.deepEqual(calls.splice(0), [

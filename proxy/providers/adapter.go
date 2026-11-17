@@ -201,7 +201,7 @@ type TransformPolicy struct {
 	RuntimeMode string
 	// AuthMode is the classified caller class ("payg", "oauth", or
 	// "subscription"). Only the STANDALONE proxy sets it
-	// (public/proxy/internal/gateway/proxy.go); the MANAGED gateway does not —
+	// (proxy/internal/gateway/proxy.go); the MANAGED gateway does not —
 	// it gates non-PAYG traffic in its own policy layer before the adapter
 	// seam — so adapter checks on this field are standalone-only guards. Empty
 	// therefore means "no claim" (direct adapter tests, managed gateway), not
