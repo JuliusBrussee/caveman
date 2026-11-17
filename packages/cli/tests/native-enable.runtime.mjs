@@ -1296,12 +1296,22 @@ test("the bridge hook names PATH's node when it is this node, never an fnm multi
     .map((entry) => entry.hooks[0].command).find((command) => command.endsWith(" shrink-hook"));
   assert.equal(shrink, `'${join(stable.home, "bin", "node")}' '${join(stable.home, "bin", "caveman")}' shrink-hook`);
 
+  // A multishell dir links to the node version's install dir, whose `caveman`
+  // outlives the shell; the hook must name that one, not the link.
   const fnm = fixture();
+  const installation = join(fnm.home, "node-versions", "v24", "installation");
+  mkdirSync(join(installation, "bin"), { recursive: true });
+  symlinkSync(process.execPath, join(installation, "bin", "node"));
+  renameSync(join(fnm.home, "bin", "caveman"), join(installation, "caveman.js"));
+  symlinkSync(join(installation, "caveman.js"), join(installation, "bin", "caveman"));
+  mkdirSync(join(fnm.home, "fnm_multishells"));
+  symlinkSync(installation, join(fnm.home, "fnm_multishells", "4242_1760000000000"));
   const multishell = join(fnm.home, "fnm_multishells", "4242_1760000000000", "bin");
-  mkdirSync(multishell, { recursive: true });
-  symlinkSync(process.execPath, join(multishell, "node"));
   assert.equal((await run(["enable", "claude"], { ...fnm.env, PATH: `${multishell}:${fnm.env.PATH}` })).code, 0);
   assert.equal(nodeArg(fnm), process.execPath);
+  const fnmShrink = JSON.parse(readFileSync(join(fnm.home, ".claude", "settings.json"), "utf8")).hooks.PreToolUse
+    .map((entry) => entry.hooks[0].command).find((command) => command.endsWith(" shrink-hook"));
+  assert.equal(fnmShrink, `'${process.execPath}' '${join(realpathSync(join(installation, "bin")), "caveman")}' shrink-hook`);
 });
 
 // Without a caveman-proxy that bridges hooks, the hook runs its adapter with
