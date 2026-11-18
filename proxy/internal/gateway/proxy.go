@@ -61,6 +61,9 @@ func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, er
 			return nil, err
 		}
 		if attempt >= 2 || ctx.Err() != nil || !connectionSetupFailure(err) {
+			if ctx.Err() == nil && isDeadUpstreamConnError(err) {
+				s.httpClient.CloseIdleConnections()
+			}
 			return nil, err
 		}
 		if s.logger != nil {
@@ -106,6 +109,17 @@ func connectionSetupFailure(err error) bool {
 		return false
 	}
 	return opErr.Op == "dial" || opErr.Op == "proxyconnect"
+}
+
+// isDeadUpstreamConnError reports errors that indicate a pooled upstream
+// connection died silently (network timeout or lost HTTP/2 ping), so sibling
+// idle connections bound to the same dead network path can be dropped (#1543).
+func isDeadUpstreamConnError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "http2: client connection lost")
 }
 
 func isOpenCodeChatGPTSubscription(r *http.Request) bool {
@@ -2357,6 +2371,9 @@ func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.R
 		}
 		if r.Context().Err() != nil {
 			return counter, "cave_client_canceled"
+		}
+		if s.httpClient != nil && isDeadUpstreamConnError(err) {
+			s.httpClient.CloseIdleConnections()
 		}
 		return counter, "cave_upstream_body_read_failed"
 	}
