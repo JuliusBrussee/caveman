@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // Codex in code mode runs commands from a JavaScript cell, and a command's
@@ -53,7 +54,7 @@ func unwrapCodexExec(input []byte) ([]byte, codexExecWrapper) {
 				if len(raw) > len(best) {
 					var value string
 					quoted := append(append([]byte{'"'}, raw...), '"')
-					if json.Unmarshal(quoted, &value) == nil && value != "" {
+					if json.Unmarshal(quoted, &value) == nil && value != "" && strings.TrimSpace(value) != "" {
 						best, bestStart, bestEnd = []byte(value), start+key+len(codexOutputKey), start+len(line)-2
 					}
 				}
