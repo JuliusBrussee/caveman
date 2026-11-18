@@ -47,6 +47,26 @@ fixtures:
       - {type: not_contains, value: "tracking pixel"}
       - {type: not_contains, value: "copyright boilerplate"}
 
+  # A page the article extractor declines: one service table, an alert, chrome.
+  # The breaching row sits in the middle and differs from the healthy rows only
+  # in its values, so it survives as a numeric extremum, not by position.
+  - name: html-dashboard
+    file: dashboard.html
+    probes:
+      - {dimension: identifier, value: "svc-27"}
+      - {dimension: status, value: "CRITICAL"}
+    quality_task:
+      question: "Answer exactly with the name of the service that is breaching its SLO."
+      graders:
+        - {type: exact_match, value: "svc-27"}
+    graders:
+      - {type: compressed}
+      - {type: ratio_threshold, min: 0.60, max: 0.95}
+      - {type: contains, value: "|svc-27|eu-west-1|CRITICAL|4810 ms|38.12%|"}
+      - {type: contains, value: "all Status=healthy"}
+      - {type: not_contains, value: "__STATE__"}
+      - {type: not_contains, value: "<td"}
+
   - name: repetition-log
     file: repetition_log.txt
     type: repetition
