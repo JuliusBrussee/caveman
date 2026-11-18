@@ -1662,8 +1662,9 @@ func TestStandaloneClientLifetimeAndCancellation(t *testing.T) {
 	// upstream that connects and then never answers. It must be set, and it must
 	// be a header deadline only — the long stream below still has to complete.
 	transport := client.Transport.(*http.Transport)
-	if transport.ResponseHeaderTimeout != 15*time.Minute || transport.IdleConnTimeout == 0 || !transport.DisableCompression {
-		t.Fatalf("unbounded streaming transport: header timeout=%v idle=%v compression=%v", transport.ResponseHeaderTimeout, transport.IdleConnTimeout, transport.DisableCompression)
+	if transport.ResponseHeaderTimeout != 15*time.Minute || transport.IdleConnTimeout == 0 || !transport.DisableCompression ||
+		transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout <= 0 || transport.HTTP2.PingTimeout <= 0 {
+		t.Fatalf("unbounded streaming transport: header timeout=%v idle=%v compression=%v http2=%+v", transport.ResponseHeaderTimeout, transport.IdleConnTimeout, transport.DisableCompression, transport.HTTP2)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
