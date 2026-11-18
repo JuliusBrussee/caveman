@@ -30,17 +30,43 @@ var (
 // original is recoverable via CCR. It bails to pass-through on any doubt — a
 // parse failure, no <body>, no clear main container, a link-dense winner, or an
 // extraction that is too small — so it never claims a result it cannot stand by.
+//
+// A table in the extracted article that forms a plain grid is rendered as a
+// Markdown table and shaped by the tabular compressor (html_table.go), so its
+// rows keep their columns and are elided like a CSV's. An article without such
+// a table comes out byte for byte as before.
 type htmlCompressor struct {
 	minOutputBytes int
+	tab            *tabularCompressor
 }
 
-// NewHTML returns the default HTML article extractor.
-func NewHTML() Compressor { return &htmlCompressor{minOutputBytes: 200} }
+// NewHTML returns the default HTML compressor.
+func NewHTML() Compressor {
+	return &htmlCompressor{minOutputBytes: 200, tab: NewTabular().(*tabularCompressor)}
+}
 
 func (c *htmlCompressor) ContentType() string       { return HTMLType }
 func (c *htmlCompressor) SafetyClass() safety.Class { return safety.S4 }
 
 func (c *htmlCompressor) Compress(input []byte) ([]byte, bool) {
+	return c.compress(input, "")
+}
+
+// CompressQuery biases which table rows are kept toward query. An empty query
+// behaves exactly like Compress.
+func (c *htmlCompressor) CompressQuery(input []byte, query string) ([]byte, bool) {
+	return c.compress(input, query)
+}
+
+func (c *htmlCompressor) compress(input []byte, query string) ([]byte, bool) {
+	return c.article(input, query)
+}
+
+func (c *htmlCompressor) renderer(query string) *tableRenderer {
+	return &tableRenderer{tab: c.tab, query: query}
+}
+
+func (c *htmlCompressor) article(input []byte, query string) ([]byte, bool) {
 	if len(bytes.TrimSpace(input)) == 0 {
 		return nil, false
 	}
@@ -67,9 +93,13 @@ func (c *htmlCompressor) Compress(input []byte) ([]byte, bool) {
 		return nil, false
 	}
 
-	text := strings.TrimSpace(renderText(best))
+	tables := c.renderer(query)
+	text := strings.TrimSpace(renderText(best, tables.tableBlock))
 	if len(text) < c.minOutputBytes {
 		return nil, false
+	}
+	if wantsElisionNote(tables.elidedBytes) {
+		text += "\n" + elisionNote("rows")
 	}
 	out := []byte(text)
 	if len(out) >= len(input) {
@@ -266,12 +296,23 @@ func anchorTextLen(n *html.Node) int {
 // adjacent text never merges across a tag (e.g. "<b>fifty</b><i>dollars</i>"
 // stays "fifty dollars", not "fiftydollars"). <pre> content is preserved
 // verbatim (its whole contract is whitespace), protected from the collapse pass
-// via a placeholder. Deterministic.
-func renderText(n *html.Node) string {
+// via a placeholder. A table that table renders (a plain grid of cells, see
+// cellGrid) is protected the same way, so its rows stay rows instead of one cell
+// per line; any other table falls through to the plain walk. Deterministic.
+func renderText(n *html.Node, table func(*html.Node) (string, bool)) string {
 	var b strings.Builder
-	var pres []string
+	var pres, tables []string
 	var walk func(*html.Node)
 	walk = func(n *html.Node) {
+		if n.Type == html.ElementNode && n.DataAtom == atom.Table {
+			if rendered, ok := table(n); ok {
+				b.WriteString("\n\x00TBL")
+				b.WriteString(strconv.Itoa(len(tables)))
+				b.WriteString("\x00\n")
+				tables = append(tables, rendered)
+				return
+			}
+		}
 		if n.Type == html.ElementNode && n.DataAtom == atom.Pre {
 			idx := len(pres)
 			pres = append(pres, strings.Trim(textContent(n), "\n"))
@@ -305,6 +346,9 @@ func renderText(n *html.Node) string {
 	out := collapseWhitespace(b.String())
 	for i, p := range pres {
 		out = strings.Replace(out, "\x00PRE"+strconv.Itoa(i)+"\x00", p, 1)
+	}
+	for i, t := range tables {
+		out = strings.Replace(out, "\x00TBL"+strconv.Itoa(i)+"\x00", t, 1)
 	}
 	return out
 }
