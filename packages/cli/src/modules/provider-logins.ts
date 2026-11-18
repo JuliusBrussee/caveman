@@ -32,6 +32,7 @@ export const PROVIDER_LOGINS: ProviderLogin[] = [
   { id: "xai", name: "xAI", kind: "api_key", env: ["XAI_API_KEY"] },
   { id: "groq", name: "Groq", kind: "api_key", env: ["GROQ_API_KEY"] },
   { id: "together", name: "Together AI", kind: "api_key", env: ["TOGETHER_API_KEY"] },
+  { id: "runcrate", name: "Runcrate", kind: "api_key", env: ["RUNCRATE_API_KEY"] },
 ];
 
 // Logins that cannot be added, and why: their terms forbid a third-party client.
