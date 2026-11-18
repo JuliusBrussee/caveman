@@ -3,14 +3,14 @@
 Caveman Compress CLI
 
 Usage:
-    caveman <filepath>
+    caveman <filepath> [--dry-run]
 """
 
 import argparse
 import sys
 
 # Force UTF-8 on stdout/stderr before any code can print. Windows consoles
-# default to cp1252 and crash on the ❌ glyphs in error/validation branches,
+# default to cp1252 and crash on the emoji glyphs in error/validation branches,
 # masking the real error and leaving the user with a half-compressed file.
 for _stream in (sys.stdout, sys.stderr):
     reconfigure = getattr(_stream, "reconfigure", None)
@@ -35,22 +35,25 @@ from .detect import detect_file_type, should_compress
 def main():
     parser = argparse.ArgumentParser(description="Compress a natural-language file with validation and an original backup.")
     parser.add_argument("filepath", type=Path, help="path to the file to compress")
-    filepath = parser.parse_args().filepath
+    parser.add_argument("--dry-run", action="store_true", help="print compressed output without writing files")
+    args = parser.parse_args()
+    filepath = args.filepath
+    dry_run = args.dry_run
 
     # Check file exists
     if not filepath.exists():
-        print(f"❌ File not found: {filepath}")
+        print(f"File not found: {filepath}")
         sys.exit(1)
 
     if not filepath.is_file():
-        print(f"❌ Not a file: {filepath}")
+        print(f"Not a file: {filepath}")
         sys.exit(1)
 
     filepath = filepath.resolve()
 
     # Refuse before detect_file_type(), which reads extensionless files to sniff them.
     if is_sensitive_path(filepath):
-        print(f"❌ Refusing to compress {filepath}: filename looks sensitive "
+        print(f"Refusing to compress {filepath}: filename looks sensitive "
               "(credentials, keys, secrets, or known private paths). "
               "Rename the file if this is a false positive.")
         sys.exit(1)
@@ -68,17 +71,20 @@ def main():
     print("Starting caveman compression...\n")
 
     try:
-        success = compress_file(filepath)
+        success = compress_file(filepath, dry_run=dry_run)
 
         if success:
-            print("\nCompression completed successfully")
-            backup_path = backup_dir_for(filepath) / (filepath.stem + ".original.md")
-            print(f"Compressed: {filepath}")
-            print(f"Original:   {backup_path}")
+            if dry_run:
+                print("\nDry run complete. No files were modified.")
+            else:
+                print("\nCompression completed successfully")
+                backup_path = backup_dir_for(filepath) / (filepath.stem + ".original.md")
+                print(f"Compressed: {filepath}")
+                print(f"Original:   {backup_path}")
             sys.exit(0)
         else:
             # Also reached when no attempt ran (backup exists, empty file, ...).
-            print("\n❌ Compression did not complete (see above). Original file is untouched.")
+            print("\nCompression did not complete (see above). Original file is untouched.")
             sys.exit(2)
 
     except KeyboardInterrupt:
@@ -86,7 +92,7 @@ def main():
         sys.exit(130)
 
     except Exception as e:
-        print(f"\n❌ Error: {e}")
+        print(f"\nError: {e}")
         sys.exit(1)
 
 
