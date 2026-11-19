@@ -3,6 +3,7 @@ package engine
 import (
 	"bytes"
 	"encoding/json"
+	"strings"
 )
 
 // Codex in code mode runs commands from a JavaScript cell, and a command's
@@ -49,12 +50,25 @@ func unwrapCodexExec(input []byte) ([]byte, codexExecWrapper) {
 		line := bytes.TrimRight(input[start:end], " \t\r")
 		if bytes.HasPrefix(line, []byte(`{"`)) && bytes.HasSuffix(line, []byte(`"}`)) {
 			if key := bytes.LastIndex(line, codexOutputKey); key > 0 && hasCodexKey(line[:key]) {
-				raw := line[key+len(codexOutputKey) : len(line)-2]
-				if len(raw) > len(best) {
-					var value string
-					quoted := append(append([]byte{'"'}, raw...), '"')
-					if json.Unmarshal(quoted, &value) == nil && value != "" {
-						best, bestStart, bestEnd = []byte(value), start+key+len(codexOutputKey), start+len(line)-2
+				// The `"}` suffix check already claimed the line's last two
+				// bytes, and Codex cuts a long result anywhere — including
+				// inside this very key, leaving `…"output":"}`. There the
+				// value's own opening quote IS that suffix quote, so the value
+				// would start one byte past where it ends and slicing those
+				// bounds panics. A line with no room for a value is not a
+				// wrapper, so the original bytes win.
+				valueStart, valueEnd := key+len(codexOutputKey), len(line)-2
+				if valueStart <= valueEnd {
+					raw := line[valueStart:valueEnd]
+					if len(raw) > len(best) {
+						var value string
+						quoted := append(append([]byte{'"'}, raw...), '"')
+						// A whitespace-only output is not content: unwrapping
+						// to it hands the compressor nothing and leaves the
+						// JSON line itself unexamined.
+						if json.Unmarshal(quoted, &value) == nil && strings.TrimSpace(value) != "" {
+							best, bestStart, bestEnd = []byte(value), start+valueStart, start+valueEnd
+						}
 					}
 				}
 			}
