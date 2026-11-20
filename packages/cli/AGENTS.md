@@ -19,11 +19,11 @@
 From the repo root:
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm --filter @caveman-ai/cli build
-pnpm --filter @caveman-ai/cli run test:fast   # CI on macOS; stubs every Go binary
+bun install --frozen-lockfile
+bun run --filter @caveman-ai/cli build
+bun run --filter @caveman-ai/cli test:fast   # CI on macOS; stubs every Go binary
 go build -o /tmp/caveman-proxy ./proxy/cmd/caveman-proxy
-env -u FORCE_COLOR -u ANTHROPIC_BASE_URL CAVEMAN_TEST_PROXY_BIN=/tmp/caveman-proxy pnpm --filter @caveman-ai/cli test   # full suite
+env -u FORCE_COLOR -u ANTHROPIC_BASE_URL CAVEMAN_TEST_PROXY_BIN=/tmp/caveman-proxy bun run --filter @caveman-ai/cli test   # full suite
 node packages/cli/scripts/gen-device-auth.mjs --check
 ```
 

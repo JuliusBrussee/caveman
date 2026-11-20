@@ -21,7 +21,7 @@ is `inferred`. cavemem and browse reuse its server through `mcp.NewServer`.
 
 ## Build and test (from the repo root)
 - `go build ./mcp/...` and `go test ./mcp/...`.
-- `pnpm --filter caveman-mcp test` runs the launcher tests.
+- `bun run --filter caveman-mcp test` runs the launcher tests.
 
 ## Invariants
 - **stdout is the protocol channel.** Logs go to stderr only; a test guards this.

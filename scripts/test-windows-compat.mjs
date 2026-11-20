@@ -23,12 +23,12 @@ function run(label, command, args, options = {}) {
   if (result.status !== 0) process.exit(result.status ?? 1);
 }
 
-function runPnpm(label, args) {
-  const invocation = portableInvocation("pnpm", args);
+function runBun(label, args) {
+  const invocation = portableInvocation("bun", args);
   run(label, invocation.command, invocation.args);
 }
 
-runPnpm("build CLI", ["--dir", "packages/cli", "build"]);
+runBun("build CLI", ["run", "--cwd", "packages/cli", "build"]);
 run("Node Windows contracts", process.execPath, [
   "--test",
   "--test-force-exit",

@@ -6,7 +6,7 @@ It speaks only HTTP, so it tests `caveman-proxy`, a Postgres-backed replica set,
 another implementation the same way.
 
 ```sh
-pnpm install --filter @caveman-ai/contracts   # ajv is its only dependency
+bun install --filter @caveman-ai/contracts   # ajv is its only dependency
 node packages/shared/contracts/conformance/run.mjs http://127.0.0.1:8787 \
   --token "$CAVEMAN_AUTH_TOKEN" [--namespace N] [--foreign-token T2] [--legacy-only]
 ```

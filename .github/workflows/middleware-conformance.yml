@@ -58,13 +58,12 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile --filter @caveman-ai/contracts
-      - run: pnpm --filter @caveman-ai/contracts test
+      - run: bun install --frozen-lockfile --filter @caveman-ai/contracts
+      - run: bun run --filter @caveman-ai/contracts test
       # The test skips when ajv is missing; here a skip is a failure.
       - name: Go golden responses validated against the schemas
         run: |
@@ -97,16 +96,15 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
-      - run: pnpm --filter "@caveman-ai/middleware..." build
+      - run: bun install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
+      - run: bun run --filter "@caveman-ai/middleware..." build
       - run: node tests/middleware-e2e/run.mjs
         env:
           CAVEMAN_TEST_POSTGRES_URL: postgres://caveman:caveman@localhost:5432/caveman_test?sslmode=disable
@@ -119,16 +117,15 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - run: pnpm install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
-      - run: pnpm --filter "@caveman-ai/middleware..." build
+      - run: bun install --frozen-lockfile --filter "@caveman-ai/middleware..." --filter @caveman-ai/contracts
+      - run: bun run --filter "@caveman-ai/middleware..." build
       # gh downloads the release asset; skew.mjs verifies its signed checksum manifest and digest.
       - run: node tests/middleware-e2e/skew.mjs runtime
         env:

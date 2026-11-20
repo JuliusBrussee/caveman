@@ -67,7 +67,7 @@ delete a binary release; remove assets only for an active security risk.
 
 ```bash
 node agents/compile.mjs
-env -u FORCE_COLOR -u ANTHROPIC_BASE_URL pnpm --dir packages/cli test
+env -u FORCE_COLOR -u ANTHROPIC_BASE_URL bun run --cwd packages/cli test
 (cd packages/cli && npm pack --dry-run)
 ```
 

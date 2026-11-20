@@ -19,17 +19,17 @@ packages in module.
 ### TypeScript and JavaScript
 
 ```bash
-pnpm install --frozen-lockfile
-pnpm -r build
-pnpm -r test
+bun install --frozen-lockfile
+bun run --workspaces --if-present build
+bun run --workspaces --if-present test
 ```
 
 Individual packages expose narrower scripts:
 
 ```bash
-pnpm --dir packages/cli test
+bun run --cwd packages/cli test
 npm --prefix extension test
-pnpm --dir packages/shared/contracts test
+bun run --cwd packages/shared/contracts test
 ```
 
 Use package manifest to confirm exact scripts.

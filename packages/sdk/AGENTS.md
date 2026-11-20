@@ -11,7 +11,7 @@ Two client SDKs for the Caveman gateway's `/sdk/v1/*` API and the framework midd
 From the repo root:
 
 ```bash
-pnpm --filter @caveman-ai/sdk test     # build, tsc type tests, node --test tests/*.runtime.mjs
+bun run --filter @caveman-ai/sdk test     # build, tsc type tests, node --test tests/*.runtime.mjs
 PYTHONPATH=packages/sdk/python python -m pytest -q packages/sdk/python/tests
 ```
 

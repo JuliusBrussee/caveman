@@ -16,7 +16,7 @@
 ## Build and test
 
 ```bash
-pnpm --filter @caveman-ai/contracts test    # both validators; build and lint run the same
+bun run --filter @caveman-ai/contracts test    # both validators; build and lint run the same
 ```
 
 CI: `middleware-conformance.yml`. Releases: `contracts-v*` tags through `release-packages.yml`.
