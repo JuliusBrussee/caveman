@@ -9522,6 +9522,17 @@ export default {
     // to each child explicitly rather than parked in module scope (#1443).
     const contexts = new Map();
     const pending = new Map();
+    // Which source this host uses to report a completed-model turn boundary.
+    // V2 has no "session.idle" bus event at all — its session-event schema
+    // names 54 session events and none of them is idle — so a V2 host speaks
+    // only through the "experimental.idle" session hook below (#1539). The bus
+    // branch is kept for any 2.x host that does publish one, but the hook is
+    // authoritative: the host triggers it at the point the session WOULD go
+    // idle, before the drain completes, so it always reaches us first for a
+    // given boundary. Once it has spoken, the bus branch stays quiet rather
+    // than counting the same turn twice; double counting inflates the
+    // accounting silently, which is worse than missing a boundary.
+    let idleHookSpoke = false;
     const projectCwd = typeof ctx.location?.directory === "string" && ctx.location.directory
       ? ctx.location.directory
       : undefined;
@@ -9564,7 +9575,7 @@ export default {
       const sessionID = event.data?.sessionID;
       if (typeof sessionID !== "string" || !sessionID) return;
       if (type === "session.created") sessionContext(sessionID);
-      if (type === "session.idle") emit("Stop", { session_id: sessionID });
+      if (type === "session.idle" && !idleHookSpoke) emit("Stop", { session_id: sessionID });
       // "session.compacted" is the V1 event name; V2 reports compaction
       // through "session.compaction.ended". Handle both.
       if (type === "session.compaction.ended" || type === "session.compacted") {
@@ -9592,8 +9603,13 @@ export default {
       if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
     });
 
+    // The host skips this hook for control-only drains such as a manual
+    // compaction, which never ran the model, so every call is a real
+    // completed-model boundary — including the later continuation turns that
+    // follow when a plugin admits input and the drain loop keeps going.
     await ctx.session.hook("experimental.idle", (event) => {
       if (typeof event?.sessionID === "string" && event.sessionID) {
+        idleHookSpoke = true;
         emit("Stop", { session_id: event.sessionID });
       }
     });

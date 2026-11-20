@@ -3360,7 +3360,94 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
   }
 });
 
-test("enable opencode with an unreadable version writes a plugin both majors load, and doctor names it", async () => {
+test("the V2 plugin reports a completed-model turn boundary exactly once (#1539)", async () => {
+  // OpenCode V2 has no "session.idle" bus event at all: its session-event
+  // schema names 54 session events and not one of them is idle. Completed
+  // model work reaches a plugin only through the session "experimental.idle"
+  // hook, which the host triggers at the point the session WOULD go idle and
+  // deliberately skips for control-only drains such as a manual compaction.
+  // Without a handler the V2 adapter emitted no Stop at all, so nothing
+  // downstream ever saw a turn end on that host (#1539).
+  //
+  // The risk in fixing it is double counting, which is worse than missing a
+  // boundary because the accounting silently inflates. So this also pins the
+  // ordering guard: the host calls the hook BEFORE the drain completes, so a
+  // bus "session.idle" from any 2.x host that does still publish one is the
+  // same boundary arriving second, and must not add a second Stop.
+  const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+
+  const sessionHooks = new Map();
+  let publish = () => {};
+  const bus = [];
+  const fakeCtx = {
+    location: { directory: fx.home, workspaceID: undefined },
+    event: {
+      async *subscribe() {
+        // A bus this test drives by hand, so an idle event can be delivered
+        // after the hook has fired for the same boundary.
+        while (true) {
+          if (bus.length) { yield bus.shift(); continue; }
+          const next = await new Promise((resolve) => { publish = resolve; });
+          if (next === null) return;
+          yield next;
+        }
+      },
+    },
+    session: { hook: async (name, cb) => { sessionHooks.set(name, cb); return { dispose: async () => {} }; } },
+    tool: { hook: async (name, cb) => { return { dispose: async () => {} }; } },
+  };
+  const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+  const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    await pluginModule.default.setup(fakeCtx);
+    assert.ok(sessionHooks.has("experimental.idle"),
+      "the V2 adapter must handle the hook the host actually calls at a completed-model boundary");
+
+    // One completed-model boundary → one Stop, carrying the instance session id.
+    await sessionHooks.get("experimental.idle")({ sessionID: "idle-1", background: [] });
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [["Stop", "idle-1"]]);
+
+    // The same boundary arriving a second time over the bus is not a new turn.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    publish({ type: "session.idle", location: { directory: fx.home }, data: { sessionID: "idle-1" } });
+    await flush();
+    assert.deepEqual(readCapture(), [],
+      "a bus session.idle after the hook has spoken is the same boundary, not a second turn");
+
+    // A later continuation turn is a real boundary and must still be reported.
+    await sessionHooks.get("experimental.idle")({ sessionID: "idle-1", background: [] });
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [["Stop", "idle-1"]],
+      "a continuation turn reaching the hook again is a new boundary");
+
+    // An idle callback without a usable session id names no turn.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("experimental.idle")({ background: [] });
+    await sessionHooks.get("experimental.idle")({ sessionID: "" });
+    await sessionHooks.get("experimental.idle")(undefined);
+    await flush();
+    assert.deepEqual(readCapture(), []);
+  } finally {
+    publish(null);
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+});
+
+ test("enable opencode with an unreadable version writes a plugin both majors load, and doctor names it", async () => {
   // On a loaded machine `opencode --version` missed the probe timeout: doctor
   // called the host "unavailable", and enable fell back to the V1 hook map,
   // which OpenCode 2 refuses to load ("must export a default definition with
