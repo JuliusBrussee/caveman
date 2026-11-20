@@ -2789,7 +2789,7 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
   writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
   try {
     const cleanup = await pluginModule.default.setup(fakeCtx);
-    assert.deepEqual([...sessionHooks.keys()].sort(), ["compaction", "context", "prompt"]);
+    assert.deepEqual([...sessionHooks.keys()].sort(), ["compaction", "context", "experimental.idle", "prompt"]);
     assert.deepEqual([...toolHooks.keys()].sort(), ["execute.after", "execute.before"]);
     await flush();
     assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
@@ -2797,6 +2797,12 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
       ["Stop", "oc2-1"],
       ["PostCompact", "oc2-1"],
       ["SessionEnd", "oc2-1"],
+    ]);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("experimental.idle")({ sessionID: "oc2-idle" });
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["Stop", "oc2-idle"],
     ]);
 
     writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
