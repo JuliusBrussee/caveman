@@ -17,7 +17,7 @@ MCP tools: `cavemem_remember(text)`, `cavemem_recall(query, limit?, token_budget
 
 ## Build and test
 - `go build ./mem/...` and `go test ./mem/...` from the repo root.
-- `pnpm --filter cavemem test` for the JS client; `python -m pytest -q tests` from `mem/py` for the Python client (CI's `root-surfaces` job).
+- `bun run --filter cavemem test` for the JS client; `python -m pytest -q tests` from `mem/py` for the Python client (CI's `root-surfaces` job).
 
 ## Invariants
 - **Byte-safe write.** Raw text reaches SQLite before any engine call, so a memory is never lost. Compression happens only at recall time.

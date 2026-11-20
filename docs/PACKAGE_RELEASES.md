@@ -44,21 +44,21 @@ from the package's committed lockfile, `npm audit` (runtime graph at `low`, full
 graph at `high`), full tests, `npm pack`, and a fresh-install import smoke of the
 exact tarball.
 
-**pnpm lane** (`middleware-ts`): `@caveman-ai/middleware` depends on the
-workspace SDK, so it builds in the pnpm workspace (`pnpm install
+**Bun lane** (`middleware-ts`): `@caveman-ai/middleware` depends on the
+workspace SDK, so it builds in the Bun workspace (`bun install
 --frozen-lockfile`), builds the SDK, runs the adapter suite with
-`CAVEMAN_REQUIRE_FRAMEWORKS=1` plus the consumer test, and packs with pnpm, which
+`CAVEMAN_REQUIRE_FRAMEWORKS=1` plus the consumer test, and packs with `bun pm pack`, which
 rewrites `workspace:^` to a concrete range. A fresh npm project then installs
 the tarball with the AI SDK and imports `@caveman-ai/middleware/ai-sdk`; the
 build fails if the workspace protocol leaked into the manifest.
 
-**CLI lane** (`cli`): also a pnpm workspace package. Before building it
+**CLI lane** (`cli`): also a Bun workspace package. Before building it
 requires every asset of the binary release pinned in
 `packages/cli/BINARY_RELEASE` (36 binaries, `checksums.txt`,
 `checksums.txt.keysig`, `RELEASE`) to download anonymously, since the CLI installs them.
 It then checks the generated profile and binary-pin constants against their
 sources (`node agents/compile.mjs`, `gen-binaries.mjs --check`), builds the real
-proxy, runs the full CLI suite, packs with pnpm, and checks that the installed
+proxy, runs the full CLI suite, packs with `bun pm pack`, and checks that the installed
 tarball's `caveman --version` reports the tagged version and the binary pin.
 `node agents/probe-installed.mjs --all` stays a release-machine check; the
 `agent-conformance` workflow covers every profile in CI.
@@ -66,7 +66,7 @@ tarball's `caveman --version` reports the tagged version and the binary pin.
 **All npm lanes** then unpack the tarball, resolve its runtime dependencies the
 way a consumer would, run `npm audit --omit=dev --audit-level=low` on that
 graph, and write a CycloneDX SBOM with `npm sbom`. For the middleware this is the
-only audit: `pnpm audit` covers the whole workspace (and fails on unrelated
+only audit: a workspace-wide audit covers the whole workspace (and fails on unrelated
 packages), and npm cannot resolve the adapters' framework test graph, whose
 optional peers conflict. Dependabot watches that test graph instead.
 
@@ -98,8 +98,8 @@ on Node 22 and 24, and the nightly `middleware-canary.yml` runs the TypeScript
 suite against the latest release of every framework and opens an issue when it
 fails.
 
-**contracts lane** (`contracts`): a pnpm workspace package with no lockfile of
-its own. It runs the schema validators, packs with pnpm, and checks that a fresh
+**contracts lane** (`contracts`): a Bun workspace package with no lockfile of
+its own. It runs the schema validators, packs with `bun pm pack`, and checks that a fresh
 npm install resolves the schemas and the OpenAPI document through the exports
 map. It gets a GitHub Release from its `CHANGELOG.md`.
 

@@ -60,7 +60,7 @@ jobs:
         run: |
           set -euo pipefail
           # @caveman-ai/middleware depends on the workspace SDK, so its tarball is
-          # built with pnpm, which rewrites `workspace:^` to a concrete range.
+          # built with Bun, which rewrites `workspace:^` to a concrete range.
           # @caveman-ai/contracts and @caveman-ai/cli have no lockfile of their
           # own: they are workspace packages too.
           packager="npm"
@@ -68,7 +68,7 @@ jobs:
             middleware-ts-v*)
               package="packages/middleware/typescript"
               ecosystem="npm"
-              packager="pnpm"
+              packager="bun"
               version="${GITHUB_REF_NAME#middleware-ts-v}"
               actual="$(node -p "require('./$package/package.json').version")"
               ;;
@@ -99,14 +99,14 @@ jobs:
             contracts-v*)
               package="packages/shared/contracts"
               ecosystem="npm"
-              packager="pnpm"
+              packager="bun"
               version="${GITHUB_REF_NAME#contracts-v}"
               actual="$(node -p "require('./$package/package.json').version")"
               ;;
             cli-v*)
               package="packages/cli"
               ecosystem="npm"
-              packager="pnpm"
+              packager="bun"
               version="${GITHUB_REF_NAME#cli-v}"
               actual="$(node -p "require('./$package/package.json').version")"
               ;;
@@ -187,17 +187,17 @@ jobs:
         if: startsWith(github.ref_name, 'cli-v')
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
-        if: steps.package.outputs.packager == 'pnpm'
-      - name: Build and test pnpm workspace package
-        if: steps.package.outputs.packager == 'pnpm'
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
+        if: steps.package.outputs.packager == 'bun'
+      - name: Build and test Bun workspace package
+        if: steps.package.outputs.packager == 'bun'
         env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
           PACKAGE: ${{ steps.package.outputs.package }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/package-dist"
-          pnpm install --frozen-lockfile
+          bun install --frozen-lockfile
           if [[ "$PACKAGE" == packages/cli ]]; then
             # Generated profile and binary-pin constants must match their sources.
             node agents/compile.mjs
@@ -208,17 +208,17 @@ jobs:
             sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
             go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
             env -u FORCE_COLOR -u ANTHROPIC_BASE_URL CAVEMAN_TEST_PROXY_BIN="$RUNNER_TEMP/caveman-proxy" \
-              pnpm --filter "./$PACKAGE" test
+              bun run --filter "./$PACKAGE" test
           else
             # Build the workspace dependencies first: the adapters import the SDK's
             # built `./middleware` types, which do not exist until the SDK is built.
-            pnpm --filter @caveman-ai/sdk run build
-            pnpm --filter "./$PACKAGE" test
+            bun run --filter @caveman-ai/sdk build
+            bun run --filter "./$PACKAGE" test
           fi
           if [[ "$PACKAGE" == packages/middleware/typescript ]]; then
-            pnpm --filter "./$PACKAGE" test:consumer
+            bun run --filter "./$PACKAGE" test:consumer
           fi
-          pnpm --filter "./$PACKAGE" pack --pack-destination "$RUNNER_TEMP/package-dist"
+          (cd "$PACKAGE" && bun pm pack --destination "$RUNNER_TEMP/package-dist")
           mapfile -t tarballs < <(find "$RUNNER_TEMP/package-dist" -maxdepth 1 -type f -name '*.tgz' -print)
           [[ "${#tarballs[@]}" == 1 ]] || { echo "expected exactly one npm tarball" >&2; exit 1; }
           smoke="$RUNNER_TEMP/npm-artifact-smoke"
@@ -294,8 +294,8 @@ jobs:
             echo "SHA256SUMS"
           } >> "$GITHUB_OUTPUT"
       # The tarball's own runtime graph (dependencies, not peers), resolved the
-      # way a consumer gets it. For the pnpm lane this is the audit gate:
-      # `pnpm audit` is workspace-wide (it would fail on unrelated packages) and
+      # way a consumer gets it. For the Bun lane this is the audit gate:
+      # A workspace-wide audit (it would fail on unrelated packages) and
       # npm cannot resolve the adapters' framework test graph, whose optional
       # peers conflict.
       - name: Audit runtime dependency graph and write SBOM (npm)

@@ -2,7 +2,7 @@
 // Black-box conformance kit for the Caveman middleware protocol
 // (docs/technical/middleware-protocol.md). Runs against any runtime URL and
 // prints TAP; exit 0 = conformant, 1 = a check failed, 2 = usage, 3 = ajv
-// missing (run pnpm install for @caveman-ai/contracts).
+// missing (run bun install for @caveman-ai/contracts).
 //
 //   node run.mjs <baseURL> [--token T] [--namespace N] [--foreign-token T2] [--legacy-only]
 //
@@ -44,7 +44,7 @@ try {
   const mod = createRequire(path.join(contracts, 'package.json'))('ajv/dist/2020.js');
   Ajv2020 = mod.default ?? mod;
 } catch {
-  console.error('ajv not installed for packages/shared/contracts (run: pnpm install --filter @caveman-ai/contracts)');
+  console.error('ajv not installed for packages/shared/contracts (run: bun install --filter @caveman-ai/contracts)');
   process.exit(3);
 }
 const ajv = new Ajv2020({ allErrors: true, strict: true });

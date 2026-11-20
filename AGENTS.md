@@ -103,8 +103,8 @@ node --test --test-force-exit tests/*.js          # standalone hook and tool tes
 python -m unittest discover -s tests              # Python tests
 python tests/verify_repo.py                       # repository invariants
 go test ./engine/... ./proxy/... ./shared/...     # Go runtime (engine-ci runs go test ./...)
-pnpm install --frozen-lockfile && pnpm -r build   # TypeScript workspace
-pnpm --filter @caveman-ai/cli run test:fast       # CLI
+bun install --frozen-lockfile && bun run --workspaces --if-present build   # TypeScript workspace
+bun run --filter @caveman-ai/cli test:fast       # CLI
 node .github/scripts/check-doc-links.mjs <files>  # documentation links
 ```
 

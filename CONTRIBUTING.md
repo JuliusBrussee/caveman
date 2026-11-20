@@ -41,7 +41,7 @@ authorship and DCO sign-off.
 - Read [`AGENTS.md`](AGENTS.md) for the repository map, the rules that break
   builds, and the test commands. A folder with its own `AGENTS.md` has local
   rules too.
-- Build and test the package you touched (`go test ./...`, `pnpm test`, or
+- Build and test the package you touched (`go test ./...`, `bun run test`, or
   `pytest`, depending on the directory), then run
   `python tests/verify_repo.py`.
 - Keep it byte-safe: compressors must round-trip or degrade gracefully. Never

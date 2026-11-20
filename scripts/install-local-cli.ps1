@@ -21,16 +21,16 @@ if (Test-Path (Join-Path $RepoRoot "public/cli")) {
 
 $Dist = Join-Path $CliDir "dist/index.js"
 if (-not (Test-Path $Dist)) {
-  if (-not (Get-Command pnpm -ErrorAction SilentlyContinue)) {
-    throw "$Dist missing and pnpm not found. Install pnpm and re-run."
+  if (-not (Get-Command bun -ErrorAction SilentlyContinue)) {
+    throw "$Dist missing and Bun not found. Install Bun and re-run."
   }
   Write-Host "building CLI ($CliDir)"
   Push-Location $CliDir
   try {
-    & pnpm install --silent
-    if ($LASTEXITCODE -ne 0) { throw "pnpm install failed with exit code $LASTEXITCODE" }
-    & pnpm build
-    if ($LASTEXITCODE -ne 0) { throw "pnpm build failed with exit code $LASTEXITCODE" }
+    & bun install --silent
+    if ($LASTEXITCODE -ne 0) { throw "bun install failed with exit code $LASTEXITCODE" }
+    & bun run build
+    if ($LASTEXITCODE -ne 0) { throw "bun run build failed with exit code $LASTEXITCODE" }
   } finally {
     Pop-Location
   }

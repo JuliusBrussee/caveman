@@ -113,11 +113,10 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
       # Ubuntu 23.10+ runners restrict unprivileged user namespaces via
       # AppArmor; the agent sandbox tests exercise the real userns sandbox.
       - name: Allow unprivileged user namespaces for sandbox tests
@@ -126,15 +125,15 @@ jobs:
       # the cached Go toolchain keeps the test inside its 90s budget.
       - name: Prebuild caveman-proxy for conformance tests
         run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
-      - run: pnpm install --frozen-lockfile
+      - run: bun install --frozen-lockfile
       # The build regenerates the CLI's compiled-in device-auth copy, so check
       # the committed one against packages/device-auth before it does.
       - name: CLI device-auth copy matches packages/device-auth
         run: node packages/cli/scripts/gen-device-auth.mjs --check
-      - run: pnpm -r build
+      - run: bun run --workspaces --if-present build
       # The SDK and middleware suites run in middleware-typescript below, so a
       # failure elsewhere in the workspace cannot skip them.
-      - run: pnpm -r --filter "!@caveman-ai/sdk" --filter "!@caveman-ai/middleware" test
+      - run: bun run --filter "*" --filter "!caveman-installer" --filter "!@caveman-ai/sdk" --filter "!@caveman-ai/middleware" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
@@ -149,15 +148,14 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @caveman-ai/cli run test:fast
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @caveman-ai/cli test:fast
 
-  # Its own job: `pnpm -r test` stops at the first failing package, so a red
+  # Its own job: `bun run --workspaces --if-present test` stops at the first failing package, so a red
   # suite elsewhere in the workspace must not keep these from running.
   middleware-typescript:
     name: middleware-typescript / node ${{ matrix.node }}
@@ -171,17 +169,16 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: ${{ matrix.node }}
-          cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @caveman-ai/sdk test
-      - run: pnpm --filter @caveman-ai/middleware test
+      - run: bun install --frozen-lockfile
+      - run: bun run --filter @caveman-ai/sdk test
+      - run: bun run --filter @caveman-ai/middleware test
         env:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
-      - run: pnpm --dir packages/middleware/typescript test:consumer
+      - run: bun run --cwd packages/middleware/typescript test:consumer
 
   root-surfaces:
     runs-on: ubuntu-latest
@@ -257,15 +254,14 @@ jobs:
       - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
         with:
           go-version-file: go.mod
-      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
-          cache: pnpm
       - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
         with:
           python-version: "3.13"
-      - run: pnpm install --frozen-lockfile
+      - run: bun install --frozen-lockfile
       - run: python -m pip install pytest==9.0.3
       - run: go test ./...
       - run: npm test
@@ -291,15 +287,15 @@ jobs:
       # cut a run off there) must not skip the suites above.
       - name: Prebuild caveman-proxy for conformance tests
         run: go build -o "$env:RUNNER_TEMP\caveman-proxy.exe" ./proxy/cmd/caveman-proxy
-      - run: pnpm -r build
+      - run: bun run --workspaces --if-present build
       # @caveman-ai/cli's POSIX-harnessed suite has never executed on Windows
       # and is excluded until its harness is ported, not because coverage is
       # unwanted (149 failures — shebang-script stub agent binaries; Windows
       # contracts run in the curated `npm run test:windows` gate above via
       # windows-platform/portable-command/delegate-windows). Every other
       # workspace suite passes on Windows and stays in.
-      - run: pnpm -r --filter "!@caveman-ai/cli" test
+      - run: bun run --filter "*" --filter "!caveman-installer" --filter "!@caveman-ai/cli" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}\caveman-proxy.exe
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
-      - run: pnpm --dir packages/middleware/typescript test:consumer
+      - run: bun run --cwd packages/middleware/typescript test:consumer
