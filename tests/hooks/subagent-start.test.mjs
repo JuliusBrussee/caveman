@@ -147,3 +147,27 @@ test('returns on the first complete payload while the host holds stdin open', as
   assert.ok(Date.now() - started < 1500, `took ${Date.now() - started}ms with stdin held open`);
   assert.match(contextOf(stdout), /mode: ultracave/);
 });
+
+test('CAVEMAN_SUBAGENT_MATCHER scopes injection to matching agent_type (#1548)', t => {
+  const { env, project, prompt } = fixture(t);
+  prompt('/caveman');
+  const runWithMatcher = (matcher, agentType) => spawnSync(process.execPath, [ACTIVATE, '--subagent'], {
+    cwd: project,
+    env: { ...env, CAVEMAN_SUBAGENT_MATCHER: matcher },
+    input: JSON.stringify({ session_id: 's1', cwd: project, hook_event_name: 'SubagentStart', agent_id: 'a1', agent_type: agentType }),
+    encoding: 'utf8',
+    timeout: 5000,
+  });
+
+  const skipped = runWithMatcher('^(coder|builder)$', 'Explore');
+  assert.equal(skipped.status, 0);
+  assert.equal(skipped.stdout, '');
+
+  const matched = runWithMatcher('^(coder|builder)$', 'builder');
+  assert.equal(matched.status, 0);
+  assert.match(contextOf(matched.stdout), /mode: caveman\b/);
+
+  const invalid = runWithMatcher('[invalid', 'Explore');
+  assert.equal(invalid.status, 0);
+  assert.match(contextOf(invalid.stdout), /mode: caveman\b/);
+});
