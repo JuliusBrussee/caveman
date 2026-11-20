@@ -32,6 +32,59 @@ LIST_ITEM_REGEX = re.compile(r"^\s*(?:[-*+]|\d+[.)])\s")
 # Requires either a path prefix (./ ../ / or drive letter) or a slash/backslash within the match
 PATH_REGEX = re.compile(r"(?:\./|\.\./|/|[A-Za-z]:\\)[\w\-/\\\.]+|[\w\-\.]+[/\\][\w\-/\\\.]+")
 
+# Numeric values, for the "never modify" contract SKILL.md states and the skill
+# README repeats ("Dates, version numbers, numeric values"). One token covers
+# plain integers, decimals, versions and thousands-separated figures: 3, 0.15,
+# 4.0.1, 1,000. A date's parts (2026-11-17) come out as 2026/11/17, which is
+# what keeps each component from being rewritten on its own.
+# Digits touching letters are part of an identifier, not a value: a11y, i18n,
+# utf8, sha256, x86_64. The committed fixture pair compresses "accessibility"
+# to "a11y", so counting those digits reported an invented 11.
+# The lookbehind excludes a digit as well as a letter: without that, matching
+# could start PAST the letter and still succeed — "sha256" yielded "56", since
+# the 5 is preceded by a digit and the 6 ends the word.
+#
+# Because the token must START at the digits, trailing letters are safe to
+# absorb as a unit: "60s", "5ms", "2x", "64bit" are values, while "a11y" and
+# "utf8" are already excluded by the lookbehind. The unit is matched and
+# discarded so only the digits are compared — and matching it is what makes
+# the boundary whole-token. A bare `(?!\w)` after the digits instead let
+# backtracking shorten the run until the guard passed, so "60s" read as "6".
+NUMBER_REGEX = re.compile(r"(?<![A-Za-z_\d])(\d+(?:[.,]\d+)*)[A-Za-z]*(?!\w)")
+# ...which would also drop the v off a version. Removed before matching so
+# v4.0.1 is still read as the value 4.0.1. `\b` keeps it from firing inside a
+# word, so "rev2" is untouched.
+VERSION_PREFIX_REGEX = re.compile(r"\bv(?=\d)", re.IGNORECASE)
+# An ordered-list marker is structure, not data: the 1 in "1. step" numbers the
+# item, it does not state a value. Blanked before extraction so re-numbering a
+# list — or writing prose bullets as an ordered list — reports itself through
+# the list/bullet checks instead of as an invented number.
+ORDERED_MARKER_REGEX = re.compile(r"^(\s*)\d+([.)])(\s)", re.MULTILINE)
+
+# Writing a spelled-out number as a digit is compression that PRESERVES the
+# value, and caveman prose does it constantly — the committed fixture pair
+# turns "about two years" into "2 years" and "three small PRs than one large"
+# into "3 small > 1 large". So the original's permitted set includes the digits
+# for any number word it spells out. Only that side is widened: the compressed
+# side stays literal, so `at most 3 attempts` → `max 5 attempts` is still an
+# error. Ordinals are here for the same reason ("third" → "3rd").
+WORD_NUMBERS = {
+    "zero": "0", "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+    "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+    "eleven": "11", "twelve": "12", "thirteen": "13", "fourteen": "14",
+    "fifteen": "15", "sixteen": "16", "seventeen": "17", "eighteen": "18",
+    "nineteen": "19", "twenty": "20", "thirty": "30", "forty": "40",
+    "fifty": "50", "sixty": "60", "seventy": "70", "eighty": "80",
+    "ninety": "90", "hundred": "100", "thousand": "1000", "million": "1000000",
+    "first": "1", "second": "2", "third": "3", "fourth": "4", "fifth": "5",
+    "sixth": "6", "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10",
+}
+WORD_NUMBER_REGEX = re.compile(r"\b(" + "|".join(WORD_NUMBERS) + r")\b", re.IGNORECASE)
+# A comma between a digit and exactly three digits is a thousands separator, so
+# 1,000 and 1000 are the same value written two ways. Normalizing it away is
+# deliberate: flagging pure reformatting would add noise and protect no value.
+THOUSANDS_SEPARATOR_REGEX = re.compile(r"(?<=\d),(?=\d{3}(?!\d))")
+
 # PATH_REGEX is crude on purpose and also matches ordinary prose pairs —
 # "pros/cons", "Node/browser", "state/lifecycle". Caveman prose ADDS those
 # constructions freely and dropping one breaks nothing, so only an unambiguous
@@ -239,6 +292,32 @@ def count_bullets(text):
     return len(BULLET_REGEX.findall(text))
 
 
+def extract_numbers(text):
+    """Every numeric value in the text, thousands separators normalized away.
+
+    Code blocks, inline spans, URLs and paths are deliberately NOT masked out
+    first. Each of those is required to survive byte-for-byte and is checked
+    exactly by its own validator, so it contributes the same numbers to both
+    sides and can never raise a false error here. Masking them would instead
+    CREATE one: a value the model moved out of an inline span would look newly
+    invented, reporting the wrong defect for a loss already caught elsewhere.
+    """
+    scrubbed = VERSION_PREFIX_REGEX.sub(" ", ORDERED_MARKER_REGEX.sub(r"\1\2\3", text))
+    return {
+        THOUSANDS_SEPARATOR_REGEX.sub("", match)
+        for match in NUMBER_REGEX.findall(scrubbed)
+    }
+
+
+def spelled_numbers(text):
+    """Digits for the number words the text spells out ("three" -> "3").
+
+    Widens only what the ORIGINAL permits, never what the compressed side
+    claims, so the check stays one-directional.
+    """
+    return {WORD_NUMBERS[match.group(1).lower()] for match in WORD_NUMBER_REGEX.finditer(text)}
+
+
 def extract_inline_codes(text):
     """Backtick-delimited inline spans, with fenced code blocks stripped first.
 
@@ -362,6 +441,26 @@ def validate_bullets(orig, comp, result):
         result.add_warning(f"Bullet count changed too much: {b1} -> {b2}")
 
 
+def validate_numbers(orig, comp, result):
+    """A numeric value in the compressed text that is not in the original.
+
+    One-directional on purpose. Compression is allowed to drop prose, so a
+    number that disappears along with its sentence is not a violation and is
+    not reported — the many-numbers case (a changelog, a table of limits)
+    would otherwise fail on every legitimate shortening. What compression may
+    never do is invent or alter a value, and that is exactly what the opposite
+    direction detects: `at most 3 attempts` coming back as `max 5 attempts`
+    puts a 5 in the output that the input never had (#1350).
+    """
+    allowed = extract_numbers(orig) | spelled_numbers(orig)
+    invented = sorted(extract_numbers(comp) - allowed)
+    if invented:
+        result.add_error(
+            f"Numeric values not in the original: {', '.join(invented)} "
+            "(dates, versions and numbers must be preserved exactly)"
+        )
+
+
 def validate_inline_codes(orig, comp, result):
     def _render_spans(spans):
         """Render spans for an error message, truncated and newline-escaped.
@@ -409,6 +508,7 @@ def validate(original_path: Path, compressed_path: Path) -> ValidationResult:
     validate_paths(orig, comp, result)
     validate_bullets(orig, comp, result)
     validate_inline_codes(orig, comp, result)
+    validate_numbers(orig, comp, result)
 
     return result
 

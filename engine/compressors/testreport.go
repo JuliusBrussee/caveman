@@ -299,6 +299,14 @@ func parsePytestJSON(input []byte) (*testReport, error) {
 			Call     pytestStage `json:"call"`
 			Teardown pytestStage `json:"teardown"`
 		} `json:"tests"`
+		// A module pytest could not collect is recorded only here: tests[]
+		// never gets an entry for it and the json-report summary has no error
+		// key, so this is the sole record that the run was red.
+		Collectors []struct {
+			NodeID   string `json:"nodeid"`
+			Outcome  string `json:"outcome"`
+			Longrepr string `json:"longrepr"`
+		} `json:"collectors"`
 	}
 
 	if err := json.Unmarshal(input, &doc); err != nil {
@@ -384,7 +392,57 @@ func parsePytestJSON(input []byte) (*testReport, error) {
 		}
 	}
 
+	// A collector pytest could not run — an unimportable test module, a module
+	// body that raises, a broken conftest — is "failed" with no entry in
+	// tests[], so without this a run pytest itself reported as red ("2 passed,
+	// 1 error", exit 1) summarized as all-passing. Reachable under
+	// --continue-on-collection-errors, which leaves the surviving tests in
+	// tests[] so the payload is compressed rather than passed through on the
+	// 0-tests check.
+	//
+	// Only "failed" counts. Parent collectors of a failed module stay "passed",
+	// so a failure is reported once, by the node that produced it; a module
+	// skipped at collection is "skipped", which pytest counts as a skip and not
+	// as an error.
+	for _, col := range doc.Collectors {
+		if col.Outcome != "failed" {
+			continue
+		}
+		report.Errors++
+		report.Failures = append(report.Failures, pytestCollectionFailure(col.NodeID, col.Longrepr))
+	}
+
 	return report, nil
+}
+
+// pytestCollectionFailure turns a failed collector's longrepr into an error
+// entry. pytest's own short summary names the exception, so the "E " line is
+// preferred as the reason; a longrepr without one (a plain collection message)
+// falls back to its first non-frame line. Frames are the ".py:" lines, matching
+// the two branches above.
+func pytestCollectionFailure(nodeID, longrepr string) testFailure {
+	msg, fallback := "", ""
+	stack := []string{}
+	for _, line := range strings.Split(longrepr, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		switch {
+		case strings.HasPrefix(line, "E "):
+			if msg == "" {
+				msg = strings.TrimSpace(strings.TrimPrefix(line, "E "))
+			}
+		case strings.Contains(line, ".py:"):
+			stack = append(stack, line)
+		case fallback == "":
+			fallback = line
+		}
+	}
+	if msg == "" {
+		msg = fallback
+	}
+	return testFailure{Name: nodeID, Message: msg, Type: "error", Stack: trimStack(stack)}
 }
 
 type pytestStage struct {
@@ -399,6 +457,8 @@ func parseJestJSON(input []byte) (*testReport, error) {
 		NumPendingTests int `json:"numPendingTests"`
 		TestResults     []struct {
 			Name             string `json:"name"`
+			Status           string `json:"status"`
+			Message          string `json:"message"`
 			AssertionResults []struct {
 				AncestorTitles  []string `json:"ancestorTitles"`
 				Title           string   `json:"title"`
@@ -425,8 +485,10 @@ func parseJestJSON(input []byte) (*testReport, error) {
 	}
 
 	for _, suite := range doc.TestResults {
+		failedTests := 0
 		for _, test := range suite.AssertionResults {
 			if test.Status == "failed" {
+				failedTests++
 				name := test.FullName
 				if name == "" {
 					name = strings.Join(append(test.AncestorTitles, test.Title), " › ")
@@ -457,9 +519,37 @@ func parseJestJSON(input []byte) (*testReport, error) {
 				})
 			}
 		}
+		// A suite Jest could not run (a module that fails to load, a throwing
+		// beforeAll/afterAll) is "failed" with no failed test of its own. Its
+		// reason lives only in the suite message and it never reaches
+		// numFailedTests, so without this a red run summarizes as all-passing.
+		if suite.Status == "failed" && failedTests == 0 {
+			report.Errors++
+			report.Failures = append(report.Failures, jestSuiteFailure(suite.Name, suite.Message))
+		}
 	}
 
 	return report, nil
+}
+
+// jestSuiteFailure turns a suite-level Jest message into an error entry. The
+// first line after Jest's "● Test suite failed to run" header is the reason;
+// "at …" lines are the stack. Jest colors the message when stdout is a TTY or
+// FORCE_COLOR is set.
+func jestSuiteFailure(name, message string) testFailure {
+	msg := ""
+	stack := []string{}
+	for _, line := range strings.Split(ansiRe.ReplaceAllString(message, ""), "\n") {
+		line = strings.TrimSpace(line)
+		switch {
+		case line == "", strings.HasSuffix(line, "Test suite failed to run"):
+		case strings.HasPrefix(line, "at "):
+			stack = append(stack, line)
+		case msg == "":
+			msg = line
+		}
+	}
+	return testFailure{Name: name, Message: msg, Type: "error", Stack: trimStack(stack)}
 }
 
 // trimStack keeps first + last few frames, eliding the middle if too long.

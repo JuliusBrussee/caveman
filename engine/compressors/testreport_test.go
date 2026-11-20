@@ -293,6 +293,135 @@ func TestTestReportJestJSON(t *testing.T) {
 	}
 }
 
+// TestTestReportJestSuiteFailures pins that a suite Jest could not run — a
+// module that fails to load, a throwing afterAll — reaches the summary as an
+// error. Jest records those only on the suite (status "failed" plus a message,
+// counted in numFailedTestSuites), never in numFailedTests, so a summary built
+// from the assertion counts alone reported a red run as all-passing. Messages
+// trimmed from real `jest --json` output (Jest 29.7.0; the first one was
+// captured with FORCE_COLOR=1, so it carries ANSI escapes).
+func TestTestReportJestSuiteFailures(t *testing.T) {
+	c := compressors.NewTestReport()
+	out, ok := c.Compress([]byte(`{"numFailedTests":0,"numPassedTests":3,"numPendingTests":0,"numFailedTestSuites":2,"success":false,"testResults":[
+		{"name":"/repo/src/user.test.js","status":"failed","assertionResults":[],
+		 "message":"  \u001b[1m● \u001b[22mTest suite failed to run\n\n    Cannot find module './db' from 'src/user.test.js'\n\n    \u001b[0m\u001b[31m\u001b[1m>\u001b[22m\u001b[39m\u001b[90m 1 |\u001b[39m \u001b[36mconst\u001b[39m db \u001b[33m=\u001b[39m require(\u001b[32m'./db'\u001b[39m)\u001b[33m;\u001b[39m"},
+		{"name":"/repo/src/hook.test.js","status":"failed","assertionResults":[{"fullName":"works","status":"passed"}],
+		 "message":"\n\n  ● Test suite failed to run\n\n    afterAll boom: pool not closed\n\n    > 1 | afterAll(() => { throw new Error('afterAll boom: pool not closed'); });\n\n      at Object.<anonymous> (src/hook.test.js:1:24)"},
+		{"name":"/repo/src/ok.test.js","status":"passed","message":"","assertionResults":[{"fullName":"adds","status":"passed"},{"fullName":"subs","status":"passed"}]}]}`))
+	if !ok {
+		t.Fatal("expected Jest JSON compression")
+	}
+	for _, want := range []string{
+		"TEST SUMMARY: 3 passed, 2 errors",
+		"ERROR: /repo/src/user.test.js\n  Cannot find module './db' from 'src/user.test.js'",
+		"ERROR: /repo/src/hook.test.js\n  afterAll boom: pool not closed",
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	if bytes.Contains(out, []byte("\x1b")) {
+		t.Errorf("ANSI escape leaked into the summary:\n%q", out)
+	}
+
+	// A suite that failed because one of its own tests failed is already
+	// reported through that test; it must not be counted a second time.
+	out, ok = c.Compress([]byte(`{"numFailedTests":1,"numPassedTests":1,"numPendingTests":0,"testResults":[
+		{"name":"/repo/src/math.test.js","status":"failed","message":"  ● math › divides\n\n    expect(received).toBe(expected)",
+		 "assertionResults":[{"fullName":"math adds","status":"passed"},{"fullName":"math divides","status":"failed","failureMessages":["expect(received).toBe(expected)"]}]}]}`))
+	if !ok {
+		t.Fatal("expected Jest JSON compression")
+	}
+	if !bytes.Contains(out, []byte("TEST SUMMARY: 1 passed, 1 failed\n")) || bytes.Contains(out, []byte("ERROR:")) {
+		t.Errorf("assertion failure double-counted as a suite error:\n%s", out)
+	}
+}
+
+// TestTestReportPytestCollectionErrors pins the pytest sibling of the Jest gap
+// above. A test module pytest could not import is recorded only under
+// `collectors[]` (outcome "failed", reason in longrepr); it never reaches
+// `tests[]` and the json-report `summary` has no error key either, so a report
+// built from `tests[]` alone summarized a red run as all-passing.
+//
+// Reachable whenever pytest is told to keep going after a collection error:
+// `--continue-on-collection-errors` leaves the surviving tests in `tests[]`, so
+// the payload has tests and is compressed rather than passed through. Shapes and
+// longreprs below are trimmed from real runs (pytest 9.2.0, pytest-json-report
+// 1.5.0); that run printed "1 passed, 1 skipped, 2 errors" and exited 1.
+func TestTestReportPytestCollectionErrors(t *testing.T) {
+	c := compressors.NewTestReport()
+	out, ok := c.Compress([]byte(`{"exitcode":1,"duration":0.03,
+		"summary":{"passed":1,"total":1,"collected":1},
+		"tests":[{"nodeid":"test_ok.py::test_a","outcome":"passed"}],
+		"collectors":[
+			{"nodeid":"","outcome":"passed","result":[]},
+			{"nodeid":"test_bad1.py","outcome":"failed","longrepr":"ImportError while importing test module '/repo/test_bad1.py'.\nHint: make sure your test modules/packages have valid Python names.\nTraceback:\n/usr/lib/python3.11/importlib/__init__.py:126: in import_module\n    return _bootstrap._gcd_import(name[level:], package, level)\ntest_bad1.py:1: in <module>\n    import nope_one\nE   ModuleNotFoundError: No module named 'nope_one'"},
+			{"nodeid":"test_bad2.py","outcome":"failed","longrepr":"test_bad2.py:1: in <module>\n    raise RuntimeError(\"module body exploded\")\nE   RuntimeError: module body exploded"},
+			{"nodeid":"test_modskip.py","outcome":"skipped","longrepr":"Skipped: needs hardware"},
+			{"nodeid":"test_ok.py","outcome":"passed","result":[]},
+			{"nodeid":".","outcome":"passed","result":[]}]}`))
+	if !ok {
+		t.Fatal("expected pytest JSON compression")
+	}
+	for _, want := range []string{
+		"TEST SUMMARY: 1 passed, 2 errors",
+		"ERROR: test_bad1.py\n  ModuleNotFoundError: No module named 'nope_one'",
+		"ERROR: test_bad2.py\n  RuntimeError: module body exploded",
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
+	}
+	// Only the two failed collectors count. A passed collector is not an
+	// error, and a module skipped at collection is not one either — pytest
+	// reported that one as a skip, not as the third error.
+	if bytes.Contains(out, []byte("3 errors")) || bytes.Contains(out, []byte("ERROR: test_modskip.py")) ||
+		bytes.Contains(out, []byte("ERROR: test_ok.py")) || bytes.Contains(out, []byte("ERROR: .")) {
+		t.Errorf("counted a collector that did not fail:\n%s", out)
+	}
+
+	// pytest's default: collection aborts, tests[] is empty. Previously the
+	// whole payload passed through on the 0-tests check; the error is now
+	// reported, matching what the Jest sibling does for a load failure.
+	out, ok = c.Compress([]byte(`{"exitcode":2,"summary":{"total":0,"collected":2},"tests":[],
+		"collectors":[{"nodeid":"test_bad1.py","outcome":"failed","longrepr":"test_bad1.py:1: in <module>\n    import nope_one\nE   ModuleNotFoundError: No module named 'nope_one'"}]}`))
+	if !ok {
+		t.Fatal("expected an interrupted collection to compress, not pass through")
+	}
+	if !bytes.Contains(out, []byte("TEST SUMMARY: 1 errors")) ||
+		!bytes.Contains(out, []byte("ModuleNotFoundError: No module named 'nope_one'")) {
+		t.Errorf("interrupted collection lost its reason:\n%s", out)
+	}
+
+	// pytest on Windows writes its longrepr lines CRLF-separated, and the
+	// reason is the line AFTER the frames, so a stray \r would ride into the
+	// summary with it.
+	out, ok = c.Compress([]byte("{\"tests\":[{\"nodeid\":\"t.py::a\",\"outcome\":\"passed\"}]," +
+		"\"collectors\":[{\"nodeid\":\"test_bad.py\",\"outcome\":\"failed\"," +
+		"\"longrepr\":\"test_bad.py:1: in <module>\\r\\n    import nope\\r\\nE   ModuleNotFoundError: No module named 'nope'\"}]}"))
+	if !ok {
+		t.Fatal("expected a CRLF longrepr to compress")
+	}
+	if !bytes.Contains(out, []byte("ModuleNotFoundError: No module named 'nope'")) {
+		t.Errorf("CRLF longrepr lost its reason:\n%s", out)
+	}
+	if bytes.Contains(out, []byte("\r")) {
+		t.Errorf("a bare CR rode into the summary:\n%q", out)
+	}
+
+	// A clean run carries only passed collectors; none of them may become an
+	// error, and the summary must be byte-identical to the no-collectors form.
+	withCollectors, ok1 := c.Compress([]byte(`{"exitcode":0,"tests":[{"nodeid":"t.py::a","outcome":"passed"}],
+		"collectors":[{"nodeid":"","outcome":"passed"},{"nodeid":"t.py","outcome":"passed"}]}`))
+	without, ok2 := c.Compress([]byte(`{"exitcode":0,"tests":[{"nodeid":"t.py::a","outcome":"passed"}]}`))
+	if !ok1 || !ok2 {
+		t.Fatal("expected both passing reports to compress")
+	}
+	if !bytes.Equal(withCollectors, without) {
+		t.Errorf("passed collectors changed a green summary:\n%s\nvs\n%s", withCollectors, without)
+	}
+}
+
 // Test detection
 
 func TestTestReportDetection(t *testing.T) {
