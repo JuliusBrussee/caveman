@@ -9572,6 +9572,12 @@ export default {
       if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
     });
 
+    await ctx.session.hook("experimental.idle", (event) => {
+      if (typeof event?.sessionID === "string" && event.sessionID) {
+        emit("Stop", { session_id: event.sessionID });
+      }
+    });
+
     await ctx.session.hook("context", (event) => {
       const stable = sessionContext(event.sessionID);
       if (stable) event.system.push({ type: "text", text: stable });
