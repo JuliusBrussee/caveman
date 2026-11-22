@@ -2,14 +2,14 @@
 
 Native framework adapters for the Caveman compression runtime. Your framework keeps its inference client, tools, retries, streams, and original conversation. Caveman projects eligible tool-result text into a copied outbound request. Inference stays with your provider.
 
-This quickstart targets middleware `1.0.1` and SDK `1.2.0`. Read the [release notes and limitations](https://github.com/JuliusBrussee/caveman/blob/main/packages/middleware/typescript/CHANGELOG.md) before upgrading.
+This quickstart targets middleware `1.2.0` and SDK `1.2.0`. Read the [release notes and limitations](https://github.com/JuliusBrussee/caveman/blob/main/packages/middleware/typescript/CHANGELOG.md) before upgrading.
 
 ## Run a complete example
 
 Follow the [AI SDK quickstart](https://docs.caveman.so/integrations/frameworks) for a fresh environment and [runtime installation](https://docs.caveman.so/reference/faq). Start the local runtime separately; the client package does not include it.
 
 ```sh
-npm install --save-exact @caveman-ai/sdk@1.2.0 @caveman-ai/middleware@1.1.0 ai@7.0.94 @ai-sdk/provider@4.0.11 zod@4.4.3
+npm install --save-exact @caveman-ai/sdk@1.2.0 @caveman-ai/middleware@1.2.0 ai@7.0.94 @ai-sdk/provider@4.0.11 zod@4.4.3
 ```
 
 The framework guide above is the runnable walkthrough. A separate downloadable quickstart script is not published on the docs site.

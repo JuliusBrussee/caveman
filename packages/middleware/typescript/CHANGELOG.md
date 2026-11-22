@@ -4,6 +4,15 @@
 new major. Read this file before upgrading. Prereleases publish under their own
 npm dist-tag, never `latest`. Support policy: [SECURITY.md](../../../SECURITY.md#supported-versions).
 
+## 1.2.0 — 2026-11-22
+
+- Add the `@caveman-ai/middleware/codemode` subpath (`createCodeModeToolset`):
+  a provider-agnostic, zero-dependency in-process Code-Mode toolset that
+  collapses large framework or MCP tool catalogs into three static,
+  prefix-cache-safe meta-tools (`codemode_search_tools`, `codemode_execute`,
+  and `codemode_mutate`) with BM25 discovery, structured execution pipelines,
+  and read/write separation (#1559).
+
 ## 1.1.0 — 2026-11-07
 
 - Security: the MCP adapter now requires `@modelcontextprotocol/sdk` 1.32.0 or

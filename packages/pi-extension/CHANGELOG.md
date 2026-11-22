@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 — 2026-11-22
+
+- Add opt-in Code-Mode support (`CAVEMAN_PI_CODEMODE=1`): registers
+  `codemode_search_tools`, `codemode_execute`, and `codemode_mutate` backed by
+  a lazy `CodemodeClient` stdio MCP session to `caveman-mcp codemode` (#1559).
+- Honor `CAVEMAN_MCP_PREFIX_ARGS` when launching `caveman-mcp` through a wrapper
+  such as `npx`, and extend `CodemodeClient` RPC deadlines past caller
+  `timeout_ms` so long-running scripts do not time out at the transport layer.
+
 ## 0.3.2 — 2026-11-07
 
 - Pass a pi-virtual model (`router/auto`) through without the pass-through
