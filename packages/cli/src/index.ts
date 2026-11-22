@@ -9475,16 +9475,12 @@ import { createHash } from "node:crypto";
 
 const command = ${JSON.stringify(cmd)};
 const prefix = ${JSON.stringify(pre)};
-const contexts = new Map();
-const pending = new Map();
 
 // A host process can serve a project that is not its own launch directory, so
 // the served project travels with every call: in the payload, which
 // nativeRuntimeRequest reads as the session cwd, and as the child's working
 // directory, so anything it resolves relatively resolves there (#1443).
-let projectDir;
-
-function call(event, payload = {}, cwd = projectDir) {
+function call(event, payload = {}, cwd) {
   try {
     const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
       input: JSON.stringify({ event_name: event, ...(cwd ? { cwd } : {}), ...payload }),
@@ -9552,10 +9548,20 @@ function taskContinuation(value) {
   return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
 }
 
+// OpenCode creates one factory per served project. Keep its callbacks and
+// session state together so creating or disposing another project is isolated.
+export const CavemanNative = async (ctx) => {
+const contexts = new Map();
+const pending = new Map();
+const projectDir = typeof ctx?.directory === "string" && ctx.directory
+  ? ctx.directory
+  : undefined;
+const emit = (event, payload = {}) => call(event, payload, projectDir);
+
 function sessionContext(sessionID) {
   if (!sessionID) return undefined;
   if (!contexts.has(sessionID)) {
-    const out = call("SessionStart", { session_id: sessionID, surface: "cli" });
+    const out = emit("SessionStart", { session_id: sessionID, surface: "cli" });
     const context = out?.hookSpecificOutput?.additionalContext;
     if (typeof context === "string" && context) contexts.set(sessionID, context);
   }
@@ -9568,20 +9574,20 @@ const hostHooks = {
     const props = event?.properties ?? {};
     const sessionID = props.sessionID ?? props.info?.id;
     if (type === "session.created") sessionContext(sessionID);
-    if (type === "session.idle") call("Stop", { session_id: sessionID });
+    if (type === "session.idle") emit("Stop", { session_id: sessionID });
     if (type === "session.compacted") {
-      const out = call("PostCompact", { session_id: sessionID });
+      const out = emit("PostCompact", { session_id: sessionID });
       const context = out?.hookSpecificOutput?.additionalContext;
       if (typeof context === "string" && context) contexts.set(sessionID, context);
     }
     if (type === "session.deleted") {
-      call("SessionEnd", { session_id: sessionID });
+      emit("SessionEnd", { session_id: sessionID });
       contexts.delete(sessionID);
       pending.delete(sessionID);
     }
   },
   "chat.message": async (input, output) => {
-    const decision = call("UserPromptSubmit", {
+    const decision = emit("UserPromptSubmit", {
       session_id: input.sessionID,
       model: input.model?.modelID,
       provider: input.model?.providerID,
@@ -9603,7 +9609,7 @@ const hostHooks = {
     }
   },
   "tool.execute.before": async (input, output) => {
-    const decision = call("PreToolUse", {
+    const decision = emit("PreToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: output.args,
@@ -9625,7 +9631,7 @@ const hostHooks = {
     } catch {}
   },
   "tool.execute.after": async (input, output) => {
-    const decision = call("PostToolUse", {
+    const decision = emit("PostToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: input.args,
@@ -9638,22 +9644,17 @@ const hostHooks = {
     }
   },
   "experimental.session.compacting": async (input, output) => {
-    call("PreCompact", { session_id: input.sessionID });
+    emit("PreCompact", { session_id: input.sessionID });
     const stable = sessionContext(input.sessionID);
     if (stable) output.context.push(stable);
   },
   dispose: async () => {
-    for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
+    for (const sessionID of contexts.keys()) emit("SessionEnd", { session_id: sessionID });
     contexts.clear();
     pending.clear();
   },
 };
 
-// OpenCode's V1 plugin context names the served project \`directory\`. A host
-// that supplies none (or a caller that supplies no context at all) leaves
-// projectDir unset and every child inherits this process's cwd, as before.
-export const CavemanNative = async (ctx) => {
-  if (typeof ctx?.directory === "string" && ctx.directory) projectDir = ctx.directory;
   return hostHooks;
 };
 `;
