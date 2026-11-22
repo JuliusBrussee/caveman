@@ -61,7 +61,11 @@ func parseTestReport(input []byte) (*testReport, bool) {
 			report, err = parseJestJSON(input)
 		}
 	} else {
-		return nil, false // not a recognized format
+		// Plain-text verbose test runners: `go test -v` and `cargo test`.
+		report, err = parseGoTestVerbose(input)
+		if err != nil {
+			report, err = parseCargoTest(input)
+		}
 	}
 
 	if err != nil || report == nil {
@@ -499,4 +503,141 @@ func trimStack(frames []string) []string {
 	out = append(out, fmt.Sprintf("... (%d frames omitted)", elided))
 	out = append(out, clean[len(clean)-keepTail:]...)
 	return out
+}
+
+// parseGoTestVerbose parses plain-text `go test -v` output, collapsing all
+// passing `=== RUN` / `--- PASS:` lines while keeping 100% of failure messages,
+// assertion details, and file:line diagnostics for every failing test.
+func parseGoTestVerbose(input []byte) (*testReport, error) {
+	clean := ansiRe.ReplaceAll(input, nil)
+	if !bytes.Contains(clean, []byte("=== RUN")) ||
+		(!bytes.Contains(clean, []byte("--- PASS:")) && !bytes.Contains(clean, []byte("--- FAIL:"))) {
+		return nil, fmt.Errorf("not go test -v output")
+	}
+	lines := strings.Split(string(clean), "\n")
+	report := &testReport{}
+	var currentTest string
+	var currentBuf []string
+	flushFailed := func(name string) {
+		msgLines := make([]string, 0, len(currentBuf))
+		for _, l := range currentBuf {
+			if t := strings.TrimSpace(l); t != "" {
+				msgLines = append(msgLines, t)
+			}
+		}
+		report.Failures = append(report.Failures, testFailure{
+			Name:    name,
+			Message: strings.Join(msgLines, "\n"),
+			Type:    "failure",
+		})
+	}
+	for _, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		switch {
+		case strings.HasPrefix(trimmed, "=== RUN "):
+			currentTest = strings.TrimSpace(strings.TrimPrefix(trimmed, "=== RUN "))
+			currentBuf = currentBuf[:0]
+		case strings.HasPrefix(trimmed, "=== PAUSE "), strings.HasPrefix(trimmed, "=== CONT "):
+			continue
+		case strings.HasPrefix(trimmed, "--- PASS: "):
+			report.Passed++
+			currentBuf = currentBuf[:0]
+		case strings.HasPrefix(trimmed, "--- SKIP: "):
+			report.Skipped++
+			currentBuf = currentBuf[:0]
+		case strings.HasPrefix(trimmed, "--- FAIL: "):
+			report.Failed++
+			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL: "))
+			name := rest
+			if sp := strings.IndexByte(rest, ' '); sp > 0 {
+				name = rest[:sp]
+			}
+			if name == "" {
+				name = currentTest
+			}
+			flushFailed(name)
+			currentBuf = currentBuf[:0]
+		case strings.HasPrefix(trimmed, "ok  \t") || strings.HasPrefix(trimmed, "FAIL\t"):
+			if fields := strings.Fields(trimmed); len(fields) >= 3 && strings.HasSuffix(fields[2], "s") {
+				var d float64
+				if _, err := fmt.Sscanf(strings.TrimSuffix(fields[2], "s"), "%f", &d); err == nil {
+					report.Duration += d
+				}
+			}
+		case trimmed == "PASS" || trimmed == "FAIL" || trimmed == "":
+			continue
+		default:
+			if currentTest != "" {
+				currentBuf = append(currentBuf, raw)
+			}
+		}
+	}
+	total := report.Passed + report.Failed + report.Skipped
+	if total < 4 {
+		return nil, fmt.Errorf("too few go test results (%d)", total)
+	}
+	return report, nil
+}
+
+// parseCargoTest parses plain-text `cargo test` output, collapsing passing
+// `test ... ok` lines while keeping failure details from the `failures:` section.
+func parseCargoTest(input []byte) (*testReport, error) {
+	clean := ansiRe.ReplaceAll(input, nil)
+	if !bytes.Contains(clean, []byte("running ")) || !bytes.Contains(clean, []byte("test result:")) {
+		return nil, fmt.Errorf("not cargo test output")
+	}
+	lines := strings.Split(string(clean), "\n")
+	report := &testReport{}
+	inFailures := false
+	var curFailName string
+	var curFailLines []string
+	flushFail := func() {
+		if curFailName == "" {
+			return
+		}
+		report.Failures = append(report.Failures, testFailure{
+			Name:    curFailName,
+			Message: strings.TrimSpace(strings.Join(curFailLines, "\n")),
+			Type:    "failure",
+		})
+		curFailName = ""
+		curFailLines = curFailLines[:0]
+	}
+	for _, raw := range lines {
+		trimmed := strings.TrimSpace(raw)
+		if trimmed == "failures:" {
+			inFailures = true
+			continue
+		}
+		if strings.HasPrefix(trimmed, "test result:") {
+			flushFail()
+			inFailures = false
+			continue
+		}
+		if inFailures {
+			if strings.HasPrefix(trimmed, "---- ") && strings.HasSuffix(trimmed, " stdout ----") {
+				flushFail()
+				curFailName = strings.TrimSuffix(strings.TrimPrefix(trimmed, "---- "), " stdout ----")
+			} else if curFailName != "" {
+				curFailLines = append(curFailLines, raw)
+			}
+			continue
+		}
+		if strings.HasPrefix(trimmed, "test ") {
+			switch {
+			case strings.HasSuffix(trimmed, " ... ok"):
+				report.Passed++
+			case strings.HasSuffix(trimmed, " ... FAILED"):
+				report.Failed++
+			case strings.HasSuffix(trimmed, " ... ignored"):
+				report.Skipped++
+			}
+		}
+	}
+	flushFail()
+	total := report.Passed + report.Failed + report.Skipped
+	if total < 4 {
+		return nil, fmt.Errorf("too few cargo test results (%d)", total)
+	}
+	return report, nil
 }

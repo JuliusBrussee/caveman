@@ -65,13 +65,14 @@ func unwrapFileWrapper(input []byte) ([]byte, fileWrapper) {
 	if openEnd < 0 || openEnd+1 > closeStart {
 		return input, fileWrapper{}
 	}
-	inner := trimmed[openEnd+1 : closeStart]
+	innerEnd := pullOpenCodeTrailingFooter(trimmed, openEnd+1, closeStart)
+	inner := trimmed[openEnd+1 : innerEnd]
 	if len(bytes.TrimSpace(inner)) == 0 {
 		return input, fileWrapper{}
 	}
 	return inner, fileWrapper{
 		prefix:  input[:start+openEnd+1],
-		suffix:  input[start+closeStart:],
+		suffix:  input[start+innerEnd:],
 		present: true,
 	}
 }
@@ -118,14 +119,113 @@ type inputWrapper interface {
 
 type inputWrappers []inputWrapper
 
+// unwrapFetchedWebContent separates Claude Code's WebFetch envelope
+// (`Fetched https://...\n<fetched-web-content>\n...\n</fetched-web-content>`)
+// from the fetched payload so Detect classifies the underlying source, JSON,
+// HTML, or text accurately and rewrap restores the exact envelope. Also
+// handles truncated WebFetch outputs that open with a `Fetched http(s)://...`
+// header line + `<fetched-web-content>` and were cut before the closing tag.
+func unwrapFetchedWebContent(input []byte) ([]byte, fileWrapper) {
+	const (
+		openTag  = "<fetched-web-content>"
+		closeTag = "</fetched-web-content>"
+	)
+	if !bytes.Contains(input, []byte(openTag)) {
+		return input, fileWrapper{}
+	}
+	if bytes.Count(input, []byte(openTag)) != 1 {
+		return input, fileWrapper{}
+	}
+	openIdx := bytes.Index(input, []byte(openTag))
+	// Prefix before <fetched-web-content> must be either empty/whitespace or
+	// a single `Fetched http(s)://...` header line.
+	head := bytes.TrimSpace(input[:openIdx])
+	hasFetchedHeader := false
+	if len(head) > 0 {
+		if bytes.ContainsRune(head, '\n') {
+			return input, fileWrapper{}
+		}
+		if !bytes.HasPrefix(head, []byte("Fetched https://")) && !bytes.HasPrefix(head, []byte("Fetched http://")) {
+			return input, fileWrapper{}
+		}
+		hasFetchedHeader = true
+	}
+	innerStart := openIdx + len(openTag)
+	if innerStart < len(input) && input[innerStart] == '\n' {
+		innerStart++
+	}
+	closeCount := bytes.Count(input, []byte(closeTag))
+	var closeIdx int
+	switch closeCount {
+	case 1:
+		closeIdx = bytes.Index(input, []byte(closeTag))
+		if closeIdx <= openIdx+len(openTag) {
+			return input, fileWrapper{}
+		}
+		// Suffix after </fetched-web-content> must be whitespace only.
+		if len(bytes.TrimSpace(input[closeIdx+len(closeTag):])) != 0 {
+			return input, fileWrapper{}
+		}
+	case 0:
+		// Allow missing closing tag ONLY when anchored by the explicit
+		// `Fetched http(s)://...` WebFetch header (truncated payload).
+		if !hasFetchedHeader {
+			return input, fileWrapper{}
+		}
+		closeIdx = len(input)
+	default:
+		return input, fileWrapper{}
+	}
+	if innerStart >= closeIdx {
+		return input, fileWrapper{}
+	}
+	inner := input[innerStart:closeIdx]
+	if len(bytes.TrimSpace(inner)) == 0 {
+		return input, fileWrapper{}
+	}
+	return inner, fileWrapper{
+		prefix:  input[:innerStart],
+		suffix:  input[closeIdx:],
+		present: true,
+	}
+}
+
 // unwrapInput removes supported presentation wrappers in outer-to-inner order.
-// Four layers cover known agent compositions while bounding repeated scans of
-// attacker-controlled input. rewrap applies them in reverse order.
+// Six layers cover known agent compositions (e.g. Claude <system-reminder>
+// around a line-numbered listing or <file>, Codex exec_command around a listing
+// or test report, OpenCode <path><content> around a listing) while bounding
+// repeated scans of attacker-controlled input. rewrap applies them in reverse
+// order.
 func unwrapInput(input []byte) ([]byte, inputWrappers) {
 	body := input
-	wrappers := make(inputWrappers, 0, 2)
-	for range 4 {
+	wrappers := make(inputWrappers, 0, 3)
+	for range 6 {
+		if inner, wrapper := unwrapClaudeSystemReminder(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
 		if inner, wrapper := unwrapCodexExec(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
+		if inner, wrapper := unwrapCodexTextExec(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
+		if inner, wrapper := unwrapHermesToolJSON(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
+		if inner, wrapper := unwrapFetchedWebContent(body); wrapper.present {
+			body = inner
+			wrappers = append(wrappers, wrapper)
+			continue
+		}
+		if inner, wrapper := unwrapOpenCodeRead(body); wrapper.present {
 			body = inner
 			wrappers = append(wrappers, wrapper)
 			continue

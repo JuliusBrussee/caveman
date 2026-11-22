@@ -55,6 +55,16 @@ func newCodeWith(opts CodeOptions) Compressor { return &codeCompressor{opts: opt
 func (c *codeCompressor) ContentType() string       { return "code" }
 func (c *codeCompressor) SafetyClass() safety.Class { return safety.S4 }
 
+const (
+	goSyntheticPackagePrefix = "package _\n"
+	minPartialSliceBytes     = 512
+)
+
+var (
+	goPackageRe = regexp.MustCompile(`(?m)^[ \t]*package[ \t]+[A-Za-z_][A-Za-z0-9_]*`)
+	goFuncRe    = regexp.MustCompile(`(?m)^[ \t]*func[ \t]+(?:\([^)\n]+\)[ \t]*)?[A-Za-z_][A-Za-z0-9_]*[ \t]*\(`)
+)
+
 func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	if isGDScript(input) {
 		return compressGDScript(input) // no grammar for it; see code_gdscript.go
@@ -63,12 +73,26 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	if l == nil {
 		return nil, false // unsupported language → pass-through
 	}
-	root, tree, missing, ok := parseAccepted(l, input)
+	parseSrc := input
+	prefixShift := uint32(0)
+	if l.name == "go" && !goPackageRe.Match(input) {
+		// Mid-file Go slices (`Read` with offset, `sed -n`) omit the top-level
+		// `package` declaration that tree-sitter's Go grammar requires. Parse
+		// with a synthetic package line and map replacement spans back onto the
+		// caller's original slice.
+		prefixed := make([]byte, len(goSyntheticPackagePrefix)+len(input))
+		copy(prefixed, goSyntheticPackagePrefix)
+		copy(prefixed[len(goSyntheticPackagePrefix):], input)
+		parseSrc = prefixed
+		prefixShift = uint32(len(goSyntheticPackagePrefix))
+	}
+
+	root, tree, missing, errNodes, ok := parseAccepted(l, parseSrc, len(input) >= minPartialSliceBytes)
 	if !ok && l.name == "ts" {
 		// JSX is not TypeScript: a React component fails the TypeScript grammar
 		// at its first `<div>`. The TSX grammar is a superset, so retry with it.
 		l = &lang{name: "tsx", language: tsx.GetLanguage(), braceBody: true}
-		root, tree, missing, ok = parseAccepted(l, input)
+		root, tree, missing, errNodes, ok = parseAccepted(l, parseSrc, len(input) >= minPartialSliceBytes)
 	}
 	if !ok {
 		return nil, false
@@ -80,51 +104,101 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 	if l.braceBody {
 		elision = braceElision
 	}
-	collectBodies(root, input, elision, &repls)
+	collectBodies(root, parseSrc, elision, &repls)
 	if c.opts.Comments == CommentRemove || c.opts.Docstrings == CommentRemove {
-		collectComments(root, input, c.opts, &repls)
+		collectComments(root, parseSrc, c.opts, &repls)
 	}
 	if len(repls) == 0 {
 		return nil, false
 	}
+	if prefixShift > 0 {
+		shifted := repls[:0]
+		for _, r := range repls {
+			if r.start < prefixShift {
+				continue
+			}
+			shifted = append(shifted, replacement{
+				start: r.start - prefixShift,
+				end:   r.end - prefixShift,
+				text:  r.text,
+			})
+		}
+		repls = shifted
+		if len(repls) == 0 {
+			return nil, false
+		}
+	}
 	out := applyReplacements(input, repls)
 
-	// Byte-safe guarantee: the result must re-parse at least as cleanly.
-	_, vtree, vmissing, ok := parseAccepted(l, out)
+	verifySrc := out
+	if prefixShift > 0 {
+		prefixed := make([]byte, len(goSyntheticPackagePrefix)+len(out))
+		copy(prefixed, goSyntheticPackagePrefix)
+		copy(prefixed[len(goSyntheticPackagePrefix):], out)
+		verifySrc = prefixed
+	}
+
+	// Byte-safe guarantee: the result must re-parse at least as cleanly,
+	// introducing zero new ERROR or MISSING nodes.
+	_, vtree, vmissing, verrNodes, ok := parseAccepted(l, verifySrc, errNodes > 0)
 	if !ok {
 		return nil, false
 	}
 	vtree.Close()
-	if vmissing > missing {
+	if vmissing > missing || verrNodes > errNodes {
 		return nil, false
 	}
 	return out, true
 }
 
 // parseAccepted parses src with l and reports whether the tree may be edited:
-// no ERROR node anywhere, and every MISSING node a token the parser could
-// safely invent, a `;` or a name. Real-world C++ leans on macros that end a
-// class-body line without a semicolon (Godot's GDCLASS) and on typed anonymous
-// enums the grammar wants named; tree-sitter recovers from both by inserting
-// exactly such a token, and the block structure the elision relies on was still
-// parsed from real tokens. A MISSING brace or parenthesis is not accepted,
-// because then the recovery decided where a block ends. The MISSING count is
-// returned so a re-parse can be held to at most as many. On rejection the tree
-// is closed.
-func parseAccepted(l *lang, src []byte) (*sitter.Node, *sitter.Tree, int, bool) {
+// normally zero ERROR nodes and only tolerable MISSING tokens (`;` or an
+// identifier). When allowPartial is true (multi-line slices >= 512 bytes such
+// as `Read(offset, limit)`, `sed -n`, or 32 KB-truncated files), bounded parse
+// errors (< 25% of input bytes) are tolerated so every complete, error-free
+// function in the slice still compresses while incomplete boundary fragments
+// stay untouched.
+func parseAccepted(l *lang, src []byte, allowPartial bool) (*sitter.Node, *sitter.Tree, int, int, bool) {
 	root, tree, ok := parse(l, src)
 	if !ok {
-		return nil, nil, 0, false
+		return nil, nil, 0, 0, false
 	}
 	if !root.HasError() {
-		return root, tree, 0, true
+		return root, tree, 0, 0, true
 	}
 	missing, tolerable := recoveredTokens(root)
-	if !tolerable {
-		tree.Close()
-		return nil, nil, 0, false
+	if tolerable {
+		return root, tree, missing, 0, true
 	}
-	return root, tree, missing, true
+	if !allowPartial {
+		tree.Close()
+		return nil, nil, 0, 0, false
+	}
+	errNodes, errBytes, missingCount := errorStats(root)
+	if errNodes == 0 || errBytes*4 >= len(src) {
+		tree.Close()
+		return nil, nil, 0, 0, false
+	}
+	return root, tree, missingCount, errNodes, true
+}
+
+func errorStats(n *sitter.Node) (errNodes, errBytes, missing int) {
+	if n.IsError() {
+		return 1, int(n.EndByte() - n.StartByte()), 0
+	}
+	if n.IsMissing() {
+		return 0, 0, 1
+	}
+	if !n.HasError() {
+		return 0, 0, 0
+	}
+	for i := 0; i < int(n.ChildCount()); i++ {
+		en, eb, m := errorStats(n.Child(i))
+		errNodes += en
+		errBytes += eb
+		missing += m
+	}
+	return errNodes, errBytes, missing
 }
 
 // recoveredTokens walks a tree that has errors and reports how many MISSING
@@ -198,12 +272,16 @@ func isBlock(t string) bool {
 	return false
 }
 
-// collectBodies records the byte range of each outermost function body. It does
-// not descend into a body it is about to elide, so nested closures are covered
-// by the enclosing replacement and ranges never overlap.
+// collectBodies records the byte range of each outermost error-free function
+// body. It never touches an ERROR subtree or an incomplete function at a slice
+// boundary, and does not descend into a body it is about to elide so nested
+// closures are covered by the enclosing replacement and ranges never overlap.
 func collectBodies(n *sitter.Node, src []byte, elision string, out *[]replacement) {
-	if isFuncLike(n.Type()) {
-		if body := n.ChildByFieldName("body"); body != nil && isBlock(body.Type()) {
+	if n.IsError() {
+		return
+	}
+	if isFuncLike(n.Type()) && !n.HasError() {
+		if body := n.ChildByFieldName("body"); body != nil && isBlock(body.Type()) && !body.HasError() {
 			if strings.TrimSpace(body.Content(src)) != strings.TrimSpace(elision) {
 				*out = append(*out, replacement{body.StartByte(), body.EndByte(), elision})
 			}
@@ -329,7 +407,8 @@ var pyDefRe = regexp.MustCompile(`(?m)^[ \t]*(?:async[ \t]+)?def[ \t]+[A-Za-z_][
 func sniffLanguage(input []byte) *lang {
 	has := func(s string) bool { return bytes.Contains(input, []byte(s)) }
 	switch {
-	case has("package ") && has("func "):
+	case (has("package ") && has("func ")) ||
+		(goFuncRe.Match(input) && (has(":=") || has("err != nil") || has(") error {") || has("func ("))):
 		return &lang{name: "go", language: golang.GetLanguage(), braceBody: true}
 	case pyDefRe.Match(input) && has(":"):
 		return &lang{name: "python", language: python.GetLanguage(), braceBody: false}
@@ -342,9 +421,10 @@ func sniffLanguage(input []byte) *lang {
 	case has("#include") && (has("std::") || has("template<") || has("template <") ||
 		has("namespace ") || has("::") || has("public:") || has("private:")):
 		return &lang{name: "cpp", language: cpp.GetLanguage(), braceBody: true}
-	case has("#include"):
+	case has("#include") || (has("static inline ") && has("{") && has(";")) ||
+		((has("#ifndef ") || has("#ifdef ")) && has("#define ") && has("struct ") && has(";")):
 		// C++ (with its stronger signals) is already handled above; any remaining
-		// #include payload is treated as C.
+		// #include / C-header payload is treated as C.
 		return &lang{name: "c", language: c.GetLanguage(), braceBody: true}
 	case has("function ") || has("=>") || has("const ") || has("let ") || has("interface ") || has("class "):
 		// The TypeScript grammar is a superset of JavaScript, so it parses both.

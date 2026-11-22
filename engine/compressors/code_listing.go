@@ -105,8 +105,14 @@ func splitLineNumberGutter(line []byte) (number int, rest []byte, ok bool) {
 	switch {
 	case i < len(line) && line[i] == '\t':
 		return value, line[i+1:], true
+	case i+2 < len(line) && line[i] == 0xe2 && line[i+1] == 0x86 && line[i+2] == 0x92:
+		// Claude Code Read tool gutter: `<spaces><digits>→<code>` (U+2192).
+		return value, line[i+3:], true
 	case i+2 < len(line) && line[i] == ' ' && line[i+1] == '|' && line[i+2] == ' ':
 		return value, line[i+3:], true
+	case i+1 < len(line) && line[i] == '|' && line[i+1] == ' ':
+		// OpenCode Read tool gutter: `00001| <code>`.
+		return value, line[i+2:], true
 	case i+1 < len(line) && line[i] == ':' && line[i+1] == ' ':
 		return value, line[i+2:], true
 	case i == len(line):
