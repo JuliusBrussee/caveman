@@ -132,6 +132,16 @@
         "default": "./dist/mcp.js"
       }
     },
+    "./codemode": {
+      "import": {
+        "types": "./dist/codemode.d.ts",
+        "default": "./dist/codemode.js"
+      },
+      "default": {
+        "types": "./dist/codemode.d.cts",
+        "default": "./dist/codemode.js"
+      }
+    },
     "./compatibility": {
       "workerd": "./dist/edge.js",
       "edge-light": "./dist/edge.js",

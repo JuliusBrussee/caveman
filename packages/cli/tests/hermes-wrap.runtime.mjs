@@ -40,6 +40,8 @@ const keyNames = [
 process.stdout.write(JSON.stringify({
   argv: process.argv.slice(2),
   customBaseUrl: process.env.CUSTOM_BASE_URL || "",
+  openaiBaseUrl: process.env.OPENAI_BASE_URL || "",
+  openaiApiBase: process.env.OPENAI_API_BASE || "",
   hasCustomApiKey: Object.prototype.hasOwnProperty.call(process.env, "CUSTOM_API_KEY"),
   customApiKey: process.env.CUSTOM_API_KEY || "",
   apiKeyVars: Object.fromEntries(keyNames.filter((key) => Object.prototype.hasOwnProperty.call(process.env, key)).map((key) => [key, process.env[key]]))
@@ -208,4 +210,24 @@ writeFileSync(${JSON.stringify(modeFile)}, JSON.stringify({ mode: process.env.CA
   assert.equal(out.code, 0, out.stderr);
   assert.ok(existsSync(modeFile), "pixel shortcut must invoke proxy startup");
   assert.equal(JSON.parse(readFileSync(modeFile, "utf8")).mode, "pixel");
+});
+
+test("wrap hermes gives OPENAI_BASE_URL /v1 suffix and omits --provider custom on subcommands/--help", async () => {
+  const binDir = hermesStubDir();
+  const home = mkdtempSync(join(tmpdir(), "cave-hermes-subcmd-"));
+  const env = hermesEnv(binDir, home, "http://127.0.0.1:18805", { OPENAI_API_KEY: "sk-local" });
+
+  const chat = await runCli(["wrap", "hermes", "-z", "hi"], env);
+  assert.equal(chat.code, 0, chat.stderr);
+  const seenChat = JSON.parse(chat.stdout);
+  assert.equal(seenChat.openaiBaseUrl, "http://127.0.0.1:18805/w/hermes/v1");
+  assert.equal(seenChat.openaiApiBase, "http://127.0.0.1:18805/w/hermes/v1");
+
+  const status = await runCli(["wrap", "hermes", "status"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.deepEqual(JSON.parse(status.stdout).argv, ["status"]);
+
+  const help = await runCli(["hermes", "--help"], env);
+  assert.equal(help.code, 0, help.stderr);
+  assert.deepEqual(JSON.parse(help.stdout).argv, ["--help"]);
 });

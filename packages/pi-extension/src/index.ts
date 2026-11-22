@@ -15,7 +15,7 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { HookBridge, promptDigest, taskContinuation, taskTerms, taskType } from "./lifecycle.ts";
 import { MAX_CONTEXT_BYTES, additionalContextOf, isLoopbackUrl } from "./protocol.ts";
 import { ProviderRouter } from "./provider.ts";
-import { RecoveryClient } from "./recovery.ts";
+import { CodemodeClient, RecoveryClient } from "./recovery.ts";
 import { shrinkToolResult } from "./tool-output.ts";
 
 const HEALTH_TIMEOUT_MS = 750;
@@ -112,6 +112,8 @@ async function readLiveRunState(gateway: string): Promise<RunState | undefined> 
 export default function (pi: ExtensionAPI) {
   const bridge = new HookBridge();
   const recovery = new RecoveryClient();
+  const codemodeEnabled = process.env.CAVEMAN_PI_CODEMODE === "1";
+  const codemode = codemodeEnabled ? new CodemodeClient() : undefined;
   let router: ProviderRouter | undefined;
   let sessionId = "default";
   let coreContext: string | undefined;
@@ -174,6 +176,63 @@ export default function (pi: ExtensionAPI) {
       return { content: [{ type: "text", text: result.text }], details: { recovery_handle: params.recovery_handle } };
     },
   });
+
+  if (codemode) {
+    // Native opt-in Code-Mode tools (only registered when CAVEMAN_PI_CODEMODE=1;
+    // zero extra tools or processes for normal Pi sessions). Lazy child boot on
+    // first call preserves Pi's synchronous factory rule.
+    pi.registerTool({
+      name: "codemode_search_tools",
+      label: "Search Code-Mode MCP tools",
+      description: "Search connected MCP & built-in repo/pr/browse tools by keyword and return compact typed signatures plus read/write access tags.",
+      parameters: Type.Object({
+        query: Type.String({ description: "Keywords describing the action or resource." }),
+        server: Type.Optional(Type.String({ description: "Optional MCP server filter." })),
+        limit: Type.Optional(Type.Number({ description: "Max tools to return (default 8, max 25)." })),
+      }),
+      async execute(_toolCallId, params, signal) {
+        const result = await codemode.callTool("codemode_search_tools", params as Record<string, unknown>, signal);
+        if (result.isError) throw new Error(result.text || "codemode_search_tools failed");
+        return { content: [{ type: "text", text: result.text }], details: { tool: "codemode_search_tools" } };
+      },
+    });
+    pi.registerTool({
+      name: "codemode_execute",
+      label: "Run read-only Code-Mode pipeline",
+      description: "Run a read-only multi-step sandboxed MCP pipeline (`steps`) or embedded QuickJS async JS snippet (`code`) in one turn. Large raw payloads are archived in CCR.",
+      parameters: Type.Object({
+        steps: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()), { description: "Ordered read-only pipeline steps." })),
+        code: Type.Optional(Type.String({ description: "Embedded QuickJS async JS body using `await mcp.server.tool(args)`." })),
+        return_step: Type.Optional(Type.String({ description: "Step id to return in steps mode." })),
+        max_output_chars: Type.Optional(Type.Number({ description: "Optional max output chars before engine compression." })),
+        timeout_ms: Type.Optional(Type.Number({ description: "Optional timeout ms for code mode." })),
+      }),
+      async execute(_toolCallId, params, signal) {
+        const result = await codemode.callTool("codemode_execute", params as Record<string, unknown>, signal);
+        if (result.isError) throw new Error(result.text || "codemode_execute failed");
+        return { content: [{ type: "text", text: result.text }], details: { tool: "codemode_execute" } };
+      },
+    });
+    pi.registerTool({
+      name: "codemode_mutate",
+      label: "Run write-capable Code-Mode call",
+      description: "Execute state-changing MCP tool call(s) via single `tool`+`args`, `steps`, or `code`.",
+      parameters: Type.Object({
+        tool: Type.Optional(Type.String({ description: "Single tool formatted as `server.tool_name`." })),
+        args: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Arguments for single-tool mode." })),
+        steps: Type.Optional(Type.Array(Type.Record(Type.String(), Type.Unknown()), { description: "Optional multi-step pipeline with writes permitted." })),
+        code: Type.Optional(Type.String({ description: "Optional embedded QuickJS async JS body with writes permitted." })),
+        return_step: Type.Optional(Type.String({ description: "Step id to return in steps mode." })),
+        max_output_chars: Type.Optional(Type.Number({ description: "Optional max output chars." })),
+        timeout_ms: Type.Optional(Type.Number({ description: "Optional timeout ms for code mode." })),
+      }),
+      async execute(_toolCallId, params, signal) {
+        const result = await codemode.callTool("codemode_mutate", params as Record<string, unknown>, signal);
+        if (result.isError) throw new Error(result.text || "codemode_mutate failed");
+        return { content: [{ type: "text", text: result.text }], details: { tool: "codemode_mutate" } };
+      },
+    });
+  }
 
   pi.on("session_start", GUARD_session_start(async (_event: unknown, ctx: ExtensionContext) => {
     router ??= new ProviderRouter(pi, (message, kind) => notify(ctx, message, kind));
@@ -318,8 +377,11 @@ export default function (pi: ExtensionAPI) {
     }
   };
 
+  const isCodeModeTool = (name: string): boolean =>
+    name === "codemode_execute" || name === "codemode_mutate" || name === "codemode_search_tools";
+
   pi.on("tool_result", GUARD_tool_result((event: Parameters<typeof shrinkToolResult>[2], ctx: ExtensionContext) =>
-    event.toolName === RECOVERY_TOOL || !recoveryCallable() ? undefined : shrinkToolResult(bridge, sessionId, event, recovery, () => {
+    event.toolName === RECOVERY_TOOL || isCodeModeTool(event.toolName) || !recoveryCallable() ? undefined : shrinkToolResult(bridge, sessionId, event, recovery, () => {
       // The runtime answered SessionStart and then stopped answering, so
       // shrinking has silently stopped for the rest of the session: the user
       // pays full token cost with nothing to show for it (#1287). Say so once.
@@ -344,5 +406,6 @@ export default function (pi: ExtensionAPI) {
     await bridge.call("SessionEnd", { session_id: sessionId });
     await router?.closeGate(ctx);
     recovery.dispose();
+    codemode?.dispose();
   }));
 }

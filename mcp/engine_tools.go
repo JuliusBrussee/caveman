@@ -41,6 +41,7 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 		log = slog.New(slog.NewTextHandler(discard{}, nil))
 	}
 	accounting := &compressionSession{}
+	roAnnot := map[string]any{"readOnlyHint": true, "destructiveHint": false, "idempotentHint": true, "openWorldHint": false}
 	return []Tool{
 		{
 			Name:        ToolCompress,
@@ -50,7 +51,8 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 				"content_type": StringProp("Optional engine content type, e.g. json or toon."),
 				"type":         StringProp("Alias for content_type."),
 			}, "input"),
-			Handler: func(args json.RawMessage) ToolResult { return compressTool(eng, accounting, log, args) },
+			Annotations: roAnnot,
+			Handler:     func(args json.RawMessage) ToolResult { return compressTool(eng, accounting, log, args) },
 		},
 		{
 			Name:        ToolRetrieve,
@@ -60,6 +62,7 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 				"query":           StringProp("Optional broad query covering related details. Omit for the byte-exact full original."),
 				"verify_only":     map[string]any{"type": "boolean", "description": "Check exact-original availability and return its byte length and SHA-256 without consuming a recovery delivery. Ignores query."},
 			}, "recovery_handle"),
+			Annotations: roAnnot,
 			// Recovery returns the exact original bytes: exempt from the
 			// result-size cap so a >cap original (the shared gateway store has no
 			// matching ceiling) stays recoverable rather than failing closed on
@@ -71,6 +74,7 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 			Name:        ToolStats,
 			Description: "Report compression calls handled by this MCP server process: tokens before/after, request count including repeated inputs and pass-throughs, and an inferred ratio. Excludes other processes and earlier sessions. Local-only; never a verified figure.",
 			InputSchema: ObjectSchema(map[string]any{}),
+			Annotations: roAnnot,
 			Handler:     func(json.RawMessage) ToolResult { return statsTool(accounting) },
 		},
 		{
@@ -79,7 +83,8 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 			InputSchema: ObjectSchema(map[string]any{
 				"input": StringProp("The JSON to re-encode as TOON."),
 			}, "input"),
-			Handler: func(args json.RawMessage) ToolResult { return toonEncodeTool(eng, log, args) },
+			Annotations: roAnnot,
+			Handler:     func(args json.RawMessage) ToolResult { return toonEncodeTool(eng, log, args) },
 		},
 		{
 			Name:        ToolToonDecode,
@@ -87,7 +92,8 @@ func EngineTools(eng Engine, log *slog.Logger) []Tool {
 			InputSchema: ObjectSchema(map[string]any{
 				"input": StringProp("The TOON to decode back into JSON."),
 			}, "input"),
-			Handler: func(args json.RawMessage) ToolResult { return toonDecodeTool(eng, args) },
+			Annotations: roAnnot,
+			Handler:     func(args json.RawMessage) ToolResult { return toonDecodeTool(eng, args) },
 		},
 	}
 }

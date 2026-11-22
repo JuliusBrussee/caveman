@@ -116,7 +116,7 @@ export function verifiedProviderRoute(
 // preserving them in an overlay alone does not make the proxy forward them.
 const COPIED_HEADERS = ["content-type", "content-encoding", "accept", "accept-encoding", "idempotency-key", "openai-organization", "openai-project", "session_id", "x-session-id", "x-client-request-id", "x-session-affinity", "anthropic-version", "anthropic-beta", "api-version", "user-agent"];
 const COMPAT_HEADERS: Readonly<Record<string, readonly string[]>> = {
-  openrouter: ["http-referer", "x-openrouter-title", "x-openrouter-categories"],
+  openrouter: ["http-referer", "x-title", "x-openrouter-title", "x-openrouter-categories"],
   nvidia: ["x-billing-invoke-origin"],
   opencode: ["x-opencode-session", "x-opencode-client", "x-opencode-project", "x-opencode-request"],
   "opencode-go": ["x-opencode-session", "x-opencode-client", "x-opencode-project", "x-opencode-request"],
