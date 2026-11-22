@@ -32,15 +32,17 @@ function hermesFixture(config) {
 
 test("Hermes plugin membership uses exact enabled and disabled lists", async () => {
   const disabledConfigs = [
-    "plugins:\n  enabled: []\n  disabled:\n    - caveman_shrink\n",
+    "plugins:\n  \"enabled\": []\n  \"disabled\": [\"caveman_\\x73hrink\"]\n",
     "plugins:\n  enabled:\n    - caveman_shrink\n  disabled:\n    - \"caveman_shrink\"\n",
     "plugins:\n  enabled: [caveman_shrink]\n  disabled: [\"caveman_shrink\"]\n",
+    "plugins:\n  enabled: []\n  disabled:\n    - caveman_shrink\n",
+    "plugins:\n  'disabled':\n    - 'caveman_shrink'\n",
   ];
   for (const config of disabledConfigs) {
     const fx = hermesFixture(config);
     try {
       const result = await runCli(["tools", "hooks", "install", "hermes"], { env: fx.fixture.env });
-      assert(result.code === 1, result.stderr);
+      assert.equal(result.code, 1, result.stderr);
       assert.match(result.stderr, /explicitly disables caveman_shrink/);
       assert.doesNotMatch(result.stderr, /✓ Hermes Agent:/);
       assert.equal(existsSync(fx.markerPath), false);
@@ -49,6 +51,71 @@ test("Hermes plugin membership uses exact enabled and disabled lists", async () 
     } finally {
       fx.fixture.cleanup();
     }
+  }
+
+  const unsupportedEscapeConfig = "plugins:\n  enabled: []\n  \"disabled\": [\"caveman_\\q\"]\n";
+  const unsupportedEscape = hermesFixture(unsupportedEscapeConfig);
+  try {
+    const result = await runCli(["tools", "hooks", "install", "hermes"], { env: unsupportedEscape.fixture.env });
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /unsupported plugins\.enabled or plugins\.disabled YAML form/);
+    assert.equal(readFileSync(unsupportedEscape.configPath, "utf8"), unsupportedEscapeConfig);
+    assert.equal(existsSync(unsupportedEscape.markerPath), false);
+    assert.equal(existsSync(unsupportedEscape.pluginDir), false);
+  } finally {
+    unsupportedEscape.fixture.cleanup();
+  }
+
+  const unsupportedKeyEscapeConfig = "plugins:\n  enabled: []\n  \"dis\\u0061bled\": [caveman_shrink]\n";
+  const unsupportedKeyEscape = hermesFixture(unsupportedKeyEscapeConfig);
+  try {
+    const result = await runCli(["tools", "hooks", "install", "hermes"], { env: unsupportedKeyEscape.fixture.env });
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /unsupported plugins\.enabled or plugins\.disabled YAML form/);
+    assert.equal(readFileSync(unsupportedKeyEscape.configPath, "utf8"), unsupportedKeyEscapeConfig);
+    assert.equal(existsSync(unsupportedKeyEscape.markerPath), false);
+    assert.equal(existsSync(unsupportedKeyEscape.pluginDir), false);
+  } finally {
+    unsupportedKeyEscape.fixture.cleanup();
+  }
+
+  const malformedDisabledListConfig = "plugins:\n  enabled:\n    - caveman_shrink\n  disabled: [foreign_plugin\n";
+  const malformedDisabledList = hermesFixture(malformedDisabledListConfig);
+  try {
+    const result = await runCli(["tools", "hooks", "install", "hermes"], { env: malformedDisabledList.fixture.env });
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /unsupported plugins\.enabled or plugins\.disabled YAML form/);
+    assert.equal(readFileSync(malformedDisabledList.configPath, "utf8"), malformedDisabledListConfig);
+    assert.equal(existsSync(malformedDisabledList.markerPath), false);
+    assert.equal(existsSync(malformedDisabledList.pluginDir), false);
+  } finally {
+    malformedDisabledList.fixture.cleanup();
+  }
+
+  const unmatchedFlowDelimiterConfig = "plugins:\n  enabled:\n    - caveman_shrink\n  disabled: [foreign_plugin}]\n";
+  const unmatchedFlowDelimiter = hermesFixture(unmatchedFlowDelimiterConfig);
+  try {
+    const result = await runCli(["tools", "hooks", "install", "hermes"], { env: unmatchedFlowDelimiter.fixture.env });
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /unsupported plugins\.enabled or plugins\.disabled YAML form/);
+    assert.equal(readFileSync(unmatchedFlowDelimiter.configPath, "utf8"), unmatchedFlowDelimiterConfig);
+    assert.equal(existsSync(unmatchedFlowDelimiter.markerPath), false);
+    assert.equal(existsSync(unmatchedFlowDelimiter.pluginDir), false);
+  } finally {
+    unmatchedFlowDelimiter.fixture.cleanup();
+  }
+
+  const duplicateDisabledListConfig = "plugins:\n  enabled: []\n  disabled: []\n  'disabled':\n    - caveman_shrink\n";
+  const duplicateDisabledList = hermesFixture(duplicateDisabledListConfig);
+  try {
+    const result = await runCli(["tools", "hooks", "install", "hermes"], { env: duplicateDisabledList.fixture.env });
+    assert.equal(result.code, 1, result.stderr);
+    assert.match(result.stderr, /unsupported plugins\.enabled or plugins\.disabled YAML form/);
+    assert.equal(readFileSync(duplicateDisabledList.configPath, "utf8"), duplicateDisabledListConfig);
+    assert.equal(existsSync(duplicateDisabledList.markerPath), false);
+    assert.equal(existsSync(duplicateDisabledList.pluginDir), false);
+  } finally {
+    duplicateDisabledList.fixture.cleanup();
   }
 
   const wrongFieldConfig = "plugins:\n  enabled:\nother:\n  - caveman_shrink\n";
@@ -97,8 +164,7 @@ test("Hermes plugin membership uses exact enabled and disabled lists", async () 
     "plugins:",
     "  enabled:",
     "    - keep_plugin",
-    "  disabled:",
-    "    - caveman_native",
+    "  \"disabled\": [\"caveman_\\x6eative\"]",
     "",
   ].join("\n"));
   const originalNativeConfig = readFileSync(native.configPath, "utf8");
