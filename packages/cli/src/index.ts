@@ -5926,18 +5926,26 @@ function printSessionSavings(kind: "observe" | "compress", sinceISO: string, age
 // config/env or --off selects record mode. Known agents (claude, codex, …) are launchable by short id
 // and get detected; any other command still runs verbatim.
 async function codemodeCmd(rest: string[]) {
-  const mcp = resolveMcpCommand();
+  const probed = probeMcpBinary();
+  if (!probed) {
+    console.error("caveman codemode: caveman-mcp binary not found. Run `caveman setup --install` first.");
+    process.exit(1);
+  }
+  if (!probed.probe.current || !probed.probe.capabilities.includes("codemode")) {
+    console.error(`caveman codemode: caveman-mcp (${probed.probe.version || "unknown"}) lacks Code Mode support. Run \`caveman setup --install\` to upgrade.`);
+    process.exit(1);
+  }
   const toolsOnlyIdx = rest.indexOf("--tools-only");
   const subArgs = toolsOnlyIdx >= 0
     ? ["tools", ...rest.filter((_, idx) => idx !== toolsOnlyIdx)]
     : ["codemode", ...rest];
-  const invocation = portableInvocation(mcp.command, [...mcp.args, ...subArgs]);
+  const invocation = portableInvocation(probed.binary, subArgs);
   const res = spawnSync(invocation.command, invocation.args, {
     stdio: "inherit",
     windowsHide: true,
   });
   if (res.error) {
-    console.error(`caveman codemode: failed to run ${mcp.command}: ${res.error.message}`);
+    console.error(`caveman codemode: failed to run ${probed.binary}: ${res.error.message}`);
     process.exit(127);
   }
   process.exitCode = res.status ?? (res.signal ? signalExitCode(res.signal) : 1);
@@ -6829,15 +6837,7 @@ async function spawnWrapped(
         process.stderr.write(`${mark("warn")} caveman-mcp (${ephemeralMcp.probe.version}) lacks Code Mode support; run \`caveman setup --install\` — launching without --codemode\n`);
       }
     } else {
-      const npx = which("npx");
-      if (npx) {
-        // Carry the full npx launch spec (`-y caveman-mcp`) into overlays so
-        // the server actually starts, but do NOT assert proxy-wide MCP recovery
-        // for an unverified npx launch — recovery must be proven in band.
-        codemodeLaunch = mcpServerLaunch(npx, ["-y", "caveman-mcp"]);
-      } else {
-        process.stderr.write(`${mark("warn")} caveman-mcp not found; run \`caveman setup --install\` — launching without --codemode\n`);
-      }
+      process.stderr.write(`${mark("warn")} caveman-mcp not found; run \`caveman setup --install\` — launching without --codemode\n`);
     }
   }
   const codemodeEnabled = Boolean(codemodeRequested && codemodeLaunch);

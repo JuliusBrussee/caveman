@@ -348,7 +348,14 @@ test("caveman codemode forwards arguments to caveman-mcp codemode", async () => 
   const isolated = isolatedCliEnv();
   const stubPath = join(isolated.home, "stub-caveman-mcp.sh");
   try {
-    writeFileSync(stubPath, `#!/bin/sh\necho "ARGS:$*"\n`, { mode: 0o755 });
+    writeFileSync(
+      stubPath,
+      `#!/bin/sh
+if [ "$1" = "version" ]; then printf '%s\\n' '{"version":"0.5.0","capabilities":["mcp_recovery","codemode"]}'; exit 0; fi
+echo "ARGS:$*"
+`,
+      { mode: 0o755 },
+    );
     chmodSync(stubPath, 0o755);
     const out = await runCli(["codemode", "--no-builtins", "--workspace", "/tmp/demo"], {
       env: { ...isolated.env, CAVEMAN_MCP_BIN: stubPath },
@@ -367,7 +374,7 @@ test("caveman codemode forwards arguments to caveman-mcp codemode", async () => 
   }
 });
 
-test("caveman wrap --codemode preserves npx prefix args and refuses stale caveman-mcp without codemode capability", async () => {
+test("caveman codemode and wrap --codemode require a native caveman-mcp with codemode capability", async () => {
   if (process.platform === "win32") return;
   const isolated = isolatedCliEnv();
   const binDir = join(isolated.home, "bin");
@@ -376,6 +383,7 @@ test("caveman wrap --codemode preserves npx prefix args and refuses stale cavema
   const claudeStub = join(binDir, "claude");
   const npxStub = join(binDir, "npx");
   const staleMcpStub = join(binDir, "stale-caveman-mcp");
+  const currentMcpStub = join(binDir, "current-caveman-mcp");
   try {
     writeFileSync(
       claudeStub,
@@ -396,6 +404,11 @@ if [ -n "$mcp_cfg" ] && [ -f "$mcp_cfg" ]; then cp "$mcp_cfg" "${agentOut}"; els
       `#!/bin/sh\nif [ "$1" = "version" ]; then printf '%s\\n' '{"version":"0.4.0","capabilities":["mcp_recovery"]}'; exit 0; fi\nexit 2\n`,
       { mode: 0o755 },
     );
+    writeFileSync(
+      currentMcpStub,
+      `#!/bin/sh\nif [ "$1" = "version" ]; then printf '%s\\n' '{"version":"0.5.0","capabilities":["mcp_recovery","codemode"]}'; exit 0; fi\nexit 0\n`,
+      { mode: 0o755 },
+    );
 
     // Configure proxy=false in CAVEMAN_HOME so this test exercises the wrapped
     // Claude overlay directly without spawning a local proxy listener.
@@ -406,9 +419,15 @@ if [ -n "$mcp_cfg" ] && [ -f "$mcp_cfg" ]; then cp "$mcp_cfg" "${agentOut}"; els
       JSON.stringify({ wrap: { proxy: false } }, null, 2),
     );
 
-    // 1. Only npx available (no caveman-mcp on PATH): Claude overlay must carry `-y caveman-mcp codemode ...`
-    //    (not `npx codemode ...`).
-    const npxRes = await runCli(["wrap", "--codemode", "claude"], {
+    // 1. Empty Caveman home with only npx available (no native caveman-mcp):
+    //    must NOT fall back to the unscoped `npx -y caveman-mcp` npm placeholder.
+    const missingCmd = await runCli(["codemode"], {
+      env: { ...isolated.env, PATH: `${binDir}:/usr/bin:/bin`, CAVEMAN_MCP_BIN: "" },
+    });
+    assert.notEqual(missingCmd.code, 0);
+    assert.match(missingCmd.stderr, /caveman setup --install/);
+
+    const missingWrap = await runCli(["wrap", "--codemode", "claude"], {
       env: {
         ...isolated.env,
         PATH: `${binDir}:/usr/bin:/bin`,
@@ -416,14 +435,17 @@ if [ -n "$mcp_cfg" ] && [ -f "$mcp_cfg" ]; then cp "$mcp_cfg" "${agentOut}"; els
         CAVE_GATEWAY_URL: "http://127.0.0.1:18802",
       },
     });
-    assert.equal(npxRes.code, 0, npxRes.stderr);
-    const npxCfg = JSON.parse(readFileSync(agentOut, "utf8"));
-    const cm = npxCfg.mcpServers?.["caveman-codemode"];
-    assert.ok(cm, `expected caveman-codemode in .mcp.json: ${JSON.stringify(npxCfg)}`);
-    assert.ok(cm.command.endsWith("/npx") || cm.command === "npx", `expected npx command, got ${cm.command}`);
-    assert.deepEqual(cm.args.slice(0, 3), ["-y", "caveman-mcp", "codemode"], `npx prefix args dropped: ${JSON.stringify(cm.args)}`);
+    assert.equal(missingWrap.code, 0, missingWrap.stderr);
+    assert.match(missingWrap.stderr, /caveman-mcp not found.*caveman setup --install/);
+    assert.equal(readFileSync(agentOut, "utf8"), "NO_CODEMODE_MCP");
 
-    // 2. Stale local caveman-mcp lacking "codemode" capability must NOT register broken codemode overlay.
+    // 2. Stale local caveman-mcp lacking "codemode" capability must fail clearly on both entry points.
+    const staleCmd = await runCli(["codemode"], {
+      env: { ...isolated.env, PATH: `${binDir}:/usr/bin:/bin`, CAVEMAN_MCP_BIN: staleMcpStub },
+    });
+    assert.notEqual(staleCmd.code, 0);
+    assert.match(staleCmd.stderr, /lacks Code Mode support/);
+
     const staleRes = await runCli(["wrap", "--codemode", "claude"], {
       env: {
         ...isolated.env,
@@ -435,6 +457,22 @@ if [ -n "$mcp_cfg" ] && [ -f "$mcp_cfg" ]; then cp "$mcp_cfg" "${agentOut}"; els
     assert.equal(staleRes.code, 0, staleRes.stderr);
     assert.match(staleRes.stderr, /lacks Code Mode support/);
     assert.equal(readFileSync(agentOut, "utf8"), "NO_CODEMODE_MCP");
+
+    // 3. Current native caveman-mcp advertising "codemode" registers the overlay cleanly.
+    const okRes = await runCli(["wrap", "--codemode", "claude"], {
+      env: {
+        ...isolated.env,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CAVEMAN_MCP_BIN: currentMcpStub,
+        CAVE_GATEWAY_URL: "http://127.0.0.1:18802",
+      },
+    });
+    assert.equal(okRes.code, 0, okRes.stderr);
+    const okCfg = JSON.parse(readFileSync(agentOut, "utf8"));
+    const cm = okCfg.mcpServers?.["caveman-codemode"];
+    assert.ok(cm, `expected caveman-codemode in .mcp.json: ${JSON.stringify(okCfg)}`);
+    assert.equal(cm.command, currentMcpStub);
+    assert.equal(cm.args[0], "codemode");
   } finally {
     isolated.cleanup();
   }
