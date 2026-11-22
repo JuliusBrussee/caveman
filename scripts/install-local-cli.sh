@@ -3,7 +3,7 @@ set -euo pipefail
 
 # install-local-cli.sh — one command from a fresh clone to a working
 # `caveman claude`:
-#   1. builds the CLI if dist/ is missing (pnpm)
+#   1. builds the CLI if dist/ is missing (Bun)
 #   2. writes the .local-bin/cave shim and links it as BOTH `cave` and `caveman`
 #      (not bin/: the plugin root is the repo root, and a top-level bin/ in a
 #      checkout added as a local marketplace lands on PATH — #1035)
@@ -30,11 +30,11 @@ else
 fi
 
 if [[ ! -f "$cli_dir/dist/index.js" ]]; then
-  if command -v pnpm >/dev/null 2>&1; then
+  if command -v bun >/dev/null 2>&1; then
     echo "→ building the CLI ($cli_dir)"
-    (cd "$cli_dir" && pnpm install --silent && pnpm build)
+    (cd "$cli_dir" && bun install --silent && bun run build)
   else
-    echo "✗ $cli_dir/dist/index.js missing and pnpm not found — install pnpm and re-run" >&2
+    echo "✗ $cli_dir/dist/index.js missing and Bun not found — install Bun and re-run" >&2
     exit 1
   fi
 fi

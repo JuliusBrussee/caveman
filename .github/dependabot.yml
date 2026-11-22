@@ -37,11 +37,44 @@ updates:
       docker:
         patterns: ["*"]
 
-  # pnpm workspace at the root, plus the packages that release from their own
-  # npm lockfile.
+  # Bun workspace and separately released npm packages.
+  - package-ecosystem: bun
+    directory: /
+    schedule:
+      interval: weekly
+    commit-message:
+      prefix: "chore(deps)"
+
+    # The middleware's framework pins are its tested versions and must move
+    # together with its compatibility table; the nightly middleware-canary
+    # workflow reports new framework releases instead.
+    ignore:
+      - dependency-name: "ai"
+      - dependency-name: "@ai-sdk/*"
+      - dependency-name: "openai"
+      - dependency-name: "@anthropic-ai/sdk"
+      - dependency-name: "@google/genai"
+      - dependency-name: "langchain"
+      - dependency-name: "@langchain/*"
+      - dependency-name: "@strands-agents/sdk"
+      - dependency-name: "@mastra/core"
+      - dependency-name: "@modelcontextprotocol/sdk"
+      # TypeScript 7 drops the JS compiler API that sdk/typescript's
+      # cjs-types.mjs builds with, and @types/node majors type runtimes newer
+      # than the engines floor (>=22). Both are deliberate migrations.
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/node"
+        update-types: ["version-update:semver-major"]
+      # The Pi pin moves by hand: provider-compat.runtime.mjs is a tripwire
+      # that needs a compat review of the nested pi-ai on every bump.
+      - dependency-name: "@earendil-works/pi-coding-agent"
+    groups:
+      bun:
+        patterns: ["*"]
+
   - package-ecosystem: npm
     directories:
-      - /
       - /extension
       - /packages/sdk/typescript
       - /packages/pi-extension

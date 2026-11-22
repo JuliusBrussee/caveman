@@ -9,27 +9,27 @@ import { build } from 'esbuild';
 const root = fileURLToPath(new URL('../', import.meta.url));
 const { packageManager } = JSON.parse(await readFile(new URL('../../../../package.json', import.meta.url), 'utf8'));
 const sdkMetadata = JSON.parse(await readFile(new URL('../../../sdk/typescript/package.json', import.meta.url), 'utf8'));
-const pnpmCLI = process.env.npm_execpath;
-if (!pnpmCLI || !/^pnpm\.(c?js)$/.test(basename(pnpmCLI))) {
-  throw new Error('Run this consumer gate with pnpm run test:consumer so the pinned package-manager CLI is available.');
+const bunCLI = process.env.npm_execpath;
+if (!bunCLI || !/^bun(?:\.exe)?$/i.test(basename(bunCLI))) {
+  throw new Error('Run this consumer gate with bun run test:consumer so the pinned package-manager CLI is available.');
 }
 const directory = await mkdtemp(join(tmpdir(), 'caveman-middleware-consumer-'));
 const run = (command, args, cwd = directory) => execFileSync(command, args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
-const pnpm = (args, cwd) => run(process.execPath, [pnpmCLI, ...args], cwd);
+const bun = (args, cwd) => run(bunCLI, args, cwd);
 try {
   const sdk = join(directory, 'sdk.tgz'), middleware = join(directory, 'middleware.tgz');
-  pnpm(['pack', '--out', sdk], fileURLToPath(new URL('../../../sdk/typescript/', import.meta.url)));
-  pnpm(['pack', '--out', middleware], root);
+  bun(['pm', 'pack', '--filename', sdk], fileURLToPath(new URL('../../../sdk/typescript/', import.meta.url)));
+  bun(['pm', 'pack', '--filename', middleware], root);
   const consumer = join(directory, 'app'); await mkdir(consumer);
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module', packageManager, dependencies: {
     '@caveman-ai/sdk': `file:${sdk}`, '@caveman-ai/middleware': `file:${middleware}`, ai: '7.0.94', '@ai-sdk/provider': '4.0.11', zod: '4.4.3',
     // @langchain/core without `langchain`: the model-only subpath must work alone.
     '@langchain/core': '1.2.9', typescript: '5.9.3',
   // The middleware's own ^SDK range must resolve to this tarball too, not an older registry release.
-  }, pnpm: { overrides: { '@caveman-ai/sdk': `file:${sdk}` } } }));
+  }, overrides: { '@caveman-ai/sdk': `file:${sdk}` } }));
   // A clean registry install proves consumer resolution independently of the
   // workspace. --offline is available only when all registry metadata is cached.
-  pnpm(['install', '--no-frozen-lockfile', ...(process.argv.includes('--offline') ? ['--offline'] : []), '--ignore-scripts', '--config.auto-install-peers=false'], consumer);
+  bun(['install', '--omit=peer', '--ignore-scripts', ...(process.argv.includes('--offline') ? ['--offline'] : [])], consumer);
   const metadata = JSON.parse(await readFile(join(consumer, 'node_modules/@caveman-ai/middleware/package.json'), 'utf8'));
   assert.equal(metadata.dependencies['@caveman-ai/sdk'], `^${sdkMetadata.version}`, 'packed dependency must not retain workspace protocol');
   // Decision 2: ranged peers make npm install fail with ERESOLVE; unranged optional ones only declare the imports (Yarn PnP).

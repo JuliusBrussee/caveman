@@ -20,7 +20,7 @@ the byte-exact original AX payload through CCR. Every saving is `inferred`, neve
 ## Build and test (from the repo root)
 - `go build ./browse/cmd/caveman-browse` and `go test ./browse/...` (no browser needed).
 - `CAVEMAN_BROWSE_CHROME=/path/to/Chrome go test -tags=integration ./browse/...` runs the CDP contract against a real Chrome.
-- `pnpm --filter caveman-browse test` runs the launcher tests.
+- `bun run --filter caveman-browse test` runs the launcher tests.
 
 ## Invariants
 - **The uid map is `browser_snapshot`'s contract.** On engine pass-through (no recovery handle, because the tree did not shrink or there is no store) the tool fails closed with `cave_browser_snapshot_uncompressed` and keeps the prior page's uids. It must never dump the raw AX tree into `uids` or wipe the target cache (issue #140).

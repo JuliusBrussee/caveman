@@ -27,8 +27,8 @@ tests agree.
 TypeScript package:
 
 ```bash
-pnpm --dir packages/sdk/typescript build
-pnpm --dir packages/sdk/typescript test
+bun run --cwd packages/sdk/typescript build
+bun run --cwd packages/sdk/typescript test
 ```
 
 Python package:

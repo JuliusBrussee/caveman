@@ -18,7 +18,7 @@ export const BINARY_SIGNING_PUBKEY = ${JSON.stringify(publicKey)};
 `;
 
 // mcp, shrink, and browse each run this from their own prepack/pretest, and
-// `pnpm -r` runs those in parallel — so several processes rewrite these same
+// `bun run --workspaces` runs those in parallel — so several processes rewrite these same
 // files at once, each writing all four targets rather than just its own. On
 // Windows the loser of that race dies with `EBUSY: resource busy or locked`.
 // Every writer produces identical bytes and the outputs are committed, so the
