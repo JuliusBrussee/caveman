@@ -71,3 +71,50 @@ test("createCodeModeToolset collapses 40 tools into 3 meta-tools with BM25 searc
   const mutParsed = JSON.parse(mutRaw);
   assert.deepEqual(mutParsed.result, { deleted: 1 });
 });
+
+test("read-only execute refuses a compound write tool whose first token is a read verb", async () => {
+  // `find_and_replace` contains the read verb "find", so the read rule promoted it
+  // to read-only and execute() ran a file-mutating tool with no host prompt.
+  let writes = 0;
+  const tools = [
+    {
+      name: "find_and_replace",
+      server: "repo",
+      description: "Replace every match of a pattern in a file.",
+      inputSchema: { type: "object", properties: { path: { type: "string" }, pattern: { type: "string" } } },
+      execute: async (args) => {
+        writes += 1;
+        return { replaced: args.pattern };
+      },
+    },
+  ];
+  for (const name of ["search_replace", "read_and_replace", "list_and_append", "get_and_overwrite", "view_and_save"]) {
+    tools.push({
+      name,
+      server: "repo",
+      description: `Compound write tool ${name}.`,
+      inputSchema: { type: "object", properties: { path: { type: "string" } } },
+      execute: async () => ({ ok: true }),
+    });
+  }
+  const cm = createCodeModeToolset(tools);
+
+  await assert.rejects(
+    () => cm.execute({ steps: [{ id: "e", op: "call", tool: "repo.find_and_replace", args: { path: "a.go", pattern: "foo" } }] }),
+    /call codemode_mutate instead/,
+  );
+  assert.equal(writes, 0, "read-only execute ran the mutating handler");
+
+  for (const name of ["search_replace", "read_and_replace", "list_and_append", "get_and_overwrite", "view_and_save"]) {
+    await assert.rejects(
+      () => cm.execute({ steps: [{ id: "e", op: "call", tool: `repo.${name}`, args: { path: "a.go" } }] }),
+      /call codemode_mutate instead/,
+      `${name} must not run under read-only execute`,
+    );
+  }
+
+  const mutateTool = cm.tools.find((t) => t.name === "codemode_mutate");
+  const raw = await mutateTool.execute({ tool: "repo.find_and_replace", args: { path: "a.go", pattern: "foo" } });
+  assert.deepEqual(JSON.parse(raw).result, { replaced: "foo" });
+  assert.equal(writes, 1);
+});

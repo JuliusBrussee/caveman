@@ -95,12 +95,23 @@ export interface CodeModeToolset {
   toGeminiTools(): Array<{ functionDeclarations: Array<{ name: string; description: string; parametersJsonSchema: Record<string, unknown> }> }>;
 }
 
+// MUTATING_VERBS are the name tokens that mark a tool as state-changing.
+//
+// A verb missing here is not a missing prompt. `isReadOnlyTool` grants the
+// read-only surface to a name that CONTAINS a read verb, so any name shaped
+// `<read verb>_and_<unlisted write verb>` — `find_and_replace`,
+// `search_replace`, `list_and_append` — is promoted to read-only and
+// `execute()` runs it under read-only annotations with no host approval prompt.
+// Every write verb a catalog can spell as an exact token belongs in this list.
 const MUTATING_VERBS = new Set([
   "create", "update", "delete", "remove", "destroy", "drop", "write", "edit",
   "patch", "put", "post", "set", "merge", "close", "reopen", "approve", "cancel",
   "kill", "stop", "start", "launch", "run", "exec", "eval", "act", "click", "type",
   "push", "commit", "send", "respond", "review", "comment", "deploy", "mutate",
   "insert", "upsert", "rename", "archive", "link", "unlink", "schedule", "rerun",
+  "replace", "append", "prepend", "overwrite", "save", "upload", "move", "copy",
+  "clone", "toggle", "enable", "disable", "install", "uninstall", "reset",
+  "restore", "purge", "truncate",
 ]);
 
 const READONLY_VERBS = new Set([
