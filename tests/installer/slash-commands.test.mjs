@@ -128,19 +128,28 @@ test('#571 command .md bodies use $ARGUMENTS, never the TOML {{args}} placeholde
 
 // #603: the init command must not depend on a repo-relative path — installed
 // users run it from their own project, where src/tools/ does not exist.
-test('#603 caveman-init command bodies do not run src/tools blindly', () => {
+//
+// #1525 narrowed HOW that fallback may be supplied, so this test now states the
+// same requirement without naming the mechanism it used to mandate. The old
+// fallback was `curl .../main/src/tools/caveman-init.js | node -`, which runs
+// whatever is on main at call time and so defeated a marketplace entry pinned
+// to a reviewed SHA — the fallback this test asserted was itself the bug. The
+// obligation is unchanged (never leave an installed user pointed at a path that
+// is not there); only remote code execution is no longer an acceptable way to
+// meet it. command-remote-exec.test.mjs guards that half, including the .md's
+// ${CLAUDE_PLUGIN_ROOT} step; this one guards the stranded-user half.
+test('#603/#1525 caveman-init command bodies gate src/tools and name a runnable fallback', () => {
   for (const ext of ['md', 'toml']) {
     const body = fs.readFileSync(path.join(COMMANDS_DIR, `caveman-init.${ext}`), 'utf8');
-    if (body.includes('src/tools/caveman-init.js')) {
-      assert.ok(
-        /raw\.githubusercontent\.com.*caveman-init\.js/.test(body),
-        `commands/caveman-init.${ext} references the repo-relative src/tools path without a standalone fallback (curl | node) — fails for every installed user (issue #603).`,
-      );
-      assert.match(
-        body,
-        /if .*exists|exists in the current repo/i,
-        `commands/caveman-init.${ext} must gate the repo-relative path on the file actually existing (issue #603).`,
-      );
-    }
+    if (!body.includes('src/tools/caveman-init.js')) continue;
+    assert.match(
+      body,
+      /if .*exists|exists in the current repo/i,
+      `commands/caveman-init.${ext} must gate the repo-relative path on the file actually existing (issue #603).`,
+    );
+    assert.ok(
+      /npx -y github:JuliusBrussee\/caveman -- --with-init/.test(body),
+      `commands/caveman-init.${ext} references the repo-relative src/tools path without naming anything a user outside a caveman checkout can run — offer the installed copy, not a branch download (issues #603, #1525).`,
+    );
   }
 });

@@ -10,7 +10,7 @@ const frameworks = {
   // this is the one framework whose bound moves from next-minor to next-major: the zero-major caution it encoded cannot
   // apply to a line that can no longer ship a minor. 1.0.0 and 1.1.0 passed the suite before being claimed here.
   '@anthropic-ai/sdk': { floor: '0.124.0', high: '2', tested: ['0.124.0', '0.125.0', '0.126.0', '0.127.0', '0.128.0', '0.129.0', '0.130.0', '0.131.0', '0.132.0', '0.133.0', '0.134.0', '0.135.0', '0.136.0', '0.137.0', '1.0.0', '1.1.0'], entry: '@anthropic-ai/sdk' },
-  '@google/genai': { floor: '2.21.0', high: '3', tested: ['2.21.0', '2.24.0'], entry: '@google/genai' },
+  '@google/genai': { floor: '2.21.0', high: '4', tested: ['2.21.0', '2.24.0', '3.0.0', '3.3.0'], entry: '@google/genai' },
   langchain: { floor: '1.5.10', high: '2', tested: ['1.5.10', '1.5.12'], entry: 'langchain' },
   '@langchain/core': { floor: '1.2.9', high: '2', tested: ['1.2.9', '1.2.12'], entry: '@langchain/core/messages' },
   '@strands-agents/sdk': { floor: '1.17.0', high: '2', tested: ['1.17.0', '1.19.0'], entry: '@strands-agents/sdk' },

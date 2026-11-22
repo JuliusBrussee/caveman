@@ -4047,6 +4047,11 @@ function isEphemeralPath(path: string): boolean {
   return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
 }
 
+// fnm puts a per-shell link to the active node version on PATH; the link is a
+// temp path that vanishes with its shell (and on reboot). The dir it links to
+// lasts as long as that node version is installed.
+const FNM_MULTISHELL = /[\\/]fnm_multishells[\\/]/i;
+
 function cliIsEphemeral(): boolean {
   return isEphemeralPath(fileURLToPath(import.meta.url));
 }
@@ -4067,8 +4072,12 @@ function durableCavemen(withPrivate = true): string[] {
   const found: string[] = [];
   for (const dir of [...(process.env.PATH ?? "").split(delimiter), ...(withPrivate ? [privateCliBin()] : [])]) {
     if (!dir || isEphemeralPath(dir)) continue;
+    let stableDir = dir;
+    if (FNM_MULTISHELL.test(dir)) {
+      try { stableDir = realpathSync(dir); } catch { continue; }
+    }
     for (const candidate of executableCandidateNames("caveman")) {
-      const full = join(dir, candidate);
+      const full = join(stableDir, candidate);
       if (!isExecutable(full) || found.includes(full)) continue;
       try { if (isEphemeralPath(realpathSync(full))) continue; } catch { continue; }
       found.push(full);
@@ -8132,7 +8141,7 @@ export function nativeHookInvocation(
 // per-shell temp paths that vanish with the shell, so never those.
 function stableNodePath(): string {
   const onPath = which("node");
-  return onPath && !/[\\/]fnm_multishells[\\/]/i.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
+  return onPath && !FNM_MULTISHELL.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
 }
 
 export function hookExecutableInvocation(
@@ -9475,16 +9484,12 @@ import { createHash } from "node:crypto";
 
 const command = ${JSON.stringify(cmd)};
 const prefix = ${JSON.stringify(pre)};
-const contexts = new Map();
-const pending = new Map();
 
 // A host process can serve a project that is not its own launch directory, so
 // the served project travels with every call: in the payload, which
 // nativeRuntimeRequest reads as the session cwd, and as the child's working
 // directory, so anything it resolves relatively resolves there (#1443).
-let projectDir;
-
-function call(event, payload = {}, cwd = projectDir) {
+function call(event, payload = {}, cwd) {
   try {
     const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
       input: JSON.stringify({ event_name: event, ...(cwd ? { cwd } : {}), ...payload }),
@@ -9552,10 +9557,20 @@ function taskContinuation(value) {
   return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
 }
 
+// OpenCode creates one factory per served project. Keep its callbacks and
+// session state together so creating or disposing another project is isolated.
+export const CavemanNative = async (ctx) => {
+const contexts = new Map();
+const pending = new Map();
+const projectDir = typeof ctx?.directory === "string" && ctx.directory
+  ? ctx.directory
+  : undefined;
+const emit = (event, payload = {}) => call(event, payload, projectDir);
+
 function sessionContext(sessionID) {
   if (!sessionID) return undefined;
   if (!contexts.has(sessionID)) {
-    const out = call("SessionStart", { session_id: sessionID, surface: "cli" });
+    const out = emit("SessionStart", { session_id: sessionID, surface: "cli" });
     const context = out?.hookSpecificOutput?.additionalContext;
     if (typeof context === "string" && context) contexts.set(sessionID, context);
   }
@@ -9568,20 +9583,20 @@ const hostHooks = {
     const props = event?.properties ?? {};
     const sessionID = props.sessionID ?? props.info?.id;
     if (type === "session.created") sessionContext(sessionID);
-    if (type === "session.idle") call("Stop", { session_id: sessionID });
+    if (type === "session.idle") emit("Stop", { session_id: sessionID });
     if (type === "session.compacted") {
-      const out = call("PostCompact", { session_id: sessionID });
+      const out = emit("PostCompact", { session_id: sessionID });
       const context = out?.hookSpecificOutput?.additionalContext;
       if (typeof context === "string" && context) contexts.set(sessionID, context);
     }
     if (type === "session.deleted") {
-      call("SessionEnd", { session_id: sessionID });
+      emit("SessionEnd", { session_id: sessionID });
       contexts.delete(sessionID);
       pending.delete(sessionID);
     }
   },
   "chat.message": async (input, output) => {
-    const decision = call("UserPromptSubmit", {
+    const decision = emit("UserPromptSubmit", {
       session_id: input.sessionID,
       model: input.model?.modelID,
       provider: input.model?.providerID,
@@ -9603,7 +9618,7 @@ const hostHooks = {
     }
   },
   "tool.execute.before": async (input, output) => {
-    const decision = call("PreToolUse", {
+    const decision = emit("PreToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: output.args,
@@ -9625,7 +9640,7 @@ const hostHooks = {
     } catch {}
   },
   "tool.execute.after": async (input, output) => {
-    const decision = call("PostToolUse", {
+    const decision = emit("PostToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: input.args,
@@ -9638,22 +9653,17 @@ const hostHooks = {
     }
   },
   "experimental.session.compacting": async (input, output) => {
-    call("PreCompact", { session_id: input.sessionID });
+    emit("PreCompact", { session_id: input.sessionID });
     const stable = sessionContext(input.sessionID);
     if (stable) output.context.push(stable);
   },
   dispose: async () => {
-    for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
+    for (const sessionID of contexts.keys()) emit("SessionEnd", { session_id: sessionID });
     contexts.clear();
     pending.clear();
   },
 };
 
-// OpenCode's V1 plugin context names the served project \`directory\`. A host
-// that supplies none (or a caller that supplies no context at all) leaves
-// projectDir unset and every child inherits this process's cwd, as before.
-export const CavemanNative = async (ctx) => {
-  if (typeof ctx?.directory === "string" && ctx.directory) projectDir = ctx.directory;
   return hostHooks;
 };
 `;
@@ -9753,6 +9763,17 @@ export default {
     // to each child explicitly rather than parked in module scope (#1443).
     const contexts = new Map();
     const pending = new Map();
+    // Which source this host uses to report a completed-model turn boundary.
+    // V2 has no "session.idle" bus event at all — its session-event schema
+    // names 54 session events and none of them is idle — so a V2 host speaks
+    // only through the "experimental.idle" session hook below (#1539). The bus
+    // branch is kept for any 2.x host that does publish one, but the hook is
+    // authoritative: the host triggers it at the point the session WOULD go
+    // idle, before the drain completes, so it always reaches us first for a
+    // given boundary. Once it has spoken, the bus branch stays quiet rather
+    // than counting the same turn twice; double counting inflates the
+    // accounting silently, which is worse than missing a boundary.
+    let idleHookSpoke = false;
     const projectCwd = typeof ctx.location?.directory === "string" && ctx.location.directory
       ? ctx.location.directory
       : undefined;
@@ -9795,7 +9816,7 @@ export default {
       const sessionID = event.data?.sessionID;
       if (typeof sessionID !== "string" || !sessionID) return;
       if (type === "session.created") sessionContext(sessionID);
-      if (type === "session.idle") emit("Stop", { session_id: sessionID });
+      if (type === "session.idle" && !idleHookSpoke) emit("Stop", { session_id: sessionID });
       // "session.compacted" is the V1 event name; V2 reports compaction
       // through "session.compaction.ended". Handle both.
       if (type === "session.compaction.ended" || type === "session.compacted") {
@@ -9821,6 +9842,17 @@ export default {
       });
       const dynamic = decision?.hookSpecificOutput?.additionalContext;
       if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
+    });
+
+    // The host skips this hook for control-only drains such as a manual
+    // compaction, which never ran the model, so every call is a real
+    // completed-model boundary — including the later continuation turns that
+    // follow when a plugin admits input and the drain loop keeps going.
+    await ctx.session.hook("experimental.idle", (event) => {
+      if (typeof event?.sessionID === "string" && event.sessionID) {
+        idleHookSpoke = true;
+        emit("Stop", { session_id: event.sessionID });
+      }
     });
 
     await ctx.session.hook("context", (event) => {
@@ -10617,6 +10649,9 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     if (source.includes(marker)) throw new Error("existing Hermes Caveman native block is unjournaled; run `caveman doctor hermes`");
   }
   const nativePluginMembership = hermesNamedPluginMembership(source, HERMES_NATIVE_PLUGIN_NAME);
+  if (nativePluginMembership === "unhandled") {
+    throw new Error("Hermes plugins.enabled or plugins.disabled uses unsupported YAML; refusing to modify configuration");
+  }
   if (nativePluginMembership === "disabled") {
     throw new Error(`Hermes plugin ${HERMES_NATIVE_PLUGIN_NAME} is explicitly disabled in plugins.disabled; remove that entry before enabling Caveman`);
   }
@@ -10626,15 +10661,75 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     lines.splice(yamlBodyStart(lines), 0, "model:");
     model = topLevelSection(lines, "model")!;
   }
-  const routeIndexes: number[] = [];
-  const previousRouteLines: string[] = [];
+  // The route keys sit at whatever indent THIS document gives model:'s direct
+  // children, not a hardcoded two (#1486). A valid `model:\n    provider: x`
+  // matched nothing, so the old provider stayed put and a two-space routing
+  // block was spliced in ABOVE it; the surviving four-space line then nested
+  // under the new base_url scalar and the document stopped parsing — caveman
+  // corrupted a config it was asked to extend. The restore side already
+  // derives this width (hermesRestoreOwnedByValue); the writer was the one
+  // place that still assumed it.
+  // topLevelSection ends a block only at the next UNQUOTED top-level key, so a
+  // document-end `...`, a `---` separator, or a quoted top-level key AND ALL OF
+  // ITS CHILDREN sit inside the reported span. Measuring or scanning over that
+  // tail reads another section's layout as model's own: `"other":\n x: y` after
+  // a two-space model block measures 1, the real `  provider:` then matches
+  // nothing, and the route goes in one space deep above a line two spaces deep
+  // — the same corruption this is fixing, in a document the old hardcoded
+  // writer handled correctly. model's own children all precede the first
+  // indent-0 line, so that is the real end of the block.
+  let modelBodyEnd = model.end;
   for (let i = model.start + 1; i < model.end; i++) {
-    if (/^  (provider|base_url):/.test(lines[i]!)) {
-      routeIndexes.push(i);
-      previousRouteLines.push(lines[i]!);
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    if (line.length - line.replace(/^[ \t]*/, "").length === 0) {
+      modelBodyEnd = i;
+      break;
     }
   }
-  if (new Set(routeIndexes.map((index) => lines[index]!.match(/^  ([^:]+):/)?.[1])).size !== routeIndexes.length) {
+  // No indented line at all means the block is empty (we just created it),
+  // which takes the conventional two.
+  let measured: number | null = null;
+  for (let i = model.start + 1; i < modelBodyEnd; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    // YAML forbids tabs as indentation, so a tab here is not a document we can
+    // measure — and emitting spaces into it would change its structure.
+    if (/^[ ]*\t/.test(line)) {
+      throw new Error("Hermes model: block is indented with tabs; refusing to rewrite it — set model.provider and model.base_url manually");
+    }
+    const width = line.length - line.replace(/^[ ]*/, "").length;
+    if (measured === null || width < measured) measured = width;
+  }
+  const modelIndent = measured ?? 2;
+  const routePad = " ".repeat(modelIndent);
+  // Quoted route keys reach the same writer, so accept them the way the restore
+  // regex does; capture group 2 is the bare key name.
+  const routeKey = new RegExp(`^[ ]{${modelIndent}}(["']?)(provider|base_url)\\1\\s*:(?=\\s|$)`);
+  const routeIndexes: number[] = [];
+  const previousRouteLines: string[] = [];
+  for (let i = model.start + 1; i < modelBodyEnd; i++) {
+    if (!routeKey.test(lines[i]!)) continue;
+    // A route value continued on later lines (block scalar, nested mapping, a
+    // flow collection spanning lines) cannot be removed by dropping its key
+    // line: the continuation would be orphaned under the replacement block.
+    // A blank line or a comment is not a continuation, whatever its indent —
+    // YAML indents comments independently of the scalar above them, so
+    // refusing on one rejected a config that rewrites perfectly well.
+    let continuation: string | undefined;
+    for (let next = i + 1; next < modelBodyEnd; next++) {
+      const line = lines[next]!;
+      if (/^\s*(?:#.*)?$/.test(line)) continue;
+      continuation = line;
+      break;
+    }
+    if (continuation !== undefined && continuation.length - continuation.replace(/^[ \t]*/, "").length > modelIndent) {
+      throw new Error("Hermes model provider/base_url carries a multiline value; refusing to rewrite it — set model.base_url manually");
+    }
+    routeIndexes.push(i);
+    previousRouteLines.push(lines[i]!);
+  }
+  if (new Set(routeIndexes.map((index) => lines[index]!.match(routeKey)?.[2])).size !== routeIndexes.length) {
     throw new Error("Hermes model provider/base_url keys are duplicated; refusing ambiguous install");
   }
   const insertAt = routeIndexes[0] ?? model.start + 1;
@@ -10642,15 +10737,15 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   // A named OAuth provider selects a credential and a transport that the
   // generic custom route cannot carry, so keep it and route to the handler
   // that speaks it. `api_mode` is not a route key, so it already survives.
-  const providerLine = previousRouteLines.find((line) => /^  provider:/.test(line));
+  const providerLine = previousRouteLines.find((line) => hermesRouteLineKey(line) === "provider");
   const previousProvider = providerLine ? configValue(providerLine.slice(providerLine.indexOf(":") + 1)) : undefined;
   const keptProvider = previousProvider && HERMES_CHATGPT_OAUTH_PROVIDERS.has(previousProvider) ? previousProvider : null;
   const route = hermesGatewayBase(gw, keptProvider);
   const routeBlock = [
-    `  ${HERMES_NATIVE_ROUTE_BEGIN}`,
-    keptProvider ? `  provider: ${keptProvider}` : '  provider: "custom"',
-    `  base_url: ${yamlQuote(route)}`,
-    `  ${HERMES_NATIVE_ROUTE_END}`,
+    `${routePad}${HERMES_NATIVE_ROUTE_BEGIN}`,
+    keptProvider ? `${routePad}provider: ${keptProvider}` : `${routePad}provider: "custom"`,
+    `${routePad}base_url: ${yamlQuote(route)}`,
+    `${routePad}${HERMES_NATIVE_ROUTE_END}`,
   ];
   lines.splice(insertAt, 0, ...routeBlock);
 
@@ -10659,8 +10754,8 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   if (plugins) {
     let enabled = -1;
     for (let i = plugins.start + 1; i < plugins.end; i++) {
-      if (/^  enabled:\s*\[/.test(lines[i]!)) throw new Error("Hermes plugins.enabled uses inline YAML; refusing unsafe native merge");
-      if (/^  enabled:\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*\[/.test(lines[i]!)) throw new Error("Hermes plugins.enabled uses inline YAML; refusing unsafe native merge");
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
     }
     if (enabled >= 0) {
       if (nativePluginMembership !== "enabled") {
@@ -10704,12 +10799,28 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   };
 }
 
+// The key of a model route line, whatever indent or quoting it carries. The
+// writer accepts both (#1486), so every reader of previous_route_lines has to
+// as well. hermesNativeMutations matched a hardcoded `^  ([^:]+):`, which on a
+// four-space line captured "  provider" — so `previous.provider` was undefined,
+// refuseOwnEndpoint was handed an undefined endpoint, and the refusal that
+// exists to stop Caveman replacing a user's private gateway silently did not
+// fire for any config that did not use exactly two spaces.
+function hermesRouteLineKey(line: string): string | null {
+  const match = line.replace(/^[ \t]+/, "").match(/^(["']?)(provider|base_url)\1\s*:/);
+  return match ? match[2]! : null;
+}
+
 function hermesNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const configPath = hermesConfigPath();
   const configBefore = fileBytes(configPath);
   const native = hermesNativeConfig(configBefore?.toString("utf8") ?? "", gw, mcpBinary);
   // A custom provider is the user's own endpoint; a named one is the vendor's.
-  const previous = Object.fromEntries((native.owned.previous_route_lines as string[]).map((line) => [line.match(/^  ([^:]+):/)![1]!, configValue(line.slice(line.indexOf(":") + 1))]));
+  const previous = Object.fromEntries((native.owned.previous_route_lines as string[])
+    .flatMap((line) => {
+      const key = hermesRouteLineKey(line);
+      return key ? [[key, configValue(line.slice(line.indexOf(":") + 1))] as const] : [];
+    }));
   if (!previous.provider || previous.provider === "custom" || previous.provider === "auto") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
   const pluginDir = hermesNativePluginDir();
   const manifestPath = join(pluginDir, "plugin.yaml");
@@ -11457,7 +11568,15 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
         const block = operation.owned?.[key];
         if (block === null || block === undefined) continue;
         if (typeof block !== "string" || !text.includes(block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
-        text = text.replace(block, "");
+        // Not a bare replace with "": the block carries the `plugins:` /
+        // `mcp_servers:` / `enabled:` keys enable created, and dropping those
+        // along with our entry orphaned every sibling the user had added under
+        // them since (#1488). This substitutes the ancestor keys the surviving
+        // lines still need, and leaves every other byte — line endings
+        // included — exactly where it was.
+        const removed = removeJournalledYamlBlock(text, block);
+        if (removed === null) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
+        text = removed;
       }
       return Buffer.from(text);
     }
@@ -12012,12 +12131,32 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   // or `mcp_servers:` key appearing in the plugin manifest later must not be
   // able to answer for the one in config.yaml.
   const hermesRouteFileText = agent === "hermes" && routeOperation ? fileBytes(routeOperation.file)?.toString("utf8") ?? "" : "";
+  // #1492 / #1490: `ownedHealthy` answers whether what we wrote is still ours,
+  // which disable needs and health must not be satisfied by. Two Hermes
+  // questions it cannot answer:
+  //   - would Hermes LOAD the plugin? It applies `disabled` first, so a user
+  //     who lists caveman_native there has not taken our plugins.enabled entry
+  //     away (hermesPluginOwned stays true, and disable must still undo the
+  //     install) but the plugin does not run, and neither do its hooks.
+  //   - is the MCP server still REGISTERED? See hermesMcpServerConfigured.
+  // Both read the config file the route operation names, not every journalled
+  // file concatenated, for the reason hermesRouteFileText already does.
+  const hermesPluginLoadable = agent !== "hermes" || !installed
+    || hermesNamedPluginMembership(hermesRouteFileText, HERMES_NATIVE_PLUGIN_NAME) === "enabled";
+  const hermesMcpPresent = agent !== "hermes" || !installed || hermesMcpServerConfigured(hermesRouteFileText);
+  if (agent === "hermes" && installed && !hermesPluginLoadable) {
+    warnings.push(`Hermes lists ${HERMES_NATIVE_PLUGIN_NAME} in plugins.disabled, so it loads no Caveman lifecycle hooks; remove that entry to turn them back on (\`caveman disable hermes\` still undoes the install)`);
+  }
+  if (agent === "hermes" && installed && !hermesMcpPresent) {
+    warnings.push(`Hermes has no enabled ${HERMES_NATIVE_MCP_SERVER} MCP server configured, so compressed context cannot be recovered; run \`caveman enable hermes\` to re-register it`);
+  }
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? hermesRouteOwned(hermesRouteFileText, routeOperation?.owned) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
-    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
-    core: coreActive,
-    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable,
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted && hermesPluginLoadable,
+    // Core rides on those hooks, the way it rides on Codex trusting them.
+    core: coreActive && hermesPluginLoadable,
+    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable && hermesMcpPresent,
     // Codex is false for the same reason hermes is: no command rewrite happens.
     // Since #1037 shrinkHook declines every Codex tool event, so Codex gets no
     // shrink-hook entry; an older install's entry reads degraded until --fix.
@@ -14343,8 +14482,14 @@ function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "
     try {
       if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
       // A null block: the user's own caveman-native entry was already there.
-      // Read by value, so a reserialised config still counts (#1410).
-      if (agent === "hermes") return hermesMcpOwned(current.toString("utf8"), operation.owned);
+      // Read by value, so a reserialised config still counts (#1410) — AND by
+      // presence, because that sentinel is true forever once journalled, so on
+      // its own it kept counting a registration the user had since deleted
+      // (#1490). Ownership and presence are different questions.
+      if (agent === "hermes") {
+        const text = current.toString("utf8");
+        return hermesMcpOwned(text, operation.owned) && hermesMcpServerConfigured(text);
+      }
       if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
       const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
       return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
@@ -14693,6 +14838,55 @@ function yamlMappingChildren(lines: string[], start: number, end: number): Map<s
   return children;
 }
 
+// Does the key at lines[keyAt] still have anything under it? #1488: native
+// disable removes `plugins:`, `plugins.enabled:` or `mcp_servers:` whenever
+// enable created that key — unconditionally, so a child the user added
+// afterwards survived as text and lost its parent. At best it reparents into
+// the section above (a plugin deny-list silently becoming part of
+// `platforms:`); at worst the document stops parsing and Hermes will not start.
+// A key we created is only ours to remove while it is still empty.
+function yamlKeyHasChildren(lines: string[], keyAt: number, end: number): boolean {
+  const key = lines[keyAt];
+  if (key === undefined) return false;
+  const indent = key.length - key.replace(/^[ \t]*/, "").length;
+  for (let i = keyAt + 1; i < Math.min(end, lines.length); i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (width > indent) return true;
+    // A block sequence may be written at its OWN key's indent — `enabled:`
+    // followed by `- name` two spaces deep is one key with a list under it,
+    // which is the layout PyYAML emits and Hermes itself writes. Reading that
+    // item as a sibling called the key empty and removed it, leaving the list
+    // parentless: the very corruption this guard exists to stop.
+    if (width === indent && /^[ \t]*-(?:\s|$)/.test(line)) return true;
+    return false;
+  }
+  return false;
+}
+
+// Remove a journalled block that is still present byte for byte, keeping any
+// parent key it created that the user has since put something else under
+// (#1488). The block's own key-only lines are the ancestor chain it
+// introduced: whatever indent the first line after the block carries says
+// which of them that line still needs, so those are substituted back in the
+// block's place and the rest go. Everything outside the block — comments,
+// siblings, line endings — is untouched, so this stays the byte-preserving
+// path it has always been. null when the block is not there, which leaves the
+// caller's existing refusal to fire.
+function removeJournalledYamlBlock(text: string, block: string): string | null {
+  const at = text.indexOf(block);
+  if (at < 0) return null;
+  const indentOf = (line: string) => line.length - line.replace(/^[ \t]*/, "").length;
+  const createdKeys = yamlLines(block).filter((line) => /^[ \t]*(["']?)[^:"'\s][^:"']*\1\s*:\s*(?:#.*)?$/.test(line));
+  const after = text.slice(at + block.length);
+  const survivor = yamlLines(after).find((line) => !/^\s*(?:#.*)?$/.test(line));
+  const needed = survivor === undefined
+    ? []
+    : createdKeys.filter((line) => indentOf(line) < indentOf(survivor));
+  return `${text.slice(0, at)}${needed.join("\n")}${after}`;
+}
+
 // Span of the direct child `name` inside [start, end): its own line through the
 // last line indented deeper than it.
 function yamlChildSpan(lines: string[], start: number, end: number, name: string): { start: number; end: number } | null {
@@ -14743,16 +14937,25 @@ function hermesOwnedValues(text: string): { model: Map<string, string> | null; m
   };
 }
 
-// The `command` the journalled MCP block registered, read back out of the block
+// Every child the journalled MCP block registered, read back out of the block
 // itself so no journal format change is needed: an install made before this fix
-// is checked by value too.
-function hermesJournaledMcpCommand(block: string): string | null {
+// is checked by value too. The block may or may not carry the `mcp_servers:`
+// parent (it does when enable created the section), so the entry is found at
+// whatever depth it sits rather than as a direct child of a known span.
+function hermesJournaledMcpValues(block: string): Map<string, string> | null {
   const lines = yamlLines(block);
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*command\s*:/.test(lines[i]!)) continue;
-    return yamlScalarAfterKey(lines, i).value;
+  const key = new RegExp(`^[ \\t]*(["']?)${escapeRegExp(HERMES_NATIVE_MCP_SERVER)}\\1\\s*:(?=\\s|$)`);
+  const at = lines.findIndex((line) => key.test(line));
+  if (at < 0) return null;
+  const indent = lines[at]!.length - lines[at]!.replace(/^[ \t]*/, "").length;
+  let end = at + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (/^\s*(?:#.*)?$/.test(line)) break;
+    if (line.length - line.replace(/^[ \t]*/, "").length <= indent) break;
+    end++;
   }
-  return null;
+  return yamlMappingChildren(lines, at + 1, end);
 }
 
 // Does this config still carry Caveman's own Hermes routing, by value?
@@ -14774,10 +14977,35 @@ function hermesMcpOwned(text: string, owned: NativeJournal["operations"][number]
   if (block === null) return true;
   if (typeof block !== "string") return false;
   if (text.includes(block)) return true;
-  const command = hermesJournaledMcpCommand(block);
-  if (command === null) return false;
+  // #1487: the whole field set, not just `command` and `enabled`. Proving our
+  // two values are unchanged says nothing about what the user has ADDED, and
+  // the by-value restore removes the entry's whole span — so a `cwd` they added
+  // to launch the server from somewhere else was deleted with it, silently,
+  // under a check that had just called the entry unmodified. Hermes launches
+  // stdio servers with cwd, so that is a semantic edit; an entry carrying
+  // anything we did not write is no longer ours to remove, exactly as a changed
+  // command already was not.
+  const journalled = hermesJournaledMcpValues(block);
+  if (!journalled || journalled.size === 0) return false;
   const values = hermesOwnedValues(text).mcp;
-  return values?.get("command") === command && values.get("enabled") === "true";
+  if (!values || values.size !== journalled.size) return false;
+  for (const [name, value] of journalled) {
+    if (values.get(name) !== value) return false;
+  }
+  return true;
+}
+
+// Is a `caveman-native` MCP server configured in this document AT ALL? The
+// ownership helpers answer a different question (#1490): `mcp_block: null` is
+// the non-ownership sentinel — the user's own entry was already there, so
+// disable never owned it and never has to prove it — and it stays true after
+// they delete that entry. Anything asking whether Hermes still HAS a server to
+// launch has to read the file, so status stops claiming recovery against a
+// registration that is gone. An explicit `enabled: false` is Hermes declining
+// to launch it, which is the same answer; a missing key is not.
+function hermesMcpServerConfigured(text: string): boolean {
+  const values = hermesOwnedValues(text).mcp;
+  return Boolean(values) && values!.get("enabled") !== "false";
 }
 
 // Is the journalled `caveman_native` plugin still enabled? Same null rule.
@@ -14793,7 +15021,7 @@ function hermesPluginOwned(text: string, owned: NativeJournal["operations"][numb
   const block = owned?.plugin_block;
   if (block === null) return true;
   if (typeof block !== "string") return false;
-  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME);
+  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME) === true;
 }
 
 // Indent shared by the direct children of [start, end), or null when there are
@@ -14866,8 +15094,15 @@ function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operation
     }
     if (itemAt < 0) throw new Error("Hermes plugin entry is gone; refusing destructive disable");
     lines.splice(itemAt, 1);
-    if (createdEnabled) lines.splice(enabledAt, 1);
-    if (createdSection) lines.splice(plugins.start, 1);
+    // Only while they are still empty: #1488 again, on the by-value path. A
+    // second plugin the user enabled beside ours is enough to make dropping
+    // `enabled:` — and then `plugins:` — produce a document that no longer
+    // parses. Each check runs against the array as it now stands, and the
+    // splices stay in descending order so the earlier indices remain valid.
+    if (createdEnabled && !yamlKeyHasChildren(lines, enabledAt, lines.length)) {
+      lines.splice(enabledAt, 1);
+      if (createdSection && !yamlKeyHasChildren(lines, plugins.start, lines.length)) lines.splice(plugins.start, 1);
+    }
   }
 
   // --- MCP registration ---
@@ -14879,7 +15114,7 @@ function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operation
     const native = yamlChildSpan(lines, servers.start + 1, servers.end, HERMES_NATIVE_MCP_SERVER);
     if (!native) throw new Error("Hermes MCP entry is gone; refusing destructive disable");
     lines.splice(native.start, native.end - native.start);
-    if (createdSection) lines.splice(servers.start, 1);
+    if (createdSection && !yamlKeyHasChildren(lines, servers.start, lines.length)) lines.splice(servers.start, 1);
   }
 
   // yamlText joins with \n. The literal path edits the raw string and so keeps
@@ -19265,16 +19500,90 @@ def register(ctx):
 `;
 }
 
-type HermesPluginMembership = "enabled" | "disabled" | "not-enabled";
+type HermesPluginMembership = "enabled" | "disabled" | "not-enabled" | "unhandled";
 
-function hermesFlowSequenceItems(raw: string): string[] | null {
+// Decode the quoted scalar subset used for plugin names. Unknown YAML escapes
+// are not guessed: membership callers must stop before making install writes.
+function hermesWithoutInlineComment(raw: string): string {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let end = raw.length;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (quote === '"' && escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === '"' && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'" && char === "'" && raw[i + 1] === "'") {
+      i++;
+      continue;
+    }
+    if (quote && char === quote) {
+      quote = null;
+      continue;
+    }
+    if (!quote && (char === "'" || char === '"')) {
+      quote = char;
+      continue;
+    }
+    if (!quote && char === "#" && (i === 0 || /\s/.test(raw[i - 1]!))) {
+      end = i;
+      break;
+    }
+  }
+  return raw.slice(0, end);
+}
+
+function hermesScalarValue(raw: string): string | null {
+  const value = hermesWithoutInlineComment(raw).trim();
+  if (value.startsWith('"') || value.endsWith('"')) {
+    if (!value.startsWith('"') || !value.endsWith('"')) return null;
+    const source = value.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i]!;
+      if (char !== "\\") {
+        if (char === '"') return null;
+        decoded += char;
+        continue;
+      }
+      const next = source[++i];
+      if (next === '"' || next === "\\") decoded += next;
+      else if (next === "x" && /^[0-9a-fA-F]{2}/.test(source.slice(i + 1, i + 3))) {
+        decoded += String.fromCharCode(Number.parseInt(source.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else return null;
+    }
+    return decoded;
+  }
+  if (value.startsWith("'") || value.endsWith("'")) {
+    if (!value.startsWith("'") || !value.endsWith("'")) return null;
+    const source = value.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] === "'") {
+        if (source[i + 1] !== "'") return null;
+        decoded += "'";
+        i++;
+      } else decoded += source[i];
+    }
+    return decoded;
+  }
+  if (value.includes('"') || value.includes("'") || /^[\[{&*!|>]/.test(value) || /:\s/.test(value)) return null;
+  return value;
+}
+
+function hermesFlowSequenceItems(raw: string): string[] | null | false {
   const start = raw.indexOf("[");
   if (start < 0) return null;
   const items: string[] = [];
   let item = "";
   let quote: "'" | '"' | null = null;
   let escaped = false;
-  let depth = 0;
   for (let i = start + 1; i < raw.length; i++) {
     const char = raw[i]!;
     if (quote) {
@@ -19304,26 +19613,17 @@ function hermesFlowSequenceItems(raw: string): string[] | null {
       item += char;
       continue;
     }
-    if (char === "[" || char === "{") {
-      depth++;
-      item += char;
-      continue;
-    }
+    if (char === "[" || char === "{") return false;
     if (char === "]") {
-      if (depth === 0) {
-        items.push(item);
-        return items.map(configValue).filter((value): value is string => value !== undefined);
-      }
-      depth--;
-      item += char;
-      continue;
+      items.push(item);
+      const trailing = raw.slice(i + 1).replace(/^\s+/, "");
+      if (trailing && !trailing.startsWith("#")) return false;
+      const values = items.map(hermesScalarValue);
+      if (values.some((value) => value === null)) return false;
+      return values as string[];
     }
-    if (char === "}" && depth > 0) {
-      depth--;
-      item += char;
-      continue;
-    }
-    if (char === "," && depth === 0) {
+    if (char === "}") return false;
+    if (char === ",") {
       items.push(item);
       item = "";
       continue;
@@ -19333,14 +19633,43 @@ function hermesFlowSequenceItems(raw: string): string[] | null {
   return null;
 }
 
-function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean {
+// A comment is never a key, and this reader has to say so BEFORE it asks
+// whether a line opens the next sibling mapping. `^  [^ ].*?:` matches a
+// two-space comment the moment its text contains a colon, and Caveman writes
+// exactly such a line: the item-indent-padded `# >>> caveman:native-hermes-plugin`
+// marker. So our own marker was read as the key after `enabled:` and ended the
+// item scan one line above our own entry — hermesPluginOwned went false on a
+// config we had just written, ownedHealthy collapsed every component with it,
+// and `enable hermes` reported success into an install `doctor` called
+// `degraded`. In the deny direction the same break fails OPEN: a comment
+// between `disabled:` and its items made an explicit deny read as "not listed"
+// and enable installed over it. Four-space lists never showed either, because
+// the comment skip below is reached first when the marker is deeper.
+function hermesCommentOrBlank(line: string): boolean {
+  return /^\s*(?:#.*)?$/.test(line);
+}
+
+function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean | "unhandled" {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
   if (!plugins) return false;
+  let listKeyCount = 0;
   for (let i = plugins.start + 1; i < plugins.end; i++) {
-    const match = lines[i]!.match(/^  (enabled|disabled):(?:\s*(.*))?$/);
-    if (!match || match[1] !== listName) continue;
-    const raw = (match[2] ?? "").replace(/\s+#.*$/, "").trim();
+    if (hermesCommentOrBlank(lines[i]!)) continue;
+    const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
+    if (!match) continue;
+    const key = hermesScalarValue(match[1]!);
+    if (key === null) return "unhandled";
+    if (key === listName && ++listKeyCount > 1) return "unhandled";
+  }
+  for (let i = plugins.start + 1; i < plugins.end; i++) {
+    if (hermesCommentOrBlank(lines[i]!)) continue;
+    const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
+    if (!match) continue;
+    const key = hermesScalarValue(match[1]!);
+    if (key === null) return "unhandled";
+    if (key !== listName) continue;
+    const raw = hermesWithoutInlineComment(match[2] ?? "").trim();
     if (raw.startsWith("[")) {
       let flow = raw;
       let items = hermesFlowSequenceItems(flow);
@@ -19348,22 +19677,29 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
         flow += `\n${lines[next]}`;
         items = hermesFlowSequenceItems(flow);
       }
-      return items?.includes(name) ?? false;
+      if (!items) return "unhandled";
+      return items.includes(name);
     }
-    if (raw && !raw.startsWith("#")) return false;
+    if (raw && raw !== "null" && raw !== "~") return "unhandled";
     let sequenceIndent: number | null = null;
     for (let next = i + 1; next < plugins.end; next++) {
       const line = lines[next]!;
-      if (/^  [A-Za-z0-9_-]+:\s*/.test(line)) break;
-      if (!line.trim() || /^\s*#/.test(line)) continue;
+      // Blanks and comments first: see hermesCommentOrBlank above.
+      if (hermesCommentOrBlank(line)) continue;
+      if (/^  [^ ].*?:/.test(line)) break;
       const item = line.match(/^(\s*)-\s*(.*?)\s*$/);
       if (!item) {
-        if (sequenceIndent !== null && line.search(/\S/) > sequenceIndent) continue;
+        const indent = line.search(/\S/);
+        if (sequenceIndent !== null && indent > sequenceIndent) return "unhandled";
+        if (indent > 2) return "unhandled";
         break;
       }
       const indent = item[1]!.length;
       if (sequenceIndent === null) sequenceIndent = indent;
-      if (indent === sequenceIndent && configValue(item[2]) === name) return true;
+      if (indent !== sequenceIndent) return "unhandled";
+      const value = hermesScalarValue(item[2]!);
+      if (value === null) return "unhandled";
+      if (value === name) return true;
     }
     return false;
   }
@@ -19371,15 +19707,22 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
 }
 
 function hermesNamedPluginMembership(text: string, name: string): HermesPluginMembership {
-  if (hermesPluginListContains(text, "disabled", name)) return "disabled";
-  if (hermesPluginListContains(text, "enabled", name)) return "enabled";
+  const disabled = hermesPluginListContains(text, "disabled", name);
+  if (disabled === "unhandled") return "unhandled";
+  if (disabled) return "disabled";
+  const enabled = hermesPluginListContains(text, "enabled", name);
+  if (enabled === "unhandled") return "unhandled";
+  if (enabled) return "enabled";
   return "not-enabled";
 }
 
 function hermesEnabledListIsInline(text: string): boolean {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
-  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => /^  enabled:\s*\[/.test(line)));
+  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => {
+    const match = line.match(/^  ([^ ].*?):\s*(.*)$/);
+    return match && hermesScalarValue(match[1]!) === "enabled" && match[2]!.trim().startsWith("[");
+  }));
 }
 
 function hermesPluginInstallConfigReady(): boolean {
@@ -19394,6 +19737,10 @@ function hermesPluginInstallConfigReady(): boolean {
     }
   }
   const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "unhandled") {
+    console.error(`${mark("warn")} ${path} uses an unsupported plugins.enabled or plugins.disabled YAML form; refusing to install the Hermes plugin`);
+    return false;
+  }
   if (membership === "disabled") {
     console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; no hook was installed`);
     return false;
@@ -19417,6 +19764,10 @@ function enableHermesPluginInConfig(): boolean {
     }
   }
   const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "unhandled") {
+    console.error(`${mark("warn")} ${path} uses an unsupported plugins.enabled or plugins.disabled YAML form; refusing to modify Hermes configuration`);
+    return false;
+  }
   if (membership === "disabled") {
     console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; remove that entry before installing`);
     return false;
@@ -19430,11 +19781,11 @@ function enableHermesPluginInConfig(): boolean {
     let inlineEnabled = false;
     for (let i = plugins.start + 1; i < plugins.end; i++) {
       const line = lines[i]!;
-      if (/^  enabled:\s*(?:#.*)?$/.test(line)) {
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*(?:#.*)?$/.test(line)) {
         enabledLine = i;
         break;
       }
-      if (/^  enabled:\s*\[/.test(line)) {
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*\[/.test(line)) {
         enabledLine = i;
         inlineEnabled = true;
         break;

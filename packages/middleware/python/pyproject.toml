@@ -34,7 +34,7 @@ Issues = "https://github.com/JuliusBrussee/caveman/issues"
 [project.optional-dependencies]
 openai = ["openai>=2.20,<4"]
 anthropic = ["anthropic>=1.0,<3"]
-google = ["google-genai>=2.18,<3"]
+google = ["google-genai>=2.18,<4"]
 langchain = ["langchain>=1.1,<2", "langchain-core>=1.1,<2", "langgraph>=1.0.2,<2"]
 # filelock <=4.2.0 has lock-file and timeout vulnerabilities. Keep the floor in
 # wheel metadata so fresh installs backtrack to a compatible LiteLLM release.
