@@ -934,6 +934,55 @@ enabled = false
 	}
 }
 
+// TestReadOnlyExecuteDoesNotRunCompoundWriteTool drives the documented read/write
+// split end to end: a tool whose name reads `<read verb>_and_<write verb>` must be
+// refused by codemode_execute and run only by codemode_mutate. Before the verb
+// list carried `replace`, the read rule promoted `repo.find_and_replace` to
+// read-only, so codemode_execute ran a file-mutating tool under read-only
+// annotations with no host approval prompt.
+func TestReadOnlyExecuteDoesNotRunCompoundWriteTool(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	gw := NewGateway(store, engine.New(store, nil), nil)
+
+	var writes atomic.Int64
+	up := NewInProcessUpstream("repo")
+	up.Register(ToolSpec{
+		Name:        "find_and_replace",
+		Description: "Replace every match of a pattern in a file.",
+		InputSchema: mcp.ObjectSchema(map[string]any{
+			"path":    mcp.StringProp("File to edit."),
+			"pattern": mcp.StringProp("Text to replace."),
+		}, "path"),
+	}, func(_ context.Context, args map[string]any) (any, error) {
+		writes.Add(1)
+		return map[string]any{"replaced": args["pattern"]}, nil
+	})
+	if err := gw.AddUpstream(context.Background(), up); err != nil {
+		t.Fatal(err)
+	}
+
+	step, _ := json.Marshal(map[string]any{"steps": []map[string]any{{
+		"id": "edit", "op": "call", "tool": "repo.find_and_replace",
+		"args": map[string]any{"path": "a.go", "pattern": "foo"},
+	}}})
+	if res := gw.handleExecute(step); !res.IsError || !strings.Contains(res.Content[0].Text, "cave_write_not_allowed") {
+		t.Fatalf("codemode_execute must refuse a mutating tool, got: %+v", res)
+	}
+	if got := writes.Load(); got != 0 {
+		t.Fatalf("read-only codemode_execute ran the mutating handler %d time(s)", got)
+	}
+	if res := gw.handleMutate(step); res.IsError {
+		t.Fatalf("codemode_mutate must run the mutating tool, got: %+v", res)
+	}
+	if got := writes.Load(); got != 1 {
+		t.Fatalf("codemode_mutate handler runs = %d, want 1", got)
+	}
+}
+
 type stubNamedUpstream struct {
 	name  string
 	tools []ToolSpec
@@ -972,7 +1021,14 @@ func TestBrowseUpstreamSurvivesCanceledFirstCallContext(t *testing.T) {
 }
 
 func TestIsReadOnlyToolCompoundTokensAndQuickJSPrototypeHardening(t *testing.T) {
-	for _, mutating := range []string{"get_and_delete-issue", "listAndDropTables", "read_or_update", "fetchAndCreateUser"} {
+	for _, mutating := range []string{
+		"get_and_delete-issue", "listAndDropTables", "read_or_update", "fetchAndCreateUser",
+		// A read verb as the first or last token must not promote a name whose
+		// other token is a write that the read rule used to miss. Each of these ran
+		// under codemode_execute's read-only annotations, with no host prompt.
+		"find_and_replace", "search_replace", "read_and_replace", "list_and_append",
+		"get_and_overwrite", "view_and_save", "show_then_upload", "find_and_move",
+	} {
 		if IsReadOnlyTool(ToolSpec{Name: mutating}) {
 			t.Errorf("IsReadOnlyTool(%q) = true, want false (compound mutating token)", mutating)
 		}
