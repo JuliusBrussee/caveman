@@ -53,6 +53,9 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 	}
 
 	cacheKeyOn := policy.OptimizerEnabled(OptimizerID)
+	deferOn := policy.OptimizerEnabled(DeferMCPToolsOptimizerID) &&
+		(policy.AuthMode == "" || policy.AuthMode == "payg") &&
+		deferMCPToolsResponsesEndpoint(meta.Provider, meta.Endpoint)
 	// Behavioral: output-brevity needs its flag AND a cleared eval gate.
 	brevityOn := policy.OptimizerActive(BrevityOptimizerID)
 	// Behavioral: reasoning-effort lowers the thinking budget, which can change
@@ -64,13 +67,27 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 	// promises either way. Needs its flag AND a cleared eval gate, same as the
 	// other optimizers in this list with any observable effect.
 	streamUsageOn := policy.OptimizerActive(StreamUsageOptimizerID)
-	if !cacheKeyOn && !brevityOn && !reasoningOn && !streamUsageOn {
+	if !cacheKeyOn && !deferOn && !brevityOn && !reasoningOn && !streamUsageOn {
 		return passthrough, nil
 	}
 
 	root, ok := decodeRequestBody(data)
 	if !ok {
 		return passthrough, nil
+	}
+
+	cur := data
+	var prefixIDs []string
+	if deferOn {
+		if deferred, ok := applyDeferMCPTools(cur, root); ok {
+			cur = deferred
+			prefixIDs = append(prefixIDs, DeferMCPToolsOptimizerID)
+			if redecoded, rok := decodeRequestBody(cur); rok {
+				root = redecoded
+			} else {
+				return providers.TransformResult{Body: cur, OptimizerIDs: prefixIDs}, nil
+			}
+		}
 	}
 
 	var ids []string
@@ -87,13 +104,18 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 		ids = append(ids, StreamUsageOptimizerID)
 	}
 	if len(ids) == 0 {
-		return passthrough, nil
+		if len(prefixIDs) == 0 {
+			return passthrough, nil
+		}
+		return providers.TransformResult{Body: cur, OptimizerIDs: prefixIDs}, nil
 	}
 
+	allIDs := append(prefixIDs, ids...)
 	// Preferred path: splice the new top-level fields into the caller's ORIGINAL
-	// bytes and leave every other byte alone, so the cache prefix stays stable.
-	if out, ok := spliceTopLevelFields(data, root, ids, meta.Endpoint); ok {
-		return providers.TransformResult{Body: out, OptimizerIDs: ids}, nil
+	// bytes (or deferred bytes) and leave every other byte alone, so the cache
+	// prefix stays stable.
+	if out, ok := spliceTopLevelFields(cur, root, ids, meta.Endpoint); ok {
+		return providers.TransformResult{Body: out, OptimizerIDs: allIDs}, nil
 	}
 	// Fallback: re-marshal the mutated document. Reached when an applied
 	// optimizer changed something a top-level splice cannot express — today only
@@ -101,9 +123,12 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 	// for that request; the mutation is not.
 	out, err := json.Marshal(root)
 	if err != nil {
+		if len(prefixIDs) > 0 {
+			return providers.TransformResult{Body: cur, OptimizerIDs: prefixIDs}, nil
+		}
 		return passthrough, nil
 	}
-	return providers.TransformResult{Body: out, OptimizerIDs: ids}, nil
+	return providers.TransformResult{Body: out, OptimizerIDs: allIDs}, nil
 }
 
 // decodeRequestBody decodes a request body for decision-making AND for the

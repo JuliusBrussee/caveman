@@ -127,6 +127,8 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	// The decoded (logical) request and what of it went upstream, which the
 	// raw pin and the tripwire compare; nil when the body was never decoded.
 	var logicalBody, logicalSent []byte
+	var requestEncoding chatGPTRequestEncoding
+	var cgRun *routeRun
 	if compressCandidate {
 		maxBytes := env.Int("CAVE_MAX_REQUEST_BYTES", 33554432)
 		captured, readErr := io.ReadAll(io.LimitReader(r.Body, int64(maxBytes)+1))
@@ -142,7 +144,9 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 			// A zstd body decodes up to the same request limit an identity body
 			// is read to, so a large Codex or Pi turn still re-sends what
 			// earlier turns cached replaced.
-			decoded, requestEncoding, decodeErr := decodeChatGPTRequestBody(originalBody, r.Header.Get("Content-Encoding"), maxBytes)
+			var decoded []byte
+			var decodeErr error
+			decoded, requestEncoding, decodeErr = decodeChatGPTRequestBody(originalBody, r.Header.Get("Content-Encoding"), maxBytes)
 			inspectErr := decodeErr
 			if decodeErr == nil {
 				logicalBody, logicalSent = decoded, decoded
@@ -173,7 +177,36 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 				compressEligible = allowNew
 				transform.Body = logicalBody
 				comp = s.rewriteRequest(adapter, logicalBody, meta, &transform, requestID, lockedRoutes, allowNew)
-				if comp == nil {
+				if len(lockedRoutes) == 0 && rc.Optimizers[providers.CanonicalToolOrderOptimizerID] {
+					if rawTools, reassembleTools, ok := providers.ExtractToolCatalog(transform.Body, meta); ok {
+						if canonical, changed := providers.CanonicalizeToolCatalog(rawTools, meta); changed {
+							if spliced, serr := reassembleTools(canonical); serr == nil && len(spliced) > 0 && json.Valid(spliced) {
+								transform.Body = spliced
+								transform.OptimizerIDs = append(transform.OptimizerIDs, providers.CanonicalToolOrderOptimizerID)
+							}
+						}
+					}
+				}
+				if len(lockedRoutes) == 0 && rc.Optimizers[providers.TurnEffortOptimizerID] && suffix == "/responses" {
+					exact := ""
+					if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+						exact = evidence.SessionID
+					}
+					cgRun = newRouteRun(r.Header, exact, "/v1/responses", transform.Body)
+					cgRun.asked = meta.Model
+					cgRun.localTurnEffort = true
+					cgRun.key = localTurnEffortSessionKey(cgRun, adapter, meta, transform.Body)
+					if cgRun.key != "" {
+						ans, active := planLocalTurnEffort("openai", "/v1/responses", meta.Model, transform.Body)
+						if out := s.applyEffort(cgRun, "openai", "/v1/responses", meta.Model, transform.Body, ans); !bytes.Equal(out, transform.Body) {
+							transform.Body = out
+							if active && cgRun.marked {
+								transform.OptimizerIDs = append(transform.OptimizerIDs, providers.TurnEffortOptimizerID)
+							}
+						}
+					}
+				}
+				if comp == nil && len(transform.OptimizerIDs) == 0 {
 					skipReason = "nothing_compressible"
 					if !allowNew {
 						skipReason = "cache_epoch_diverged"
@@ -267,11 +300,39 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 		s.recordChatGPT(rc, r, requestID, traceID, suffix, start, 0, "cave_upstream_unreachable", reqCapture, reqHash.Sum(nil), transformedChatGPTHash(reqHash.Sum(nil), transform.Body), requestHashComplete, nil, 0, false, transform.OptimizerIDs, comp, compressEligible, transform.Body, "", nil)
 		return
 	}
+	if resp.StatusCode == http.StatusBadRequest && cgRun != nil && cgRun.marked {
+		if retry, kind, _ := s.routeHeal(cgRun, resp, logicalSent, meta.Model, true); kind == healMarks && retry != nil {
+			if encodedRetry, ok := encodeChatGPTRequestBody(retry, requestEncoding); ok {
+				healedResp, herr := s.doUpstream(r.Context(), func() (*http.Request, error) {
+					retryReq, retryErr := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, bytes.NewReader(encodedRetry))
+					if retryErr != nil {
+						return nil, retryErr
+					}
+					retryReq.Header = chatGPTRequestHeaders(r.Header)
+					retryReq.Header.Del("Content-Length")
+					return retryReq, nil
+				})
+				if herr == nil {
+					_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+					_ = resp.Body.Close()
+					resp = healedResp
+					logicalSent = retry
+					transform.Body = encodedRetry
+					transform.OptimizerIDs = removeOptimizerID(transform.OptimizerIDs, providers.TurnEffortOptimizerID)
+					if healedResp.StatusCode < 300 {
+						cgRun.marked = false
+						s.routes.latch(cgRun.key, meta.Model)
+					}
+				}
+			}
+		}
+	}
 	// OAuth backends can reject byte-modified requests for undocumented reasons.
 	// Retry once with exact original bytes, then disclose/record no optimization.
 	// A rate-limit 429 is returned instead, and an accepted retry pins the
 	// conversation raw, as in proxy.go.
-	if resp.StatusCode >= 400 && resp.StatusCode < 500 && comp != nil && originalBody != nil && !rateLimited(resp) {
+	transformed := comp != nil || len(transform.OptimizerIDs) > 0
+	if resp.StatusCode >= 400 && resp.StatusCode < 500 && transformed && originalBody != nil && !rateLimited(resp) {
 		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
 		_ = resp.Body.Close()
 		retryResp, doErr := s.doUpstream(r.Context(), func() (*http.Request, error) {
@@ -311,9 +372,11 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 	defer resp.Body.Close()
 
 	copySafeResponseHeaders(w.Header(), resp.Header)
-	if comp != nil {
+	if comp != nil || len(transform.OptimizerIDs) > 0 {
 		w.Header().Set("x-cave-mode", rc.RuntimeMode)
 		w.Header().Set("x-cave-optimization", strings.Join(transform.OptimizerIDs, ","))
+	}
+	if comp != nil {
 		w.Header().Set("x-caveman-compression-ratio", strconv.FormatFloat(comp.ratio, 'f', 4, 64))
 		w.Header().Set("x-caveman-recovery-handle", comp.handle)
 		w.Header().Set("x-caveman-tokens-before", strconv.Itoa(comp.before))

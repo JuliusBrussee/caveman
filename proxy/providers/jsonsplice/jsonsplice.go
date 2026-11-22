@@ -23,6 +23,47 @@ type FieldInsertion struct {
 	Value []byte
 }
 
+// ObjectField is one member of a JSON object in document order.
+type ObjectField struct {
+	Key   string
+	Value Span
+}
+
+// ObjectFields returns every top-level key/value span of object in document
+// order. Returns ok=false on any malformed object.
+func ObjectFields(body []byte, object Span) ([]ObjectField, bool) {
+	if object.Start < 0 || object.End > len(body) || object.Start >= object.End ||
+		body[object.Start] != '{' || body[object.End-1] != '}' {
+		return nil, false
+	}
+	var out []ObjectField
+	for i := space(body, object.Start+1); i < object.End && body[i] != '}'; {
+		keyEnd, ok := stringEnd(body, i)
+		if !ok {
+			return nil, false
+		}
+		var key string
+		if json.Unmarshal(body[i:keyEnd], &key) != nil {
+			return nil, false
+		}
+		i = space(body, keyEnd)
+		if i >= object.End || body[i] != ':' {
+			return nil, false
+		}
+		start := space(body, i+1)
+		end, ok := value(body, start)
+		if !ok {
+			return nil, false
+		}
+		out = append(out, ObjectField{Key: key, Value: Span{start, end}})
+		i = space(body, end)
+		if i < object.End && body[i] == ',' {
+			i = space(body, i+1)
+		}
+	}
+	return out, true
+}
+
 func Root(body []byte) (Span, bool) {
 	if !json.Valid(body) {
 		return Span{}, false
@@ -198,6 +239,60 @@ func AppendObjectFields(body []byte, object Span, fields ...FieldInsertion) ([]b
 	out = append(out, addition.Bytes()...)
 	out = append(out, body[insertAt:]...)
 	return out, nil
+}
+
+// DeleteObjectField removes one top-level member (and its single delimiting
+// comma) from object while preserving every other byte, key order, whitespace,
+// and raw escaping. Returns (nil, false) if the field is absent or object is
+// malformed.
+func DeleteObjectField(body []byte, object Span, name string) ([]byte, bool) {
+	if object.Start < 0 || object.End > len(body) || object.Start >= object.End ||
+		body[object.Start] != '{' || body[object.End-1] != '}' {
+		return nil, false
+	}
+	prevComma := -1
+	for i := space(body, object.Start+1); i < object.End && body[i] != '}'; {
+		keyStart := i
+		keyEnd, ok := stringEnd(body, keyStart)
+		if !ok {
+			return nil, false
+		}
+		var key string
+		if json.Unmarshal(body[keyStart:keyEnd], &key) != nil {
+			return nil, false
+		}
+		i = space(body, keyEnd)
+		if i >= object.End || body[i] != ':' {
+			return nil, false
+		}
+		valEnd, ok := value(body, i+1)
+		if !ok {
+			return nil, false
+		}
+		next := space(body, valEnd)
+		if key == name {
+			delStart, delEnd := keyStart, valEnd
+			if next < object.End && body[next] == ',' {
+				delEnd = space(body, next+1)
+			} else if prevComma >= 0 {
+				delStart = prevComma
+			}
+			out := make([]byte, 0, len(body)-(delEnd-delStart))
+			out = append(out, body[:delStart]...)
+			out = append(out, body[delEnd:]...)
+			if !json.Valid(out) {
+				return nil, false
+			}
+			return out, true
+		}
+		if next < object.End && body[next] == ',' {
+			prevComma = next
+			i = space(body, next+1)
+		} else {
+			break
+		}
+	}
+	return nil, false
 }
 
 // AppendArrayElements inserts elements immediately before an array's closing

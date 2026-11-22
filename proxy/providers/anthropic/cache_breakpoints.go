@@ -38,49 +38,65 @@ func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body provide
 
 	explicitEnabled := policy.OptimizerEnabled(OptimizerID)
 	automaticEnabled := policy.OptimizerEnabled(AutomaticPromptCacheOptimizerID)
-	if !explicitEnabled && !automaticEnabled {
-		return passthrough, nil
-	}
-	// The provider counts an automatic marker toward the four-breakpoint limit.
-	// Do not combine Caveman strategies because precedence depends on caller
-	// breakpoints and TTLs that the adapter cannot safely infer.
-	if explicitEnabled && automaticEnabled {
+	deferEnabled := policy.OptimizerEnabled(DeferMCPToolsOptimizerID)
+	if !explicitEnabled && !automaticEnabled && !deferEnabled {
 		return passthrough, nil
 	}
 	if policy.AuthMode != "" && policy.AuthMode != "payg" {
-		return passthrough, nil
-	}
-	if automaticEnabled && !automaticPromptCacheMessagesEndpoint(meta) {
 		return passthrough, nil
 	}
 	var root map[string]any
 	if json.Unmarshal(data, &root) != nil {
 		return passthrough, nil
 	}
+
+	optimizerIDs := []string{}
+	cur := data
+	if deferEnabled && deferMCPToolsEligibleEndpoint(meta) {
+		if deferred, ok := applyDeferMCPTools(cur, root); ok {
+			cur = deferred
+			optimizerIDs = append(optimizerIDs, DeferMCPToolsOptimizerID)
+			// Re-decode so breakpoint placement below sees the newly deferred tools.
+			root = nil
+			if json.Unmarshal(cur, &root) != nil {
+				return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
+			}
+		}
+	}
+
+	if !explicitEnabled && !automaticEnabled {
+		return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
+	}
+	// The provider counts an automatic marker toward the four-breakpoint limit.
+	// Do not combine Caveman strategies because precedence depends on caller
+	// breakpoints and TTLs that the adapter cannot safely infer.
+	if explicitEnabled && automaticEnabled {
+		return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
+	}
+	if automaticEnabled && !automaticPromptCacheMessagesEndpoint(meta) {
+		return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
+	}
 	// Respect caller-managed cache breakpoints after JSON decoding. Raw byte
 	// search is insufficient because a valid key may use a Unicode escape such
 	// as cache\u005fcontrol; attributing that caller cache to this optimizer
 	// would mint false verified savings.
 	if containsJSONKey(root, "cache_control") {
-		return passthrough, nil
+		return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
 	}
 
 	if automaticEnabled {
-		out, ok := injectAutomaticPromptCacheRaw(data)
+		out, ok := injectAutomaticPromptCacheRaw(cur)
 		if !ok || !json.Valid(out) {
-			return passthrough, nil
+			return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
 		}
-		return providers.TransformResult{Body: out, OptimizerIDs: []string{AutomaticPromptCacheOptimizerID}}, nil
+		return providers.TransformResult{Body: out, OptimizerIDs: append(optimizerIDs, AutomaticPromptCacheOptimizerID)}, nil
 	}
 
-	out, ok := injectBreakpointRaw(data, root)
-	if !ok {
-		return passthrough, nil
+	out, ok := injectBreakpointRaw(cur, root)
+	if !ok || !json.Valid(out) {
+		return providers.TransformResult{Body: cur, OptimizerIDs: optimizerIDs}, nil
 	}
-	if !json.Valid(out) {
-		return passthrough, nil
-	}
-	return providers.TransformResult{Body: out, OptimizerIDs: []string{OptimizerID}}, nil
+	return providers.TransformResult{Body: out, OptimizerIDs: append(optimizerIDs, OptimizerID)}, nil
 }
 
 func injectBreakpointRaw(data []byte, decoded map[string]any) ([]byte, bool) {

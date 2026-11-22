@@ -281,6 +281,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// reshapes model-visible bytes; it is opt-in, recoverable via CCR, and disclosed.
 	transform := providers.TransformResult{Body: body, OptimizerIDs: []string{}}
 	var comp *compressionOutcome
+	var lockedRoutes []compiledRoute
 	// toolSchemaHandle is the CCR handle of the original tool catalog, set only
 	// when the tool-schema annotation strip actually rewrote it. stripFrozen
 	// says the session's harm tripwire froze a strip that would have run.
@@ -321,9 +322,9 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// (preserved-thinking, read 2026-10-06): it gets the session's marks, strip
 	// and drop_block, is never asked about and gets no heal retry.
 	countTokens := meta.Provider == "anthropic" && strings.HasSuffix(meta.Endpoint, "/messages/count_tokens")
-	if s.cloud != nil && strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
-		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity")) &&
-		(routable(meta.Provider, meta.Endpoint) || countTokens) {
+	bodyTransformable := strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" &&
+		(reqContentEncoding == "" || strings.EqualFold(reqContentEncoding, "identity"))
+	if s.cloud != nil && bodyTransformable && (routable(meta.Provider, meta.Endpoint) || countTokens) {
 		// Only the provider's own API: a proxy or a self-hosted origin (Azure,
 		// OpenRouter, LiteLLM, a custom base URL) may not serve the pool.
 		upstream, uerr := adapter.ResolveUpstreamURL(r.Context(), r, providers.RouteContext{})
@@ -362,6 +363,21 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 				Models:        autoModelsFor(meta.Provider),
 			})
 		}
+	} else if run == nil && bodyTransformable && rc.Optimizers[providers.TurnEffortOptimizerID] &&
+		(routable(meta.Provider, meta.Endpoint) || countTokens) {
+		// Opt-in local cache-safe turn-effort (`CAVEMAN_TURN_EFFORT=1`): uses
+		// the exact same stateful per-message effort mark & replay engine so
+		// top-level effort stays frozen and prompt caches stay warm.
+		exact := ""
+		if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
+			exact = evidence.SessionID
+		}
+		run = newRouteRun(r.Header, exact, meta.Endpoint, body)
+		run.asked, run.record = meta.Model, effectiveRuntimeMode == "record"
+		run.localTurnEffort = true
+		if countTokens {
+			run.perRequest, run.replay = true, true
+		}
 	}
 	// The cache tripwire holds this request only to prefixes accepted before
 	// its forwarding was decided: one still in flight then (a fork's raw retry,
@@ -389,10 +405,8 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			}(meta)
 		}
 	case "compress":
-		if s.compressor == nil {
-			break
-		}
-		lockedRoutes, compiledPlanAllowed := compiledPlanRoutes(r.Header)
+		var compiledPlanAllowed bool
+		lockedRoutes, compiledPlanAllowed = compiledPlanRoutes(r.Header)
 		if !compiledPlanAllowed {
 			break
 		}
@@ -406,73 +420,123 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if subscriptionPassthrough {
 			break
 		}
-		serverRetrieve := authMode == AuthModePAYG && !s.recoveryViaMCP && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint)
-		if serverRetrieve {
-			if _, canRetrieve := s.compressor.(Retriever); !canRetrieve {
-				serverRetrieve = false
-			}
-		}
-		// The server-side retrieve tool rides only a non-streaming request, and the
-		// tools component heads the cached prefix. A stream on this path goes out
-		// raw, and a conversation is held to the form its longest lineage was
-		// cached in (raw_pin.go): once a turn of it streamed, it stays raw. A
-		// stream after compressed turns is the one bust this path cannot avoid.
-		serverRetrieveAllowed := serverRetrieve && !meta.Stream && !s.heldRawByStream(adapter, meta, body)
-		// Marker-only compression needs a recovery path the caller can actually reach.
-		// PAYG keeps its pre-existing MCP-recovery rule; subscription and OAuth go
-		// exclusively through the live-zone predicate above (which itself requires MCP
-		// recovery), so neither can ever compress with no way back to the elided bytes.
-		markerOnlyAllowed := (s.mcpRecoveryAvailable(body) && authMode != AuthModeOAuth && authMode != AuthModeSubscription) || nonPAYGLiveZone
-		// A stream carrying the caveman MCP tool compresses on the marker path,
-		// so it did not go out raw for being a stream.
-		streamRaw = serverRetrieve && meta.Stream && s.prefixCache != nil && !markerOnlyAllowed
-		if (markerOnlyAllowed || serverRetrieveAllowed) && s.rawPinned(adapter, meta, body) {
-			// The provider accepted this conversation only raw once (see
-			// raw_pin.go): what it cached is the original bytes, so everything
-			// that extends it goes out exactly as the client sent it.
-			break
-		}
-		if markerOnlyAllowed || serverRetrieveAllowed {
-			// Substitution is never gated: a block the provider cached in replaced
-			// form is re-sent replaced whatever this request's epoch says, because
-			// forwarding the original there busts the prefix at that block. A
-			// declared framework epoch may veto only NEW compression. An allowed
-			// request is a compression candidate whether or not anything shrinks —
-			// the eligibility denominator counts candidates, not wins.
-			allowNew := s.cacheEpochAllows(r, adapter, meta, body, evidence.SessionID)
-			compressionEligible = allowNew
-			comp = s.rewriteRequest(adapter, body, meta, &transform, requestID, lockedRoutes, allowNew)
-		}
-		if serverRetrieveAllowed {
-			if injected, ok := injectRetrieveTool(meta.Provider, meta.Endpoint, transform.Body); ok {
-				transform.Body = injected
-				retrieveInjected = true
-				if comp != nil {
-					comp.bookSavings = true
-				}
-			} else {
-				if comp != nil {
-					comp = nil
-					transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
+		if s.compressor != nil {
+			serverRetrieve := authMode == AuthModePAYG && !s.recoveryViaMCP && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint)
+			if serverRetrieve {
+				if _, canRetrieve := s.compressor.(Retriever); !canRetrieve {
+					serverRetrieve = false
 				}
 			}
+			// The server-side retrieve tool rides only a non-streaming request, and the
+			// tools component heads the cached prefix. A stream on this path goes out
+			// raw, and a conversation is held to the form its longest lineage was
+			// cached in (raw_pin.go): once a turn of it streamed, it stays raw. A
+			// stream after compressed turns is the one bust this path cannot avoid.
+			serverRetrieveAllowed := serverRetrieve && !meta.Stream && !s.heldRawByStream(adapter, meta, body)
+			// Marker-only compression needs a recovery path the caller can actually reach.
+			// PAYG keeps its pre-existing MCP-recovery rule; subscription and OAuth go
+			// exclusively through the live-zone predicate above (which itself requires MCP
+			// recovery), so neither can ever compress with no way back to the elided bytes.
+			markerOnlyAllowed := (s.mcpRecoveryAvailable(body) && authMode != AuthModeOAuth && authMode != AuthModeSubscription) || nonPAYGLiveZone
+			// A stream carrying the caveman MCP tool compresses on the marker path,
+			// so it did not go out raw for being a stream.
+			streamRaw = serverRetrieve && meta.Stream && s.prefixCache != nil && !markerOnlyAllowed
+			if (markerOnlyAllowed || serverRetrieveAllowed) && s.rawPinned(adapter, meta, body) {
+				// The provider accepted this conversation only raw once (see
+				// raw_pin.go): what it cached is the original bytes, so everything
+				// that extends it goes out exactly as the client sent it.
+				break
+			}
+			if markerOnlyAllowed || serverRetrieveAllowed {
+				// Substitution is never gated: a block the provider cached in replaced
+				// form is re-sent replaced whatever this request's epoch says, because
+				// forwarding the original there busts the prefix at that block. A
+				// declared framework epoch may veto only NEW compression. An allowed
+				// request is a compression candidate whether or not anything shrinks —
+				// the eligibility denominator counts candidates, not wins.
+				allowNew := s.cacheEpochAllows(r, adapter, meta, body, evidence.SessionID)
+				compressionEligible = allowNew
+				comp = s.rewriteRequest(adapter, body, meta, &transform, requestID, lockedRoutes, allowNew)
+			}
+			if serverRetrieveAllowed {
+				if injected, ok := injectRetrieveTool(meta.Provider, meta.Endpoint, transform.Body); ok {
+					transform.Body = injected
+					retrieveInjected = true
+					if comp != nil {
+						comp.bookSavings = true
+					}
+				} else {
+					if comp != nil {
+						comp = nil
+						transform = providers.TransformResult{Body: body, OptimizerIDs: []string{}}
+					}
+				}
+			}
+			// A conversation that was raw-pinned must go out raw — never run tool
+			// catalog rewrites, native transforms, or breakpoint plans over it.
+			if s.rawPinned(adapter, meta, body) {
+				break
+			}
+			// Opt-in deterministic tool-catalog sorting prevents MCP reconnect
+			// order shuffles from busting byte 1 of the cached prefix. Runs before
+			// tool-schema strip/shrink so both paths share one canonical catalog.
+			if len(lockedRoutes) == 0 && rc.Optimizers[providers.CanonicalToolOrderOptimizerID] {
+				if rawTools, reassembleTools, ok := providers.ExtractToolCatalog(transform.Body, meta); ok {
+					if canonical, changed := providers.CanonicalizeToolCatalog(rawTools, meta); changed {
+						if spliced, serr := reassembleTools(canonical); serr == nil && len(spliced) > 0 && json.Valid(spliced) {
+							transform.Body = spliced
+							transform.OptimizerIDs = append(transform.OptimizerIDs, providers.CanonicalToolOrderOptimizerID)
+						}
+					}
+				}
+			}
+			// The tool-schema annotation strip is its own path, not a rewritable block:
+			// the tool catalog is frozen prefix that extractRewritable deliberately
+			// never yields, and compressRequest's `!block.live` guard must keep
+			// protecting that prefix from the general rewrite loop. See
+			// stripToolSchema for the determinism invariant that makes a frozen-prefix
+			// rewrite admissible here. It runs last so its byte offsets are computed on
+			// the bytes actually going upstream, and it is skipped under a compiled
+			// Cave Build, whose transform set is locked to what evals approved. No
+			// epoch gate: a pure function of the catalog must not flip per request.
+			if len(lockedRoutes) == 0 && s.toolSchemaStripApplies(adapter, body) {
+				if !s.ledger.LeverAllowed(evidence.SessionID, leverToolSchemaStrip) {
+					stripFrozen = true // the harm tripwire's deliberate rollover (see stripToolSchema)
+				} else if stripped, handle, ok := s.stripToolSchema(transform.Body, meta, requestID); ok {
+					transform.Body = stripped
+					transform.OptimizerIDs = append(transform.OptimizerIDs, s.toolSchemaOptimizerID())
+					toolSchemaHandle = handle
+				}
+			}
 		}
-		// The tool-schema annotation strip is its own path, not a rewritable block:
-		// the tool catalog is frozen prefix that extractRewritable deliberately
-		// never yields, and compressRequest's `!block.live` guard must keep
-		// protecting that prefix from the general rewrite loop. See
-		// stripToolSchema for the determinism invariant that makes a frozen-prefix
-		// rewrite admissible here. It runs last so its byte offsets are computed on
-		// the bytes actually going upstream, and it is skipped under a compiled
-		// Cave Build, whose transform set is locked to what evals approved. No
-		// epoch gate: a pure function of the catalog must not flip per request.
-		if len(lockedRoutes) == 0 && s.toolSchemaStripApplies(adapter, body) {
-			if !s.ledger.LeverAllowed(evidence.SessionID, leverToolSchemaStrip) {
-				stripFrozen = true // the harm tripwire's deliberate rollover (see stripToolSchema)
-			} else if stripped, handle, ok := s.stripToolSchema(transform.Body, meta, requestID); ok {
-				transform.Body = stripped
-				transform.OptimizerIDs = append(transform.OptimizerIDs, toolSchemaStripOptimizerID)
-				toolSchemaHandle = handle
+		// Compose provider-native cache metadata optimizers and the cache-breakpoint
+		// planner after content compression so unmanaged PAYG callers (Anthropic,
+		// Bedrock, Vertex Claude, OpenAI, Azure, OpenAI-compatible) get BOTH input
+		// compression AND prompt-cache breakpoints/routing keys without breaking
+		// prefix stability or compiled Cave Builds.
+		if len(lockedRoutes) == 0 {
+			if authMode != AuthModeSubscription {
+				t, terr := adapter.ApplyProviderNativeTransforms(r.Context(), bytes.NewReader(transform.Body), meta, providers.TransformPolicy{
+					RuntimeMode: rc.RuntimeMode,
+					AuthMode:    string(authMode),
+					Optimizers:  rc.Optimizers,
+					EvalGates:   rc.EvalGates,
+				})
+				if terr != nil {
+					if s.logger != nil {
+						s.logger.Warn("transform failed; forwarding compressed bytes without provider-native metadata", "error", redact.Error(terr), "request_id", requestID)
+					}
+				} else if len(t.OptimizerIDs) > 0 {
+					transform.Body = t.Body
+					transform.OptimizerIDs = append(transform.OptimizerIDs, t.OptimizerIDs...)
+				}
+			}
+			if s.breakpointPlanAllowed(evidence.SessionID) {
+				if planned, ok := s.planBreakpoints(adapter, transform.Body, meta, authMode == AuthModePAYG); ok {
+					transform.Body = planned
+					transform.OptimizerIDs = append(transform.OptimizerIDs, breakpointPlanOptimizerID)
+					breakpointPlanned = true
+				}
 			}
 		}
 	case "pixel":
@@ -596,7 +660,24 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		evidence.route = answer
 	} else if run != nil {
 		transform.Body = nativeHistory(meta.Provider, meta.Endpoint, transform.Body)
-		transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
+		if !countTokens && rc.Optimizers[providers.TurnEffortOptimizerID] &&
+			effectiveRuntimeMode == "compress" && len(lockedRoutes) == 0 && !s.rawPinned(adapter, meta, body) {
+			run.localTurnEffort = true
+			run.key = localTurnEffortSessionKey(run, adapter, meta, transform.Body)
+			answer, active := planLocalTurnEffort(meta.Provider, meta.Endpoint, meta.Model, transform.Body)
+			out := s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, answer)
+			if !bytes.Equal(out, transform.Body) {
+				transform.Body = out
+				if active && run.marked {
+					transform.OptimizerIDs = append(transform.OptimizerIDs, providers.TurnEffortOptimizerID)
+				}
+			}
+		} else {
+			if countTokens && run.localTurnEffort {
+				run.key = localTurnEffortSessionKey(run, adapter, meta, transform.Body)
+			}
+			transform.Body = s.applyEffort(run, meta.Provider, meta.Endpoint, meta.Model, transform.Body, RouteAnswer{Outcome: "off"})
+		}
 	} else if strings.TrimSpace(r.Header.Get("x-cave-transforms")) != "caveman.pass-through.v1" {
 		// Every other request to Anthropic's or OpenAI's own API too (encoded,
 		// subscription, routing off), and every chat request whatever its
@@ -747,7 +828,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 					}
 				case kind == healMarks:
 					run.marked = false
-					s.routes.latch(run.key, meta.Model) // top-level effort served where the marks were not
+					if run.localTurnEffort {
+						transform.OptimizerIDs = removeOptimizerID(transform.OptimizerIDs, providers.TurnEffortOptimizerID)
+					}
+					s.routes.latch(run.key, meta.Model) // top-level effort (or unmarked original for local turn-effort) served where marks were not
 				case run.perRequest:
 				default:
 					s.routes.healed(run.key, kind == healDropBlock, agent, from)
@@ -990,7 +1074,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// handle of the exact original catalog. It carries no token figure — the strip
 	// claims no saving here; the replay grid prices it.
 	if toolSchemaHandle != "" {
-		w.Header().Set("x-caveman-toolschema-strip", toolSchemaStripMode)
+		w.Header().Set("x-caveman-toolschema-strip", s.toolSchemaStrip)
 		w.Header().Set("x-caveman-toolschema-recovery-handle", toolSchemaHandle)
 	}
 	// per-request disclosure of the harm tripwire: which levers this session has
@@ -1063,11 +1147,13 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		s.warmer.backoff(credentialKey(upstreamHeaders), backoffUntil(s.warmer.clock.Now(), resp.Header, authMode))
 	}
 	if warmArm {
+		toolStopSeen := toolStopped.seen || strings.EqualFold(finalUsage.StopReason, "tool_use")
+		encodedUnclassified := encoding != "" && !strings.EqualFold(encoding, "identity") && finalUsage.StopReason == ""
 		s.armCacheWarm(r, warmAnswer{
 			key: warmKey, subagent: warmParent != "", start: warmStart,
 			ok:      resp.StatusCode < 300 && errCode == "" && len(retrieveCalls) == 0,
 			adapter: adapter, meta: meta, authMode: authMode, upstream: upstreamURL, header: upstreamHeaders, body: transform.Body,
-			usage: finalUsage, tool: toolStopped.seen, encoded: encoding != "" && !strings.EqualFold(encoding, "identity"),
+			usage: finalUsage, tool: toolStopSeen, encoded: encodedUnclassified,
 			mode: effectiveRuntimeMode, label: rc.Label, agent: rc.AgentSlug, session: evidence.SessionID, basis: evidence.SessionCorrelationBasis,
 		})
 	}
@@ -1641,6 +1727,8 @@ func (s *Server) rewriteRequest(
 		before, after int
 	}
 	var fresh []freshBlock
+	dedupApplied := false
+	seenToolBlocks := make(map[[32]byte]int, len(blocks))
 	query := extractCompressionQuery(meta.Provider, meta.Endpoint, body)
 	queryComp, queryAware := s.compressor.(QueryAwareCompressor)
 	activeRoutes := make([]bool, len(lockedRoutes))
@@ -1678,6 +1766,26 @@ func (s *Server) rewriteRequest(
 			route := lockedRoutes[routeByBlock[i]]
 			cacheScope = "locked:" + route.SegmentKind + ":" + route.SegmentID + ":" + route.TransformID + s.toolSchemaCacheScope()
 		}
+		// Live-zone duplicate-read collapsing (dedup.go): when a large tool_result
+		// repeats byte-for-byte in the SAME conversation, route its 2nd+ occurrence
+		// through a separate deterministic scope (`|dup`) so:
+		//   1. The 1st occurrence keeps its exact cached-prefix bytes (0 cache bust).
+		//   2. The 2nd+ occurrence collapses to a tiny CCR-backed stub on its live
+		//      turn AND re-substitutes that exact stub once frozen (0 cache bust).
+		//   3. If compaction drops the 1st occurrence, the surviving copy becomes
+		//      occurrence 0 and renders its real content (no dangling pointer).
+		isDupToolBlock := false
+		var dupTrailingReminder []byte
+		if len(lockedRoutes) == 0 {
+			if digest, reminder, ok := dedupBlockInfo(block); ok {
+				if seenToolBlocks[digest] > 0 {
+					isDupToolBlock = true
+					dupTrailingReminder = reminder
+					cacheScope += "|dup"
+				}
+				seenToolBlocks[digest]++
+			}
+		}
 		if s.prefixCache != nil {
 			if stored, handle, hit := s.prefixCache.LookupReplacement(cacheScope, block.content); hit {
 				// The first decision wins: replaced bytes are re-sent exactly, and a
@@ -1703,6 +1811,24 @@ func (s *Server) rewriteRequest(
 			continue
 		}
 		if len(lockedRoutes) > 0 && routeByBlock[i] < 0 {
+			continue
+		}
+		if isDupToolBlock {
+			handle, err := s.compressor.StoreOriginal(block.content)
+			if err != nil || handle == "" {
+				keepRaw(i, cacheScope)
+				continue
+			}
+			stub := buildDuplicateStub(len(block.content), handle, dupTrailingReminder)
+			tb := countBlockTokens(block.content)
+			ta := countBlockTokens(stub)
+			if len(stub) >= len(block.content) || ta >= tb {
+				keepRaw(i, cacheScope)
+				continue
+			}
+			replacements[i] = stub
+			fresh = append(fresh, freshBlock{i: i, scope: cacheScope, handle: handle, before: tb, after: ta})
+			dedupApplied = true
 			continue
 		}
 		out, tb, ta := s.safeEngineCall("compress", requestID, func() ([]byte, int, int) {
@@ -1814,6 +1940,9 @@ func (s *Server) rewriteRequest(
 		transform.OptimizerIDs = append(transform.OptimizerIDs, appliedTransformIDs...)
 	} else {
 		transform.OptimizerIDs = append(transform.OptimizerIDs, compressionOptimizerID)
+		if dedupApplied {
+			transform.OptimizerIDs = append(transform.OptimizerIDs, dedupOptimizerID)
+		}
 	}
 	handleList := joinRecoveryHandles(handles)
 	// A substitution-only turn rewrote bytes but earned no NEW reduction, so its

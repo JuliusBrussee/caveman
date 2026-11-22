@@ -53,6 +53,21 @@ func injectRetrieveTool(provider, routePath string, body []byte) ([]byte, bool) 
 	if hasRetrieveTool(body) {
 		return body, false
 	}
+	root, ok := gatewayRootObjectSpan(body)
+	if !ok {
+		return body, false
+	}
+	if providerUsesGeminiTools(provider, routePath) {
+		// Gemini forbids setting `tools` when explicit `cachedContent` is used (HTTP 400).
+		if _, hasCached := gatewayFindObjectField(body, root, "cachedContent"); hasCached {
+			return body, false
+		}
+		// Never inject when function calling is disabled (`mode: "NONE"`) or locked to
+		// an explicit `allowedFunctionNames` allowlist that omits `caveman_retrieve`.
+		if !geminiAllowsInjectedRetrieveTool(body, root) {
+			return body, false
+		}
+	}
 	tool := retrieveTool{
 		Name:        retrieveToolName,
 		Description: retrieveToolDescription,
@@ -63,10 +78,6 @@ func injectRetrieveTool(provider, routePath string, body []byte) ([]byte, bool) 
 	if err != nil || !json.Valid(toolBytes) {
 		return body, false
 	}
-	root, ok := gatewayRootObjectSpan(body)
-	if !ok {
-		return body, false
-	}
 	toolsSpan, hasTools := gatewayFindObjectField(body, root, "tools")
 	if hasTools {
 		if toolsSpan.start >= len(body) || body[toolsSpan.start] != '[' {
@@ -75,6 +86,35 @@ func injectRetrieveTool(provider, routePath string, body []byte) ([]byte, bool) 
 		elements, ok := gatewayArrayElements(body, toolsSpan)
 		if !ok {
 			return body, false
+		}
+		// Gemini requires all function declarations inside a single
+		// `{"functionDeclarations":[...]}` Tool object (a second object returns 400).
+		if providerUsesGeminiTools(provider, routePath) {
+			for _, el := range elements {
+				declSpan, found := gatewayFindObjectField(body, el, "functionDeclarations")
+				if !found || declSpan.start >= len(body) || body[declSpan.start] != '[' {
+					continue
+				}
+				decls, ok := gatewayArrayElements(body, declSpan)
+				if !ok {
+					return body, false
+				}
+				declBytes, derr := json.Marshal(map[string]any{
+					"name":        tool.Name,
+					"description": tool.Description,
+					"parameters":  tool.Parameters,
+				})
+				if derr != nil || !json.Valid(declBytes) {
+					return body, false
+				}
+				insertAt := declSpan.end - 1
+				prefix := []byte(nil)
+				if len(decls) > 0 {
+					prefix = []byte(",")
+				}
+				out := slices.Concat(body[:insertAt], prefix, declBytes, body[insertAt:])
+				return out, json.Valid(out)
+			}
 		}
 		insertAt := toolsSpan.end - 1
 		prefix := []byte(nil)
@@ -95,6 +135,35 @@ func injectRetrieveTool(provider, routePath string, body []byte) ([]byte, bool) 
 		return body, false
 	}
 	return out, true
+}
+
+func geminiAllowsInjectedRetrieveTool(body []byte, root gatewayJSONSpan) bool {
+	tcSpan, found := gatewayFindObjectField(body, root, "toolConfig")
+	if !found {
+		return true
+	}
+	var tc struct {
+		FunctionCallingConfig *struct {
+			Mode                 string   `json:"mode"`
+			AllowedFunctionNames []string `json:"allowedFunctionNames"`
+		} `json:"functionCallingConfig"`
+	}
+	if json.Unmarshal(body[tcSpan.start:tcSpan.end], &tc) != nil || tc.FunctionCallingConfig == nil {
+		return true
+	}
+	mode := strings.ToUpper(strings.TrimSpace(tc.FunctionCallingConfig.Mode))
+	if mode == "NONE" {
+		return false
+	}
+	if len(tc.FunctionCallingConfig.AllowedFunctionNames) > 0 {
+		for _, n := range tc.FunctionCallingConfig.AllowedFunctionNames {
+			if n == retrieveToolName {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func hasRetrieveTool(body []byte) bool {

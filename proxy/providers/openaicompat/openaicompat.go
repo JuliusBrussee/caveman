@@ -165,6 +165,18 @@ func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata
 	return openai.ExtractStabilizable(body, meta)
 }
 
+func (a Adapter) ApplyProviderNativeTransforms(ctx context.Context, body providers.BodyReader, meta providers.RequestMetadata, policy providers.TransformPolicy) (providers.TransformResult, error) {
+	return openai.Adapter{Base: a.Base}.ApplyProviderNativeTransforms(ctx, body, meta, policy)
+}
+
+func (a Adapter) PlanCacheBreakpoints(body []byte, meta providers.RequestMetadata, payg bool) ([]byte, bool) {
+	return openai.Adapter{Base: a.Base}.PlanCacheBreakpoints(body, meta, payg)
+}
+
+func (a Adapter) CachedPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, int, bool) {
+	return openai.Adapter{Base: a.Base}.CachedPrefixComponents(body, meta)
+}
+
 // anthropicZoneGrammar carries the shared Anthropic Messages zone extractors a
 // wire-dialect mount delegates to. The extractors are pure over (body, meta), so
 // the zero adapter is the whole grammar.
@@ -182,6 +194,39 @@ func (a namedAdapter) ExtractStabilizable(body []byte, meta providers.RequestMet
 		return anthropicZoneGrammar.ExtractStabilizable(body, meta)
 	}
 	return openai.ExtractStabilizable(body, meta)
+}
+
+func (a namedAdapter) ApplyProviderNativeTransforms(ctx context.Context, body providers.BodyReader, meta providers.RequestMetadata, policy providers.TransformPolicy) (providers.TransformResult, error) {
+	if a.anthropicWireZones(meta.Endpoint) {
+		return anthropicZoneGrammar.ApplyProviderNativeTransforms(ctx, body, meta, policy)
+	}
+	return openai.Adapter{Base: a.Base}.ApplyProviderNativeTransforms(ctx, body, meta, policy)
+}
+
+func (a namedAdapter) PlanCacheBreakpoints(body []byte, meta providers.RequestMetadata, payg bool) ([]byte, bool) {
+	if a.anthropicWireZones(meta.Endpoint) {
+		return anthropicZoneGrammar.PlanCacheBreakpoints(body, meta, payg)
+	}
+	return openai.Adapter{Base: a.Base}.PlanCacheBreakpoints(body, meta, payg)
+}
+
+func (a namedAdapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, bool) {
+	if a.anthropicWireZones(meta.Endpoint) {
+		return anthropicZoneGrammar.FrozenPrefixComponents(body, meta)
+	}
+	return nil, false
+}
+
+// CachedPrefixComponents mirrors Anthropic's marker-stripped prefix view on
+// Anthropic-dialect compat mounts (so rolling frontier breakpoints never read
+// as false cache busts) and delegates OpenAI-dialect mounts to openai.Adapter
+// so sharedComponents(adapter) == 2 holds uniformly and inference controls
+// (reasoning effort, max_tokens, prompt_cache_key) never trigger false busts.
+func (a namedAdapter) CachedPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, int, bool) {
+	if a.anthropicWireZones(meta.Endpoint) {
+		return anthropicZoneGrammar.CachedPrefixComponents(body, meta)
+	}
+	return openai.Adapter{Base: a.Base}.CachedPrefixComponents(body, meta)
 }
 
 type namedAdapter struct {

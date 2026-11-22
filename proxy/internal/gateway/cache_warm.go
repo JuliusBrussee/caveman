@@ -558,31 +558,46 @@ func backoffUntil(now time.Time, h http.Header, authMode AuthMode) time.Time {
 }
 
 // toolStop reports whether a response asked for a tool, read off the bytes
-// as they stream past (JSON or SSE), never buffering them: it keeps the last
-// len(needle)-1 bytes, so the needle is found across any number of reads.
-// It reads plain bytes only; an encoded response is not classed (armCacheWarm).
+// as they stream past (JSON or SSE), never buffering them: it keeps at most
+// len(toolStopNeedle)-1 bytes so `"stop_reason":"tool_use"` — with or without
+// JSON whitespace around the colon, as api.anthropic.com emits in SSE
+// message_delta events — is found across any chunk split. For compressed
+// responses (gzip/deflate/zstd), UsageScanner also extracts StopReason from
+// the decoded body.
 type toolStop struct {
 	tail []byte
 	seen bool
 }
 
-var toolStopNeedle = []byte(`"stop_reason":"tool_use"`)
+var (
+	toolStopNeedle     = []byte(`"stop_reason":"tool_use"`)
+	toolStopKey        = []byte(`"stop_reason"`)
+	toolStopKeyColon   = []byte(`"stop_reason":`)
+)
 
 func (t *toolStop) Write(p []byte) (int, error) {
 	if t.seen {
 		return len(p), nil
 	}
 	keep := len(toolStopNeedle) - 1
-	t.tail = append(t.tail, p[:min(len(p), keep)]...)
-	if bytes.Contains(t.tail, toolStopNeedle) || bytes.Contains(p, toolStopNeedle) {
-		t.seen, t.tail = true, nil
-		return len(p), nil
-	}
-	switch {
-	case len(p) >= keep:
-		t.tail = append(t.tail[:0], p[len(p)-keep:]...)
-	case len(t.tail) > keep:
-		t.tail = append(t.tail[:0], t.tail[len(t.tail)-keep:]...)
+	// Fast path: when there is no JSON whitespace anywhere near a colon in p,
+	// or we simply scan byte-by-byte dropping whitespace only immediately
+	// before/after the colon following "stop_reason".
+	for _, b := range p {
+		if (b == ' ' || b == '\t' || b == '\r' || b == '\n') &&
+			(bytes.HasSuffix(t.tail, toolStopKey) || bytes.HasSuffix(t.tail, toolStopKeyColon)) {
+			continue
+		}
+		t.tail = append(t.tail, b)
+		if len(t.tail) >= len(toolStopNeedle) {
+			if bytes.Equal(t.tail[len(t.tail)-len(toolStopNeedle):], toolStopNeedle) {
+				t.seen, t.tail = true, nil
+				return len(p), nil
+			}
+			// Keep at most len(toolStopNeedle)-1 trailing bytes.
+			copy(t.tail, t.tail[len(t.tail)-keep:])
+			t.tail = t.tail[:keep]
+		}
 	}
 	return len(p), nil
 }

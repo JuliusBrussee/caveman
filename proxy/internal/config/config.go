@@ -443,10 +443,10 @@ func (c Config) withDefaults() Config {
 	default:
 		c.SubscriptionCompress = "off"
 	}
-	// Normalize to one spelling of off so the decision point is a single equality
-	// against "annotations"; an unrecognized value can never read as enabled.
+	// Normalize to explicit opt-in modes ("annotations" or "shrink") and one
+	// spelling of off so an unrecognized value can never read as enabled.
 	switch c.ToolSchemaStrip {
-	case "annotations":
+	case "annotations", "shrink":
 	default:
 		c.ToolSchemaStrip = "off"
 	}
@@ -461,6 +461,16 @@ func (c Config) withDefaults() Config {
 	}
 	if c.Optimizers == nil {
 		c.Optimizers = map[string]bool{}
+	}
+	if env.Bool("CAVEMAN_DEFER_MCP_TOOLS", false) {
+		c.Optimizers["anthropic-defer-mcp-tools"] = true
+		c.Optimizers["openai-defer-mcp-tools"] = true
+	}
+	if env.Bool("CAVEMAN_CANONICAL_TOOLS", false) {
+		c.Optimizers["canonical-tool-order"] = true
+	}
+	if env.Bool("CAVEMAN_TURN_EFFORT", false) {
+		c.Optimizers["turn-effort-step"] = true
 	}
 	for _, optimizerID := range []string{"anthropic-cache-breakpoints", "openai-prompt-cache-key", "bedrock-cache-points"} {
 		if _, configured := c.Optimizers[optimizerID]; !configured {

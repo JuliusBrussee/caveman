@@ -122,6 +122,15 @@ type ToolSchemaStripper interface {
 	StripToolSchema(tools []byte) (out []byte, ok bool)
 }
 
+// ToolSchemaShrinker is the optional Compressor capability that runs Caveman's
+// toolschema compressor (caveman-shrink) on a serialized tool catalog, dropping
+// annotation metadata and condensing verbose prose descriptions while preserving
+// names, types, enums, required, defaults, and constraint sentences. It is a
+// pure byte transform; CCR archival is owned by the gateway.
+type ToolSchemaShrinker interface {
+	ShrinkToolSchema(tools []byte) (out []byte, ok bool)
+}
+
 // Estimator is the optional observe-only half of Compressor. It measures the
 // token reduction a real CompressSegment would achieve WITHOUT storing any CCR
 // recovery original (it runs the engine's network-free Simulate path). Record-mode
@@ -613,12 +622,12 @@ func New(cfg Config) *Server {
 	if upstream == "" {
 		upstream = DefaultChatGPTUpstream
 	}
-	if cfg.ToolSchemaStrip == toolSchemaStripMode && cfg.Logger != nil {
+	if (cfg.ToolSchemaStrip == toolSchemaStripMode || cfg.ToolSchemaStrip == toolSchemaShrinkMode) && cfg.Logger != nil {
 		// One startup line, because this lever rewrites the head of the provider
 		// cache prefix: the operator should be able to date the one-time cold write
 		// to a config change rather than to the provider.
-		cfg.Logger.Info("tool-schema annotation strip enabled",
-			"mode", toolSchemaStripMode, "strip_version", toolSchemaStripVersion)
+		cfg.Logger.Info("tool-schema rewrite enabled",
+			"mode", cfg.ToolSchemaStrip, "strip_version", toolSchemaVersionForMode(cfg.ToolSchemaStrip))
 	}
 	if cfg.BreakpointPlan == breakpointPlanModeFrontier && cfg.Logger != nil {
 		// One startup line, for the same reason the strip has one: the planner moves

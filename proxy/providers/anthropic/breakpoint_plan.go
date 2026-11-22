@@ -1,6 +1,7 @@
 package anthropic
 
 import (
+	"bytes"
 	"encoding/json"
 	"sort"
 
@@ -120,9 +121,9 @@ func coldStartPlan(data []byte, root jsonsplice.Span) []spliceEdit {
 	return edits
 }
 
-// toolsTailEdit marks the last tool. Anthropic caches everything up to and
-// including the marked block, so one marker on the last tool caches the whole
-// tool catalog — the largest stable prefix in an agent request.
+// toolsTailEdit marks the last non-deferred tool. Anthropic forbids
+// cache_control on any tool with defer_loading: true (HTTP 400), so deferred
+// tools are skipped.
 func toolsTailEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 	tools, ok := jsonsplice.Field(data, root, "tools")
 	if !ok || !isJSONArray(data, tools) {
@@ -133,16 +134,22 @@ func toolsTailEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 		return spliceEdit{}, false
 	}
 	for i := len(elements) - 1; i >= 0; i-- {
-		if isJSONObject(data, elements[i]) {
-			return appendFieldEdit(data, elements[i])
+		if !isJSONObject(data, elements[i]) {
+			continue
 		}
+		if defSpan, hasDef := jsonsplice.Field(data, elements[i], "defer_loading"); hasDef {
+			if bytes.Equal(bytes.TrimSpace(data[defSpan.Start:defSpan.End]), []byte("true")) {
+				continue
+			}
+		}
+		return appendFieldEdit(data, elements[i])
 	}
 	return spliceEdit{}, false
 }
 
-// systemTailEdit marks the tail of the system prompt. A string system prompt is
-// rewritten into its equivalent single-text-block array form, which is the only
-// shape that can carry a marker.
+// systemTailEdit marks the tail of the system prompt. A non-empty string system
+// prompt is rewritten into its equivalent single-text-block array form; empty
+// text blocks are skipped because Anthropic rejects cache_control on empty text.
 func systemTailEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 	system, ok := jsonsplice.Field(data, root, "system")
 	if !ok || system.Start >= system.End {
@@ -150,6 +157,9 @@ func systemTailEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 	}
 	switch data[system.Start] {
 	case '"':
+		if s, ok := jsonsplice.String(data, system); !ok || s == "" {
+			return spliceEdit{}, false
+		}
 		replacement := make([]byte, 0, system.End-system.Start+72)
 		replacement = append(replacement, []byte(`[{"type":"text","text":`)...)
 		replacement = append(replacement, data[system.Start:system.End]...)
@@ -163,7 +173,7 @@ func systemTailEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 			return spliceEdit{}, false
 		}
 		for i := len(elements) - 1; i >= 0; i-- {
-			if isJSONObject(data, elements[i]) {
+			if isCacheableContentBlock(data, elements[i]) {
 				return appendFieldEdit(data, elements[i])
 			}
 		}
@@ -171,9 +181,28 @@ func systemTailEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 	return spliceEdit{}, false
 }
 
-// frontierEdit marks the last content block of the newest message — the rolling
-// tail breakpoint. It bounds every later turn's rebuild to the tail rather than
-// the whole conversation.
+// isCacheableContentBlock reports whether a block object can legally carry
+// cache_control under Anthropic's Messages API (rejecting thinking,
+// redacted_thinking, and empty text blocks, which return HTTP 400).
+func isCacheableContentBlock(data []byte, span jsonsplice.Span) bool {
+	if !isJSONObject(data, span) {
+		return false
+	}
+	typ, _ := jsonsplice.StringField(data, span, "type")
+	if typ == "thinking" || typ == "redacted_thinking" {
+		return false
+	}
+	if typ == "text" {
+		if text, ok := jsonsplice.StringField(data, span, "text"); ok && text == "" {
+			return false
+		}
+	}
+	return true
+}
+
+// frontierEdit marks the last cacheable content block of the newest message with
+// array content — the rolling tail breakpoint. It bounds every later turn's
+// rebuild to the tail rather than the whole conversation.
 func frontierEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 	messages, ok := jsonsplice.Field(data, root, "messages")
 	if !ok || !isJSONArray(data, messages) {
@@ -183,23 +212,23 @@ func frontierEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 	if !valid || len(elements) == 0 {
 		return spliceEdit{}, false
 	}
-	last := elements[len(elements)-1]
-	if !isJSONObject(data, last) {
-		return spliceEdit{}, false
-	}
-	content, ok := jsonsplice.Field(data, last, "content")
-	if !ok || !isJSONArray(data, content) {
-		// A string content block cannot carry a marker without reshaping the
-		// message itself, which is model-visible. Leave it alone.
-		return spliceEdit{}, false
-	}
-	blocks, valid := jsonsplice.Elements(data, content)
-	if !valid {
-		return spliceEdit{}, false
-	}
-	for i := len(blocks) - 1; i >= 0; i-- {
-		if isJSONObject(data, blocks[i]) {
-			return appendFieldEdit(data, blocks[i])
+	for m := len(elements) - 1; m >= 0; m-- {
+		msg := elements[m]
+		if !isJSONObject(data, msg) {
+			continue
+		}
+		content, ok := jsonsplice.Field(data, msg, "content")
+		if !ok || !isJSONArray(data, content) {
+			continue
+		}
+		blocks, valid := jsonsplice.Elements(data, content)
+		if !valid {
+			return spliceEdit{}, false
+		}
+		for i := len(blocks) - 1; i >= 0; i-- {
+			if isCacheableContentBlock(data, blocks[i]) && !blockIsMarked(data, blocks[i]) {
+				return appendFieldEdit(data, blocks[i])
+			}
 		}
 	}
 	return spliceEdit{}, false
@@ -210,6 +239,12 @@ func frontierEdit(data []byte, root jsonsplice.Span) (spliceEdit, bool) {
 // composition dead-zone fall-through described on PlanCacheBreakpoints.
 func managedPlan(data []byte, root jsonsplice.Span, budget int, payg bool) []spliceEdit {
 	if budget <= 0 {
+		return nil
+	}
+	// Never stack an explicit breakpoint on top of Anthropic's top-level
+	// automatic prompt caching (`root.cache_control`), which already caches the
+	// entire conversation up to the newest block.
+	if _, hasTopAutomatic := jsonsplice.Field(data, root, "cache_control"); hasTopAutomatic {
 		return nil
 	}
 	if edits := lookbackPlan(); len(edits) > 0 {

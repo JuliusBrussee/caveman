@@ -150,6 +150,35 @@ func TestGeminiRetrieveWireRoundTrip(t *testing.T) {
 		t.Fatal("second injection should reject duplicate nested declaration")
 	}
 
+	// Existing functionDeclarations[] must merge into the existing object (never append a second functionDeclarations entry).
+	withExisting := []byte(`{"tools":[{"functionDeclarations":[{"name":"read_file","description":"Read"}]}],"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	mergedGem, ok := injectRetrieveTool("gemini", route, withExisting)
+	if !ok {
+		t.Fatal("injectRetrieveTool failed when Gemini tools already had functionDeclarations")
+	}
+	var mergedRoot map[string]any
+	if err := json.Unmarshal(mergedGem, &mergedRoot); err != nil {
+		t.Fatalf("invalid merged Gemini JSON: %v", err)
+	}
+	mergedTools := mergedRoot["tools"].([]any)
+	if len(mergedTools) != 1 {
+		t.Fatalf("expected 1 tools entry with merged functionDeclarations, got %d: %s", len(mergedTools), mergedGem)
+	}
+	mergedDecls := mergedTools[0].(map[string]any)["functionDeclarations"].([]any)
+	if len(mergedDecls) != 2 {
+		t.Fatalf("expected 2 merged declarations, got %d: %s", len(mergedDecls), mergedGem)
+	}
+
+	// Gemini cachedContent and restrictive toolConfig must refuse injection cleanly.
+	withCache := []byte(`{"cachedContent":"cachedContents/abc","contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	if _, ok := injectRetrieveTool("gemini", route, withCache); ok {
+		t.Fatal("Gemini request with cachedContent must refuse retrieve tool injection")
+	}
+	withNoneMode := []byte(`{"toolConfig":{"functionCallingConfig":{"mode":"NONE"}},"contents":[{"role":"user","parts":[{"text":"hi"}]}]}`)
+	if _, ok := injectRetrieveTool("gemini", route, withNoneMode); ok {
+		t.Fatal("Gemini request with toolConfig mode=NONE must refuse retrieve tool injection")
+	}
+
 	respBody := []byte(`{"candidates":[{"content":{"role":"model","parts":[{"thoughtSignature":"sig"},{"functionCall":{"id":"call_g","name":"caveman_retrieve","args":{"handle":"ccr_gemini","query":"schema"}}}]},"finishReason":"STOP"}]}`)
 	id, handle, query, ok := parseRetrieveCall("gemini", route, respBody)
 	if !ok || id != "call_g" || handle != "ccr_gemini" || query != "schema" {

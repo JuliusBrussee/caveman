@@ -484,6 +484,27 @@ func (c *engineCompressor) StripToolSchema(tools []byte) ([]byte, bool) {
 	return compressors.StripToolSchemaAnnotations(tools)
 }
 
+// ShrinkToolSchema compresses a serialized tool catalog using Caveman's
+// toolschema compressor (dropping annotation metadata and condensing verbose
+// free-text descriptions while keeping names, types, enums, required, defaults,
+// and constraint sentences). CCR archival is handled by the gateway.
+func (c *engineCompressor) ShrinkToolSchema(tools []byte) ([]byte, bool) {
+	best := tools
+	changed := false
+	if stripped, ok := compressors.StripToolSchemaAnnotations(best); ok && len(stripped) < len(best) {
+		best = stripped
+		changed = true
+	}
+	if shrunk, ok := compressors.NewToolSchema().Compress(best); ok && len(shrunk) < len(best) {
+		best = shrunk
+		changed = true
+	}
+	if !changed {
+		return nil, false
+	}
+	return best, true
+}
+
 func (c *engineCompressor) StoreOriginal(body []byte) (string, error) {
 	if c.store == nil {
 		// The estimate-only compressor has no store: fail closed so a caller that
