@@ -1,6 +1,6 @@
 {
   "name": "caveman",
   "description": "Ultra-compressed communication mode. Shortens replies while preserving technical substance, code, commands, and exact errors.",
-  "version": "4.1.0",
+  "version": "4.2.0",
   "contextFileName": "GEMINI.md"
 }

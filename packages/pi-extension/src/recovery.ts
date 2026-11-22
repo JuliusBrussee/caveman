@@ -195,7 +195,7 @@ export class RecoveryClient {
       await this.call("initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "caveman-pi-extension", version: "0.3.2" },
+        clientInfo: { name: "caveman-pi-extension", version: "0.4.0" },
       }, undefined, INIT_TIMEOUT_MS);
       this.notify("notifications/initialized");
       if (this.disposed) { this.onChildGone(child); this.stop(child); return false; }
@@ -382,7 +382,7 @@ export class CodemodeClient {
       await this.call("initialize", {
         protocolVersion: "2024-11-05",
         capabilities: {},
-        clientInfo: { name: "caveman-pi-codemode", version: "0.3.2" },
+        clientInfo: { name: "caveman-pi-codemode", version: "0.4.0" },
       }, undefined, CALL_TIMEOUT_MS);
       try {
         this.child?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
