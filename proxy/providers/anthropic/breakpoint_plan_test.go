@@ -319,3 +319,61 @@ func blocksWithMarks(count int, marked ...int) string {
 	}
 	return strings.Join(parts, ",")
 }
+
+func TestBreakpointPlanSkipsDeferredToolsThinkingBlocksEmptySystemAndAutoCache(t *testing.T) {
+	// 1. Last tool has defer_loading:true -> tools breakpoint must land on previous non-deferred tool.
+	deferredTail := `{"model":"claude-sonnet-4-6","max_tokens":1024,` +
+		`"tools":[{"name":"read","input_schema":{}},{"name":"mcp__gh__list","defer_loading":true,"input_schema":{}}],` +
+		`"system":"You are helpful.",` +
+		`"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+	out, ok := planCacheBreakpoints([]byte(deferredTail), true)
+	if !ok {
+		t.Fatal("expected cold plan with deferred trailing tool")
+	}
+	var root map[string]any
+	if err := json.Unmarshal(out, &root); err != nil {
+		t.Fatalf("invalid json: %v", err)
+	}
+	tools := root["tools"].([]any)
+	if _, hasCC := tools[1].(map[string]any)["cache_control"]; hasCC {
+		t.Fatalf("deferred tool must never receive cache_control: %s", out)
+	}
+	if _, hasCC := tools[0].(map[string]any)["cache_control"]; !hasCC {
+		t.Fatalf("last non-deferred tool should receive cache_control: %s", out)
+	}
+
+	// 2. Trailing thinking block in newest message -> frontier must skip thinking and mark prior non-empty block.
+	withThinking := `{"model":"claude-sonnet-4-6","max_tokens":1024,` +
+		`"messages":[{"role":"assistant","content":[{"type":"text","text":"done"},{"type":"thinking","thinking":"hmm"}]}]}`
+	outThink, ok := planCacheBreakpoints([]byte(withThinking), true)
+	if !ok {
+		t.Fatal("expected frontier breakpoint skipping thinking block")
+	}
+	var rootThink map[string]any
+	_ = json.Unmarshal(outThink, &rootThink)
+	blocks := rootThink["messages"].([]any)[0].(map[string]any)["content"].([]any)
+	if _, hasCC := blocks[1].(map[string]any)["cache_control"]; hasCC {
+		t.Fatalf("thinking block must never receive cache_control: %s", outThink)
+	}
+	if _, hasCC := blocks[0].(map[string]any)["cache_control"]; !hasCC {
+		t.Fatalf("preceding text block should receive frontier cache_control: %s", outThink)
+	}
+
+	// 3. Empty string system prompt must NOT get converted to an empty cached text block.
+	emptySys := `{"model":"claude-sonnet-4-6","system":"","messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+	outEmptySys, ok := planCacheBreakpoints([]byte(emptySys), true)
+	if !ok {
+		t.Fatal("expected frontier breakpoint even with empty system")
+	}
+	var rootEmptySys map[string]any
+	_ = json.Unmarshal(outEmptySys, &rootEmptySys)
+	if rootEmptySys["system"] != "" {
+		t.Fatalf("empty system string must remain untouched, got: %#v", rootEmptySys["system"])
+	}
+
+	// 4. Top-level automatic caching (root cache_control) -> planner must stay hands-off.
+	autoCache := `{"model":"claude-sonnet-4-6","cache_control":{"type":"ephemeral"},"messages":[{"role":"user","content":[{"type":"text","text":"hi"}]}]}`
+	if outAuto, ok := planCacheBreakpoints([]byte(autoCache), true); ok {
+		t.Fatalf("automatic top-level cache_control must not be rewritten: %s", outAuto)
+	}
+}

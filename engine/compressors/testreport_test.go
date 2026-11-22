@@ -661,3 +661,37 @@ func TestTestReportStackTrimming(t *testing.T) {
 		t.Error("expected last frame")
 	}
 }
+
+func TestTestReportGoBuildFailurePreservesDiagnostics(t *testing.T) {
+	c := compressors.NewTestReport()
+	raw := []byte(`# github.com/example/app/broken
+broken/main.go:12:5: undefined: doesNotExist
+broken/main.go:19:2: cannot use x (variable of type string) as int value
+FAIL	github.com/example/app/broken [build failed]
+=== RUN   TestOne
+--- PASS: TestOne (0.00s)
+=== RUN   TestTwo
+--- PASS: TestTwo (0.00s)
+=== RUN   TestThree
+--- PASS: TestThree (0.00s)
+=== RUN   TestFour
+--- PASS: TestFour (0.00s)
+PASS
+ok  	github.com/example/app/okpkg	0.012s
+`)
+	out, ok := c.Compress(raw)
+	if !ok {
+		// Fail-closed passthrough is also acceptable; either way diagnostics cannot be dropped.
+		return
+	}
+	for _, want := range []string{
+		"1 failed",
+		"github.com/example/app/broken [build failed]",
+		"undefined: doesNotExist",
+		"cannot use x",
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("compressed go test output dropped %q:\n%s", want, out)
+		}
+	}
+}

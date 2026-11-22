@@ -427,3 +427,56 @@ func TestToolSchemaStripSurvivesStoreFailure(t *testing.T) {
 		t.Fatalf("a catalog first sent unstripped must stay unstripped:\n%s\n%s", rt.bodies[2], rt.bodies[3])
 	}
 }
+
+type toolSchemaShrinkCompressor struct {
+	toolSchemaStripCompressor
+	shrinks int
+}
+
+func (c *toolSchemaShrinkCompressor) ShrinkToolSchema(tools []byte) ([]byte, bool) {
+	c.mu.Lock()
+	c.shrinks++
+	c.mu.Unlock()
+	return compressors.NewToolSchema().Compress(tools)
+}
+
+func TestToolSchemaShrinkCompressesDescriptionsAndCachesDeterministically(t *testing.T) {
+	rt := &captureTransport{responses: []string{subMessageRespBody, subMessageRespBody}}
+	comp := &toolSchemaShrinkCompressor{}
+	srv, sink := newToolSchemaStripServer(t, comp, rt, Config{
+		RecoveryViaMCP:  true,
+		ToolSchemaStrip: toolSchemaShrinkMode,
+	})
+
+	verboseCatalog := `[{"name":"mcp__github__list_pull_requests","description":"Retrieve a comprehensive paginated list of all pull requests in the target repository including review metadata, check run statuses, draft indicators, mergeability flags, and branch references. Must provide valid owner and repo strings.","input_schema":{"$schema":"https://json-schema.org/draft/2020-12/schema","title":"ListPRsInput","type":"object","properties":{"owner":{"type":"string","title":"Owner","examples":["octocat"],"description":"Repository owner organization or user login name used to scope the GitHub API query."},"repo":{"type":"string","title":"Repo","examples":["hello-world"],"description":"Repository name without the owner prefix."}},"required":["owner","repo"]}}]`
+	makeReq := func(msg string) string {
+		return `{"model":"claude-sonnet-4-6","max_tokens":64,"tools":` + verboseCatalog + `,"messages":[{"role":"user","content":"` + msg + `"}]}`
+	}
+
+	rec1 := serveBody(t, srv, "/v1/messages", makeReq("turn 1"), subscriptionAgentHeaders)
+	rec2 := serveBody(t, srv, "/v1/messages", makeReq("turn 2"), subscriptionAgentHeaders)
+
+	if rec1.Header().Get("x-caveman-toolschema-strip") != toolSchemaShrinkMode {
+		t.Fatalf("header=%q want %q", rec1.Header().Get("x-caveman-toolschema-strip"), toolSchemaShrinkMode)
+	}
+	if rec1.Header().Get("x-caveman-toolschema-recovery-handle") == "" {
+		t.Fatalf("missing recovery handle header")
+	}
+	if rec2.Header().Get("x-caveman-toolschema-recovery-handle") != rec1.Header().Get("x-caveman-toolschema-recovery-handle") {
+		t.Fatalf("recovery handle changed across turns")
+	}
+	// Turn 2 must hit PrefixCache (ShrinkToolSchema called once, exact same shrunk tools sent).
+	if comp.shrinks != 1 {
+		t.Fatalf("shrinks=%d want 1 (turn 2 must hit prefix cache)", comp.shrinks)
+	}
+	if len(rt.bodies[0]) >= len(makeReq("turn 1")) {
+		t.Fatalf("expected shrunk request to be smaller than original (%d >= %d)", len(rt.bodies[0]), len(makeReq("turn 1")))
+	}
+	if !strings.Contains(string(rt.bodies[0]), "Must provide valid owner and repo strings.") {
+		t.Fatalf("constraint sentence must be preserved by caveman-shrink: %s", rt.bodies[0])
+	}
+	row := sink.last(t)
+	if !strings.Contains(strings.Join(row.OptimizationIDs, ","), toolSchemaShrinkOptimizerID) {
+		t.Fatalf("expected %s in OptimizationIDs, got %v", toolSchemaShrinkOptimizerID, row.OptimizationIDs)
+	}
+}

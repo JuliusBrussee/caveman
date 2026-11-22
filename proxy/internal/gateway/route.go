@@ -312,6 +312,10 @@ type routeRun struct {
 	wire   effortWire // where the per-message marks go
 	keyed  bool       // the route stage added the session's prompt_cache_key
 	record bool       // record mode: never keyed
+	// localTurnEffort marks a session-local cache-safe turn-effort step
+	// (`CAVEMAN_TURN_EFFORT=1`): strictly per-message marks only, NEVER
+	// falling back to cache-busting top-level effort mutation.
+	localTurnEffort bool
 }
 
 // effortWire is where an effort goes on one wire: Anthropic Messages (a
@@ -803,7 +807,11 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	}
 	noMarks := run.wire.noUpdates(body)
 	if _, _, _, ok := run.wire.spans(body); (!ok || noMarks) && run.wire.responses && mode == "message" {
-		mode = "top" // a Responses input string is one user turn: no item to put a mark before
+		if run.localTurnEffort {
+			mode = "" // cache-safe local turn-effort never downgrades to top-level mutation
+		} else {
+			mode = "top" // a Responses input string is one user turn: no item to put a mark before
+		}
 	}
 	top := run.wire.top
 	// Work on a copy so a body is never spliced under the lock; only a turn's
@@ -815,6 +823,9 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	}
 	if session == nil {
 		s.routes.mu.Unlock()
+		if run.localTurnEffort {
+			return body // no stable session key to replay marks: pass through cache-safely
+		}
 		run.heal = !run.off && !blockBinding(body)
 		if mode == "top" {
 			body, run.applied = setString(body, answer.Effort, top...)
@@ -860,12 +871,16 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	switch {
 	case refusals[model] || noMarks:
 		// This model refused marks (or the request may carry none): Cloud's
-		// effort goes top-level, as the heal that found out sent it.
-		if answer.Effort != "" {
+		// effort goes top-level, as the heal that found out sent it. Cache-safe
+		// local turn-effort NEVER falls back to top-level mutation.
+		if !run.localTurnEffort && answer.Effort != "" {
 			body, run.applied = setString(body, answer.Effort, top...)
 			run.effort = answer.Effort
 		}
 	case mode == "top" && len(work.marks) == 0:
+		if run.localTurnEffort {
+			break
+		}
 		root, _ := objectRoot(body)
 		own := run.wire.topEffort(body, root)
 		body, run.applied = setString(body, answer.Effort, top...)
@@ -891,6 +906,7 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 		out, run.unmarked, run.marks, run.effort = perMessage(body, run.wire, &work, markAsk{
 			effort: answer.Effort, top: mode == "top", fallback: fallback,
 			allowNew: !run.perRequest || mode == "top", restore: restore, moved: model != run.asked,
+			freezeTop: run.localTurnEffort,
 		})
 		run.marked = run.unmarked != nil
 		run.applied = run.marked || !bytes.Equal(out, body)
@@ -930,12 +946,13 @@ func (state *effortState) applyStrip(body []byte) (out []byte, changed bool) {
 
 // markAsk is what perMessage applies to one request.
 type markAsk struct {
-	effort   string // Cloud's effort, "" none
-	top      bool   // Cloud answered effort_mode "top"
-	fallback string // the model's default effort, "" unknown
-	allowNew bool   // a new mark may go in (not a compaction or side request)
-	restore  bool   // no effort from Cloud: the request runs at its own
-	moved    bool   // the request goes to another model than the asked one
+	effort    string // Cloud's effort, "" none
+	top       bool   // Cloud answered effort_mode "top"
+	fallback  string // the model's default effort, "" unknown
+	allowNew  bool   // a new mark may go in (not a compaction or side request)
+	restore   bool   // no effort from Cloud: the request runs at its own
+	moved     bool   // the request goes to another model than the asked one
+	freezeTop bool   // never overwrite top-level effort even on a fresh body
 }
 
 // perMessage re-inserts the session's marks into an Anthropic Messages body
@@ -1036,7 +1053,7 @@ func perMessage(body []byte, w effortWire, state *effortState, ask markAsk) (out
 	if main {
 		if state.top == nil {
 			top := own
-			if own != "" && effort != "" && w.fresh(body) {
+			if !ask.freezeTop && own != "" && effort != "" && w.fresh(body) {
 				top = effort
 			}
 			state.top = &top
@@ -1458,6 +1475,16 @@ func (s *Server) routeHeal(run *routeRun, resp *http.Response, sent []byte, mode
 			return out, healStrip, max(from, 0)
 		}
 	case run.marked && (refusalRE.Match(head) || markErrRE.Match(head)):
+		if run.localTurnEffort {
+			// Cache-safe local turn-effort NEVER falls back to mutating the
+			// top-level effort field; retry cleanly with exact unmarked bytes
+			// and latch the model so subsequent turns stay cache-safe.
+			top := run.unmarked
+			if run.dropBlocks {
+				top, _ = withDropBlock(top)
+			}
+			return top, healMarks, 0
+		}
 		top, _ := setString(run.unmarked, run.effort, run.wire.top...)
 		if run.dropBlocks {
 			top, _ = withDropBlock(top)

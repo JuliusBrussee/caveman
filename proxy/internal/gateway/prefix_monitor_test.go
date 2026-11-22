@@ -468,3 +468,42 @@ func TestTripwireFlagsADroppedBreakpoint(t *testing.T) {
 		t.Fatalf("no ERROR line for a dropped breakpoint:\n%s", logs.String())
 	}
 }
+
+func TestPrefixMonitorHeadDriftAttribution(t *testing.T) {
+	m := newPrefixMonitor()
+	toolsAB := []byte(`[{"name":"alpha"},{"name":"beta"}]`)
+	toolsBA := []byte(`[{"name":"beta"},{"name":"alpha"}]`)
+	toolsAC := []byte(`[{"name":"alpha"},{"name":"gamma"}]`)
+
+	// Anchor 1: sys1 + toolsAB + msg1.
+	c1 := [][]byte{[]byte("sys1"), toolsAB, []byte("first user prompt")}
+	if cause, _ := m.observe("s1", observation{client: c1, forwarded: c1, cached: 3}); cause != "" {
+		t.Fatalf("first observation must not bust: %q", cause)
+	}
+
+	// Reordered tools on the SAME conversation -> headDrift reports "tools_reordered"
+	// while observe() keeps its non-busting contract.
+	cReordered := [][]byte{[]byte("sys1"), toolsBA, []byte("first user prompt"), []byte("turn 2")}
+	if cause, _ := m.observe("s1", observation{client: cReordered, forwarded: cReordered, cached: 4}); cause != "" {
+		t.Fatalf("interleaved/changed tools keeps observe() non-busting contract, got %q", cause)
+	}
+	if drift := m.headDrift("s1", cReordered); drift != "tools_reordered" {
+		t.Fatalf("expected headDrift=tools_reordered, got %q", drift)
+	}
+
+	// Changed tool set -> "tools_changed".
+	m2 := newPrefixMonitor()
+	m2.observe("s2", observation{client: c1, forwarded: c1, cached: 3})
+	cChanged := [][]byte{[]byte("sys1"), toolsAC, []byte("first user prompt")}
+	if drift := m2.headDrift("s2", cChanged); drift != "tools_changed" {
+		t.Fatalf("expected headDrift=tools_changed, got %q", drift)
+	}
+
+	// Drifted system prompt on same first message -> "system_drifted".
+	m3 := newPrefixMonitor()
+	m3.observe("s3", observation{client: c1, forwarded: c1, cached: 3})
+	cSysDrift := [][]byte{[]byte("sys1-with-new-timestamp"), toolsAB, []byte("first user prompt")}
+	if drift := m3.headDrift("s3", cSysDrift); drift != "system_drifted" {
+		t.Fatalf("expected headDrift=system_drifted, got %q", drift)
+	}
+}

@@ -66,6 +66,9 @@ func (e *Engine) Detect(input []byte) string {
 	if looksLikeJUnitXML(trimmed) && compressors.LooksTestReport(trimmed) {
 		return TypeTestReport
 	}
+	if looksLikePlainTextTestReport(trimmed) && compressors.LooksTestReport(trimmed) {
+		return TypeTestReport
+	}
 	// A page saved with a few stray carriage returns among its CRLF line ends is
 	// still a page: its document declaration outranks the bare-CR count below,
 	// which would otherwise route it to the terminal compressor. An ANSI escape
@@ -275,6 +278,19 @@ func looksLikeJUnitXML(trimmed []byte) bool {
 		if el, ok := tok.(xml.StartElement); ok {
 			return el.Name.Local == "testsuites" || el.Name.Local == "testsuite"
 		}
+	}
+	return false
+}
+
+// looksLikePlainTextTestReport is a fast byte pre-check for verbose `go test -v`
+// and `cargo test` runs before handing off to compressors.LooksTestReport.
+func looksLikePlainTextTestReport(trimmed []byte) bool {
+	if bytes.Contains(trimmed, []byte("=== RUN")) &&
+		(bytes.Contains(trimmed, []byte("--- PASS:")) || bytes.Contains(trimmed, []byte("--- FAIL:"))) {
+		return true
+	}
+	if bytes.Contains(trimmed, []byte("running ")) && bytes.Contains(trimmed, []byte("test result:")) {
+		return true
 	}
 	return false
 }

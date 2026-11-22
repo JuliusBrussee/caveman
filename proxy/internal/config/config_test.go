@@ -539,6 +539,15 @@ func TestLoad_ToolSchemaStripDefaultsOffAndFailsClosed(t *testing.T) {
 		t.Fatalf("toolschema_strip = %q, want annotations", cfg.ToolSchemaStrip)
 	}
 
+	t.Setenv("CAVEMAN_TOOLSCHEMA_STRIP", "shrink")
+	cfg, err = Load(path)
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if cfg.ToolSchemaStrip != "shrink" {
+		t.Fatalf("env override toolschema_strip = %q, want shrink", cfg.ToolSchemaStrip)
+	}
+
 	t.Setenv("CAVEMAN_TOOLSCHEMA_STRIP", "off")
 	cfg, err = Load(path)
 	if err != nil {

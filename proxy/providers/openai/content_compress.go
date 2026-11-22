@@ -201,6 +201,7 @@ func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate,
 	}
 	latestUser, latestTool := -1, -1
 	recovered := make(map[string]bool)
+	isToolOutput := make([]bool, len(items))
 	for i, item := range items {
 		if item.start >= item.end || body[item.start] != '{' {
 			continue
@@ -210,6 +211,7 @@ func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate,
 		switch {
 		case typ == "function_call_output" || typ == "custom_tool_call_output":
 			latestTool = i
+			isToolOutput[i] = true
 		case typ == "function_call" || typ == "custom_tool_call":
 			name, _ := objectStringField(body, item, "name")
 			if providers.IsRecoveryToolName(name) {
@@ -221,9 +223,18 @@ func responsesZones(body []byte, root jsonSpan, liveOnly bool) ([]zoneCandidate,
 			latestUser = i
 		}
 	}
+	// Mark the entire contiguous parallel tool-output burst ending at latestTool
+	// as live, not just the single last item. Parallel tool calls arrive in one
+	// batch after the model's function_call/custom_tool_call items; marking only
+	// latestTool left every earlier sibling in the same brand-new turn uncompressed
+	// and permanently stamped RawDecisionHandle on the next turn.
+	liveTool := make(map[int]bool)
+	for i := latestTool; i >= 0 && isToolOutput[i]; i-- {
+		liveTool[i] = true
+	}
 	var out []zoneCandidate
 	for i, item := range items {
-		live := i == latestTool || i == latestUser
+		live := liveTool[i] || i == latestUser
 		if liveOnly && !live {
 			continue
 		}
@@ -368,23 +379,26 @@ func collectResponsesOutputParts(body []byte, output jsonSpan) []spliceCandidate
 	return candidates
 }
 
-// latestOpenAITargets is the live-zone rule for the chat grammar: the latest tool
-// message and the latest user message. Everything before them is history the
-// provider may already have cached automatically.
+// latestOpenAITargets is the live-zone rule for the chat grammar: the latest
+// contiguous burst of parallel tool messages plus the latest user message.
+// Everything before them is history the provider may already have cached
+// automatically.
 func latestOpenAITargets(body []byte, messages []jsonSpan) map[int]bool {
 	latestUser := -1
 	latestTool := -1
+	isTool := make([]bool, len(messages))
 	for i, msg := range messages {
 		switch messageRole(body, msg) {
 		case "user":
 			latestUser = i
 		case "tool":
 			latestTool = i
+			isTool[i] = true
 		}
 	}
 	targets := map[int]bool{}
-	if latestTool >= 0 {
-		targets[latestTool] = true
+	for i := latestTool; i >= 0 && isTool[i]; i-- {
+		targets[i] = true
 	}
 	if latestUser >= 0 {
 		targets[latestUser] = true

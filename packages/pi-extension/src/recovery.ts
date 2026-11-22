@@ -297,3 +297,203 @@ export class RecoveryClient {
     } catch { /* fail-open */ }
   }
 }
+
+/**
+ * CodemodeClient — lazy stdio MCP client for `caveman-mcp codemode`.
+ * Starts ONLY when a Pi session opts into Code-Mode (`CAVEMAN_PI_CODEMODE=1`)
+ * and actually calls one of the `codemode_*` tools. Zero overhead otherwise.
+ */
+export class CodemodeClient {
+  private binary: string | undefined;
+  private extraArgs: string[];
+  private child: ChildProcess | undefined;
+  private initialized = false;
+  private ensuring: Promise<boolean> | undefined;
+  private nextId = 1;
+  private pending = new Map<number, Pending>();
+  private buffer = "";
+  private disposed = false;
+
+  constructor(
+    binary: string | undefined = resolveMcpBinary(),
+    extraArgs: string[] = defaultCodemodeArgs(),
+  ) {
+    this.binary = binary;
+    this.extraArgs = extraArgs;
+  }
+
+  async ensure(): Promise<boolean> {
+    if (this.disposed || !this.binary) return false;
+    if (this.child && this.initialized) return true;
+    this.ensuring ??= this.start().finally(() => { this.ensuring = undefined; });
+    return this.ensuring;
+  }
+
+  async callTool(name: string, args: Record<string, unknown>, signal: AbortSignal | undefined): Promise<RetrieveResult> {
+    if (!(await this.ensure())) {
+      return { text: JSON.stringify({ error: "cave_codemode_unavailable", message: "caveman-mcp codemode is not available this session" }), isError: true };
+    }
+    try {
+      const timeoutMs = codemodeCallTimeoutMs(name, args);
+      const result = await this.call("tools/call", { name, arguments: args }, signal, timeoutMs) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+      const text = (result.content ?? []).map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : "")).join("");
+      return { text, isError: Boolean(result.isError) };
+    } catch (error) {
+      return { text: JSON.stringify({ error: "cave_codemode_transport", message: (error as Error).message }), isError: true };
+    }
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    const child = this.child;
+    this.child = undefined;
+    this.initialized = false;
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("codemode client disposed"));
+    }
+    this.pending.clear();
+    if (child) {
+      try { child.stdin?.end(); } catch { /* already gone */ }
+      const term = setTimeout(() => { try { child.kill("SIGTERM"); } catch { /* gone */ } }, 500);
+      const kill = setTimeout(() => { try { child.kill("SIGKILL"); } catch { /* gone */ } }, 2000);
+      child.once("exit", () => { clearTimeout(term); clearTimeout(kill); });
+    }
+  }
+
+  private async start(): Promise<boolean> {
+    let child: ChildProcess;
+    try {
+      const prefixArgs = codemodePrefixArgs();
+      const portable = portableInvocation(this.binary!, [...prefixArgs, "codemode", ...this.extraArgs]);
+      child = spawn(portable.command, portable.args, { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
+    } catch {
+      return false;
+    }
+    this.child = child;
+    this.initialized = false;
+    this.buffer = "";
+    child.on("error", () => this.onChildGone(child));
+    child.on("exit", () => this.onChildGone(child));
+    child.stdin?.on("error", () => this.onChildGone(child));
+    child.stdout?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => this.onData(chunk));
+    try {
+      await this.call("initialize", {
+        protocolVersion: "2024-11-05",
+        capabilities: {},
+        clientInfo: { name: "caveman-pi-codemode", version: "0.3.2" },
+      }, undefined, CALL_TIMEOUT_MS);
+      try {
+        this.child?.stdin?.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+      } catch { /* fail-open */ }
+      if (this.disposed) {
+        this.onChildGone(child);
+        try { child.kill("SIGTERM"); } catch { /* gone */ }
+        return false;
+      }
+      this.initialized = true;
+      return true;
+    } catch {
+      this.onChildGone(child);
+      try { child.kill("SIGTERM"); } catch { /* gone */ }
+      return false;
+    }
+  }
+
+  private onChildGone(child: ChildProcess): void {
+    if (this.child !== child) return;
+    this.child = undefined;
+    this.initialized = false;
+    for (const [, entry] of this.pending) {
+      clearTimeout(entry.timer);
+      entry.reject(new Error("caveman-mcp codemode exited"));
+    }
+    this.pending.clear();
+  }
+
+  private onData(chunk: string): void {
+    this.buffer += chunk;
+    let newline: number;
+    while ((newline = this.buffer.indexOf("\n")) !== -1) {
+      const line = this.buffer.slice(0, newline).trim();
+      this.buffer = this.buffer.slice(newline + 1);
+      if (!line) continue;
+      let message: { id?: unknown; result?: unknown; error?: { message?: string } };
+      try { message = JSON.parse(line); } catch { continue; }
+      if (typeof message.id !== "number") continue;
+      const entry = this.pending.get(message.id);
+      if (!entry) continue;
+      this.pending.delete(message.id);
+      clearTimeout(entry.timer);
+      if (message.error) entry.reject(new Error(message.error.message || "caveman-mcp codemode error"));
+      else entry.resolve(message.result);
+    }
+  }
+
+  private call(method: string, params: Record<string, unknown>, signal: AbortSignal | undefined, timeoutMs = CALL_TIMEOUT_MS): Promise<unknown> {
+    const child = this.child;
+    if (!child?.stdin?.writable) return Promise.reject(new Error("caveman-mcp codemode not running"));
+    if (signal?.aborted) return Promise.reject(new Error("codemode call cancelled"));
+    const id = this.nextId++;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        this.pending.delete(id);
+        reject(new Error(`caveman-mcp codemode ${method} timed out`));
+      }, timeoutMs);
+      timer.unref?.();
+      const onAbort = () => {
+        this.pending.delete(id);
+        clearTimeout(timer);
+        reject(new Error("codemode call cancelled"));
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      this.pending.set(id, {
+        resolve: (value) => { signal?.removeEventListener("abort", onAbort); resolve(value); },
+        reject: (error) => { signal?.removeEventListener("abort", onAbort); reject(error); },
+        timer,
+      });
+      child.stdin!.write(JSON.stringify({ jsonrpc: "2.0", id, method, params }) + "\n", (error) => {
+        if (error) {
+          this.pending.delete(id);
+          clearTimeout(timer);
+          signal?.removeEventListener("abort", onAbort);
+          reject(error);
+        }
+      });
+    });
+  }
+}
+
+export function codemodeCallTimeoutMs(name: string, args: Record<string, unknown>): number {
+  const isExec = name === "codemode_execute" || name === "codemode_mutate";
+  const raw = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
+    ? Math.min(args.timeout_ms, 300_000)
+    : 0;
+  // Allow enough headroom above the gateway's own execution timeout so Pi never
+  // discards a valid late reply (including completed writes).
+  const minExecMs = isExec ? 75_000 : CALL_TIMEOUT_MS;
+  return Math.max(CALL_TIMEOUT_MS, minExecMs, raw > 0 ? raw + 15_000 : 0);
+}
+
+export function codemodePrefixArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.CAVEMAN_MCP_PREFIX_ARGS?.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === "string");
+    }
+  } catch { /* ignore malformed env */ }
+  return [];
+}
+
+function defaultCodemodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const args: string[] = [];
+  const cfg = env.CAVEMAN_PI_CODEMODE_CONFIG?.trim();
+  if (cfg) args.push("--config", cfg);
+  else args.push("--discover");
+  const ws = env.CAVEMAN_PI_CODEMODE_WORKSPACE?.trim();
+  if (ws) args.push("--workspace", ws);
+  return args;
+}

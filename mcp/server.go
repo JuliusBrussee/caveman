@@ -36,6 +36,7 @@ type Tool struct {
 	Name        string
 	Description string
 	InputSchema map[string]any
+	Annotations map[string]any
 	Meta        map[string]any
 	Handler     Handler
 	// ExemptResultCap declares that this tool returns the exact original bytes,
@@ -371,6 +372,9 @@ func (s *Server) toolDefinitions() []map[string]any {
 			"name":        t.Name,
 			"description": t.Description,
 			"inputSchema": t.InputSchema,
+		}
+		if len(t.Annotations) > 0 {
+			definition["annotations"] = t.Annotations
 		}
 		if len(t.Meta) > 0 {
 			definition["_meta"] = t.Meta

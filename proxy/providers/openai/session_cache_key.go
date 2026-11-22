@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
 	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
@@ -46,6 +47,9 @@ const sessionCacheKeyDomain = "caveman.session-prompt-cache-key.v1:"
 // Any parse problem leaves the body unchanged.
 func (a Adapter) PlanCacheBreakpoints(body []byte, meta providers.RequestMetadata, payg bool) ([]byte, bool) {
 	if !payg || meta.SessionID == "" {
+		return nil, false
+	}
+	if isInputTokenCountEndpoint(meta.Endpoint) || strings.HasSuffix(strings.ToLower(meta.Endpoint), "/embeddings") {
 		return nil, false
 	}
 	var root map[string]any

@@ -8,7 +8,7 @@ const stub = join(here, "fixtures", "stub-caveman-mcp.mjs");
 // pathToFileURL, not a bare path: dynamic import() of an absolute Windows
 // path throws ERR_UNSUPPORTED_ESM_URL_SCHEME (the drive letter reads as a URL
 // scheme).
-const { RecoveryClient, shrinkToolResult, MAX_TOOL_OUTPUT_BYTES, MAX_OUTPUT_REPLACEMENT_BYTES } = await import(pathToFileURL(join(here, "..", "dist", "testable.mjs")).href);
+const { RecoveryClient, codemodeCallTimeoutMs, codemodePrefixArgs, shrinkToolResult, MAX_TOOL_OUTPUT_BYTES, MAX_OUTPUT_REPLACEMENT_BYTES } = await import(pathToFileURL(join(here, "..", "dist", "testable.mjs")).href);
 
 const KNOWN_HANDLE = "ccr_0123456789abcdef0123456789abcdef";
 const KNOWN_BYTES = "exact original bytes\nline two éø bytes";
@@ -330,4 +330,13 @@ test("a runtime that gave no reply is reported once, and only for that reason", 
     assert.equal(await shrinkToolResult({ call: async () => { throw new Error("must not run"); } }, "test", outputEvent("x".repeat(MAX_TOOL_OUTPUT_BYTES + 1)), recovery, () => { quiet += 1; }), undefined);
     assert.equal(quiet, quietBefore, "a result that never reaches the runtime is not a quiet runtime");
   } finally { cleanup(); }
+});
+
+test("codemodeCallTimeoutMs extends RPC deadline past long execute_code timeouts and parses prefix args", () => {
+  assert.ok(codemodeCallTimeoutMs("codemode_execute", { timeout_ms: 60_000 }) >= 75_000);
+  assert.ok(codemodeCallTimeoutMs("codemode_mutate", { timeout_ms: 60_000 }) >= 75_000);
+  assert.ok(codemodeCallTimeoutMs("codemode_execute", {}) >= 75_000);
+  assert.equal(codemodeCallTimeoutMs("codemode_search_tools", {}), 30_000);
+  assert.deepEqual(codemodePrefixArgs({ CAVEMAN_MCP_PREFIX_ARGS: JSON.stringify(["-y", "caveman-mcp"]) }), ["-y", "caveman-mcp"]);
+  assert.deepEqual(codemodePrefixArgs({}), []);
 });

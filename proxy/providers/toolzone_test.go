@@ -31,6 +31,51 @@ func TestExtractToolCatalogReturnsExactBytesAndSplicesInPlace(t *testing.T) {
 	}
 }
 
+func TestExtractToolCatalogMultiProvider(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		meta providers.RequestMetadata
+		body string
+	}{
+		{
+			name: "openai chat",
+			meta: providers.RequestMetadata{Provider: "openai", Endpoint: "/v1/chat/completions"},
+			body: `{"model":"gpt-5.6","tools":[{"type":"function","function":{"name":"Read","parameters":{"type":"object","title":"Read"}}}],"messages":[]}`,
+		},
+		{
+			name: "openai responses",
+			meta: providers.RequestMetadata{Provider: "openai", Endpoint: "/v1/responses"},
+			body: `{"model":"gpt-5.6","tools":[{"type":"function","name":"Read","parameters":{"type":"object","title":"Read"}}],"input":[]}`,
+		},
+		{
+			name: "gemini generateContent",
+			meta: providers.RequestMetadata{Provider: "gemini", Endpoint: "/v1beta/models/gemini-2.5-pro:generateContent"},
+			body: `{"tools":[{"functionDeclarations":[{"name":"Read","parameters":{"type":"object","title":"Read"}}]}],"contents":[]}`,
+		},
+		{
+			name: "azure openai",
+			meta: providers.RequestMetadata{Provider: "azure_openai", Endpoint: "/azure/openai/deployments/gpt/chat/completions"},
+			body: `{"model":"gpt-5.6","tools":[{"type":"function","function":{"name":"Read","parameters":{"type":"object"}}}],"messages":[]}`,
+		},
+		{
+			name: "vertex claude",
+			meta: providers.RequestMetadata{Provider: "vertex", Endpoint: "/vertex/v1/projects/p/locations/global/publishers/anthropic/models/claude-sonnet-4-6:rawPredict"},
+			body: toolzoneBody,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			raw, reassemble, ok := providers.ExtractToolCatalog([]byte(tc.body), tc.meta)
+			if !ok || len(raw) == 0 {
+				t.Fatalf("expected catalog extraction to succeed for %s", tc.name)
+			}
+			out, err := reassemble(raw)
+			if err != nil || string(out) != tc.body {
+				t.Fatalf("identity splice altered body: err=%v", err)
+			}
+		})
+	}
+}
+
 func TestExtractToolCatalogFailsClosed(t *testing.T) {
 	tests := []struct {
 		name string
@@ -38,19 +83,24 @@ func TestExtractToolCatalogFailsClosed(t *testing.T) {
 		meta providers.RequestMetadata
 	}{
 		{
-			name: "openai is not covered yet",
+			name: "bedrock is excluded",
 			body: toolzoneBody,
-			meta: providers.RequestMetadata{Provider: "openai", Endpoint: "/v1/chat/completions"},
-		},
-		{
-			name: "gemini is not covered yet",
-			body: toolzoneBody,
-			meta: providers.RequestMetadata{Provider: "gemini", Endpoint: "/v1beta/models/x:generateContent"},
+			meta: providers.RequestMetadata{Provider: "bedrock", Endpoint: "/bedrock/model/anthropic.claude-sonnet-4-6/converse"},
 		},
 		{
 			name: "count_tokens must measure the body it was given",
 			body: toolzoneBody,
 			meta: providers.RequestMetadata{Provider: "anthropic", Endpoint: "/v1/messages/count_tokens"},
+		},
+		{
+			name: "gemini countTokens must measure the body it was given",
+			body: toolzoneBody,
+			meta: providers.RequestMetadata{Provider: "gemini", Endpoint: "/v1beta/models/gemini-2.5-pro:countTokens"},
+		},
+		{
+			name: "openai input_tokens must measure the body it was given",
+			body: toolzoneBody,
+			meta: providers.RequestMetadata{Provider: "openai", Endpoint: "/v1/responses/input_tokens"},
 		},
 		{
 			name: "no tools field",

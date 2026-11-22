@@ -66,7 +66,7 @@ test("config rejects an unknown MCP surface and leaves the file byte-identical",
   try {
     const out = await runCli(["config", "set", "execute.mcp", "markers"], { env: isolated.env, prefix: "tools" });
     assert.equal(out.code, 2);
-    assert.equal(out.stderr, 'not an MCP surface: "markers" — valid: auto | marker-only | true | false\n');
+    assert.equal(out.stderr, 'not an MCP surface: "markers" — valid: auto | codemode | marker-only | true | false\n');
     assert.deepEqual(readFileSync(path), before);
   } finally {
     isolated.cleanup();

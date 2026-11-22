@@ -114,28 +114,33 @@ func rewritableZones(body []byte, meta providers.RequestMetadata, liveOnly bool)
 		return nil, false
 	}
 	latestUser := -1
+	isUser := make([]bool, len(items))
 	for i, item := range items {
 		role, _ := jsonsplice.StringField(body, item, "role")
 		if role == "user" {
 			latestUser = i
+			isUser[i] = true
 		}
 	}
 	if latestUser < 0 {
 		return nil, false
 	}
+	live := make(map[int]bool)
+	for i := latestUser; i >= 0 && isUser[i]; i-- {
+		live[i] = true
+	}
 	var out []zoneCandidate
 	for i, item := range items {
-		if liveOnly && i != latestUser {
+		if liveOnly && !live[i] {
 			continue
 		}
-		role, _ := jsonsplice.StringField(body, item, "role")
-		if role != "user" {
+		if !isUser[i] {
 			continue
 		}
 		for _, candidate := range collectUserCandidates(body, item) {
 			out = append(out, zoneCandidate{
 				Candidate: candidate.Candidate,
-				live:      i == latestUser,
+				live:      live[i],
 				kind:      candidate.kind,
 			})
 		}
@@ -173,9 +178,13 @@ func collectUserCandidates(body []byte, item jsonsplice.Span) []typedCandidate {
 		if !found {
 			continue
 		}
-		for _, field := range []string{"output", "result", "content"} {
-			if value, found := jsonsplice.Field(body, payload, field); found {
-				appendCandidate(body, value, "tool_result", &candidates)
+		// Inspect every string field in functionResponse.response (output,
+		// result, content, stdout, stderr, text, body, data, ...) rather than
+		// a narrow 3-key allowlist so custom MCP/shell tools on Gemini and
+		// Vertex Gemini compress uniformly.
+		if fields, ok := jsonsplice.ObjectFields(body, payload); ok {
+			for _, f := range fields {
+				appendCandidate(body, f.Value, "tool_result", &candidates)
 			}
 		}
 	}

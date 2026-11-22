@@ -269,6 +269,10 @@ type UsageObservation struct {
 	ServiceTier              string
 	InferenceGeo             string
 	PricingUnsupportedReason string
+	// StopReason carries the provider's content-blind termination reason when
+	// present (e.g. Anthropic's "tool_use", "end_turn", "max_tokens", "refusal"),
+	// decoded from plain or compressed (gzip/deflate/zstd) response bodies.
+	StopReason string
 	// ProviderError records an SDK-visible error envelope or stream error event.
 	// It contains no provider message or caller data. Usage completeness remains
 	// independent: an unsuccessful call can still carry authoritative billed usage.
@@ -442,6 +446,21 @@ const (
 	// `caveman` inside plugin `caveman-wrap` is called under this one spelling.
 	// tests/verify_repo.py holds the two sources to each other.
 	claudeWrapRecoveryToolName = "mcp__plugin_caveman-wrap_caveman__caveman_retrieve"
+	// Code-Mode (`caveman-codemode`) and Companion (`caveman-tools`) MCP server
+	// recovery spellings across Claude Code, Codex, OpenCode, Kilo, Hermes, Gemini, Qwen.
+	// Note: Hermes sanitizes `-` to `_` (`mcp__<server>__<tool>` and legacy `mcp_<server>_<tool>`).
+	codemodeRecoveryToolName               = "mcp__caveman-codemode__caveman_retrieve"
+	claudeWrapCodemodeRecoveryToolName     = "mcp__plugin_caveman-wrap_caveman-codemode__caveman_retrieve"
+	kiloCodemodeRecoveryToolName           = "caveman-codemode_caveman_retrieve"
+	companionRecoveryToolName              = "mcp__caveman-tools__caveman_retrieve"
+	kiloCompanionRecoveryToolName          = "caveman-tools_caveman_retrieve"
+	hermesNativeRecoveryToolName           = "mcp__caveman_native__caveman_retrieve"
+	hermesNativeLegacyRecoveryToolName     = "mcp_caveman_native_caveman_retrieve"
+	hermesCodemodeRecoveryToolName         = "mcp__caveman_codemode__caveman_retrieve"
+	hermesCodemodeLegacyRecoveryToolName   = "mcp_caveman_codemode_caveman_retrieve"
+	hermesCompanionRecoveryToolName        = "mcp__caveman_tools__caveman_retrieve"
+	hermesCompanionLegacyRecoveryToolName  = "mcp_caveman_tools_caveman_retrieve"
+	hermesLegacyRecoveryToolName           = "mcp_caveman_caveman_retrieve"
 )
 
 // IsRecoveryToolName reports whether a tool call is a caveman recovery call.
@@ -455,7 +474,14 @@ const (
 // retrieve, reported "Same truncation", and re-read the same file seven times.
 func IsRecoveryToolName(name string) bool {
 	return name == recoveryToolName || name == mcpRecoveryToolName || name == kiloRecoveryToolName ||
-		name == claudeWrapRecoveryToolName
+		name == claudeWrapRecoveryToolName ||
+		name == codemodeRecoveryToolName || name == claudeWrapCodemodeRecoveryToolName ||
+		name == kiloCodemodeRecoveryToolName || name == companionRecoveryToolName ||
+		name == kiloCompanionRecoveryToolName ||
+		name == hermesNativeRecoveryToolName || name == hermesNativeLegacyRecoveryToolName ||
+		name == hermesCodemodeRecoveryToolName || name == hermesCodemodeLegacyRecoveryToolName ||
+		name == hermesCompanionRecoveryToolName || name == hermesCompanionLegacyRecoveryToolName ||
+		name == hermesLegacyRecoveryToolName
 }
 
 type Base struct {
@@ -2011,6 +2037,9 @@ func serviceTierFromObject(obj map[string]any) (tier string, present, valid bool
 func mergeProviderOutcomeQualifiers(provider string, obj map[string]any, usage *UsageObservation) {
 	if provider != "anthropic" {
 		return
+	}
+	if stop := anthropicStopReason(obj); stop != "" {
+		usage.StopReason = stop
 	}
 	if strings.EqualFold(anthropicStopReason(obj), "refusal") && anthropicOutputBeforeRefusal(obj) == 0 {
 		// Anthropic documents refusals before output as unbilled even though a

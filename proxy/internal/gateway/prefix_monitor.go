@@ -3,6 +3,7 @@ package gateway
 import (
 	"bytes"
 	"crypto/sha256"
+	"encoding/binary"
 	"slices"
 	"sync"
 
@@ -57,8 +58,13 @@ type prefixMonitor struct {
 // seq orders its acceptance against later sends (Server.prefixSeq).
 type prefixAnchor struct {
 	client, forwarded [][32]byte
-	raw               bool
-	seq               uint64
+	// toolSetDigest hashes the sorted multiset of tool names from the client's
+	// tools component so head-drift diagnostics can distinguish "tools_reordered"
+	// (fixable via canonical-tool-order) from "tools_changed".
+	toolSetDigest [32]byte
+	hasToolSet    bool
+	raw           bool
+	seq           uint64
 }
 
 const (
@@ -137,6 +143,11 @@ func (m *prefixMonitor) observe(session string, o observation) (cause string, in
 		return "", -1
 	}
 	cur := prefixAnchor{client: digestEach(client), forwarded: digestEach(forwarded), raw: rebase || pinned > 0, seq: o.accepted}
+	if len(client) > 1 {
+		if d, ok := toolMultisetDigest(client[1]); ok {
+			cur.toolSetDigest, cur.hasToolSet = d, true
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	anchors := m.last[session]
@@ -282,12 +293,12 @@ func (s *Server) observeCachedPrefix(adapter providers.Adapter, meta providers.R
 		o.cached = 0
 	}
 	cause, index := s.prefixMonitor.observe(key, o)
-	attrs := []any{"request_id", requestID, "session_id", sessionID, "index", index}
+	attrs := []any{"request_id", requestID, "session_id", sessionID, "index", index, "component", bustComponentName(index)}
 	if forwardedCached < cached {
 		// The provider writes no entry at a breakpoint caveman removed, so the
 		// next turn has none to read, whatever the anchors say.
 		if s.logger != nil {
-			s.logger.Error("caveman dropped a cache breakpoint the client set", append(attrs, "cached", cached, "forwarded_cached", forwardedCached)...)
+			s.logger.Error("caveman dropped a cache breakpoint the client set", append(attrs, "detail", "breakpoint_dropped", "cached", cached, "forwarded_cached", forwardedCached)...)
 		}
 		return bustCauseCaveman
 	}
@@ -303,9 +314,104 @@ func (s *Server) observeCachedPrefix(adapter providers.Adapter, meta providers.R
 			s.logger.Warn("a compressed PAYG conversation streamed; the server-side retrieve tool cannot ride a stream, so its cached prefix restarts raw here", attrs...)
 		case bustCauseClient:
 			s.logger.Debug("client changed bytes the provider already cached", attrs...)
+		case "":
+			// Non-busting diagnostic: detect when the SAME conversation's first
+			// message repeats while system or tools shifted at index 0/1 (e.g.
+			// MCP server reconnect shuffling tools[]). Never changes CacheBust.
+			if drift := s.prefixMonitor.headDrift(key, o.client); drift != "" {
+				s.logger.Info("prompt prefix head drifted on matching conversation",
+					"request_id", requestID, "session_id", sessionID, "head_drift", drift)
+			}
 		}
 	}
 	return cause
+}
+
+// bustComponentName names which prefix slot diverged so operators see "system",
+// "tools", or "message" instead of an opaque integer index.
+func bustComponentName(index int) string {
+	switch {
+	case index < 0:
+		return ""
+	case index == 0:
+		return "system"
+	case index == 1:
+		return "tools"
+	default:
+		return "message"
+	}
+}
+
+// headDrift inspects a session's anchors for an earlier request sharing the
+// exact same first conversation message (`client[2]`) whose `system` (index 0)
+// or `tools` (index 1) component changed. Distinguishes `"tools_reordered"`
+// (same multiset of tool names, different wire order — fixable with
+// `canonical-tool-order`) from `"tools_changed"` and `"system_drifted"`.
+func (m *prefixMonitor) headDrift(session string, client [][]byte) string {
+	if m == nil || session == "" || len(client) < conversationComponents {
+		return ""
+	}
+	cur := digestEach(client[:conversationComponents])
+	curToolsDigest, hasCurTools := toolMultisetDigest(client[1])
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	anchors := m.last[session]
+	// Compare against prior anchors (exclude the just-appended anchor if identical).
+	for i := len(anchors) - 1; i >= 0; i-- {
+		a := anchors[i]
+		if len(a.client) < conversationComponents {
+			continue
+		}
+		if a.client[2] != cur[2] {
+			continue
+		}
+		if a.client[0] == cur[0] && a.client[1] == cur[1] {
+			continue
+		}
+		if a.client[0] != cur[0] && a.client[1] != cur[1] {
+			return "system_and_tools_drifted"
+		}
+		if a.client[0] != cur[0] {
+			return "system_drifted"
+		}
+		if hasCurTools && a.hasToolSet && a.toolSetDigest == curToolsDigest {
+			return "tools_reordered"
+		}
+		return "tools_changed"
+	}
+	return ""
+}
+
+// toolMultisetDigest hashes the sorted multiset of tool names inside a cached
+// `tools` component (either bare JSON or 8-byte big-endian length-prefixed
+// frozenField/framePrefixComponent). Explicitly decoding the binary frame
+// avoids false '[' (0x5b) matches inside the 4-byte length header.
+func toolMultisetDigest(component []byte) ([32]byte, bool) {
+	payload := unwrapFramedComponent(component)
+	names := providers.ToolCatalogNames(payload)
+	if len(names) == 0 {
+		return [32]byte{}, false
+	}
+	slices.Sort(names)
+	h := sha256.New()
+	for _, n := range names {
+		_, _ = h.Write([]byte(n))
+		_, _ = h.Write([]byte{0})
+	}
+	var out [32]byte
+	h.Sum(out[:0])
+	return out, true
+}
+
+func unwrapFramedComponent(component []byte) []byte {
+	if len(component) >= 8 {
+		nameLen := int(binary.BigEndian.Uint32(component[:4]))
+		valLen := int(binary.BigEndian.Uint32(component[4:8]))
+		if nameLen >= 0 && valLen >= 0 && 8+nameLen+valLen == len(component) {
+			return component[8+nameLen:]
+		}
+	}
+	return component
 }
 
 func componentsEqual(a, b [][]byte) bool {

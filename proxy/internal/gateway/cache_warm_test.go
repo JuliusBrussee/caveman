@@ -2,6 +2,7 @@ package gateway
 
 import (
 	"bytes"
+	"compress/gzip"
 	"io"
 	"log/slog"
 	"net/http"
@@ -566,6 +567,99 @@ func TestCacheWarmPricesTheLiveUsageShape(t *testing.T) {
 			f.clock.advance(270 * time.Second)
 			if rows := f.warmRows(); rt.count() != 2 || len(rows) != 1 || rows[0].TotalCostUSD <= 0 {
 				t.Fatalf("requests = %d, warm rows = %+v", rt.count(), rows)
+			}
+		})
+	}
+}
+
+// TestCacheWarmClassifiesSpacedAndGzippedToolUse verifies the real-world wire
+// shapes api.anthropic.com sends on tool turns: SSE with whitespace after `:`
+// (`"stop_reason": "tool_use"`) and gzip-encoded SSE. Previously both missed
+// the literal `"stop_reason":"tool_use"` check and fell into subagent/end/5m
+// (or unclassed), planning zero warms for subagent tool loops.
+func TestCacheWarmClassifiesSpacedAndGzippedToolUse(t *testing.T) {
+	live := usageJSON(200_000, 0, "5m")
+	spacedSSE := "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"m\", \"type\": \"message\", \"model\": \"" + warmModel +
+		"\", \"content\": [], \"usage\": " + live + "}}\n\n" +
+		"event: message_delta\ndata: {\"type\": \"message_delta\", \"delta\": {\"stop_reason\": \"tool_use\", \"stop_sequence\": null}, \"usage\": " + live + "}\n\n" +
+		"event: message_stop\ndata: {\"type\": \"message_stop\"}\n\n"
+
+	// Verify chunk-split streaming toolStop detection with spaces.
+	var ts toolStop
+	for i := 0; i < len(spacedSSE); i += 5 {
+		end := min(i+5, len(spacedSSE))
+		_, _ = ts.Write([]byte(spacedSSE[i:end]))
+	}
+	if !ts.seen {
+		t.Fatal("toolStop missed spaced stop_reason across 5-byte chunks")
+	}
+
+	var gzBuf bytes.Buffer
+	gz := gzip.NewWriter(&gzBuf)
+	_, _ = gz.Write([]byte(spacedSSE))
+	_ = gz.Close()
+
+	for _, tc := range []struct {
+		name     string
+		body     string
+		encoding string
+	}{
+		{name: "plain_spaced_sse", body: spacedSSE},
+		{name: "gzip_spaced_sse", body: gzBuf.String(), encoding: "gzip"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var logs bytes.Buffer
+			baseRT := &warmTransport{
+				realResp: tc.body,
+				sse:      true,
+				warmResp: messageResp(warmModel, live),
+			}
+			rt := roundTripFunc(func(r *http.Request) (*http.Response, error) {
+				resp, err := baseRT.RoundTrip(r)
+				if err == nil && tc.encoding != "" && baseRT.count() == 1 {
+					resp.Header.Set("Content-Encoding", tc.encoding)
+				}
+				return resp, err
+			})
+			sink := &captureSink{}
+			clock := &fakeClock{now: time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)}
+			on := true
+			srv := New(Config{
+				Auth:       stubAuth{rc: RequestContext{Label: "local", RuntimeMode: "active"}},
+				Adapters:   []providers.Adapter{anthropic.New(anthropicAPI)},
+				Creds:      passthroughTestCreds{},
+				Sink:       sink,
+				HTTPClient: &http.Client{Transport: rt},
+				Logger:     slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})),
+				CacheWarm:  func() bool { return on },
+			})
+			srv.warmer.clock = clock
+
+			hdrs := map[string]string{
+				"x-api-key":              "sk-ant-api-secret-key",
+				"anthropic-version":      "2023-06-01",
+				"x-cave-session":         "parent-sess-1",
+				"x-claude-code-agent-id": "agent-7",
+			}
+			serveBody(t, srv, "/v1/messages", reqBody(`"stream":true,`), hdrs)
+			logOut := logs.String()
+			if !strings.Contains(logOut, "class=subagent/tool/5m") {
+				t.Fatalf("expected class=subagent/tool/5m, got logs:\n%s", logOut)
+			}
+			// Advance 6 minutes (past 5m TTL): subagent/tool/5m warms at ~4.5m so
+			// the next turn after a 6m gap hits warm cache (0.1x) instead of 1.25x rewrite.
+			clock.advance(6 * time.Minute)
+			if baseRT.count() < 2 {
+				t.Fatalf("expected at least 1 warm during 6m gap, got total requests=%d\nlogs:\n%s", baseRT.count(), logOut)
+			}
+			// Quantify exact catalog USD savings on the 200k-token prefix across a 6m idle gap.
+			p, _ := catalog.Price("anthropic", warmModel)
+			coldRewriteUSD := float64(200_000) / 1e6 * p.CacheWritePerMillion
+			warmPlusHitUSD := 2 * (float64(200_000) / 1e6 * p.CacheReadPerMillion) // 1 warm read + 1 post-gap hit
+			t.Logf("[%s] 200k prefix across 6m idle gap: cold_rewrite=$%.4f vs warm+hit=$%.4f (%.1f%% saved)",
+				tc.name, coldRewriteUSD, warmPlusHitUSD, (1-warmPlusHitUSD/coldRewriteUSD)*100)
+			if warmPlusHitUSD >= coldRewriteUSD {
+				t.Fatalf("expected warm+hit ($%.4f) < cold_rewrite ($%.4f)", warmPlusHitUSD, coldRewriteUSD)
 			}
 		})
 	}

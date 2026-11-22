@@ -23,14 +23,19 @@ var annotationDropKeys = map[string]bool{
 // envelopeSchemaKeys are the tool-definition fields whose value is a JSON Schema.
 // They are the ONLY doors from a tool envelope into strippable territory.
 var envelopeSchemaKeys = map[string]bool{
-	"input_schema": true,
-	"inputSchema":  true,
-	"parameters":   true,
+	"input_schema":         true,
+	"inputSchema":          true,
+	"parameters":           true,
+	"parametersJsonSchema": true,
 }
 
 // envelopeNestKeys are tool-definition fields that wrap another tool envelope —
-// the OpenAI `{"type":"function","function":{…}}` shape.
-var envelopeNestKeys = map[string]bool{"function": true}
+// the OpenAI `{"type":"function","function":{…}}` shape and Gemini's
+// `{"functionDeclarations":[{…}]}` array.
+var envelopeNestKeys = map[string]bool{
+	"function":             true,
+	"functionDeclarations": true,
+}
 
 // schemaNameMapKeys are schema keywords whose object value is keyed by
 // USER-DEFINED names. A member named "title" inside one of these is a property or

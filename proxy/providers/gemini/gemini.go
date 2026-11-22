@@ -2,11 +2,14 @@ package gemini
 
 import (
 	"context"
+	"encoding/binary"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
+	"github.com/JuliusBrussee/caveman/proxy/providers/jsonsplice"
 	"github.com/JuliusBrussee/caveman/shared/platform/env"
 	"github.com/JuliusBrussee/caveman/shared/platform/ssrf"
 )
@@ -105,6 +108,47 @@ func (a Adapter) InspectRequest(ctx context.Context, body providers.BodyReader, 
 		meta.Stream = routeMethod == "streamGenerateContent"
 	}
 	return meta, nil
+}
+
+// CachedPrefixComponents splits a direct Gemini generateContent request into
+// `[systemInstruction, tools, content_0, ...]`, aligning with Vertex Gemini and
+// the gateway's `sharedComponents(adapter) == 2` invariant so generationConfig
+// changes never trigger false busts and prefix_monitor headDrift inspects tools.
+func (a Adapter) CachedPrefixComponents(body []byte, meta providers.RequestMetadata) ([][]byte, int, bool) {
+	if strings.Contains(strings.ToLower(meta.Endpoint), "counttokens") {
+		return nil, 0, false
+	}
+	root, ok := jsonsplice.Root(body)
+	if !ok {
+		return nil, 0, false
+	}
+	contentsSpan, exists := jsonsplice.Field(body, root, "contents")
+	if !exists || contentsSpan.Start >= contentsSpan.End || body[contentsSpan.Start] != '[' {
+		return nil, 0, false
+	}
+	items, valid := jsonsplice.Elements(body, contentsSpan)
+	if !valid {
+		return nil, 0, false
+	}
+	out := make([][]byte, 0, len(items))
+	for _, name := range []string{"systemInstruction", "tools"} {
+		var value []byte
+		if span, found := jsonsplice.Field(body, root, name); found {
+			value = body[span.Start:span.End]
+		}
+		out = append(out, geminiFrameComponent(name, value))
+	}
+	for _, item := range items {
+		out = append(out, geminiFrameComponent("content", body[item.Start:item.End]))
+	}
+	return out, len(out), true
+}
+
+func geminiFrameComponent(name string, value []byte) []byte {
+	var hdr [8]byte
+	binary.BigEndian.PutUint32(hdr[:4], uint32(len(name)))
+	binary.BigEndian.PutUint32(hdr[4:], uint32(len(value)))
+	return slices.Concat(hdr[:], []byte(name), value)
 }
 
 func parseGeminiRoute(path string) (string, string, bool) {

@@ -1,6 +1,7 @@
 package compressors
 
 import (
+	"bytes"
 	"fmt"
 	"regexp"
 	"unicode/utf8"
@@ -80,8 +81,65 @@ func (c *searchResultCompressor) compress(input []byte, query string) ([]byte, b
 	if dropped > 0 {
 		out = append(out, synthLine(searchResultMarker(dropped), cr))
 	}
-	if len(out) == len(lines) {
+	grouped, didGroup := groupSearchPaths(out, cr)
+	if len(out) == len(lines) && !didGroup {
 		return nil, false
 	}
+	if didGroup {
+		return joinLines(grouped, trailing), true
+	}
 	return joinLines(out, trailing), true
+}
+
+var searchPathLineRe = regexp.MustCompile(`^([./~A-Za-z0-9_-][^:\n]{4,240}):(\d+(?::\d+)?:.*)$`)
+
+// groupSearchPaths factors repeated file-path prefixes across consecutive
+// `path:line:match` lines into `path:\n  line:match` headers (lossless: zero
+// files or match lines are dropped). Runs of < 3 consecutive hits for the same
+// file stay inline so short runs never grow. Idempotent because grouped lines
+// start with two spaces and no longer match searchPathLineRe.
+func groupSearchPaths(lines [][]byte, cr []byte) ([][]byte, bool) {
+	type parsed struct {
+		path string
+		rest []byte
+		ok   bool
+	}
+	items := make([]parsed, len(lines))
+	for i, line := range lines {
+		raw := bytes.TrimSuffix(line, []byte("\r"))
+		if m := searchPathLineRe.FindSubmatch(raw); m != nil {
+			items[i] = parsed{path: string(m[1]), rest: m[2], ok: true}
+		}
+	}
+	var out [][]byte
+	changed := false
+	for i := 0; i < len(lines); {
+		if !items[i].ok {
+			out = append(out, lines[i])
+			i++
+			continue
+		}
+		j := i + 1
+		for j < len(lines) && items[j].ok && items[j].path == items[i].path {
+			j++
+		}
+		runLen := j - i
+		// Grouping replaces `runLen` copies of `path:` with 1 `path:` header
+		// plus `runLen` two-space indents: net saving when runLen >= 3 and
+		// len(path) >= 8.
+		if runLen >= 3 && len(items[i].path) >= 8 {
+			out = append(out, synthLine(items[i].path+":", cr))
+			for k := i; k < j; k++ {
+				indented := append(append([]byte{' ', ' '}, items[k].rest...), cr...)
+				out = append(out, indented)
+			}
+			changed = true
+		} else {
+			for k := i; k < j; k++ {
+				out = append(out, lines[k])
+			}
+		}
+		i = j
+	}
+	return out, changed
 }

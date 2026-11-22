@@ -13,60 +13,77 @@ import (
 // whose catalog was rewritten is never indistinguishable from one that was not.
 const toolSchemaStripOptimizerID = "toolschema-annotation-strip"
 
-// toolSchemaStripMode is the one value that enables the lever. It names what is
-// removed — JSON-Schema annotation keywords — rather than claiming losslessness.
-const toolSchemaStripMode = "annotations"
+// toolSchemaShrinkOptimizerID labels opt-in caveman-shrink compression of the
+// tool catalog (`toolschema_strip: shrink` / `CAVEMAN_TOOLSCHEMA_STRIP=shrink`).
+const toolSchemaShrinkOptimizerID = "toolschema-shrink"
 
-// toolSchemaStripVersion pins the strip's SEMANTICS into the prefix-cache scope
-// key. Turning the lever on, off, or changing which keywords it removes moves the
-// tool catalog, which is the head of the provider cache prefix; message
-// replacements memoised against the old catalog would then be re-substituted
-// under a prefix that no longer matches. Folding this into the scope makes such a
-// change a deliberate, one-time epoch rollover instead of a silent partial cold
-// write. Bump it whenever annotationDropKeys or the descent allowlist changes.
-const toolSchemaStripVersion = "v1"
+// toolSchemaStripMode enables annotation-only stripping; toolSchemaShrinkMode
+// enables full caveman-shrink description + annotation compression.
+const (
+	toolSchemaStripMode  = "annotations"
+	toolSchemaShrinkMode = "shrink"
+)
 
-// toolSchemaStripAllowed reports whether the tool-schema annotation strip may run.
-//
-// The strip changes model-visible bytes, so it may default on only
-// under the local-wrap clause (recovery + CCR) — and it does not even do that: it
-// is default OFF and an operator turns it on explicitly with
-// `toolschema_strip: annotations` / CAVEMAN_TOOLSCHEMA_STRIP=annotations. On top
-// of the flag it reuses liveZoneCompressionAllowed rather than restating its
-// conditions, so it inherits the same three fail-closed local-wrap requirements —
-// the operator off-switch, MCP recovery through the agent's own caveman_retrieve,
-// and a durable prefix cache behind a schema-aware adapter. A Compressor that
-// cannot strip, or cannot store the original for recovery, keeps the catalog
-// unchanged.
-//
-// On top of all of that it consults the session ledger's freeze registry — it is
-// the first lever to do so. A session whose measured cache-creation blew up after
-// this strip ran loses the strip for the rest of that session, and falls open to
-// forwarding the catalog unchanged.
+// toolSchemaStripVersion and toolSchemaShrinkVersion pin each mode's SEMANTICS
+// into the prefix-cache scope key so switching modes performs a clean one-time
+// epoch rollover instead of a silent partial cold write.
+const (
+	toolSchemaStripVersion  = "v1"
+	toolSchemaShrinkVersion = "shrink-v1"
+)
+
+func toolSchemaVersionForMode(mode string) string {
+	switch mode {
+	case toolSchemaStripMode:
+		return toolSchemaStripVersion
+	case toolSchemaShrinkMode:
+		return toolSchemaShrinkVersion
+	default:
+		return ""
+	}
+}
+
+func (s *Server) toolSchemaOptimizerID() string {
+	if s.toolSchemaStrip == toolSchemaShrinkMode {
+		return toolSchemaShrinkOptimizerID
+	}
+	return toolSchemaStripOptimizerID
+}
+
+// toolSchemaStripAllowed reports whether the configured tool-schema rewrite may run.
 func (s *Server) toolSchemaStripAllowed(adapter providers.Adapter, body []byte, sessionID string) bool {
 	return s.toolSchemaStripApplies(adapter, body) && s.ledger.LeverAllowed(sessionID, leverToolSchemaStrip)
 }
 
 // toolSchemaStripApplies is toolSchemaStripAllowed without the ledger: the
-// strip would run here if the session's harm tripwire had not frozen it.
+// rewrite would run here if the session's harm tripwire had not frozen it.
 func (s *Server) toolSchemaStripApplies(adapter providers.Adapter, body []byte) bool {
-	if s.toolSchemaStrip != toolSchemaStripMode || s.compressor == nil {
+	if s.compressor == nil {
 		return false
 	}
-	if _, ok := s.compressor.(ToolSchemaStripper); !ok {
+	switch s.toolSchemaStrip {
+	case toolSchemaStripMode:
+		if _, ok := s.compressor.(ToolSchemaStripper); !ok {
+			return false
+		}
+	case toolSchemaShrinkMode:
+		if _, ok := s.compressor.(ToolSchemaShrinker); !ok {
+			return false
+		}
+	default:
 		return false
 	}
 	return s.liveZoneCompressionAllowed(adapter, body)
 }
 
-// toolSchemaCacheScope returns the suffix the strip contributes to a prefix-cache
-// scope key. It is empty when the lever is off, so every pre-existing scope key
-// is byte-identical to what it was before this lever existed.
+// toolSchemaCacheScope returns the suffix the strip/shrink contributes to a
+// prefix-cache scope key. It is empty when the lever is off, so every
+// pre-existing scope key is byte-identical to what it was before this lever existed.
 func (s *Server) toolSchemaCacheScope() string {
-	if s.toolSchemaStrip != toolSchemaStripMode {
-		return ""
+	if v := toolSchemaVersionForMode(s.toolSchemaStrip); v != "" {
+		return "|tss:" + v
 	}
-	return "|tss:" + toolSchemaStripVersion
+	return ""
 }
 
 // stripToolSchema removes the documentation-only JSON-Schema annotations from the
@@ -95,8 +112,24 @@ func (s *Server) toolSchemaCacheScope() string {
 // again. The ledger freeze is the one deliberate exception: a session whose
 // tripwire froze the lever falls back to the original catalog once, by design.
 func (s *Server) stripToolSchema(body []byte, meta providers.RequestMetadata, requestID string) ([]byte, string, bool) {
-	stripper, ok := s.compressor.(ToolSchemaStripper)
-	if !ok || s.prefixCache == nil {
+	if s.prefixCache == nil || s.compressor == nil {
+		return nil, "", false
+	}
+	var transformCatalog func([]byte) ([]byte, bool)
+	switch s.toolSchemaStrip {
+	case toolSchemaStripMode:
+		stripper, ok := s.compressor.(ToolSchemaStripper)
+		if !ok {
+			return nil, "", false
+		}
+		transformCatalog = stripper.StripToolSchema
+	case toolSchemaShrinkMode:
+		shrinker, ok := s.compressor.(ToolSchemaShrinker)
+		if !ok {
+			return nil, "", false
+		}
+		transformCatalog = shrinker.ShrinkToolSchema
+	default:
 		return nil, "", false
 	}
 	raw, reassemble, ok := providers.ExtractToolCatalog(body, meta)
@@ -115,7 +148,7 @@ func (s *Server) stripToolSchema(body []byte, meta providers.RequestMetadata, re
 			stripped, handle = nil, RawDecisionHandle
 		} else {
 			var ok bool
-			if stripped, ok = stripper.StripToolSchema(raw); !ok || len(stripped) >= len(raw) {
+			if stripped, ok = transformCatalog(raw); !ok || len(stripped) >= len(raw) {
 				return nil, "", false // removes nothing, on every turn
 			}
 			var err error
