@@ -1087,7 +1087,7 @@ def _body_candidate_error(original_masked: str, candidate_masked: str) -> str:
 # ---------- Core Logic ----------
 
 
-def compress_file(filepath: Path) -> bool:
+def compress_file(filepath: Path, dry_run: bool = False) -> bool:
     # Resolve first so the lock and every check below key off the same canonical path regardless of how the caller spelled it.
     filepath = filepath.resolve()
 
@@ -1117,7 +1117,7 @@ def compress_file(filepath: Path) -> bool:
         had_backup = backup_path.exists()
         run = {"live_write_started": False}
         try:
-            return _compress_file_locked(filepath, run)
+            return _compress_file_locked(filepath, run, dry_run=dry_run)
         except BaseException:
             # A provider error, timeout or Ctrl-C mid-run must not leave the
             # staging file next to the source, or a backup that makes every
@@ -1130,7 +1130,7 @@ def compress_file(filepath: Path) -> bool:
             raise
 
 
-def _compress_file_locked(filepath: Path, run: dict) -> bool:
+def _compress_file_locked(filepath: Path, run: dict, dry_run: bool = False) -> bool:
     """Body of compress_file; runs entirely under compress_file's file_lock for this resolved path."""
     print(f"Processing: {filepath}")
 
@@ -1246,6 +1246,18 @@ def _compress_file_locked(filepath: Path, run: dict) -> bool:
 
     # Reassemble: frontmatter (verbatim) + compressed body
     compressed = frontmatter + compressed_body
+
+    if dry_run:
+        print("\n--- Dry run: compressed output ---")
+        print(compressed)
+        print("--- End of dry run output ---")
+        original_len = len(original_text)
+        compressed_len = len(compressed)
+        saved = original_len - compressed_len
+        ratio = (saved / original_len * 100) if original_len > 0 else 0
+        print(f"\nToken savings: {original_len} -> {compressed_len} chars ({ratio:.1f}% reduction)")
+        print("Dry run complete. No files were modified.")
+        return True
 
     # Save original as backup, then verify the backup readback before
     # touching the input file. If the filesystem dropped bytes (encoding,
