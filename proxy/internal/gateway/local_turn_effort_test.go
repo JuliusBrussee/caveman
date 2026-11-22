@@ -350,3 +350,127 @@ func TestLocalTurnEffortOpenAIGPT6CacheSafeAndSkipsGPT5AndChat(t *testing.T) {
 		t.Fatalf("top-level reasoning.effort must stay frozen at high")
 	}
 }
+
+type localRTFunc func(*http.Request) (*http.Response, error)
+
+func (f localRTFunc) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestChatGPTSubstantiveTurnKeepsReplayedEffortMarks(t *testing.T) {
+	var sentBodies [][]byte
+	rt := localRTFunc(func(req *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(req.Body)
+		sentBodies = append(sentBodies, raw)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"application/json"}},
+			Body:       io.NopCloser(strings.NewReader(`{"id":"resp_cg","object":"response","model":"gpt-6-sol","output":[],"usage":{"input_tokens":1000,"output_tokens":10,"total_tokens":1010,"input_tokens_details":{"cached_tokens":900}}}`)),
+			Request:    req,
+		}, nil
+	})
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")},
+		Auth: stubAuth{rc: RequestContext{
+			Label:       "local",
+			RuntimeMode: "compress",
+			Optimizers:  map[string]bool{providers.TurnEffortOptimizerID: true},
+		}},
+		Creds:                stubCreds{key: "sk-openai-test"},
+		Sink:                 &captureSink{},
+		Compressor:           &dedupTestCompressor{eng: engine.New(store, nil), store: store},
+		PrefixCache:          newMemPrefixCache(),
+		RecoveryViaMCP:       true,
+		SubscriptionCompress: "live_zone",
+		ChatGPTUpstream:      "https://chatgpt.example.test/backend-api/codex",
+		HTTPClient:           &http.Client{Transport: rt},
+	})
+	postCG := func(body string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodPost, "/chatgpt/responses", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Authorization", "Bearer chatgpt-oauth-token")
+		req.Header.Set("ChatGPT-Account-ID", "acct-test")
+		req.Header.Set("session_id", "cg-effort-sess")
+		rec := httptest.NewRecorder()
+		srv.Handler().ServeHTTP(rec, req)
+		if rec.Code != http.StatusOK {
+			t.Fatalf("chatgpt status=%d body=%s", rec.Code, rec.Body.String())
+		}
+	}
+
+	// Turn 1: mechanical continuation ("continue") -> steps down via configuration_update.
+	rCont := `{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}`
+	postCG(thread("high", rA, rB, rCont))
+	if want1 := thread("high", rA, rB, update("low"), rCont); string(sentBodies[0]) != want1 {
+		t.Fatalf("chatgpt turn 1:\n got %s\nwant %s", sentBodies[0], want1)
+	}
+
+	// Turn 2: substantive prompt with NO other optimizer active -> must NOT discard
+	// the replayed configuration_update marks and restore update!
+	rSub := `{"type":"message","role":"user","content":[{"type":"input_text","text":"Design the multi-region failover protocol."}]}`
+	postCG(thread("high", rA, rB, rCont, rE, rSub))
+	if want2 := thread("high", rA, rB, update("low"), rCont, rE, update("high"), rSub); string(sentBodies[1]) != want2 {
+		t.Fatalf("chatgpt turn 2 dropped replayed effort marks:\n got %s\nwant %s", sentBodies[1], want2)
+	}
+	if !bytes.HasPrefix(sentBodies[1], sentBodies[0][:len(sentBodies[0])-2]) {
+		t.Fatalf("chatgpt turn 2 broke cached prefix from turn 1")
+	}
+}
+
+func TestOpenAIStreamingWithMCPDisabledStaysByteIdentical(t *testing.T) {
+	var sentBodies [][]byte
+	rt := localRTFunc(func(req *http.Request) (*http.Response, error) {
+		raw, _ := io.ReadAll(req.Body)
+		sentBodies = append(sentBodies, raw)
+		return &http.Response{
+			StatusCode: http.StatusOK,
+			Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+			Body:       io.NopCloser(strings.NewReader("event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_1\",\"usage\":{\"input_tokens\":50,\"output_tokens\":5}}}\n\n")),
+			Request:    req,
+		}, nil
+	})
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	sink := &captureSink{}
+	srv := New(Config{
+		Adapters: []providers.Adapter{openai.New("https://api.openai.com")},
+		Auth: stubAuth{rc: RequestContext{
+			Label:       "local",
+			RuntimeMode: "compress",
+			Optimizers: map[string]bool{
+				openai.OptimizerID: true, // default-on openai-prompt-cache-key
+			},
+		}},
+		Creds:          stubCreds{key: "sk-openai-test"},
+		Sink:           sink,
+		Compressor:     &dedupTestCompressor{eng: engine.New(store, nil), store: store},
+		PrefixCache:    newMemPrefixCache(),
+		RecoveryViaMCP: false, // MCP disabled
+		HTTPClient:     &http.Client{Transport: rt},
+	})
+	plainStream := `{"model":"gpt-5.5","stream":true,"instructions":"You are concise.","input":[{"role":"user","content":"hi"}]}`
+	req := httptest.NewRequest(http.MethodPost, "/v1/responses", strings.NewReader(plainStream))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer sk-openai-test")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+	}
+	if len(sentBodies) != 1 || string(sentBodies[0]) != plainStream {
+		t.Fatalf("streaming OpenAI Responses with MCP disabled must stay byte-identical:\n got %s\nwant %s", sentBodies[0], plainStream)
+	}
+	if got := rec.Header().Get("x-cave-optimization"); got != "" && got != "none" {
+		t.Fatalf("expected zero optimizers applied on MCP-disabled stream, got x-cave-optimization=%q", got)
+	}
+	if row := sink.last(t); row.CompressionTokensBefore != 0 || row.CompressionTokensAfter != 0 {
+		t.Fatalf("expected zero compression accounting on MCP-disabled stream, got before=%d after=%d", row.CompressionTokensBefore, row.CompressionTokensAfter)
+	}
+}

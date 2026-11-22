@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"regexp"
 	"strings"
@@ -62,18 +63,39 @@ func StartHTTPUpstream(ctx context.Context, name string, cfg ServerConfig, clien
 	if log == nil {
 		log = slog.New(slog.NewTextHandler(io.Discard, nil))
 	}
-	if client == nil {
-		client = &http.Client{Timeout: httpCallTimeout}
-	}
 	hdrs := make(map[string]string, len(cfg.Headers))
 	for k, v := range cfg.Headers {
 		hdrs[k] = expandHeaderEnv(v)
+	}
+	httpClient := &http.Client{Timeout: httpCallTimeout}
+	if client != nil {
+		cp := *client
+		httpClient = &cp
+	}
+	prevCheckRedirect := httpClient.CheckRedirect
+	httpClient.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+		if len(via) > 0 && !sameHTTPOrigin(via[0].URL, req.URL) {
+			for k := range hdrs {
+				req.Header.Del(k)
+			}
+			req.Header.Del("Authorization")
+			req.Header.Del("Proxy-Authorization")
+			req.Header.Del("Cookie")
+			req.Header.Del("Mcp-Session-Id")
+		}
+		if prevCheckRedirect != nil {
+			return prevCheckRedirect(req, via)
+		}
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		return nil
 	}
 	u := &HTTPUpstream{
 		name:    name,
 		url:     endpoint,
 		headers: hdrs,
-		client:  client,
+		client:  httpClient,
 		log:     log,
 	}
 
@@ -353,20 +375,25 @@ func (u *HTTPUpstream) roundTrip(ctx context.Context, method string, params any)
 		u.mu.Unlock()
 	}
 
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		errBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		return nil, fmt.Errorf("http %d from %q: %s", resp.StatusCode, u.name, firstSentence(string(errBody), 240))
+	}
+
+	ct := strings.ToLower(resp.Header.Get("Content-Type"))
+	if strings.Contains(ct, "text/event-stream") {
+		// Stream SSE frames incrementally and return as soon as the JSON-RPC
+		// response matching `id` arrives, so servers that keep SSE streams open
+		// for notifications do not block until EOF/timeout.
+		return readSSERPCResponse(resp.Body, id, httpMaxBodySize)
+	}
+
 	body, err := io.ReadAll(io.LimitReader(resp.Body, httpMaxBodySize+1))
 	if err != nil {
 		return nil, fmt.Errorf("read %s response from %q: %w", method, u.name, err)
 	}
 	if len(body) > httpMaxBodySize {
 		return nil, fmt.Errorf("http response from %q exceeded %d bytes", u.name, httpMaxBodySize)
-	}
-	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return nil, fmt.Errorf("http %d from %q: %s", resp.StatusCode, u.name, firstSentence(string(body), 240))
-	}
-
-	ct := strings.ToLower(resp.Header.Get("Content-Type"))
-	if strings.Contains(ct, "text/event-stream") {
-		return parseSSERPCResponse(body, id)
 	}
 	return parseJSONRPCResponse(body, id)
 }
@@ -414,8 +441,13 @@ func parseJSONRPCResponse(data []byte, wantID int64) (json.RawMessage, error) {
 }
 
 func parseSSERPCResponse(data []byte, wantID int64) (json.RawMessage, error) {
-	sc := bufio.NewScanner(bytes.NewReader(data))
-	sc.Buffer(make([]byte, 0, 64*1024), httpMaxBodySize)
+	return readSSERPCResponse(bytes.NewReader(data), wantID, httpMaxBodySize)
+}
+
+func readSSERPCResponse(r io.Reader, wantID int64, maxBytes int) (json.RawMessage, error) {
+	lr := &io.LimitedReader{R: r, N: int64(maxBytes) + 1}
+	sc := bufio.NewScanner(lr)
+	sc.Buffer(make([]byte, 0, 64*1024), maxBytes)
 	var eventLines []string
 	flush := func() (json.RawMessage, bool, error) {
 		if len(eventLines) == 0 {
@@ -446,6 +478,9 @@ func parseSSERPCResponse(data []byte, wantID int64) (json.RawMessage, error) {
 		return msg.Result, true, nil
 	}
 	for sc.Scan() {
+		if lr.N <= 0 {
+			return nil, fmt.Errorf("sse response exceeded %d bytes", maxBytes)
+		}
 		line := sc.Text()
 		if strings.TrimSpace(line) == "" {
 			if res, matched, err := flush(); matched {
@@ -457,28 +492,70 @@ func parseSSERPCResponse(data []byte, wantID int64) (json.RawMessage, error) {
 			eventLines = append(eventLines, strings.TrimSpace(payload))
 		}
 	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("read sse stream: %w", err)
+	}
+	if lr.N <= 0 {
+		return nil, fmt.Errorf("sse response exceeded %d bytes", maxBytes)
+	}
 	if res, matched, err := flush(); matched {
 		return res, err
 	}
 	return nil, errors.New("no matching JSON-RPC response found in SSE stream")
 }
 
+func sameHTTPOrigin(a, b *url.URL) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	if !strings.EqualFold(a.Scheme, b.Scheme) {
+		return false
+	}
+	if !strings.EqualFold(a.Hostname(), b.Hostname()) {
+		return false
+	}
+	return effectiveURLPort(a) == effectiveURLPort(b)
+}
+
+func effectiveURLPort(u *url.URL) string {
+	if p := u.Port(); p != "" {
+		return p
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "https":
+		return "443"
+	case "http":
+		return "80"
+	default:
+		return ""
+	}
+}
+
 func decodeMCPCallResult(server, name string, raw json.RawMessage) (any, error) {
 	var resp struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		StructuredContent any  `json:"structuredContent,omitempty"`
-		IsError           bool `json:"isError"`
+		Content           []json.RawMessage `json:"content"`
+		StructuredContent json.RawMessage   `json:"structuredContent,omitempty"`
+		IsError           bool              `json:"isError"`
 	}
 	if err := json.Unmarshal(raw, &resp); err != nil {
 		return nil, fmt.Errorf("decode tools/call result from %q.%s: %w", server, name, err)
 	}
 	var texts []string
-	for _, c := range resp.Content {
-		if c.Text != "" {
-			texts = append(texts, c.Text)
+	allTextOnly := true
+	for _, rawBlock := range resp.Content {
+		var blk struct {
+			Type string `json:"type"`
+			Text string `json:"text"`
+		}
+		if json.Unmarshal(rawBlock, &blk) != nil {
+			allTextOnly = false
+			continue
+		}
+		if blk.Type != "" && blk.Type != "text" {
+			allTextOnly = false
+		}
+		if blk.Text != "" {
+			texts = append(texts, blk.Text)
 		}
 	}
 	joined := strings.Join(texts, "\n")
@@ -488,8 +565,31 @@ func decodeMCPCallResult(server, name string, raw json.RawMessage) (any, error) 
 		}
 		return nil, fmt.Errorf("%s.%s: %s", server, name, joined)
 	}
-	if resp.StructuredContent != nil {
-		return resp.StructuredContent, nil
+	trimmedStructured := bytes.TrimSpace(resp.StructuredContent)
+	if len(trimmedStructured) > 0 && !bytes.Equal(trimmedStructured, []byte("null")) {
+		var structured any
+		dec := json.NewDecoder(bytes.NewReader(trimmedStructured))
+		dec.UseNumber()
+		if err := dec.Decode(&structured); err != nil {
+			return nil, fmt.Errorf("decode structuredContent from %q.%s: %w", server, name, err)
+		}
+		return structured, nil
+	}
+	if !allTextOnly && len(resp.Content) > 0 {
+		blocks := make([]any, 0, len(resp.Content))
+		for _, rawBlock := range resp.Content {
+			var decoded any
+			dec := json.NewDecoder(bytes.NewReader(rawBlock))
+			dec.UseNumber()
+			if err := dec.Decode(&decoded); err == nil {
+				blocks = append(blocks, decoded)
+			}
+		}
+		out := map[string]any{"content": blocks}
+		if joined != "" {
+			out["text"] = joined
+		}
+		return out, nil
 	}
 	return decodeMCPTextPayload(joined), nil
 }

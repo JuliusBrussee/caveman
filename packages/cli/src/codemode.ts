@@ -730,7 +730,12 @@ function expandHomeOverride(raw: string | undefined, homeDir: string, env: NodeJ
   return resolve(expanded);
 }
 
-function openCodeConfigPaths(workspaceDir: string, homeDir: string, env: NodeJS.ProcessEnv): string[] {
+function openCodeConfigPaths(
+  workspaceDir: string,
+  homeDir: string,
+  env: NodeJS.ProcessEnv,
+  trustWorkspace = false,
+): string[] {
   const paths: string[] = [];
   if (homeDir) {
     const configDir = expandHomeOverride(env.OPENCODE_CONFIG_DIR, homeDir, env)
@@ -739,13 +744,18 @@ function openCodeConfigPaths(workspaceDir: string, homeDir: string, env: NodeJS.
   }
   const explicit = expandHomeOverride(env.OPENCODE_CONFIG, homeDir, env);
   if (explicit) paths.push(explicit);
-  if (workspaceDir) {
+  if (trustWorkspace && workspaceDir) {
     paths.push(join(workspaceDir, "opencode.json"), join(workspaceDir, "opencode.jsonc"));
   }
   return paths;
 }
 
-function kiloConfigPaths(workspaceDir: string, homeDir: string, env: NodeJS.ProcessEnv): string[] {
+function kiloConfigPaths(
+  workspaceDir: string,
+  homeDir: string,
+  env: NodeJS.ProcessEnv,
+  trustWorkspace = false,
+): string[] {
   const paths: string[] = [];
   if (homeDir) {
     const configDir = expandHomeOverride(env.KILO_CONFIG_DIR, homeDir, env)
@@ -754,7 +764,7 @@ function kiloConfigPaths(workspaceDir: string, homeDir: string, env: NodeJS.Proc
   }
   const explicit = expandHomeOverride(env.KILO_CONFIG, homeDir, env);
   if (explicit) paths.push(explicit);
-  if (workspaceDir) {
+  if (trustWorkspace && workspaceDir) {
     paths.push(join(workspaceDir, "kilo.json"), join(workspaceDir, "kilo.jsonc"));
   }
   return paths;
@@ -770,9 +780,10 @@ export function discoverOpenCodeOwnServerNames(
   workspaceDir: string,
   homeDir: string,
   env: NodeJS.ProcessEnv = process.env,
+  trustWorkspace = false,
 ): string[] {
   const names = new Set<string>();
-  for (const p of openCodeConfigPaths(workspaceDir, homeDir, env)) {
+  for (const p of openCodeConfigPaths(workspaceDir, homeDir, env, trustWorkspace)) {
     try {
       const doc = parseJsonRelaxed(readFileSync(p, "utf8")) as { mcp?: unknown };
       for (const name of Object.keys(parseOpenCodeMcp(doc?.mcp))) {
@@ -791,9 +802,10 @@ export function discoverKiloOwnServerNames(
   workspaceDir: string,
   homeDir: string,
   env: NodeJS.ProcessEnv = process.env,
+  trustWorkspace = false,
 ): string[] {
   const names = new Set<string>();
-  for (const p of kiloConfigPaths(workspaceDir, homeDir, env)) {
+  for (const p of kiloConfigPaths(workspaceDir, homeDir, env, trustWorkspace)) {
     try {
       const doc = parseJsonRelaxed(readFileSync(p, "utf8")) as { mcp?: unknown };
       for (const name of Object.keys(parseOpenCodeMcp(doc?.mcp))) {
@@ -806,14 +818,22 @@ export function discoverKiloOwnServerNames(
 
 /**
  * Discovers user MCP servers across all major coding agents (Cursor, OpenClaw,
- * Hermes, OpenCode, Kilo, Gemini CLI, Qwen Code, Codex, Claude Code, and
- * workspace `.mcp.json`), supporting both stdio commands and remote Streamable
- * HTTP URLs while excluding disabled and self-referential Caveman servers.
+ * Hermes, OpenCode, Kilo, Gemini CLI, Qwen Code, Codex, and Claude Code),
+ * supporting both stdio commands and remote Streamable HTTP URLs while
+ * excluding disabled and self-referential Caveman servers.
+ *
+ * Workspace-local executable configs (`.mcp.json`, `.codex/config.toml`,
+ * `.gemini/settings.json`, `.qwen/settings.json`, `opencode.json*`, `kilo.json*`)
+ * are SKIPPED by default (`trustWorkspace = false`) so untrusted checkouts
+ * cannot execute arbitrary commands on `caveman wrap --codemode`. Pass
+ * `trustWorkspace = true` (via `--trust-workspace-mcp` or
+ * `CAVEMAN_TRUST_WORKSPACE_MCP=1`) to explicitly opt in for trusted repos.
  */
 export function discoverCodemodeServers(
   workspaceDir: string,
   homeDir: string,
   env: NodeJS.ProcessEnv = process.env,
+  trustWorkspace = false,
 ): Record<string, CodemodeServerConfig> {
   const merged: Record<string, CodemodeServerConfig> = {};
   const merge = (src: Record<string, CodemodeServerConfig>) => {
@@ -848,14 +868,14 @@ export function discoverCodemodeServers(
       merge(parseHermesMcpServersYaml(hermesYaml));
     } catch { /* absent */ }
 
-    for (const p of openCodeConfigPaths(workspaceDir, homeDir, env)) {
+    for (const p of openCodeConfigPaths(workspaceDir, homeDir, env, trustWorkspace)) {
       try {
         const opencodeDoc = parseJsonRelaxed(readFileSync(p, "utf8")) as { mcp?: unknown };
         merge(parseOpenCodeMcp(opencodeDoc?.mcp));
       } catch { /* absent */ }
     }
 
-    for (const p of kiloConfigPaths(workspaceDir, homeDir, env)) {
+    for (const p of kiloConfigPaths(workspaceDir, homeDir, env, trustWorkspace)) {
       try {
         const kiloDoc = parseJsonRelaxed(readFileSync(p, "utf8")) as { mcp?: unknown };
         merge(parseOpenCodeMcp(kiloDoc?.mcp));
@@ -903,7 +923,7 @@ export function discoverCodemodeServers(
     }
   }
 
-  if (workspaceDir) {
+  if (trustWorkspace && workspaceDir) {
     try {
       const projCodex = readFileSync(join(workspaceDir, ".codex", "config.toml"), "utf8");
       merge(parseCodexMcpServersToml(projCodex));
@@ -1180,6 +1200,131 @@ export function rewriteHermesCodemodeYaml(sourceYaml: string, cmEntry: CodemodeL
   return base ? `${base}\n\n${block}\n` : `${block}\n`;
 }
 
+const HERMES_CODEMODE_BASELINE_FILE = ".caveman-codemode-baseline.yaml";
+
+function extractHermesMcpServerBlocks(yaml: string): Map<string, string[]> {
+  const blocks = new Map<string, string[]>();
+  let inSection = false;
+  let serverIndent = -1;
+  let currentName = "";
+  let currentLines: string[] = [];
+
+  const flush = () => {
+    if (currentName && currentLines.length > 0) {
+      // Trim trailing blank lines attached to a server block.
+      while (currentLines.length > 1 && currentLines[currentLines.length - 1]!.trim() === "") {
+        currentLines.pop();
+      }
+      blocks.set(currentName, currentLines);
+    }
+    currentName = "";
+    currentLines = [];
+  };
+
+  for (const line of yaml.split(/\r?\n/)) {
+    const trimmed = stripYamlComment(line).trim();
+    const indent = line.length - line.trimStart().length;
+    if (trimmed && indent === 0) {
+      if (trimmed === "..." || trimmed === "---") {
+        if (inSection) {
+          flush();
+          inSection = false;
+        }
+        continue;
+      }
+      const colon = trimmed.indexOf(":");
+      const key = colon > 0 ? unquoteKey(trimmed.slice(0, colon)) : "";
+      if (key === "mcp_servers") {
+        inSection = true;
+        serverIndent = -1;
+        continue;
+      }
+      if (inSection) {
+        flush();
+        inSection = false;
+      }
+      continue;
+    }
+    if (!inSection) continue;
+    if (!trimmed) {
+      if (currentName) currentLines.push(line);
+      continue;
+    }
+    if (serverIndent < 0) serverIndent = indent;
+    if (indent === serverIndent) {
+      flush();
+      const colon = trimmed.indexOf(":");
+      if (colon > 0) {
+        currentName = unquoteKey(trimmed.slice(0, colon));
+        currentLines = [line];
+      }
+      continue;
+    }
+    if (currentName && indent > serverIndent) {
+      currentLines.push(line);
+    }
+  }
+  if (inSection) flush();
+  return blocks;
+}
+
+/**
+ * Merges in-session Hermes `config.yaml` edits (e.g., `hermes mcp add ...` or
+ * model/provider changes) back onto the user's pre-wrap `config.yaml` while
+ * removing the ephemeral `caveman-codemode` overlay entry and preserving all
+ * pre-existing user `mcp_servers` entries that were masked during the wrap.
+ */
+export function mergeHermesConfigEdits(editedYaml: string, originalYaml: string): string {
+  const editedEntries = extractHermesMcpServerBlocks(editedYaml);
+  editedEntries.delete("caveman-codemode");
+  const origEntries = extractHermesMcpServerBlocks(originalYaml);
+
+  const mergedServerLines: string[] = [];
+  for (const [name, lines] of origEntries) {
+    if (!editedEntries.has(name)) {
+      mergedServerLines.push(...lines);
+    }
+  }
+  for (const [, lines] of editedEntries) {
+    mergedServerLines.push(...lines);
+  }
+
+  const kept: string[] = [];
+  let skipping = false;
+  for (const line of editedYaml.split(/\r?\n/)) {
+    const trimmed = stripYamlComment(line).trim();
+    const indent = line.length - line.trimStart().length;
+    if (trimmed && indent === 0) {
+      if (trimmed === "..." || trimmed === "---") {
+        skipping = false;
+      } else {
+        const colon = trimmed.indexOf(":");
+        const key = colon > 0 ? unquoteKey(trimmed.slice(0, colon)) : "";
+        skipping = key === "mcp_servers";
+      }
+    }
+    if (!skipping) kept.push(line);
+  }
+
+  if (mergedServerLines.length === 0) {
+    const base = kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+    return base ? `${base}\n` : "";
+  }
+
+  const block = ["mcp_servers:", ...mergedServerLines].join("\n");
+  const docEndIdx = kept.findIndex((line) => {
+    const t = stripYamlComment(line).trim();
+    return t === "..." && line.length - line.trimStart().length === 0;
+  });
+  if (docEndIdx >= 0) {
+    const before = kept.slice(0, docEndIdx).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+    const after = kept.slice(docEndIdx).join("\n").trimEnd();
+    return before ? `${before}\n\n${block}\n${after}\n` : `${block}\n${after}\n`;
+  }
+  const base = kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+  return base ? `${base}\n\n${block}\n` : `${block}\n`;
+}
+
 /**
  * Builds an ephemeral `HERMES_HOME` directory linking user plugins/auth/skills/
  * sessions/state into `outDir` and replacing ONLY `mcp_servers:` in the
@@ -1194,11 +1339,13 @@ export function buildHermesEphemeralCodemodeHome(
   try {
     sourceYaml = readFileSync(join(sourceHome, "config.yaml"), "utf8");
   } catch { /* no existing config.yaml */ }
-  writeFileSync(join(outDir, "config.yaml"), rewriteHermesCodemodeYaml(sourceYaml, cmEntry), { mode: 0o600 });
+  const overlayYaml = rewriteHermesCodemodeYaml(sourceYaml, cmEntry);
+  writeFileSync(join(outDir, "config.yaml"), overlayYaml, { mode: 0o600 });
+  writeFileSync(join(outDir, HERMES_CODEMODE_BASELINE_FILE), overlayYaml, { mode: 0o600 });
   if (existsSync(sourceHome)) {
     try {
       for (const entry of readdirSync(sourceHome)) {
-        if (entry === "config.yaml" || entry === "codemode-servers.json") continue;
+        if (entry === "config.yaml" || entry === "codemode-servers.json" || entry === HERMES_CODEMODE_BASELINE_FILE) continue;
         const src = join(sourceHome, entry);
         const dst = join(outDir, entry);
         if (!existsSync(dst)) {
@@ -1222,14 +1369,37 @@ export function buildHermesEphemeralCodemodeHome(
  * inside an ephemeral `HERMES_HOME` (such as rotated OAuth `auth.json`, newly
  * created `state.db*`, `.env`, `SOUL.md`, `memories/`, `sessions/`, `cron/`)
  * back into `sourceHome` before the ephemeral directory is removed.
- * Never overwrites `config.yaml` or copies `codemode-servers.json`.
+ * If the user modified `config.yaml` during the session (for example via
+ * `hermes mcp add`), merges those edits back while removing the ephemeral
+ * `caveman-codemode` overlay and keeping pre-existing `mcp_servers` intact.
+ * Unmodified `config.yaml` leaves `sourceHome/config.yaml` byte-identical.
  */
 export function syncBackHermesEphemeralHome(outDir: string, sourceHome: string): void {
   if (!outDir || !sourceHome || !existsSync(outDir)) return;
   try {
     const entries = readdirSync(outDir);
     for (const entry of entries) {
-      if (entry === "config.yaml" || entry === "codemode-servers.json") continue;
+      if (entry === "codemode-servers.json" || entry === HERMES_CODEMODE_BASELINE_FILE) continue;
+      if (entry === "config.yaml") {
+        try {
+          const baselinePath = join(outDir, HERMES_CODEMODE_BASELINE_FILE);
+          if (!existsSync(baselinePath)) continue;
+          const baselineYaml = readFileSync(baselinePath, "utf8");
+          const currentYaml = readFileSync(join(outDir, "config.yaml"), "utf8");
+          if (currentYaml === baselineYaml) continue;
+          let origYaml = "";
+          try {
+            origYaml = readFileSync(join(sourceHome, "config.yaml"), "utf8");
+          } catch { /* fresh config.yaml */ }
+          const merged = mergeHermesConfigEdits(currentYaml, origYaml);
+          mkdirSync(sourceHome, { recursive: true });
+          const dst = join(sourceHome, "config.yaml");
+          const tmp = `${dst}.caveman-sync-${process.pid}-${Date.now()}`;
+          writeFileSync(tmp, merged, { mode: 0o600 });
+          renameSync(tmp, dst);
+        } catch { /* best-effort */ }
+        continue;
+      }
       const src = join(outDir, entry);
       let lst;
       try {

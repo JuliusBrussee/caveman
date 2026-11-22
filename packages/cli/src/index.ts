@@ -4214,7 +4214,7 @@ type WrapRuntimeMode = "compress" | "record" | "pixel";
 //   off         — the pre-existing `execute.mcp: false`; same install behavior
 //                 as marker-only, kept as its own name for config compatibility.
 type McpSurfaceMode = "auto" | "codemode" | "marker-only" | "off";
-type WrapOptions = { mode: WrapRuntimeMode; noProxy: boolean; toon: boolean; pixelModels?: string; pixelDensity?: string; noShrink: boolean; mcpMode: McpSurfaceMode; noBrowse: boolean; delegate: boolean; minimal: boolean; autoRecall?: boolean; workflow?: string; codemode?: boolean; shrinkTools?: boolean; deferMcpTools?: boolean; canonicalTools?: boolean; turnEffort?: boolean; command: string[] };
+type WrapOptions = { mode: WrapRuntimeMode; noProxy: boolean; toon: boolean; pixelModels?: string; pixelDensity?: string; noShrink: boolean; mcpMode: McpSurfaceMode; noBrowse: boolean; delegate: boolean; minimal: boolean; autoRecall?: boolean; workflow?: string; codemode?: boolean; trustWorkspaceMcp?: boolean; shrinkTools?: boolean; deferMcpTools?: boolean; canonicalTools?: boolean; turnEffort?: boolean; command: string[] };
 type CapabilitySource = "default" | "proxy-yaml" | "legacy-wrap" | "global" | "project" | "env";
 type CapabilityKey =
   | "think.mode"
@@ -6390,6 +6390,11 @@ function parseWrapArgs(rest: string[]): WrapOptions {
       cmd.shift();
       continue;
     }
+    if (a === "--trust-workspace-mcp") {
+      out.trustWorkspaceMcp = true;
+      cmd.shift();
+      continue;
+    }
     if (a === "--shrink-tools") {
       out.shrinkTools = true;
       cmd.shift();
@@ -6463,7 +6468,7 @@ function normalizeAgentShortcutWrapArgs(input: string[]): string[] {
   const agentArgs: string[] = [];
   for (let i = 1; i < input.length; i++) {
     const item = input[i]!;
-    if (item === "--off" || item === "--pixel" || item === "--codemode" || item === "--shrink-tools" || item === "--defer-mcp-tools" || item === "--canonical-tools" || item === "--turn-effort") {
+    if (item === "--off" || item === "--pixel" || item === "--codemode" || item === "--trust-workspace-mcp" || item === "--shrink-tools" || item === "--defer-mcp-tools" || item === "--canonical-tools" || item === "--turn-effort") {
       wrapFlags.push(item);
       continue;
     }
@@ -6803,18 +6808,48 @@ async function spawnWrapped(
   // `caveman mcp install <agent>`). When it does, signal the proxy to use MCP
   // recovery (which lets it compress streams); otherwise streams pass through.
   const codemodeSupportedAgents = new Set(["claude", "codex", "gemini", "qwen", "opencode", "openclaw", "kilo", "hermes", "pi"]);
-  const ephemeralMcp = !direct && agent && (agent.id === "claude" || agent.id === "codex" || (opts.codemode && codemodeSupportedAgents.has(agent.id)))
+  const codemodeRequested = Boolean(!direct && opts.codemode && agent && codemodeSupportedAgents.has(agent.id));
+  const ephemeralMcp = !direct && agent && (agent.id === "claude" || agent.id === "codex" || codemodeRequested)
     && !opts.minimal && (opts.mcpMode === "auto" || opts.mcpMode === "codemode" || opts.codemode) && wrapRecoveryEligible(opts)
     ? probeMcpBinary()
     : null;
   if (ephemeralMcp && !ephemeralMcp.probe.current) queueStaleMcpBinary(ephemeralMcp.probe);
   const ephemeralMcpBinary = ephemeralMcp?.probe.current ? ephemeralMcp.binary : undefined;
-  const codemodeEnabled = Boolean(!direct && opts.codemode && agent && codemodeSupportedAgents.has(agent.id));
-  const codemodeBinary = codemodeEnabled ? (ephemeralMcpBinary ?? resolveMcpCommand().command) : undefined;
+  let codemodeLaunch: { command: string; args: string[] } | undefined;
+  let codemodeVerifiedRecovery = false;
+  if (codemodeRequested) {
+    if (ephemeralMcp) {
+      if (ephemeralMcp.probe.current && ephemeralMcp.probe.capabilities.includes("codemode")) {
+        codemodeLaunch = mcpServerLaunch(ephemeralMcp.binary, []);
+        // Kilo and Qwen can apply policy after user-owned config; they prove
+        // recovery in band rather than via a proxy-wide recovery assertion.
+        codemodeVerifiedRecovery = agent!.id !== "kilo" && agent!.id !== "qwen";
+      } else {
+        queueStaleMcpBinary(ephemeralMcp.probe);
+        process.stderr.write(`${mark("warn")} caveman-mcp (${ephemeralMcp.probe.version}) lacks Code Mode support; run \`caveman setup --install\` — launching without --codemode\n`);
+      }
+    } else {
+      const npx = which("npx");
+      if (npx) {
+        // Carry the full npx launch spec (`-y caveman-mcp`) into overlays so
+        // the server actually starts, but do NOT assert proxy-wide MCP recovery
+        // for an unverified npx launch — recovery must be proven in band.
+        codemodeLaunch = mcpServerLaunch(npx, ["-y", "caveman-mcp"]);
+      } else {
+        process.stderr.write(`${mark("warn")} caveman-mcp not found; run \`caveman setup --install\` — launching without --codemode\n`);
+      }
+    }
+  }
+  const codemodeEnabled = Boolean(codemodeRequested && codemodeLaunch);
+  const trustWorkspaceMcp = Boolean(opts.trustWorkspaceMcp || process.env.CAVEMAN_TRUST_WORKSPACE_MCP === "1");
   const codemodeServers: Record<string, CodemodeServerConfig> = codemodeEnabled
-    ? discoverCodemodeServers(process.cwd(), homedir())
+    ? discoverCodemodeServers(process.cwd(), homedir(), process.env, trustWorkspaceMcp)
     : {};
-  const mcpRecovery = !direct && (Boolean(ephemeralMcpBinary) || Boolean(codemodeBinary) || wrapMcpRecoveryAvailable(agent, opts, cmdArgs));
+  const mcpRecovery = !direct && (
+    Boolean(ephemeralMcpBinary && (agent?.id === "claude" || agent?.id === "codex"))
+    || codemodeVerifiedRecovery
+    || wrapMcpRecoveryAvailable(agent, opts, cmdArgs)
+  );
   const delegateAlreadyInstalled = Boolean(!direct && agent && mcpServerInstalled(agent.id, "caveman-delegate"));
   const ephemeralDelegateMcp = !direct && agent && (agent.id === "claude" || agent.id === "codex")
     && !opts.minimal && opts.delegate && !delegateAlreadyInstalled
@@ -7014,10 +7049,10 @@ async function spawnWrapped(
     env = direct
       ? { ...process.env }
       : agent?.id === "codex"
-        ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, ephemeralDelegateMcp, codemodeEnabled ? { binary: codemodeBinary!, servers: codemodeServers, workspace: process.cwd() } : null)
+        ? buildCodexEphemeralWrapEnv(gw, codexSubscription, ephemeralMcpBinary, ephemeralDelegateMcp, codemodeEnabled && codemodeLaunch ? { launch: codemodeLaunch, servers: codemodeServers, workspace: process.cwd() } : null)
         : buildWrapEnv(agent, gw, opts.mcpMode, cmdArgs, runtime.owner === "unknown" ? undefined : runtime);
     if (!direct && agent?.id === "claude") {
-      const codemodeSpec = codemodeEnabled ? { binary: codemodeBinary!, servers: codemodeServers, workspace: process.cwd() } : null;
+      const codemodeSpec = codemodeEnabled && codemodeLaunch ? { launch: codemodeLaunch, servers: codemodeServers, workspace: process.cwd() } : null;
       const pluginDir = buildClaudeEphemeralPlugin(ephemeralMcpBinary, includeShrink, Boolean(opts.autoRecall), ephemeralDelegateMcp, codemodeSpec);
       if (codemodeSpec) {
         // Strict MCP config isolates Claude to the 3 Code-Mode meta-tools while
@@ -7036,20 +7071,28 @@ async function spawnWrapped(
     }
     if (!direct && agent?.id === "pi") {
       childArgs = buildPiWrapArgs(cmdArgs, env, gw);
-      if (codemodeEnabled && codemodeBinary) {
+      if (codemodeEnabled && codemodeLaunch) {
         const cmDir = mkdtempSync(join(tmpdir(), "caveman-wrap-pi-cm-"));
         wrapTempDirs.add(cmDir);
         env.CAVEMAN_PI_CODEMODE = "1";
         env.CAVEMAN_PI_CODEMODE_CONFIG = writeEphemeralCodemodeConfig(cmDir, codemodeServers);
         env.CAVEMAN_PI_CODEMODE_WORKSPACE = process.cwd();
-        if (!env.CAVEMAN_MCP_BIN) env.CAVEMAN_MCP_BIN = codemodeBinary;
+        if (!env.CAVEMAN_MCP_BIN) {
+          env.CAVEMAN_MCP_BIN = codemodeLaunch.command;
+          if (codemodeLaunch.args.length > 0 && !env.CAVEMAN_MCP_PREFIX_ARGS) {
+            env.CAVEMAN_MCP_PREFIX_ARGS = JSON.stringify(codemodeLaunch.args);
+          }
+        }
       }
     }
-    if (!direct && codemodeEnabled && codemodeBinary && agent && agent.id !== "claude" && agent.id !== "codex" && agent.id !== "pi") {
+    if (!direct && codemodeEnabled && codemodeLaunch && agent && agent.id !== "claude" && agent.id !== "codex" && agent.id !== "pi") {
       const cmDir = mkdtempSync(join(tmpdir(), `caveman-wrap-${agent.id}-cm-`));
       wrapTempDirs.add(cmDir);
       const cfgPath = writeEphemeralCodemodeConfig(cmDir, codemodeServers);
-      const cmEntry = { command: codemodeBinary, args: ["codemode", "--config", cfgPath, "--workspace", process.cwd()] };
+      const cmEntry = {
+        command: codemodeLaunch.command,
+        args: [...codemodeLaunch.args, "codemode", "--config", cfgPath, "--workspace", process.cwd()],
+      };
       if (agent.id === "gemini") {
         env.GEMINI_CLI_SYSTEM_SETTINGS_PATH = writeGeminiCodemodeSettingsOverlay(
           cmDir,
@@ -7062,14 +7105,14 @@ async function spawnWrapped(
       } else if (agent.id === "opencode") {
         env.OPENCODE_CONFIG_CONTENT = applyOpenCodeCodemodeOverlay(
           env.OPENCODE_CONFIG_CONTENT,
-          discoverOpenCodeOwnServerNames(process.cwd(), homedir()),
+          discoverOpenCodeOwnServerNames(process.cwd(), homedir(), process.env, trustWorkspaceMcp),
           cmEntry,
         );
       } else if (agent.id === "kilo") {
         env.KILO_CONFIG_CONTENT = applyKiloCodemodeOverlay(
           env.KILO_CONFIG_CONTENT,
           cmEntry,
-          discoverKiloOwnServerNames(process.cwd(), homedir()),
+          discoverKiloOwnServerNames(process.cwd(), homedir(), process.env, trustWorkspaceMcp),
         );
       } else if (agent.id === "openclaw" && env.OPENCLAW_CONFIG_PATH) {
         patchEphemeralOpenClawCodemode(env.OPENCLAW_CONFIG_PATH, cmEntry);
@@ -8507,7 +8550,7 @@ function nativeHookEntriesHealthy(root: Record<string, unknown>, agentId: "claud
 }
 
 type CodemodeWrapSpec = {
-  binary: string;
+  launch: { command: string; args: string[] };
   servers: Record<string, CodemodeServerConfig>;
   workspace: string;
 };
@@ -8544,8 +8587,8 @@ function buildCodexEphemeralHome(
   let mcp = "\n";
   if (codemodeSpec) {
     const cfgPath = writeEphemeralCodemodeConfig(outDir, codemodeSpec.servers);
-    const cmArgs = ["codemode", "--config", cfgPath, "--workspace", codemodeSpec.workspace];
-    mcp = `\n\n[mcp_servers.caveman-codemode]\ncommand = ${JSON.stringify(codemodeSpec.binary)}\nargs = [${cmArgs.map((arg) => JSON.stringify(arg)).join(", ")}]\n${recoveryEnv ? `${recoveryEnv}\n` : ""}`;
+    const cmArgs = [...codemodeSpec.launch.args, "codemode", "--config", cfgPath, "--workspace", codemodeSpec.workspace];
+    mcp = `\n\n[mcp_servers.caveman-codemode]\ncommand = ${JSON.stringify(codemodeSpec.launch.command)}\nargs = [${cmArgs.map((arg) => JSON.stringify(arg)).join(", ")}]\n${recoveryEnv ? `${recoveryEnv}\n` : ""}`;
   } else if (mcpBinary) {
     mcp = `\n\n[mcp_servers.caveman]\ncommand = ${JSON.stringify(mcpBinary)}\n${recoveryEnv ? `${recoveryEnv}\n` : ""}`;
   }
@@ -8609,8 +8652,8 @@ function buildClaudeEphemeralPlugin(
     if (codemodeSpec) {
       const cfgPath = writeEphemeralCodemodeConfig(dir, codemodeSpec.servers);
       mcpServers["caveman-codemode"] = {
-        command: codemodeSpec.binary,
-        args: ["codemode", "--config", cfgPath, "--workspace", codemodeSpec.workspace],
+        command: codemodeSpec.launch.command,
+        args: [...codemodeSpec.launch.args, "codemode", "--config", cfgPath, "--workspace", codemodeSpec.workspace],
       };
     } else if (mcpBinary) {
       mcpServers.caveman = { command: mcpBinary, args: [] };

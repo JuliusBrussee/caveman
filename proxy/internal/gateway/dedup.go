@@ -3,6 +3,7 @@ package gateway
 import (
 	"crypto/sha256"
 	"fmt"
+	"slices"
 
 	"github.com/JuliusBrussee/caveman/engine"
 	"github.com/JuliusBrussee/caveman/engine/tokens"
@@ -46,10 +47,7 @@ func buildDuplicateStub(rawLen int, handle string, trailingReminder []byte) []by
 	)
 	stub := appendCCRMarker([]byte(body), handle)
 	if len(trailingReminder) > 0 {
-		out := make([]byte, 0, len(stub)+len(trailingReminder))
-		out = append(out, stub...)
-		out = append(out, trailingReminder...)
-		return out
+		return slices.Concat(stub, trailingReminder)
 	}
 	return stub
 }

@@ -235,34 +235,7 @@ func (u *StdioUpstream) CallTool(ctx context.Context, name string, args map[stri
 	if err != nil {
 		return nil, err
 	}
-	var resp struct {
-		Content []struct {
-			Type string `json:"type"`
-			Text string `json:"text"`
-		} `json:"content"`
-		StructuredContent any  `json:"structuredContent,omitempty"`
-		IsError           bool `json:"isError"`
-	}
-	if err := json.Unmarshal(raw, &resp); err != nil {
-		return nil, fmt.Errorf("decode tools/call result from %q.%s: %w", u.name, name, err)
-	}
-	var texts []string
-	for _, c := range resp.Content {
-		if c.Text != "" {
-			texts = append(texts, c.Text)
-		}
-	}
-	joined := strings.Join(texts, "\n")
-	if resp.IsError {
-		if joined == "" {
-			joined = "downstream tool returned an error"
-		}
-		return nil, fmt.Errorf("%s.%s: %s", u.name, name, joined)
-	}
-	if resp.StructuredContent != nil {
-		return resp.StructuredContent, nil
-	}
-	return decodeMCPTextPayload(joined), nil
+	return decodeMCPCallResult(u.name, name, raw)
 }
 
 // Close terminates the child MCP server process cleanly.

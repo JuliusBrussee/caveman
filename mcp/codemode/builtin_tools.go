@@ -185,23 +185,21 @@ func NewRepoUpstream(workspaceRoot string, store *ccr.Store, eng *engine.Engine)
 				eIdx = endLine
 			}
 			truncated := false
-			if eIdx-sIdx > maxLines {
-				eIdx = sIdx + maxLines
-				truncated = true
-			}
-			var b strings.Builder
-			for i := sIdx; i < eIdx; i++ {
-				fmt.Fprintf(&b, "%d|%s\n", i+1, lines[i])
-			}
 			var handle string
-			if truncated && store != nil {
+			if eIdx-sIdx > maxLines && store != nil {
 				if h, herr := store.Put(ccr.Recovery{
 					ContentType: "code",
 					Compressor:  "codemode.batch_read",
 					Original:    raw,
-				}); herr == nil {
+				}); herr == nil && h != "" {
+					eIdx = sIdx + maxLines
+					truncated = true
 					handle = h
 				}
+			}
+			var b strings.Builder
+			for i := sIdx; i < eIdx; i++ {
+				fmt.Fprintf(&b, "%d|%s\n", i+1, lines[i])
 			}
 			files = append(files, fileEntry{
 				Path:           normRel,
@@ -288,23 +286,33 @@ func NewRepoUpstream(workspaceRoot string, store *ccr.Store, eng *engine.Engine)
 
 			if eng != nil {
 				if res, cerr := eng.Compress(raw, engine.Options{Mode: engine.ModeCompress, Type: "code"}); cerr == nil && len(res.Output) < len(raw) {
-					outlined = res.Output
-					handle = res.RecoveryHandle
-					compressed = true
-				}
-			}
-			if !compressed && codeComp != nil {
-				if out, ok := codeComp.Compress(raw); ok && len(out) < len(raw) {
-					outlined = out
-					compressed = true
-					if store != nil {
-						if h, herr := store.Put(ccr.Recovery{
+					h := res.RecoveryHandle
+					if h == "" && store != nil {
+						if stored, herr := store.Put(ccr.Recovery{
 							ContentType: "code",
 							Compressor:  "code",
 							Original:    raw,
 						}); herr == nil {
-							handle = h
+							h = stored
 						}
+					}
+					if h != "" {
+						outlined = res.Output
+						handle = h
+						compressed = true
+					}
+				}
+			}
+			if !compressed && codeComp != nil && store != nil {
+				if out, ok := codeComp.Compress(raw); ok && len(out) < len(raw) {
+					if h, herr := store.Put(ccr.Recovery{
+						ContentType: "code",
+						Compressor:  "code",
+						Original:    raw,
+					}); herr == nil && h != "" {
+						outlined = out
+						handle = h
+						compressed = true
 					}
 				}
 			}
@@ -629,23 +637,25 @@ func NewPRUpstream(workspaceRoot string, store *ccr.Store, eng *engine.Engine, r
 			totalLines := len(lines)
 			truncated := false
 			shown := lines
-			if len(shown) > maxDiffLines {
-				shown = shown[:maxDiffLines]
-				truncated = true
+			var handle string
+			if len(shown) > maxDiffLines && store != nil {
+				if h, herr := store.Put(ccr.Recovery{
+					ContentType: "diff",
+					Compressor:  "codemode.pr_read",
+					Original:    stdout,
+				}); herr == nil && h != "" {
+					shown = shown[:maxDiffLines]
+					truncated = true
+					handle = h
+				}
 			}
 			diffObj := map[string]any{
 				"total_lines": totalLines,
 				"truncated":   truncated,
 				"text":        strings.Join(shown, "\n"),
 			}
-			if truncated && store != nil {
-				if h, herr := store.Put(ccr.Recovery{
-					ContentType: "diff",
-					Compressor:  "codemode.pr_read",
-					Original:    stdout,
-				}); herr == nil {
-					diffObj["recovery_handle"] = h
-				}
+			if handle != "" {
+				diffObj["recovery_handle"] = handle
 			}
 			result["diff"] = diffObj
 		}
@@ -777,26 +787,49 @@ func NewPRUpstream(workspaceRoot string, store *ccr.Store, eng *engine.Engine, r
 		if len(raw) > 0 {
 			rawTotalLines = bytes.Count(bytes.TrimRight(raw, "\n"), []byte{'\n'}) + 1
 		}
-		// Compress through Engine when it yields a smaller structured view, then
-		// apply the bounded tail_lines cap. Reuse Engine's CCR handle to avoid
-		// double-storing the raw log.
+		// Compress through Engine when it yields a smaller structured view AND
+		// the full raw log is safely stored in CCR; likewise only truncate to
+		// tail_lines once CCR holds the original.
 		rendered := string(raw)
 		compressed := false
 		var handle string
 		if eng != nil && len(raw) > 0 {
 			if res, cerr := eng.Compress(raw, engine.Options{Mode: engine.ModeCompress}); cerr == nil && len(res.Output) < len(raw) {
-				rendered = string(res.Output)
-				compressed = true
-				handle = res.RecoveryHandle
+				h := res.RecoveryHandle
+				if h == "" && store != nil {
+					if stored, herr := store.Put(ccr.Recovery{
+						ContentType: "log",
+						Compressor:  "codemode.ci_logs",
+						Original:    raw,
+					}); herr == nil {
+						h = stored
+					}
+				}
+				if h != "" {
+					rendered = string(res.Output)
+					compressed = true
+					handle = h
+				}
 			}
 		}
 		lines := strings.Split(strings.TrimRight(rendered, "\n"), "\n")
 		truncated := false
 		if len(lines) > tailLines {
-			lines = lines[len(lines)-tailLines:]
-			truncated = true
+			if handle == "" && store != nil {
+				if h, herr := store.Put(ccr.Recovery{
+					ContentType: "log",
+					Compressor:  "codemode.ci_logs",
+					Original:    raw,
+				}); herr == nil {
+					handle = h
+				}
+			}
+			if handle != "" {
+				lines = lines[len(lines)-tailLines:]
+				truncated = true
+			}
 		}
-		if handle == "" && store != nil && (truncated || len(raw) >= minArchiveBytes) {
+		if handle == "" && store != nil && len(raw) >= minArchiveBytes {
 			if h, herr := store.Put(ccr.Recovery{
 				ContentType: "log",
 				Compressor:  "codemode.ci_logs",
@@ -851,8 +884,45 @@ func truncateRunes(s string, maxRunes int) string {
 
 func compactPRComments(rawComments, rawReviews any, store *ccr.Store) map[string]any {
 	const maxCommentRunes = 1200
+	// Pre-check whether any comment/review body exceeds the limit so we only
+	// emit shortened bodies after storing the full original in CCR.
+	needsTruncation := false
+	checkList := func(raw any) {
+		arr, ok := raw.([]any)
+		if !ok {
+			return
+		}
+		for _, item := range arr {
+			m, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+			fullBody := strings.TrimSpace(toString(m["body"]))
+			if truncateRunes(fullBody, maxCommentRunes) != fullBody {
+				needsTruncation = true
+				return
+			}
+		}
+	}
+	checkList(rawComments)
+	if !needsTruncation {
+		checkList(rawReviews)
+	}
+	var handle string
+	allowTruncate := false
+	if needsTruncation && store != nil {
+		if rawBytes, err := json.Marshal(map[string]any{"comments": rawComments, "reviews": rawReviews}); err == nil {
+			if h, herr := store.Put(ccr.Recovery{
+				ContentType: "json",
+				Compressor:  "codemode.pr_comments",
+				Original:    rawBytes,
+			}); herr == nil && h != "" {
+				handle = h
+				allowTruncate = true
+			}
+		}
+	}
 	out := map[string]any{}
-	anyTruncated := false
 	if arr, ok := rawComments.([]any); ok {
 		items := make([]map[string]any, 0, len(arr))
 		for _, c := range arr {
@@ -865,14 +935,21 @@ func compactPRComments(rawComments, rawReviews any, store *ccr.Store) map[string
 				author = toString(a["login"])
 			}
 			fullBody := strings.TrimSpace(toString(m["body"]))
-			clipped := truncateRunes(fullBody, maxCommentRunes)
+			shownBody := fullBody
+			truncated := false
+			if allowTruncate {
+				clipped := truncateRunes(fullBody, maxCommentRunes)
+				if clipped != fullBody {
+					shownBody = clipped
+					truncated = true
+				}
+			}
 			entry := map[string]any{
 				"author": author,
-				"body":   clipped,
+				"body":   shownBody,
 			}
-			if clipped != fullBody {
+			if truncated {
 				entry["truncated"] = true
-				anyTruncated = true
 			}
 			items = append(items, entry)
 		}
@@ -890,30 +967,29 @@ func compactPRComments(rawComments, rawReviews any, store *ccr.Store) map[string
 				author = toString(a["login"])
 			}
 			fullBody := strings.TrimSpace(toString(m["body"]))
-			clipped := truncateRunes(fullBody, maxCommentRunes)
+			shownBody := fullBody
+			truncated := false
+			if allowTruncate {
+				clipped := truncateRunes(fullBody, maxCommentRunes)
+				if clipped != fullBody {
+					shownBody = clipped
+					truncated = true
+				}
+			}
 			entry := map[string]any{
 				"author": author,
 				"state":  toString(m["state"]),
-				"body":   clipped,
+				"body":   shownBody,
 			}
-			if clipped != fullBody {
+			if truncated {
 				entry["truncated"] = true
-				anyTruncated = true
 			}
 			items = append(items, entry)
 		}
 		out["reviews"] = items
 	}
-	if anyTruncated && store != nil {
-		if rawBytes, err := json.Marshal(map[string]any{"comments": rawComments, "reviews": rawReviews}); err == nil {
-			if h, herr := store.Put(ccr.Recovery{
-				ContentType: "json",
-				Compressor:  "codemode.pr_comments",
-				Original:    rawBytes,
-			}); herr == nil && h != "" {
-				out["recovery_handle"] = h
-			}
-		}
+	if handle != "" {
+		out["recovery_handle"] = handle
 	}
 	return out
 }

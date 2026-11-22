@@ -334,7 +334,8 @@ export class CodemodeClient {
       return { text: JSON.stringify({ error: "cave_codemode_unavailable", message: "caveman-mcp codemode is not available this session" }), isError: true };
     }
     try {
-      const result = await this.call("tools/call", { name, arguments: args }, signal) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
+      const timeoutMs = codemodeCallTimeoutMs(name, args);
+      const result = await this.call("tools/call", { name, arguments: args }, signal, timeoutMs) as { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
       const text = (result.content ?? []).map((block) => (block.type === "text" && typeof block.text === "string" ? block.text : "")).join("");
       return { text, isError: Boolean(result.isError) };
     } catch (error) {
@@ -363,7 +364,8 @@ export class CodemodeClient {
   private async start(): Promise<boolean> {
     let child: ChildProcess;
     try {
-      const portable = portableInvocation(this.binary!, ["codemode", ...this.extraArgs]);
+      const prefixArgs = codemodePrefixArgs();
+      const portable = portableInvocation(this.binary!, [...prefixArgs, "codemode", ...this.extraArgs]);
       child = spawn(portable.command, portable.args, { stdio: ["pipe", "pipe", "ignore"], windowsHide: true });
     } catch {
       return false;
@@ -461,6 +463,29 @@ export class CodemodeClient {
       });
     });
   }
+}
+
+export function codemodeCallTimeoutMs(name: string, args: Record<string, unknown>): number {
+  const isExec = name === "codemode_execute" || name === "codemode_mutate";
+  const raw = typeof args.timeout_ms === "number" && Number.isFinite(args.timeout_ms) && args.timeout_ms > 0
+    ? Math.min(args.timeout_ms, 300_000)
+    : 0;
+  // Allow enough headroom above the gateway's own execution timeout so Pi never
+  // discards a valid late reply (including completed writes).
+  const minExecMs = isExec ? 75_000 : CALL_TIMEOUT_MS;
+  return Math.max(CALL_TIMEOUT_MS, minExecMs, raw > 0 ? raw + 15_000 : 0);
+}
+
+export function codemodePrefixArgs(env: NodeJS.ProcessEnv = process.env): string[] {
+  const raw = env.CAVEMAN_MCP_PREFIX_ARGS?.trim();
+  if (!raw) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    if (Array.isArray(parsed)) {
+      return parsed.filter((item): item is string => typeof item === "string");
+    }
+  } catch { /* ignore malformed env */ }
+  return [];
 }
 
 function defaultCodemodeArgs(env: NodeJS.ProcessEnv = process.env): string[] {

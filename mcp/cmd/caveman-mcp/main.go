@@ -205,7 +205,7 @@ func handleArgs(args []string, stdout, stderr io.Writer) (bool, int) {
 		err := json.NewEncoder(stdout).Encode(map[string]any{
 			"version":      version,
 			"schema":       "caveman.mcp.version.v1",
-			"capabilities": []string{"mcp_recovery", "build_stamped_version", "recovery_verification"},
+			"capabilities": []string{"mcp_recovery", "build_stamped_version", "recovery_verification", "codemode"},
 		})
 		if err != nil {
 			return true, 1

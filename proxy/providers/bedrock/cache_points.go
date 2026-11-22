@@ -6,6 +6,7 @@ import (
 	"encoding/binary"
 	"encoding/json"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -532,7 +533,7 @@ func converseCachedPrefixComponents(body []byte) ([][]byte, int, bool) {
 	if !valid {
 		return nil, 0, false
 	}
-	components := make([][]byte, 0, 2+len(messages))
+	components := make([][]byte, 0, len(messages))
 	cached := 0
 
 	var sysVal []byte
@@ -631,9 +632,5 @@ func bedrockFrameComponent(name string, value []byte) []byte {
 	var hdr [8]byte
 	binary.BigEndian.PutUint32(hdr[:4], uint32(len(name)))
 	binary.BigEndian.PutUint32(hdr[4:], uint32(len(value)))
-	out := make([]byte, 0, 8+len(name)+len(value))
-	out = append(out, hdr[:]...)
-	out = append(out, name...)
-	out = append(out, value...)
-	return out
+	return slices.Concat(hdr[:], []byte(name), value)
 }

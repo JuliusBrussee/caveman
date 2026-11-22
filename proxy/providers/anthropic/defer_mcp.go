@@ -2,6 +2,7 @@ package anthropic
 
 import (
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -183,11 +184,7 @@ func applyDeferMCPTools(data []byte, decoded map[string]any) ([]byte, bool) {
 		// Re-locate '[' at toolsSpan.Start (untouched because all edits were strictly > toolsSpan.Start).
 		insertPos := toolsSpan.Start + 1
 		searchToolJSON := []byte(`{"type":"` + anthropicToolSearchToolType + `","name":"` + anthropicToolSearchToolName + `"},`)
-		rebuilt := make([]byte, 0, len(out)+len(searchToolJSON))
-		rebuilt = append(rebuilt, out[:insertPos]...)
-		rebuilt = append(rebuilt, searchToolJSON...)
-		rebuilt = append(rebuilt, out[insertPos:]...)
-		out = rebuilt
+		out = slices.Concat(out[:insertPos], searchToolJSON, out[insertPos:])
 	}
 
 	if !json.Valid(out) {

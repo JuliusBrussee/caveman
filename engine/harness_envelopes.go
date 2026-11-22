@@ -296,9 +296,8 @@ func ExtractDedupComponents(input []byte) DedupComponents {
 	innerLen := len(body)
 	var key []byte
 	if semanticMeta.Len() > 0 {
-		key = make([]byte, 0, semanticMeta.Len()+len(body))
-		key = append(key, semanticMeta.Bytes()...)
-		key = append(key, body...)
+		semanticMeta.Write(body)
+		key = semanticMeta.Bytes()
 	} else {
 		key = body
 	}

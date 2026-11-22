@@ -187,6 +187,7 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 						}
 					}
 				}
+				effortRewritten := false
 				if len(lockedRoutes) == 0 && rc.Optimizers[providers.TurnEffortOptimizerID] && suffix == "/responses" {
 					exact := ""
 					if evidence.SessionCorrelationBasis == "explicit_header" || evidence.SessionCorrelationBasis == "signed_marker" {
@@ -200,13 +201,14 @@ func (s *Server) chatgpt(w http.ResponseWriter, r *http.Request) {
 						ans, active := planLocalTurnEffort("openai", "/v1/responses", meta.Model, transform.Body)
 						if out := s.applyEffort(cgRun, "openai", "/v1/responses", meta.Model, transform.Body, ans); !bytes.Equal(out, transform.Body) {
 							transform.Body = out
+							effortRewritten = true
 							if active && cgRun.marked {
 								transform.OptimizerIDs = append(transform.OptimizerIDs, providers.TurnEffortOptimizerID)
 							}
 						}
 					}
 				}
-				if comp == nil && len(transform.OptimizerIDs) == 0 {
+				if comp == nil && len(transform.OptimizerIDs) == 0 && !effortRewritten {
 					skipReason = "nothing_compressible"
 					if !allowNew {
 						skipReason = "cache_epoch_diverged"

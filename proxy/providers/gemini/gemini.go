@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -129,7 +130,7 @@ func (a Adapter) CachedPrefixComponents(body []byte, meta providers.RequestMetad
 	if !valid {
 		return nil, 0, false
 	}
-	out := make([][]byte, 0, 2+len(items))
+	out := make([][]byte, 0, len(items))
 	for _, name := range []string{"systemInstruction", "tools"} {
 		var value []byte
 		if span, found := jsonsplice.Field(body, root, name); found {
@@ -147,11 +148,7 @@ func geminiFrameComponent(name string, value []byte) []byte {
 	var hdr [8]byte
 	binary.BigEndian.PutUint32(hdr[:4], uint32(len(name)))
 	binary.BigEndian.PutUint32(hdr[4:], uint32(len(value)))
-	out := make([]byte, 0, 8+len(name)+len(value))
-	out = append(out, hdr[:]...)
-	out = append(out, name...)
-	out = append(out, value...)
-	return out
+	return slices.Concat(hdr[:], []byte(name), value)
 }
 
 func parseGeminiRoute(path string) (string, string, bool) {

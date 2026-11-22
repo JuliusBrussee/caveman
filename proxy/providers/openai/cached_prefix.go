@@ -2,6 +2,7 @@ package openai
 
 import (
 	"encoding/binary"
+	"slices"
 	"strings"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -79,7 +80,7 @@ func CachedPrefixComponents(body []byte) (components [][]byte, cached int, ok bo
 		toolsVal = extraToolsBuf
 	}
 
-	components = make([][]byte, 0, 2+(len(items)-firstConv))
+	components = make([][]byte, 0, len(items))
 	components = append(components, framePrefixComponent("system", sysBuf))
 	components = append(components, framePrefixComponent("tools", toolsVal))
 	for _, item := range items[firstConv:] {
@@ -127,9 +128,5 @@ func framePrefixComponent(name string, value []byte) []byte {
 	var hdr [8]byte
 	binary.BigEndian.PutUint32(hdr[:4], uint32(len(name)))
 	binary.BigEndian.PutUint32(hdr[4:], uint32(len(value)))
-	out := make([]byte, 0, 8+len(name)+len(value))
-	out = append(out, hdr[:]...)
-	out = append(out, name...)
-	out = append(out, value...)
-	return out
+	return slices.Concat(hdr[:], []byte(name), value)
 }

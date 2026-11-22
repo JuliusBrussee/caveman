@@ -130,10 +130,7 @@ func groupSearchPaths(lines [][]byte, cr []byte) ([][]byte, bool) {
 		if runLen >= 3 && len(items[i].path) >= 8 {
 			out = append(out, synthLine(items[i].path+":", cr))
 			for k := i; k < j; k++ {
-				indented := make([]byte, 0, 2+len(items[k].rest)+len(cr))
-				indented = append(indented, ' ', ' ')
-				indented = append(indented, items[k].rest...)
-				indented = append(indented, cr...)
+				indented := append(append([]byte{' ', ' '}, items[k].rest...), cr...)
 				out = append(out, indented)
 			}
 			changed = true

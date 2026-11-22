@@ -420,6 +420,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		if subscriptionPassthrough {
 			break
 		}
+		allowNativeTransforms := true
 		if s.compressor != nil {
 			serverRetrieve := authMode == AuthModePAYG && !s.recoveryViaMCP && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint)
 			if serverRetrieve {
@@ -438,6 +439,11 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			// exclusively through the live-zone predicate above (which itself requires MCP
 			// recovery), so neither can ever compress with no way back to the elided bytes.
 			markerOnlyAllowed := (s.mcpRecoveryAvailable(body) && authMode != AuthModeOAuth && authMode != AuthModeSubscription) || nonPAYGLiveZone
+			// Plain streaming requests with MCP disabled (and any request where
+			// neither MCP recovery nor server-side retrieve is permitted) stay
+			// byte-identical pass-through — never inject prompt_cache_key or
+			// cache breakpoints onto them.
+			allowNativeTransforms = markerOnlyAllowed || serverRetrieveAllowed
 			// A stream carrying the caveman MCP tool compresses on the marker path,
 			// so it did not go out raw for being a stream.
 			streamRaw = serverRetrieve && meta.Stream && s.prefixCache != nil && !markerOnlyAllowed
@@ -480,7 +486,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			// Opt-in deterministic tool-catalog sorting prevents MCP reconnect
 			// order shuffles from busting byte 1 of the cached prefix. Runs before
 			// tool-schema strip/shrink so both paths share one canonical catalog.
-			if len(lockedRoutes) == 0 && rc.Optimizers[providers.CanonicalToolOrderOptimizerID] {
+			if allowNativeTransforms && len(lockedRoutes) == 0 && rc.Optimizers[providers.CanonicalToolOrderOptimizerID] {
 				if rawTools, reassembleTools, ok := providers.ExtractToolCatalog(transform.Body, meta); ok {
 					if canonical, changed := providers.CanonicalizeToolCatalog(rawTools, meta); changed {
 						if spliced, serr := reassembleTools(canonical); serr == nil && len(spliced) > 0 && json.Valid(spliced) {
@@ -514,7 +520,7 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		// Bedrock, Vertex Claude, OpenAI, Azure, OpenAI-compatible) get BOTH input
 		// compression AND prompt-cache breakpoints/routing keys without breaking
 		// prefix stability or compiled Cave Builds.
-		if len(lockedRoutes) == 0 {
+		if allowNativeTransforms && len(lockedRoutes) == 0 {
 			if authMode != AuthModeSubscription {
 				t, terr := adapter.ApplyProviderNativeTransforms(r.Context(), bytes.NewReader(transform.Body), meta, providers.TransformPolicy{
 					RuntimeMode: rc.RuntimeMode,

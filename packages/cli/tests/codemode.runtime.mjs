@@ -10,6 +10,7 @@ import {
   discoverCodemodeServers,
   discoverKiloOwnServerNames,
   discoverOpenCodeOwnServerNames,
+  mergeHermesConfigEdits,
   NATIVE_CODEMODE_AGENTS,
   parseCodexMcpServersToml,
   parseHermesMcpServersYaml,
@@ -63,16 +64,20 @@ command = "caveman-mcp"
       },
     }));
 
-    const discovered = discoverCodemodeServers(ws, home);
-    assert.equal(discovered.caveman, undefined);
-    assert.equal(discovered["caveman-codemode"], undefined);
-    // Remote Streamable HTTP entries are now preserved!
-    assert.equal(discovered.remote_http?.url, "https://example.invalid/mcp");
-    assert.equal(discovered.postgres?.command, "npx");
-    assert.equal(discovered.postgres?.env?.PGHOST, "localhost");
-    assert.equal(discovered.sentry?.command, "sentry-mcp");
-    // Project .mcp.json wins over ~/.claude.json
-    assert.equal(discovered.github?.command, "github-mcp-local");
+    // Default (untrusted workspace): ignores checkout `.mcp.json`, loads user-home configs only.
+    const defaultDiscovered = discoverCodemodeServers(ws, home);
+    assert.equal(defaultDiscovered.caveman, undefined);
+    assert.equal(defaultDiscovered["caveman-codemode"], undefined);
+    assert.equal(defaultDiscovered.remote_http, undefined, "untrusted workspace .mcp.json must be skipped by default");
+    assert.equal(defaultDiscovered.github?.command, "github-mcp", "untrusted workspace .mcp.json must not shadow ~/.claude.json");
+    assert.equal(defaultDiscovered.postgres?.command, "npx");
+    assert.equal(defaultDiscovered.postgres?.env?.PGHOST, "localhost");
+    assert.equal(defaultDiscovered.sentry?.command, "sentry-mcp");
+
+    // Explicit opt-in (`trustWorkspace = true`): merges project `.mcp.json` on top.
+    const trusted = discoverCodemodeServers(ws, home, process.env, true);
+    assert.equal(trusted.remote_http?.url, "https://example.invalid/mcp");
+    assert.equal(trusted.github?.command, "github-mcp-local");
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -206,8 +211,31 @@ mcp_servers:
     assert.equal(readFileSync(join(srcHome, "auth.json"), "utf8"), "{\"access_token\":\"rotated-new\"}\n");
     assert.equal(readFileSync(join(srcHome, "state.db"), "utf8"), "sqlite-bytes");
     assert.equal(readFileSync(join(srcHome, "memories", "note.md"), "utf8"), "remember this\n");
-    assert.equal(readFileSync(join(srcHome, "config.yaml"), "utf8"), origYaml, "original config.yaml must NEVER be clobbered");
+    assert.equal(readFileSync(join(srcHome, "config.yaml"), "utf8"), origYaml, "unmodified config.yaml must stay byte-identical");
     assert.equal(existsSync(join(srcHome, "codemode-servers.json")), false, "ephemeral codemode-servers.json must NOT leak into sourceHome");
+
+    // 4. In-session `hermes mcp add` edits to ephemeral config.yaml ARE persisted back
+    //    while preserving original pre-wrap servers (`datadog`) and stripping `caveman-codemode`.
+    const addedServerYaml = readFileSync(join(tmpHome, "config.yaml"), "utf8") +
+      "  linear:\n    url: https://linear.example/mcp\n";
+    writeFileSync(join(tmpHome, "config.yaml"), addedServerYaml);
+    syncBackHermesEphemeralHome(tmpHome, srcHome);
+    const mergedYaml = readFileSync(join(srcHome, "config.yaml"), "utf8");
+    assert.match(mergedYaml, /datadog:/, "original pre-wrap server must be preserved");
+    assert.match(mergedYaml, /linear:/, "newly added server from hermes mcp add must persist");
+    assert.doesNotMatch(mergedYaml, /caveman-codemode:/, "ephemeral caveman-codemode must never leak back");
+    assert.equal(existsSync(join(srcHome, ".caveman-codemode-baseline.yaml")), false, "baseline sidecar must not leak");
+
+    // Sanity check pure merge helper with trailing YAML doc end marker.
+    const mergedDocEnd = mergeHermesConfigEdits(
+      "model:\n  name: gpt-6\nmcp_servers:\n  caveman-codemode:\n    command: x\n  sentry:\n    command: sentry-mcp\n...\n",
+      "model:\n  name: gpt-5.4\nmcp_servers:\n  datadog:\n    command: dd-mcp\n...\n",
+    );
+    assert.match(mergedDocEnd, /name: gpt-6/);
+    assert.match(mergedDocEnd, /datadog:/);
+    assert.match(mergedDocEnd, /sentry:/);
+    assert.doesNotMatch(mergedDocEnd, /caveman-codemode:/);
+    assert.ok(mergedDocEnd.indexOf("mcp_servers:") < mergedDocEnd.indexOf("..."));
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -334,6 +362,79 @@ test("caveman codemode forwards arguments to caveman-mcp codemode", async () => 
     });
     assert.equal(toolsOut.code, 0, toolsOut.stderr);
     assert.match(toolsOut.stdout, /ARGS:tools --workspace \/tmp\/demo/);
+  } finally {
+    isolated.cleanup();
+  }
+});
+
+test("caveman wrap --codemode preserves npx prefix args and refuses stale caveman-mcp without codemode capability", async () => {
+  if (process.platform === "win32") return;
+  const isolated = isolatedCliEnv();
+  const binDir = join(isolated.home, "bin");
+  mkdirSync(binDir, { recursive: true });
+  const agentOut = join(isolated.home, "claude-captured.json");
+  const claudeStub = join(binDir, "claude");
+  const npxStub = join(binDir, "npx");
+  const staleMcpStub = join(binDir, "stale-caveman-mcp");
+  try {
+    writeFileSync(
+      claudeStub,
+      `#!/bin/sh
+mcp_cfg=""
+prev=""
+for a in "$@"; do
+  if [ "$prev" = "--mcp-config" ]; then mcp_cfg="$a"; fi
+  prev="$a"
+done
+if [ -n "$mcp_cfg" ] && [ -f "$mcp_cfg" ]; then cp "$mcp_cfg" "${agentOut}"; else printf '%s' "NO_CODEMODE_MCP" > "${agentOut}"; fi
+`,
+      { mode: 0o755 },
+    );
+    writeFileSync(npxStub, `#!/bin/sh\nexit 0\n`, { mode: 0o755 });
+    writeFileSync(
+      staleMcpStub,
+      `#!/bin/sh\nif [ "$1" = "version" ]; then printf '%s\\n' '{"version":"0.4.0","capabilities":["mcp_recovery"]}'; exit 0; fi\nexit 2\n`,
+      { mode: 0o755 },
+    );
+
+    // Configure proxy=false in CAVEMAN_HOME so this test exercises the wrapped
+    // Claude overlay directly without spawning a local proxy listener.
+    const caveHome = isolated.env.CAVEMAN_HOME || join(isolated.home, ".caveman");
+    mkdirSync(caveHome, { recursive: true });
+    writeFileSync(
+      join(caveHome, "cloud.json"),
+      JSON.stringify({ wrap: { proxy: false } }, null, 2),
+    );
+
+    // 1. Only npx available (no caveman-mcp on PATH): Claude overlay must carry `-y caveman-mcp codemode ...`
+    //    (not `npx codemode ...`).
+    const npxRes = await runCli(["wrap", "--codemode", "claude"], {
+      env: {
+        ...isolated.env,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CAVEMAN_MCP_BIN: "",
+        CAVE_GATEWAY_URL: "http://127.0.0.1:18802",
+      },
+    });
+    assert.equal(npxRes.code, 0, npxRes.stderr);
+    const npxCfg = JSON.parse(readFileSync(agentOut, "utf8"));
+    const cm = npxCfg.mcpServers?.["caveman-codemode"];
+    assert.ok(cm, `expected caveman-codemode in .mcp.json: ${JSON.stringify(npxCfg)}`);
+    assert.ok(cm.command.endsWith("/npx") || cm.command === "npx", `expected npx command, got ${cm.command}`);
+    assert.deepEqual(cm.args.slice(0, 3), ["-y", "caveman-mcp", "codemode"], `npx prefix args dropped: ${JSON.stringify(cm.args)}`);
+
+    // 2. Stale local caveman-mcp lacking "codemode" capability must NOT register broken codemode overlay.
+    const staleRes = await runCli(["wrap", "--codemode", "claude"], {
+      env: {
+        ...isolated.env,
+        PATH: `${binDir}:/usr/bin:/bin`,
+        CAVEMAN_MCP_BIN: staleMcpStub,
+        CAVE_GATEWAY_URL: "http://127.0.0.1:18802",
+      },
+    });
+    assert.equal(staleRes.code, 0, staleRes.stderr);
+    assert.match(staleRes.stderr, /lacks Code Mode support/);
+    assert.equal(readFileSync(agentOut, "utf8"), "NO_CODEMODE_MCP");
   } finally {
     isolated.cleanup();
   }

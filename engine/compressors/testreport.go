@@ -518,6 +518,9 @@ func parseGoTestVerbose(input []byte) (*testReport, error) {
 	report := &testReport{}
 	var currentTest string
 	var currentBuf []string
+	var buildPkg string
+	var buildLines []string
+	pkgFailedTests := 0
 	flushFailed := func(name string) {
 		msgLines := make([]string, 0, len(currentBuf))
 		for _, l := range currentBuf {
@@ -534,6 +537,21 @@ func parseGoTestVerbose(input []byte) (*testReport, error) {
 	for _, raw := range lines {
 		trimmed := strings.TrimSpace(raw)
 		switch {
+		case strings.HasPrefix(trimmed, "# "):
+			if buildPkg != "" && len(buildLines) > 0 {
+				// Multiple packages failed to build before any FAIL summary line;
+				// emit the previous package's compiler diagnostics verbatim.
+				report.Failed++
+				report.Failures = append(report.Failures, testFailure{
+					Name:    buildPkg + " [build failed]",
+					Message: strings.Join(buildLines, "\n"),
+					Type:    "error",
+				})
+			}
+			buildPkg = strings.TrimSpace(strings.TrimPrefix(trimmed, "# "))
+			buildLines = []string{raw}
+			currentTest = ""
+			currentBuf = currentBuf[:0]
 		case strings.HasPrefix(trimmed, "=== RUN "):
 			currentTest = strings.TrimSpace(strings.TrimPrefix(trimmed, "=== RUN "))
 			currentBuf = currentBuf[:0]
@@ -547,6 +565,7 @@ func parseGoTestVerbose(input []byte) (*testReport, error) {
 			currentBuf = currentBuf[:0]
 		case strings.HasPrefix(trimmed, "--- FAIL: "):
 			report.Failed++
+			pkgFailedTests++
 			rest := strings.TrimSpace(strings.TrimPrefix(trimmed, "--- FAIL: "))
 			name := rest
 			if sp := strings.IndexByte(rest, ' '); sp > 0 {
@@ -557,20 +576,54 @@ func parseGoTestVerbose(input []byte) (*testReport, error) {
 			}
 			flushFailed(name)
 			currentBuf = currentBuf[:0]
-		case strings.HasPrefix(trimmed, "ok  \t") || strings.HasPrefix(trimmed, "FAIL\t"):
+		case strings.HasPrefix(trimmed, "ok  \t") || strings.HasPrefix(trimmed, "?\t") || strings.HasPrefix(trimmed, "?   \t"):
 			if fields := strings.Fields(trimmed); len(fields) >= 3 && strings.HasSuffix(fields[2], "s") {
 				var d float64
 				if _, err := fmt.Sscanf(strings.TrimSuffix(fields[2], "s"), "%f", &d); err == nil {
 					report.Duration += d
 				}
 			}
+			pkgFailedTests = 0
+		case strings.HasPrefix(trimmed, "FAIL\t"):
+			if fields := strings.Fields(trimmed); len(fields) >= 3 && strings.HasSuffix(fields[2], "s") {
+				var d float64
+				if _, err := fmt.Sscanf(strings.TrimSuffix(fields[2], "s"), "%f", &d); err == nil {
+					report.Duration += d
+				}
+			}
+			if strings.Contains(trimmed, "[build failed]") || strings.Contains(trimmed, "[setup failed]") {
+				report.Failed++
+				report.Failures = append(report.Failures, testFailure{
+					Name:    strings.TrimSpace(strings.TrimPrefix(trimmed, "FAIL\t")),
+					Message: strings.Join(buildLines, "\n"),
+					Type:    "error",
+				})
+				buildPkg = ""
+				buildLines = nil
+			} else if pkgFailedTests == 0 {
+				// Package failed without any individual `--- FAIL:` test (e.g.
+				// panic in TestMain or init). Fail closed to the original output
+				// so stack traces and diagnostics are never dropped.
+				return nil, fmt.Errorf("go test package failure without test-level failure: %s", trimmed)
+			}
+			pkgFailedTests = 0
 		case trimmed == "PASS" || trimmed == "FAIL" || trimmed == "":
 			continue
 		default:
-			if currentTest != "" {
+			if buildPkg != "" {
+				buildLines = append(buildLines, raw)
+			} else if currentTest != "" {
 				currentBuf = append(currentBuf, raw)
 			}
 		}
+	}
+	if buildPkg != "" && len(buildLines) > 0 {
+		report.Failed++
+		report.Failures = append(report.Failures, testFailure{
+			Name:    buildPkg + " [build failed]",
+			Message: strings.Join(buildLines, "\n"),
+			Type:    "error",
+		})
 	}
 	total := report.Passed + report.Failed + report.Skipped
 	if total < 4 {

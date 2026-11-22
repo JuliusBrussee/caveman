@@ -11,7 +11,6 @@ import (
 
 	"modernc.org/quickjs"
 
-	"github.com/JuliusBrussee/caveman/engine"
 	"github.com/JuliusBrussee/caveman/mcp"
 )
 
@@ -503,12 +502,7 @@ func (g *Gateway) handleExecuteJS(args executeArgs, maxOut int, allowWrites bool
 	if merr != nil {
 		return mcp.ToolError("cave_marshal_failed", "could not encode QuickJS execution result")
 	}
-	if len(encoded) > maxOut && g.eng != nil {
-		if comp, cerr := g.eng.Compress(encoded, engine.Options{Mode: engine.ModeCompress}); cerr == nil && len(comp.Output) < len(encoded) {
-			return mcp.ToolRawText(string(comp.Output))
-		}
-	}
-	return mcp.ToolRawText(string(encoded))
+	return g.finalizeExecutionOutput(encoded, maxOut)
 }
 
 func classifyJSError(ctx context.Context, timeout time.Duration, err error) mcp.ToolResult {

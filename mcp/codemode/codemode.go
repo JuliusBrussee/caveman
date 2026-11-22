@@ -785,9 +785,34 @@ func (g *Gateway) runExecute(raw json.RawMessage, allowWrites bool) mcp.ToolResu
 	if err != nil {
 		return mcp.ToolError("cave_marshal_failed", "could not encode execution result")
 	}
+	return g.finalizeExecutionOutput(encoded, maxOut)
+}
+
+// finalizeExecutionOutput compresses an oversized computed execution result
+// ONLY after its full original JSON is archived in CCR and the recovery handle
+// is disclosed in the output. Otherwise fails closed toward the original bytes.
+func (g *Gateway) finalizeExecutionOutput(encoded []byte, maxOut int) mcp.ToolResult {
 	if len(encoded) > maxOut && g.eng != nil {
 		if comp, cerr := g.eng.Compress(encoded, engine.Options{Mode: engine.ModeCompress}); cerr == nil && len(comp.Output) < len(encoded) {
-			return mcp.ToolRawText(string(comp.Output))
+			handle := comp.RecoveryHandle
+			if handle == "" && g.store != nil {
+				if h, serr := g.store.Put(ccr.Recovery{
+					ContentType: "json",
+					Compressor:  "codemode.execute",
+					Original:    encoded,
+				}); serr == nil {
+					handle = h
+				}
+			}
+			if handle != "" {
+				outText := string(comp.Output)
+				if !strings.Contains(outText, handle) {
+					outText += "\n<<ccr:" + handle + ">>"
+				}
+				if len(outText) < len(encoded) {
+					return mcp.ToolRawText(outText)
+				}
+			}
 		}
 	}
 	return mcp.ToolRawText(string(encoded))
@@ -856,7 +881,7 @@ func (g *Gateway) execFanOut(ctx context.Context, step PipelineStep, env map[str
 	}
 	results := make([]any, 0, len(arr))
 	for i, item := range arr {
-		childEnv := make(map[string]any, len(env)+1)
+		childEnv := make(map[string]any, len(env))
 		for k, v := range env {
 			childEnv[k] = v
 		}

@@ -1008,3 +1008,232 @@ return { ok: res === "ok" };
 		t.Fatalf("QuickJS prototype hardening failed: %+v", out)
 	}
 }
+
+func TestMCPDecodePreservesLargeIntegersAndNonTextAttachments(t *testing.T) {
+	// 1. Large integer (> 2^53) in structuredContent must survive without float64 rounding.
+	const bigID = "9007199254740993"
+	rawStructured := json.RawMessage(`{"structuredContent":{"id":` + bigID + `,"pad":"` + strings.Repeat("a", 2500) + `"},"content":[{"type":"text","text":"ok"}]}`)
+	decoded, err := decodeMCPCallResult("srv", "get_record", rawStructured)
+	if err != nil {
+		t.Fatalf("decode structuredContent: %v", err)
+	}
+	marshaled, err := json.Marshal(decoded)
+	if err != nil {
+		t.Fatalf("marshal decoded: %v", err)
+	}
+	if !strings.Contains(string(marshaled), bigID) {
+		t.Fatalf("large integer rounded in decoded structuredContent: %s", marshaled)
+	}
+
+	// Verify invokeUpstream archives exact digits in CCR and preserves json.Number.
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+	gw := NewGateway(store, engine.New(store, nil), nil)
+	up := NewInProcessUpstream("srv")
+	up.Register(ToolSpec{Name: "get_record", Description: "read"}, func(context.Context, map[string]any) (any, error) {
+		return decodeMCPCallResult("srv", "get_record", rawStructured)
+	})
+	up.Register(ToolSpec{Name: "get_screenshot", Description: "capture"}, func(context.Context, map[string]any) (any, error) {
+		imgRaw := json.RawMessage(`{"content":[{"type":"image","mimeType":"image/png","data":"` + strings.Repeat("A", 2500) + `"}]}`)
+		return decodeMCPCallResult("srv", "get_screenshot", imgRaw)
+	})
+	if err := gw.AddUpstream(context.Background(), up); err != nil {
+		t.Fatal(err)
+	}
+	handles := map[string]string{}
+	val, err := gw.invokeUpstream(context.Background(), "srv.get_record", nil, "s1", handles, false)
+	if err != nil {
+		t.Fatalf("invokeUpstream get_record: %v", err)
+	}
+	valBytes, _ := json.Marshal(val)
+	if !strings.Contains(string(valBytes), bigID) {
+		t.Fatalf("pipeline value rounded large integer: %s", valBytes)
+	}
+	if handles["s1"] == "" {
+		t.Fatalf("expected CCR handle for large structuredContent")
+	}
+	archived, err := store.Get(handles["s1"])
+	if err != nil {
+		t.Fatalf("store.Get: %v", err)
+	}
+	if !strings.Contains(string(archived), bigID) {
+		t.Fatalf("CCR archive rounded large integer: %s", archived)
+	}
+
+	// 2. Screenshot image block without structuredContent must NOT collapse to "".
+	imgVal, err := gw.invokeUpstream(context.Background(), "srv.get_screenshot", nil, "s2", handles, false)
+	if err != nil {
+		t.Fatalf("invokeUpstream screenshot: %v", err)
+	}
+	imgBytes, _ := json.Marshal(imgVal)
+	if !strings.Contains(string(imgBytes), `"type":"image"`) || !strings.Contains(string(imgBytes), `"mimeType":"image/png"`) {
+		t.Fatalf("non-text MCP attachment was lost: %s", imgBytes)
+	}
+	if handles["s2"] == "" {
+		t.Fatalf("expected CCR archive handle for image attachment")
+	}
+}
+
+func TestHTTPUpstreamOpenSSEAndRedirectCredentialStripping(t *testing.T) {
+	// 1. Open SSE stream that delivers a complete JSON-RPC reply without closing EOF.
+	pr, pw := io.Pipe()
+	go func() {
+		_, _ = io.WriteString(pw, "event: message\ndata: {\"jsonrpc\":\"2.0\",\"id\":1,\"result\":{\"protocolVersion\":\"2025-03-26\"}}\n\n")
+		// Intentionally keep pw open to simulate a server holding the SSE stream open.
+	}()
+	defer pw.Close()
+
+	var redirectedHeaders http.Header
+	client := &http.Client{
+		Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+			switch req.URL.Host {
+			case "sse.example.test":
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"text/event-stream"}},
+					Body:       pr,
+					Request:    req,
+				}, nil
+			case "origin.example.test":
+				// 307 preserves POST method across redirect to another origin.
+				return &http.Response{
+					StatusCode: http.StatusTemporaryRedirect,
+					Header:     http.Header{"Location": []string{"https://other.example.test/mcp"}},
+					Body:       io.NopCloser(strings.NewReader("")),
+					Request:    req,
+				}, nil
+			case "other.example.test":
+				redirectedHeaders = req.Header.Clone()
+				return &http.Response{
+					StatusCode: http.StatusOK,
+					Header:     http.Header{"Content-Type": []string{"application/json"}},
+					Body:       io.NopCloser(strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":{"protocolVersion":"2025-03-26"}}`)),
+					Request:    req,
+				}, nil
+			default:
+				return nil, fmt.Errorf("unexpected host %s", req.URL.Host)
+			}
+		}),
+	}
+
+	sseCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	sseUp, err := StartHTTPUpstream(sseCtx, "sse", ServerConfig{URL: "https://sse.example.test/mcp"}, client, nil)
+	if err != nil {
+		t.Fatalf("open SSE stream should return immediately once matching reply arrives: %v", err)
+	}
+	_ = sseUp.Close()
+
+	// 2. Cross-origin redirect must strip X-API-Key, Authorization, Cookie, and Mcp-Session-Id.
+	redirCtx, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	redirUp, err := StartHTTPUpstream(redirCtx, "redir", ServerConfig{
+		URL: "https://origin.example.test/mcp",
+		Headers: map[string]string{
+			"X-API-Key":     "secret-api-key",
+			"Authorization": "Bearer secret-token",
+		},
+	}, client, nil)
+	if err != nil {
+		t.Fatalf("redirect upstream init: %v", err)
+	}
+	_ = redirUp.Close()
+	if got := redirectedHeaders.Get("X-API-Key"); got != "" {
+		t.Fatalf("cross-origin redirect leaked X-API-Key=%q", got)
+	}
+	if got := redirectedHeaders.Get("Authorization"); got != "" {
+		t.Fatalf("cross-origin redirect leaked Authorization=%q", got)
+	}
+}
+
+func TestCodemodeRecoveryRequiredBeforeElision(t *testing.T) {
+	// 1. Execution output compression attaches CCR handle when store exists,
+	//    and fails closed to original when store is nil.
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer store.Close()
+
+	bigItems := make([]map[string]any, 60)
+	for i := range bigItems {
+		bigItems[i] = map[string]any{
+			"id":     i,
+			"status": "open",
+			"title":  fmt.Sprintf("item-%03d repeated payload for engine compression verification", i),
+			"owner":  "platform-team",
+		}
+	}
+	encoded, _ := json.Marshal(map[string]any{"result": bigItems, "tool_calls": 1})
+
+	gwWithStore := NewGateway(store, engine.New(store, nil), nil)
+	resWith := gwWithStore.finalizeExecutionOutput(encoded, 200)
+	if len(resWith.Content[0].Text) < len(encoded) && !strings.Contains(resWith.Content[0].Text, "ccr_") {
+		t.Fatalf("compressed execution output missing CCR recovery handle:\n%s", resWith.Content[0].Text)
+	}
+
+	gwNoStore := NewGateway(nil, engine.New(nil, nil), nil)
+	resWithout := gwNoStore.finalizeExecutionOutput(encoded, 200)
+	if resWithout.Content[0].Text != string(encoded) {
+		t.Fatalf("without CCR store, execution output must fail closed to original (got %d vs %d bytes)", len(resWithout.Content[0].Text), len(encoded))
+	}
+
+	// 2. Built-in repo.batch_read, repo.symbol_outline, and pr.pr_read diff
+	//    must NOT elide/truncate when store is nil.
+	ws := t.TempDir()
+	var longGo strings.Builder
+	longGo.WriteString("package demo\n\n")
+	for i := 0; i < 60; i++ {
+		fmt.Fprintf(&longGo, "func Fn%d(x int) int {\n\ta := x + %d\n\tb := a * 2\n\treturn b - 1\n}\n\n", i, i)
+	}
+	if err := os.WriteFile(filepath.Join(ws, "big.go"), []byte(longGo.String()), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	repoNoStore := NewRepoUpstream(ws, nil, nil)
+	brRes, err := repoNoStore.CallTool(context.Background(), "batch_read", map[string]any{
+		"paths":     []any{"big.go"},
+		"max_lines": 10,
+	})
+	if err != nil {
+		t.Fatalf("batch_read without store: %v", err)
+	}
+	brJSON, _ := json.Marshal(brRes)
+	if strings.Contains(string(brJSON), `"truncated":true`) {
+		t.Fatalf("batch_read must not truncate when CCR store is unavailable: %s", brJSON)
+	}
+
+	soRes, err := repoNoStore.CallTool(context.Background(), "symbol_outline", map[string]any{
+		"paths": []any{"big.go"},
+	})
+	if err != nil {
+		t.Fatalf("symbol_outline without store: %v", err)
+	}
+	soJSON, _ := json.Marshal(soRes)
+	if strings.Contains(string(soJSON), `"compressed":true`) {
+		t.Fatalf("symbol_outline must not elide without CCR store: %s", soJSON)
+	}
+
+	var longDiff strings.Builder
+	for i := 0; i < 80; i++ {
+		fmt.Fprintf(&longDiff, "+line %d added\n", i)
+	}
+	prNoStore := NewPRUpstream(ws, nil, nil, func(_ context.Context, _ string, _ string, _ ...string) ([]byte, []byte, error) {
+		return []byte(longDiff.String()), nil, nil
+	})
+	prRes, err := prNoStore.CallTool(context.Background(), "pr_read", map[string]any{
+		"number":         1,
+		"sections":       []any{"diff"},
+		"max_diff_lines": 10,
+	})
+	if err != nil {
+		t.Fatalf("pr_read without store: %v", err)
+	}
+	prJSON, _ := json.Marshal(prRes)
+	if strings.Contains(string(prJSON), `"truncated":true`) {
+		t.Fatalf("pr_read diff must not truncate when CCR store is unavailable: %s", prJSON)
+	}
+}

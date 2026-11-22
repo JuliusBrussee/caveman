@@ -80,10 +80,7 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 		// `package` declaration that tree-sitter's Go grammar requires. Parse
 		// with a synthetic package line and map replacement spans back onto the
 		// caller's original slice.
-		prefixed := make([]byte, len(goSyntheticPackagePrefix)+len(input))
-		copy(prefixed, goSyntheticPackagePrefix)
-		copy(prefixed[len(goSyntheticPackagePrefix):], input)
-		parseSrc = prefixed
+		parseSrc = append([]byte(goSyntheticPackagePrefix), input...)
 		prefixShift = uint32(len(goSyntheticPackagePrefix))
 	}
 
@@ -132,10 +129,7 @@ func (c *codeCompressor) Compress(input []byte) ([]byte, bool) {
 
 	verifySrc := out
 	if prefixShift > 0 {
-		prefixed := make([]byte, len(goSyntheticPackagePrefix)+len(out))
-		copy(prefixed, goSyntheticPackagePrefix)
-		copy(prefixed[len(goSyntheticPackagePrefix):], out)
-		verifySrc = prefixed
+		verifySrc = append([]byte(goSyntheticPackagePrefix), out...)
 	}
 
 	// Byte-safe guarantee: the result must re-parse at least as cleanly,
