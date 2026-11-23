@@ -528,6 +528,36 @@ test('pruneOrphanedManagedHooks drops orphaned managed statusLine', () => {
   assert.equal(s.statusLine, undefined);
 });
 
+test('pruneOrphanedManagedHooks keeps a statusLine whose path the shell expands ($HOME, ~)', () => {
+  // Claude Code runs the command through a shell, which expands `$HOME` and a
+  // leading `~`; existsSync does not. Joining the literal token under configDir
+  // finds nothing, so a working hand-written statusline was deleted as orphaned.
+  for (const command of [
+    'bash $HOME/.claude/hooks/caveman-statusline.sh',
+    'bash "${CLAUDE_CONFIG_DIR}/hooks/caveman-statusline.sh"',
+    'bash ~/.claude/hooks/caveman-statusline.sh',
+  ]) {
+    const s = { statusLine: { type: 'command', command } };
+    const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing', 'linux');
+    assert.equal(removed, 0, command);
+    assert.equal(s.statusLine.command, command);
+  }
+});
+
+test('pruneOrphanedManagedHooks keeps a managed hook whose path the shell expands', () => {
+  const s = {
+    hooks: {
+      SessionStart: [{ hooks: [
+        { type: 'command', command: 'node "$HOME/.claude/hooks/caveman-activate.js"' },
+        { type: 'command', command: 'node ~/.claude/hooks/caveman-mode-tracker.js' },
+      ] }],
+    },
+  };
+  const removed = SETTINGS.pruneOrphanedManagedHooks(s, '/tmp/__cm_cfg_missing', 'linux');
+  assert.equal(removed, 0);
+  assert.equal(s.hooks.SessionStart[0].hooks.length, 2);
+});
+
 test('claudeConfigDir honors CLAUDE_CONFIG_DIR env', () => {
   const orig = process.env.CLAUDE_CONFIG_DIR;
   process.env.CLAUDE_CONFIG_DIR = '/tmp/__cm_test_cfg';
