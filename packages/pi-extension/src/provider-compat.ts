@@ -61,6 +61,8 @@ export function unpreservedAttributionHeaders(
 export function compatForRoutedModel(model: SelectedModel): SelectedModel["compat"] {
   const provider = model.provider;
   const url = model.baseUrl;
+  let host = "";
+  try { host = new URL(url).hostname.toLowerCase(); } catch { /* invalid URL keeps empty host */ }
   const openRouter = provider === "openrouter" || url.includes("openrouter.ai");
   if (model.api === "openai-responses") {
     const explicit = model.compat as OpenAIResponsesCompat | undefined;
@@ -68,7 +70,7 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
   }
   if (model.api === "anthropic-messages") {
     const explicit = model.compat as AnthropicMessagesCompat | undefined;
-    const messageThreads = url.includes("api.anthropic.com");
+    const messageThreads = host === "api.anthropic.com";
     if (!openRouter && !messageThreads) return model.compat;
     return {
       ...explicit,
@@ -93,7 +95,8 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
   const antLing = provider === "ant-ling" || url.includes("api.ant-ling.com");
   const grok = provider === "xai" || url.includes("api.x.ai");
   const deepseek = provider === "deepseek" || url.toLowerCase().includes("deepseek.com");
-  const isOpenAI = provider === "openai" || url.includes("api.openai.com");
+  const isOpenAIHost = host === "api.openai.com";
+  const isOpenAI = provider === "openai" || isOpenAIHost;
   const nonStandard = nvidia || provider === "cerebras" || url.includes("cerebras.ai") || grok || together
     || url.includes("chutes.ai") || deepseek || zai || moonshot
     || provider === "opencode" || url.includes("opencode.ai") || cloudflareWorkers || cloudflareGateway || antLing;
@@ -109,6 +112,6 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
     sendSessionAffinityHeaders: explicit?.sendSessionAffinityHeaders ?? openRouter,
     sessionAffinityFormat: explicit?.sessionAffinityFormat ?? (openRouter ? "openrouter" : "openai"),
     supportsLongCacheRetention: explicit?.supportsLongCacheRetention ?? !(together || cloudflareWorkers || cloudflareGateway || nvidia || antLing),
-    ...(url.includes("api.openai.com") ? { promptCacheKeyMode: explicit?.promptCacheKeyMode ?? "enabled" } : {}),
+    ...(isOpenAIHost ? { promptCacheKeyMode: explicit?.promptCacheKeyMode ?? "enabled" } : {}),
   };
 }
