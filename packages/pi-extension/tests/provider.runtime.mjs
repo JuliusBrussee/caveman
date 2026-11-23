@@ -638,3 +638,33 @@ test("selecting a pi-virtual model restores the previous route", async () => {
   assert.equal(h.ctx.model.baseUrl, "");
   assert.deepEqual(h.notices, []);
 });
+
+test("older Pi (<1.6.0) keeps api.openai.com OpenAI Chat direct to preserve prompt cache keys", async () => {
+  const chatModel = { provider: "openai", id: "gpt-chat", api: "openai-completions", baseUrl: "https://api.openai.com/v1" };
+  const responsesModel = { provider: "openai", id: "gpt-resp", api: "openai-responses", baseUrl: "https://api.openai.com/v1" };
+  const registry = [chatModel, responsesModel];
+  let active = { ...chatModel };
+  const notices = [];
+  const ctx = {
+    get model() { return active; },
+    sessionManager: { getSessionId: () => "fixture-session" },
+    modelRegistry: {
+      getAll: () => registry,
+      find: (provider, id) => registry.find((m) => m.provider === provider && m.id === id),
+      isUsingOAuth: () => false,
+      getApiKeyAndHeaders: async () => ({ ok: true, apiKey: "sk-fake-local-test-key" }),
+    },
+  };
+  const router = new ProviderRouter({ async setModel(model) { active = model; return true; } }, (msg) => notices.push(msg), {
+    supportsOpenAIChatPromptCacheKeyMode: false,
+  });
+  await router.openGate(GATEWAY, ctx, COMPAT, NATIVE);
+  assert.equal(router.routing(), false);
+  assert.equal(active.baseUrl, chatModel.baseUrl);
+  assert.match(notices.at(-1), /Pi <1\.6\.0 cannot preserve this OpenAI Chat endpoint's prompt cache keys/);
+  // Responses API on api.openai.com is unaffected and still routes.
+  active = { ...responsesModel };
+  await router.apply(active, ctx);
+  assert.equal(router.routing(), true);
+  assert.equal(active.baseUrl, `${GATEWAY}/w/pi/openai/v1`);
+});

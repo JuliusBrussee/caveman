@@ -48,7 +48,7 @@ func TestHTMLDashboardTableKeepsOutlierRow(t *testing.T) {
 		"Ops Dashboard",
 		"# Fleet health",
 		"[alert] 1 service breaching SLO",
-		"|Service|Region|Status|p99|Errors|",
+		"|Service|Region|Status|p99|Errors||\n|---|---|---|---|---|---|",
 		"|svc-287|eu-west-3|CRITICAL|4810 ms|38.12%|logs metrics|",
 		"rows elided (caveman)",
 		"all Status=healthy",

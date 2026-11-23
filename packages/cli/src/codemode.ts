@@ -698,11 +698,22 @@ function parseYamlFlowMappingEntries(
   return { ok: true, entries };
 }
 
+function foldYamlFlowLines(text: string): string {
+  if (!/[\r\n]/.test(text)) return text;
+  // YAML 1.2 flow line folding: trim horizontal whitespace around line breaks;
+  // a single line break folds to a space, while N >= 2 consecutive breaks fold to N - 1 newlines.
+  return text.replace(/[ \t]*(?:\r?\n[ \t]*)+/g, (match) => {
+    const breaks = (match.match(/\n/g) ?? []).length;
+    return breaks <= 1 ? " " : "\n".repeat(breaks - 1);
+  });
+}
+
 function parseYamlFlowValue(raw: string): unknown {
   const s = raw.trim();
-  if (!s || s === "null" || s === "~") return null;
-  if (s === "true") return true;
-  if (s === "false") return false;
+  const lower = s.toLowerCase();
+  if (!s || lower === "null" || s === "~") return null;
+  if (lower === "true") return true;
+  if (lower === "false") return false;
   if (s.startsWith("{") && s.endsWith("}")) {
     const parsed = parseYamlFlowMappingEntries(s);
     if (!parsed.ok) return undefined;
@@ -720,16 +731,26 @@ function parseYamlFlowValue(raw: string): unknown {
     return split.items.map((item) => parseYamlFlowValue(item));
   }
   if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    const inner = s.slice(1, -1);
+    const folded = /[\r\n]/.test(inner)
+      ? inner
+          // Escaped line break in double-quoted YAML flow scalar is a line continuation.
+          .replace(/(^|[^\\])((?:\\\\)*)\\\r?\n[ \t]*/g, "$1$2")
+          .replace(/[ \t]*(?:\r?\n[ \t]*)+/g, (match) => {
+            const breaks = (match.match(/\n/g) ?? []).length;
+            return breaks <= 1 ? " " : "\\n".repeat(breaks - 1);
+          })
+      : inner;
     try {
-      return JSON.parse(s);
+      return JSON.parse(`"${folded}"`);
     } catch {
-      return s.slice(1, -1);
+      return folded;
     }
   }
   if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
-    return s.slice(1, -1).replace(/''/g, "'");
+    return foldYamlFlowLines(s.slice(1, -1)).replace(/''/g, "'");
   }
-  return s;
+  return foldYamlFlowLines(s);
 }
 
 function parseYamlFlowMap(val: string): Record<string, string> | undefined {
@@ -1715,8 +1736,23 @@ type ExtractedHermesMcpServers =
       kind: "absent" | "empty" | "block" | "flow";
       entries: Map<string, string[]>;
       rawFlowLines?: string[];
+      serverIndent?: number;
     }
   | { ok: false; reason: string };
+
+function reindentYamlBlock(lines: string[], targetIndent: number): string[] {
+  const firstNonEmpty = lines.find((ln) => ln.trim().length > 0);
+  if (!firstNonEmpty) return lines;
+  const baseIndent = firstNonEmpty.length - firstNonEmpty.trimStart().length;
+  if (baseIndent === targetIndent) return lines;
+  const delta = targetIndent - baseIndent;
+  return lines.map((ln) => {
+    if (!ln.trim()) return "";
+    const curIndent = ln.length - ln.trimStart().length;
+    const nextIndent = Math.max(targetIndent, curIndent + delta);
+    return `${" ".repeat(nextIndent)}${ln.trimStart()}`;
+  });
+}
 
 function formatFlowEntryAsBlockLines(entry: YamlFlowMappingEntry): string[] {
   const valueLines = entry.rawValue.split(/\r?\n/);
@@ -1849,7 +1885,13 @@ function extractHermesMcpServers(yaml: string): ExtractedHermesMcpServers {
   }
   if (inSection) flush();
   if (blocks.size > 0 && kind === "empty") kind = "block";
-  return { ok: true, kind, entries: blocks, ...(rawFlowLines ? { rawFlowLines } : {}) };
+  return {
+    ok: true,
+    kind,
+    entries: blocks,
+    ...(rawFlowLines ? { rawFlowLines } : {}),
+    ...(serverIndent > 0 ? { serverIndent } : {}),
+  };
 }
 
 /**
@@ -1901,14 +1943,22 @@ export function mergeHermesConfigEdits(editedYaml: string, originalYaml: string)
     return insertBlock(origExtracted.rawFlowLines.join("\n"));
   }
 
+  // Normalize sibling indentation across all merged server entries so combining
+  // flow-derived entries (2-space) with 4-space block edits never emits mixed
+  // sibling indentation under mcp_servers:.
+  const targetIndent =
+    editedEntries.size > 0 && editedExtracted.serverIndent
+      ? editedExtracted.serverIndent
+      : origExtracted.serverIndent ?? 2;
+
   const mergedServerLines: string[] = [];
   for (const [name, lines] of origEntries) {
     if (!editedEntries.has(name)) {
-      mergedServerLines.push(...lines);
+      mergedServerLines.push(...reindentYamlBlock(lines, targetIndent));
     }
   }
   for (const [, lines] of editedEntries) {
-    mergedServerLines.push(...lines);
+    mergedServerLines.push(...reindentYamlBlock(lines, targetIndent));
   }
 
   if (mergedServerLines.length === 0) {

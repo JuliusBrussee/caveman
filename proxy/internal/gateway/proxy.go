@@ -630,16 +630,18 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			// fallback. A side request has a prefix of its own.
 			answer.Model, held = model, true
 		}
-		// An Anthropic message-thread continuation references a previous_message_id
-		// on Anthropic's own server and locks the thread fingerprint to Turn 1's model.
-		// Never cross-host or swap to a different model mid-thread.
+		// An Anthropic message thread binds server-side message IDs to Anthropic's
+		// own server (never route thread:create or thread:continue to a pool target)
+		// and locks the thread fingerprint to Turn 1's model on continuation.
 		if meta.Provider == "anthropic" {
-			if _, threadKind := anthropicThreadType(transform.Body); threadKind == "continue" {
+			if hasThread, threadKind := anthropicThreadType(transform.Body); hasThread {
 				answer.Target = nil
-				if last != nil && last.provider == "anthropic" && last.sent != "" {
-					answer.Model = last.sent
-				} else {
-					answer.Model = ""
+				if threadKind == "continue" {
+					if last != nil && last.provider == "anthropic" && last.sent != "" {
+						answer.Model = last.sent
+					} else {
+						answer.Model = ""
+					}
 				}
 			}
 		}

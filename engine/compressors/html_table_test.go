@@ -151,20 +151,43 @@ func TestHTMLMergedCellsAreNotTabulated(t *testing.T) {
 }
 
 func TestHTMLCellTextKeepsPathsWhole(t *testing.T) {
-	// coverage.py splits each path with <span class="sep">/</span>; a space at
-	// every tag edge would print "/ home / dev / app.py".
+	// coverage.py splits each path with <span class="sep">/</span>; syntax
+	// highlighters and link renderers also split paths across adjacent spans
+	// (<span>/usr</span><span>/local/bin</span>, <span>/home/dev/</span><span>app.py</span>).
 	var b strings.Builder
 	b.WriteString(`<table><thead><tr><th>File</th><th>Cover</th></tr></thead><tbody>`)
 	for i := 0; i < 20; i++ {
 		fmt.Fprintf(&b, `<tr><td><span class="sep">/</span>home<span class="sep">/</span>dev<span class="sep">/</span>mod_%d.py</td><td>%d%%</td></tr>`, i, 50+i)
 	}
+	b.WriteString(`<tr><td><span>/usr</span><span>/local/bin</span></td><td>100%</td></tr>`)
+	b.WriteString(`<tr><td><code><span>/var</span><span>/log</span><span>/app</span><span>.log</span></code></td><td>99%</td></tr>`)
+	b.WriteString(`<tr><td><span>/home/dev/</span><span>main</span><span>.go</span></td><td>98%</td></tr>`)
 	b.WriteString(`</tbody></table>`)
 	out, ok := compressors.NewHTML().Compress([]byte(inArticle(b.String())))
 	if !ok {
 		t.Fatal("expected article extraction")
 	}
-	if !bytes.Contains(out, []byte("|/home/dev/mod_0.py|50%|")) {
-		t.Errorf("path split by inline tags must stay whole:\n%s", out)
+	for _, want := range []string{
+		"|/home/dev/mod_0.py|50%|",
+		"|/usr/local/bin|100%|",
+		"|/var/log/app.log|99%|",
+		"|/home/dev/main.go|98%|",
+	} {
+		if !bytes.Contains(out, []byte(want)) {
+			t.Errorf("path split by inline tags must stay whole, want %q:\n%s", want, out)
+		}
+	}
+}
+
+func TestHTMLBlankTrailingHeaderKeepsColumnCount(t *testing.T) {
+	out, ok := compressors.NewHTML().Compress([]byte(inArticle(
+		`<table><thead><tr><th>Service</th><th>Status</th><th></th></tr></thead>` +
+			`<tbody><tr><td>api</td><td>ok</td><td>logs</td></tr></tbody></table>`)))
+	if !ok {
+		t.Fatal("expected article extraction")
+	}
+	if !bytes.Contains(out, []byte("|Service|Status||\n|---|---|---|\n|api|ok|logs|")) {
+		t.Errorf("header and separator column counts must match when trailing header is blank:\n%s", out)
 	}
 }
 

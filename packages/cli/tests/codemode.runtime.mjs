@@ -594,7 +594,22 @@ test("Hermes Code Mode preserves flow-style and multi-line mcp_servers and fails
       "mcp_servers: {",
       '  "docs-srv": { url: "https://docs.example.invalid/mcp#v2", headers: { Authorization: "Bearer tok" } },',
       '  local: { command: "node", args: ["srv.js", "--stdio"] },',
-      "  disabled_srv: { command: skip, enabled: false }",
+      "  wrapped: {",
+      "    command: npx,",
+      "    args: [",
+      "      hello",
+      "        world,",
+      "      'single",
+      "        quoted',",
+      '      "double',
+      '        quoted",',
+      '      "line\\',
+      '        cont"',
+      "    ]",
+      "  },",
+      "  disabled_srv: { command: skip, enabled: false },",
+      "  disabled_py: { command: skip_py, enabled: False },",
+      "  disabled_upper: { command: skip_upper, enabled: FALSE }",
       "}",
       "other: keep",
       "",
@@ -604,7 +619,10 @@ test("Hermes Code Mode preserves flow-style and multi-line mcp_servers and fails
     assert.equal(discoveredMulti["docs-srv"]?.headers?.Authorization, "Bearer tok");
     assert.equal(discoveredMulti.local?.command, "node");
     assert.deepEqual(discoveredMulti.local?.args, ["srv.js", "--stdio"]);
+    assert.deepEqual(discoveredMulti.wrapped?.args, ["hello world", "single quoted", "double quoted", "linecont"]);
     assert.equal(discoveredMulti.disabled_srv, undefined);
+    assert.equal(discoveredMulti.disabled_py, undefined);
+    assert.equal(discoveredMulti.disabled_upper, undefined);
 
     // 3. rewriteHermesCodemodeYaml strips multi-line flow map completely (no stray column-0 `}`).
     const rewrittenMulti = rewriteHermesCodemodeYaml(multiLineFlow, cmEntry);
@@ -622,6 +640,34 @@ test("Hermes Code Mode preserves flow-style and multi-line mcp_servers and fails
     const reparsed = parseHermesMcpServersYaml(mergedBoth);
     assert.equal(reparsed.existing?.url, "https://example.invalid/mcp");
     assert.equal(reparsed.linear?.url, "https://linear.example.invalid/mcp");
+
+    // 4b. Mixed indentation (flow original + 4-space block edit, or 2-space + 4-space) normalizes sibling indent.
+    const editedFourSpace = [
+      "model: new",
+      "mcp_servers:",
+      "    caveman-codemode:",
+      "        command: caveman-mcp",
+      "    linear:",
+      "        url: https://linear.example.invalid/mcp",
+      "",
+    ].join("\n");
+    const mergedFourSpace = mergeHermesConfigEdits(editedFourSpace, originalFlow);
+    assert.match(mergedFourSpace, /^    existing: \{url: https:\/\/example\.invalid\/mcp\}$/m);
+    assert.match(mergedFourSpace, /^    linear:$/m);
+    assert.match(mergedFourSpace, /^        url: https:\/\/linear\.example\.invalid\/mcp$/m);
+    assert.doesNotMatch(mergedFourSpace, /^  existing:/m, `mixed sibling indent emitted:\n${mergedFourSpace}`);
+    const reparsedFour = parseHermesMcpServersYaml(mergedFourSpace);
+    assert.equal(reparsedFour.existing?.url, "https://example.invalid/mcp");
+    assert.equal(reparsedFour.linear?.url, "https://linear.example.invalid/mcp");
+
+    const origTwoSpaceBlock = "model: old\nmcp_servers:\n  existing:\n    url: https://example.invalid/mcp\n";
+    const mergedBlockIndent = mergeHermesConfigEdits(editedFourSpace, origTwoSpaceBlock);
+    assert.match(mergedBlockIndent, /^    existing:$/m);
+    assert.match(mergedBlockIndent, /^      url: https:\/\/example\.invalid\/mcp$/m);
+    assert.match(mergedBlockIndent, /^    linear:$/m);
+    const reparsedBlockIndent = parseHermesMcpServersYaml(mergedBlockIndent);
+    assert.equal(reparsedBlockIndent.existing?.url, "https://example.invalid/mcp");
+    assert.equal(reparsedBlockIndent.linear?.url, "https://linear.example.invalid/mcp");
 
     // 5. Unsupported / unparseable YAML shapes fail closed: merge throws, syncBack leaves original untouched and warns.
     const anchorOriginal = "model: old\nmcp_servers: &shared\n  existing:\n    url: https://example.invalid/mcp\n";

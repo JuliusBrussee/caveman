@@ -165,12 +165,15 @@ func TestAnthropicMessageThreadsPreserveFingerprintAndModel(t *testing.T) {
 		Cloud:      cloud,
 	})
 
-	// Turn 1: Auto routes to claude-sonnet-4-6, asks effort "low" in message mode.
+	// Turn 1: Auto routes to claude-sonnet-4-6, asks effort "low" in message mode,
+	// and also proposes a pool Target. Message-thread creation must clear Target
+	// so Turn 1 stays on Anthropic (avoiding an orphaned message ID on Turn 2).
 	cloud.answer = RouteAnswer{
 		Outcome:    "routed",
 		Model:      "claude-sonnet-4-6",
 		Effort:     "low",
 		EffortMode: "message",
+		Target:     &RouteTarget{Host: "openai", Model: "gpt-5.4", PoolID: "pool-1", Via: "cloud"},
 	}
 	req1 := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(createBody))
 	req1.Header.Set("Content-Type", "application/json")

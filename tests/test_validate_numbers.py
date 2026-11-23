@@ -77,6 +77,15 @@ class TestExtractNumbers(unittest.TestCase):
         # error: flagging pure formatting would add noise and protect nothing.
         self.assertEqual(extract_numbers("1,000 tokens"), extract_numbers("1000 tokens"))
 
+    def test_negative_numbers_keep_sign_without_breaking_dates_or_ranges(self):
+        self.assertEqual(extract_numbers("operate at -20 °C and offset=-0.5"), {"-20", "-0.5"})
+        self.assertEqual(extract_numbers("bounds (-10, 15)"), {"-10", "15"})
+        self.assertEqual(extract_numbers("shipped 2026-11-17 range 10-20 step-1"), {"2026", "11", "17", "10", "20", "1"})
+
+    def test_compound_spelled_out_numbers_may_become_digits(self):
+        orig = "Allow twenty-five retries across forty two workers on the twenty-first run.\n"
+        self.assertTrue({"25", "42", "21"} <= spelled_numbers(orig))
+
 
 class TestValidateNumbers(unittest.TestCase):
     def _validate(self, orig, comp):
@@ -115,6 +124,25 @@ class TestValidateNumbers(unittest.TestCase):
     def test_reformatted_thousands_passes(self):
         orig = "# Budget\n\nThe prompt budget is 1,000 tokens for each request made.\n"
         comp = "# Budget\n\nPrompt budget 1000 token per request.\n"
+        result = self._validate(orig, comp)
+        self.assertTrue(result.is_valid, result.errors)
+
+    def test_sign_change_fails(self):
+        orig = "# Thermal\n\nStore the samples at -20 °C in the freezer.\n"
+        comp = "# Thermal\n\nStore samples at 20 °C in freezer.\n"
+        result = self._validate(orig, comp)
+        self.assertFalse(result.is_valid)
+        self.assertTrue(any("20" in e for e in result.errors), result.errors)
+
+    def test_preserved_negative_number_passes(self):
+        orig = "# Thermal\n\nStore the samples at -20 °C in the freezer.\n"
+        comp = "# Thermal\n\nStore samples at -20 °C.\n"
+        result = self._validate(orig, comp)
+        self.assertTrue(result.is_valid, result.errors)
+
+    def test_compound_spelled_number_to_digits_passes(self):
+        orig = "# Limits\n\nRetry at most twenty-five times before failing the job.\n"
+        comp = "# Limits\n\nRetry max 25 times before fail.\n"
         result = self._validate(orig, comp)
         self.assertTrue(result.is_valid, result.errors)
 
