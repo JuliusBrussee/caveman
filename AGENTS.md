@@ -16,7 +16,7 @@ Why it is built this way: [`docs/WHY.md`](docs/WHY.md). How it works:
 | `commands/` | Codex/Gemini `.toml` command stubs and `caveman-init.md` |
 | `src/hooks/`, `src/rules/`, `src/tools/`, `src/plugins/opencode/` | Claude Code hooks, the always-on rule body, the per-repo rule writer, the opencode plugin |
 | `installer/` | `install.js`, the only installer (`install.sh` / `install.ps1` are shims) |
-| `.claude-plugin/`, `.cursor-plugin/`, `hooks/hooks-cursor.json`, `GEMINI.md`, `gemini-extension.json` | Plugin and extension manifests (must stay at the root) |
+| `.claude-plugin/`, `.codex-plugin/`, `.cursor-plugin/`, `hooks/hooks-cursor.json`, `GEMINI.md`, `gemini-extension.json` | Plugin and extension manifests (must stay at the root) |
 | `plugins/caveman/`, `dist/caveman.skill` | CI-generated mirrors. Never edit by hand |
 | `packages/cli/` | The `caveman` CLI |
 | `engine/`, `proxy/`, `mcp/`, `mem/`, `shrink/` | Go runtime: compression Engine, provider proxy, MCP server, cavemem, tool-catalog shrink |
