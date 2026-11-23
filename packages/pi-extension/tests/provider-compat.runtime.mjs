@@ -13,12 +13,12 @@ const hostRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding
 const sdkManifest = hostRequire.resolve.paths("@earendil-works/pi-ai")
   .map(root => join(root, "@earendil-works/pi-ai/package.json")).find(existsSync);
 assert.ok(sdkManifest, "Pi's SDK dependency must be installed");
-assert.equal(JSON.parse(readFileSync(sdkManifest, "utf8")).version, "1.0.4", "Review compat detection when updating the pinned Pi SDK");
+assert.equal(JSON.parse(readFileSync(sdkManifest, "utf8")).version, "1.6.0", "Review compat detection when updating the pinned Pi SDK");
 const sdkStream = async api => (await import(pathToFileURL(join(dirname(sdkManifest), "dist/api", `${api}.js`)))).stream;
 const GATEWAY = "http://127.0.0.1:8787";
 const STREAMS = Object.fromEntries(await Promise.all(["openai-completions", "openai-responses", "anthropic-messages"]
   .map(async api => [api, await sdkStream(api)])));
-// `sk-` prefix: pi-ai 1.0.4 reads an `openai` model at api.openai.com with any other
+// `sk-` prefix: pi-ai 1.6.0 reads an `openai` model at api.openai.com with any other
 // key as a Sign in with ChatGPT token and drops max_output_tokens, temperature and
 // the prompt-cache fields. That credential is OAuth, which the router never routes,
 // so the fixture must look like the API key it stands for.
@@ -91,8 +91,8 @@ const COMPLETION_MODELS = [
   ["Moonshot alias", fixture("https://api.moonshot.ai/v1")],
   ["OpenRouter alias", fixture("https://openrouter.ai/api/v1", { headers: OPENROUTER_HEADERS, compat: { sendSessionAffinityHeaders: true } })],
   ["OpenRouter OpenAI model alias", fixture("https://openrouter.ai/api/v1", { id: "openai/fixture", headers: OPENROUTER_HEADERS })],
-  ["Cloudflare Workers alias", fixture("https://api.cloudflare.com/client/v4/accounts/fixture/ai/v1", { headers: { "User-Agent": "pi-coding-agent" } })],
-  ["Cloudflare gateway host detection", fixture("https://gateway.ai.cloudflare.com/v1/fixture/compat/v1", { headers: { "User-Agent": "pi-coding-agent" } })],
+  ["Cloudflare Workers alias", fixture("https://api.cloudflare.com/client/v4/accounts/fixture/ai/v1")],
+  ["Cloudflare gateway host detection", fixture("https://gateway.ai.cloudflare.com/v1/fixture/compat/v1")],
   ["NVIDIA alias", fixture("https://integrate.api.nvidia.com/v1", { headers: { "X-BILLING-INVOKE-ORIGIN": "Pi" } })],
   ["Ant Ling alias", fixture("https://api.ant-ling.com/v1")],
   ["Cerebras alias", fixture("https://api.cerebras.ai/v1")],
@@ -160,24 +160,23 @@ test("real Pi Responses and Anthropic requests retain body and affinity settings
   });
 });
 
-test("OpenAI Chat stays direct because Pi exposes no override for its URL-derived cache key", async () => {
+test("OpenAI Chat routes with promptCacheKeyMode preserving prompt_cache_key across retention modes", async () => {
   for (const provider of ["openai", "relay"]) {
     const original = fixture("https://api.openai.com/v1", { provider });
-    let selected = original;
-    const notices = [];
-    const ctx = { get model() { return selected; }, modelRegistry: { isUsingOAuth: () => false } };
-    const router = new ProviderRouter({ async setModel(model) { selected = model; return true; } }, message => notices.push(message));
-    await router.openGate(GATEWAY, ctx, { [provider]: original.baseUrl });
-    assert.equal(router.routing(), false);
-    assert.equal(selected, original);
-    assert.match(notices[0], /cannot preserve this OpenAI Chat endpoint's prompt cache keys.*no compression/);
-    const direct = await capture(original, { cacheRetention: "short" });
-    const rewritten = await capture({ ...original, baseUrl: `${GATEWAY}/w/pi/openai/v1` }, { cacheRetention: "short" });
-    assert.equal(direct.body.prompt_cache_key, OPTIONS.sessionId);
-    assert.equal(Object.hasOwn(rewritten.body, "prompt_cache_key"), false);
-    const disabled = await capture(original, { cacheRetention: "none" });
-    assert.equal(Object.hasOwn(disabled.body, "prompt_cache_key"), false);
-    assert.equal(await router.closeGate(ctx), true);
+    const h = await routed(original);
+    for (const cacheRetention of ["none", "short", "long"]) {
+      const direct = await capture(original, { cacheRetention });
+      const proxied = await capture(h.selected, { cacheRetention });
+      assert.deepEqual(proxied.body, direct.body, `${provider}: ${cacheRetention}`);
+      assert.deepEqual(proxied.headers, direct.headers, `${provider}: headers ${cacheRetention}`);
+      if (cacheRetention === "none") {
+        assert.equal(Object.hasOwn(proxied.body, "prompt_cache_key"), false);
+      } else {
+        assert.equal(proxied.body.prompt_cache_key, OPTIONS.sessionId);
+      }
+    }
+    assert.equal(await h.router.closeGate(h.ctx), true);
+    assert.deepEqual(h.selected, original);
   }
 });
 

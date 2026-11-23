@@ -404,6 +404,8 @@ def test_anthropic_cloud_clients_keep_the_callers_credentials(monkeypatch):
     signed, auth = [], types.ModuleType("anthropic.lib.bedrock._auth")
     auth.get_auth_headers = lambda **request: signed.append(request["profile"]) or {}
     monkeypatch.setitem(sys.modules, "anthropic.lib.bedrock._auth", auth)  # SigV4 signing without boto3
+    # anthropic 2.7 moved the signer to anthropic.lib.aws._auth and binds it in the client module at import.
+    monkeypatch.setattr("anthropic.lib.bedrock._client.get_auth_headers", auth.get_auth_headers, raising=False)
     http = importlib.import_module(sdk_flavour(DefaultHttpxClient))
     provider = lambda _: http.Response(200, json={"id": "m", "type": "message", "role": "assistant", "model": "m", "stop_reason": "end_turn",
                                                   "stop_sequence": None, "content": [{"type": "text", "text": "ok"}], "usage": {"input_tokens": 1, "output_tokens": 1}})
@@ -562,19 +564,18 @@ def test_google_wrap_returns_idempotent_clones_with_per_call_scope():
     """D11: the caller's Client is never mutated, re-wrapping never stacks, one transport serves many scopes."""
     require_adapter("google")
     import gc
-    import httpx
     from google import genai
     from google.genai import types
     from caveman_cloud.middleware import Scope
-    from caveman_middleware.google import CavemanGoogleTransport, unwrap_google, with_caveman_google
+    from caveman_middleware.google import CavemanGoogleTransport, unwrap_google, with_caveman_google, _http
     from test_behavior import ORIGINAL
 
     def provider(request):
-        return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP"}]})
+        return _http.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP"}]})
 
     runtime = peer_runtime()
-    client = genai.Client(api_key="test", http_options=types.HttpOptions(httpx_client=httpx.Client(
-        transport=CavemanGoogleTransport(runtime=runtime, transport=httpx.MockTransport(provider)))))
+    client = genai.Client(api_key="test", http_options=types.HttpOptions(httpx_client=_http.Client(
+        transport=CavemanGoogleTransport(runtime=runtime, transport=_http.MockTransport(provider)))))
     native_generate = client.models.generate_content
     first = with_caveman_google(client, runtime=runtime, scope=Scope("tests", "alice@example.com"))
     second = with_caveman_google(first, runtime=runtime, scope=Scope("tests", "bob"))
@@ -713,3 +714,57 @@ def test_mcp_host_never_raises_at_construction_for_an_unusable_scope():
     host = CavemanMCPHost(runtime=runtime, scope=Scope("tests", ""), server_id="server", protocol_version="2025-06-18")
     assert host.recovery is None and host.register([]) == []
     runtime.close()
+
+def test_google_transport_matches_the_sdks_own_http_client():
+    """#1482: google-genai 3 runs on httpx2, 2.x on httpx, and both can be importable at once.
+
+    The transports and byte streams must subclass the library the SDK's own client
+    uses, not whichever one the environment happens to have.
+    """
+    require_adapter("google")
+    from google import genai
+    from caveman_middleware import google as adapter
+    from caveman_middleware._httpx2 import sdk_flavour
+
+    sdk_client = genai.Client(api_key="test")._api_client._httpx_client
+    assert adapter._http.__name__ == sdk_flavour(type(sdk_client))
+    assert issubclass(adapter.CavemanGoogleTransport, adapter._http.BaseTransport)
+    assert issubclass(adapter.CavemanGoogleAsyncTransport, adapter._http.AsyncBaseTransport)
+    assert issubclass(adapter._SyncStream, adapter._http.SyncByteStream)
+    assert issubclass(adapter._AsyncStream, adapter._http.AsyncByteStream)
+
+
+@pytest.mark.parametrize("flavour", ["httpx", "httpx2"])
+def test_google_http_follows_the_sdk_resolver(monkeypatch, flavour):
+    """Whichever flavour the SDK resolved is the one we load, even with both installed."""
+    require_adapter("google")
+    module = pytest.importorskip(flavour)
+    from caveman_middleware import google as adapter
+
+    monkeypatch.setattr(adapter._api_client, "_get_http_client_classes",
+                        lambda *args, **kwargs: (type("Resolved", (module.Client,), {}), None), raising=False)
+    assert adapter._google_http() is module
+
+
+def test_google_http_falls_back_to_httpx_without_the_sdk_resolver(monkeypatch):
+    """google-genai 2.x has no backend resolver and no httpx2 support."""
+    require_adapter("google")
+    httpx = pytest.importorskip("httpx")
+    from caveman_middleware import google as adapter
+
+    monkeypatch.delattr(adapter._api_client, "_get_http_client_classes", raising=False)
+    assert adapter._google_http() is httpx
+
+
+def test_google_http_honors_the_sdks_own_env_override(monkeypatch):
+    """GOOGLE_GENAI_HTTP_CLIENT is the SDK's switch; we inherit it by asking the SDK."""
+    require_adapter("google")
+    pytest.importorskip("httpx")
+    pytest.importorskip("httpx2")
+    from caveman_middleware import google as adapter
+    if not hasattr(adapter._api_client, "_get_http_client_classes"):
+        pytest.skip("google-genai 2.x has no backend switch")
+
+    for name in ("httpx", "httpx2"):
+        monkeypatch.setenv("GOOGLE_GENAI_HTTP_CLIENT", name)
+        assert adapter._google_http().__name__ == name

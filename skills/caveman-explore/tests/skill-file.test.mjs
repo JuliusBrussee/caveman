@@ -22,6 +22,13 @@ test("frontmatter name matches directory and declares read-only cheap explorer",
   assert.match(fm, /^description:\s*.+/m, "description required for auto-delegation");
 });
 
+test("frontmatter forks into a read-only Explore subagent and waits for it", () => {
+  const fm = frontmatter(md);
+  assert.match(fm, /^context:\s*fork\s*$/m, "skill must run in a forked subagent, not inline");
+  assert.match(fm, /^agent:\s*Explore\s*$/m, "forked subagent must be the read-only Explore type");
+  assert.match(fm, /^background:\s*false\s*$/m, "solver must wait for the explorer result in the same turn");
+});
+
 test("description says when to invoke and skip", () => {
   const fm = frontmatter(md);
   assert.match(fm, /cold-start|cross-file|localization|search has failed/i, "must say when to invoke");

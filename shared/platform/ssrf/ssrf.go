@@ -451,8 +451,16 @@ func newDialer(cfg Config) *net.Dialer {
 		}
 	}
 	return &net.Dialer{
-		Timeout:   connectTimeout,
-		KeepAlive: 30 * time.Second,
+		Timeout: connectTimeout,
+		// Detect silently dead idle TCP sockets (HTTP/1.1 keep-alives included)
+		// within ~30 s instead of the default 5 min (30s * 9 probes), which
+		// outlived IdleConnTimeout (#1543).
+		KeepAliveConfig: net.KeepAliveConfig{
+			Enable:   true,
+			Idle:     15 * time.Second,
+			Interval: 5 * time.Second,
+			Count:    3,
+		},
 	}
 }
 

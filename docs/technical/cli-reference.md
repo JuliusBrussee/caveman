@@ -59,6 +59,12 @@ A saved Codex `model = "caveman-auto"` (top level or under `[profiles.*]`) only
 works while Caveman is wired; `caveman disable codex` clears the top-level one,
 a profile's is yours to change.
 
+Prompt caches on providers are keyed per model. While Auto stays on the same
+target model (or returns to one whose cache window is still warm), Caveman
+replays frozen prefix bytes identically so the provider prompt cache stays warm.
+When Auto routes a turn to a different model mid-session, that target model
+writes its own cache prefix on its first turn.
+
 ## Modules
 
 Caveman is six modules, each on unless you turn it off:

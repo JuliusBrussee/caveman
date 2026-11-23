@@ -75,6 +75,32 @@ test('explicit Claude hook ownership works when launched below a Gemini shell', 
   assertSavingsUnknown(out);
 });
 
+test('OMP commands cannot read or mutate unrelated Claude history (#1531)', (tmp) => {
+  makeSession(tmp, [{ type: 'assistant', message: { usage: { output_tokens: 987654, cache_read_input_tokens: 12345 } } }]);
+  const claudeDir = path.join(tmp, '.claude');
+  const history = path.join(claudeDir, '.caveman-history.jsonl');
+  const suffix = path.join(claudeDir, '.caveman-statusline-suffix');
+  fs.writeFileSync(history, 'existing Claude history\n');
+  fs.writeFileSync(suffix, 'existing Claude suffix');
+  const cases = [
+    { args: [], env: { OMP_PROFILE: 'default' } },
+    { args: ['--all'], env: { PI_CODING_AGENT_DIR: path.join(tmp, '.omp') } },
+    { args: ['--share'], env: { PI_CONFIG_DIR: '.omp' } },
+    { args: ['--host', 'omp'], env: {} },
+  ];
+  for (const { args, env } of cases) {
+    const out = execFileSync(process.execPath, [STATS, ...args], {
+      encoding: 'utf8', env: { ...process.env, ...env, CLAUDE_CONFIG_DIR: claudeDir },
+    });
+    assert.match(out, /Oh My Pi \(OMP\)/);
+    assert.match(out, /\/usage/);
+    assertSavingsUnknown(out);
+    assert.doesNotMatch(out, /987[,.]?654|12[,.]?345/);
+    assert.strictEqual(fs.readFileSync(history, 'utf8'), 'existing Claude history\n');
+    assert.strictEqual(fs.readFileSync(suffix, 'utf8'), 'existing Claude suffix');
+  }
+});
+
 test('full-mode output and historical estimates never establish measured savings (#991/#789)', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 1000, cache_read_input_tokens: 2400 } } },

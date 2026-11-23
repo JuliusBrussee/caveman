@@ -17,6 +17,12 @@ function fixture({ opencodeVersion = "opencode 1.0.0", opencode2Version = null }
   const home = mkdtempSync(join(tmpdir(), "cave-native-enable-"));
   const bin = join(home, "bin");
   mkdirSync(bin, { recursive: true });
+  // Probe only the fixture's agents. The real machine can carry opencode2
+  // beside opencode; inheriting that PATH silently changes the API selection.
+  // Keep the runtime separate: Node-path regressions create their own bin/node.
+  const runtimeBin = join(home, "runtime-bin");
+  mkdirSync(runtimeBin);
+  symlinkSync(process.execPath, join(runtimeBin, "node"));
   for (const agent of ["claude", "codex", "hermes", "gemini", "aider"]) {
     writeFileSync(join(bin, agent), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${agent} 1.0.0'; fi\n`, { mode: 0o755 });
   }
@@ -87,7 +93,7 @@ if (process.argv[2] === "shrink-hook") {
     CAVEMAN_TELEMETRY: "0",
     CAVE_NATIVE_CAPTURE: join(home, "native-capture.jsonl"),
     NO_COLOR: "1",
-    PATH: `${bin}:${process.env.PATH}`,
+    PATH: `${bin}:${runtimeBin}:/usr/bin:/bin`,
   };
   // Codex auth mode comes from auth.json alone; still keep the runner's own
   // OPENAI_API_KEY out so no fixture depends on the shell it runs from.
@@ -1297,12 +1303,22 @@ test("the bridge hook names PATH's node when it is this node, never an fnm multi
     .map((entry) => entry.hooks[0].command).find((command) => command.endsWith(" shrink-hook"));
   assert.equal(shrink, `'${join(stable.home, "bin", "node")}' '${join(stable.home, "bin", "caveman")}' shrink-hook`);
 
+  // A multishell dir links to the node version's install dir, whose `caveman`
+  // outlives the shell; the hook must name that one, not the link.
   const fnm = fixture();
+  const installation = join(fnm.home, "node-versions", "v24", "installation");
+  mkdirSync(join(installation, "bin"), { recursive: true });
+  symlinkSync(process.execPath, join(installation, "bin", "node"));
+  renameSync(join(fnm.home, "bin", "caveman"), join(installation, "caveman.js"));
+  symlinkSync(join(installation, "caveman.js"), join(installation, "bin", "caveman"));
+  mkdirSync(join(fnm.home, "fnm_multishells"));
+  symlinkSync(installation, join(fnm.home, "fnm_multishells", "4242_1760000000000"));
   const multishell = join(fnm.home, "fnm_multishells", "4242_1760000000000", "bin");
-  mkdirSync(multishell, { recursive: true });
-  symlinkSync(process.execPath, join(multishell, "node"));
   assert.equal((await run(["enable", "claude"], { ...fnm.env, PATH: `${multishell}:${fnm.env.PATH}` })).code, 0);
   assert.equal(nodeArg(fnm), process.execPath);
+  const fnmShrink = JSON.parse(readFileSync(join(fnm.home, ".claude", "settings.json"), "utf8")).hooks.PreToolUse
+    .map((entry) => entry.hooks[0].command).find((command) => command.endsWith(" shrink-hook"));
+  assert.equal(fnmShrink, `'${process.execPath}' '${join(realpathSync(join(installation, "bin")), "caveman")}' shrink-hook`);
 });
 
 // Without a caveman-proxy that bridges hooks, the hook runs its adapter with
@@ -1815,6 +1831,204 @@ test("enable/disable hermes keeps a %YAML header and two-space list items valid"
   assert.equal(readFileSync(configPath, "utf8"), original);
 });
 
+// #1486: the route scan matched a hardcoded `^  (provider|base_url):`, so a
+// valid `model:` block whose children use four spaces matched NOTHING. The old
+// provider was left in place and the two-space routing block was spliced in
+// above it, leaving the four-space line nested under the new `base_url` scalar
+// — a document PyYAML rejects. caveman corrupted a config it was asked to
+// extend, and the user's provider was never actually replaced.
+//
+// Structural assertions again, for the reason the #1405 test gives: no YAML
+// parser is declared for either runner.
+test("enable/disable hermes writes the route at the model block's own indent", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // The reporter's fixture, verbatim.
+  const original = ["model:", "    provider: openai-codex", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // openai-codex is a named OAuth provider, so it is kept and routed at /chatgpt.
+  assert.match(installed, /^ {4}provider: openai-codex$/m, installed);
+  assert.match(installed, /^ {4}base_url: "http:\/\/127\.0\.0\.1:8787\/chatgpt"$/m, installed);
+  // The defect's signature: the user's provider surviving BELOW our block, so
+  // model: ends up with two provider keys and one of them nested under a
+  // scalar. Exactly one direct child of model: may name provider.
+  const lines = installed.split("\n");
+  const modelAt = lines.indexOf("model:");
+  assert.ok(modelAt >= 0, installed);
+  const childIndents = [];
+  let providers = 0;
+  for (let i = modelAt + 1; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim() === "" || /^\s*#/.test(line)) continue;
+    const indent = line.length - line.replace(/^[ \t]*/, "").length;
+    if (indent === 0) break; // next top-level key
+    childIndents.push(indent);
+    if (/^ {4}provider\s*:/.test(line)) providers++;
+  }
+  assert.equal(providers, 1, `model: must carry exactly one provider key:\n${installed}`);
+  assert.equal(new Set(childIndents).size, 1,
+    `every child of model: must share one indent, got ${childIndents}:\n${installed}`);
+  // And that one indent is the document's four, not the writer's old two. The
+  // marker comments ride along at the same width.
+  assert.equal(childIndents[0], 4, `model: children must stay at four spaces:\n${installed}`);
+  assert.match(installed, /^ {4}# >>> caveman:native-hermes-routing$/m, installed);
+  assert.match(installed, /^ {4}# <<< caveman:native-hermes-routing$/m, installed);
+
+  const status = await run(["doctor", "hermes"], env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.equal(JSON.parse(status.stdout).components.routing, true);
+
+  // Reversible: disable restores the four-space document exactly.
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1486, the measurement edge: topLevelSection ends a block at the next
+// unquoted top-level key, so a document-end marker sits INSIDE the model span
+// at indent 0. Deriving the child indent as a plain minimum over the span would
+// read 0 there and emit `provider:`/`base_url:` at top level, outside model: —
+// a worse corruption than the four-space bug. The route keys must stay under
+// model: at the indent its real children use.
+test("enable/disable hermes measures the model indent past a document-end marker", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = ["model:", "  provider: openai", "..." , ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // Indented under model:, never at column 0.
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+  assert.doesNotMatch(installed, /^provider:/m, `provider must not escape model::\n${installed}`);
+  assert.doesNotMatch(installed, /^base_url:/m, `base_url must not escape model::\n${installed}`);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review: topLevelSection ends a block only at the next UNQUOTED
+// top-level key, so a quoted top-level section and all of its children sit
+// inside the reported model span. Measuring over that tail read another
+// section's layout as model's own — and with narrower children it produced the
+// very corruption #1486 is about, in a document the old hardcoded writer
+// handled correctly. model's own children end at the first indent-0 line.
+test("enable/disable hermes ignores a quoted top-level section when measuring", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // `x` is ONE space deep: a plain minimum over the span would measure 1.
+  const original = ["model:", "  provider: openai", '"other":', " x: y", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const installed = readFileSync(configPath, "utf8");
+
+  // Measured from model's own child, so two — not one, and not zero.
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+  assert.doesNotMatch(installed, /^ {1}provider:/m, `route must not take the foreign section's indent:\n${installed}`);
+  // The old route is REPLACED, not left below the new block.
+  assert.doesNotMatch(installed, /provider: openai$/m, `the original provider must be replaced:\n${installed}`);
+  // The foreign section is untouched.
+  assert.match(installed, /^"other":$/m, installed);
+  assert.match(installed, /^ x: y$/m, installed);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review: YAML indents comments independently of the scalar above them,
+// so an indented comment after a route key is not a value continuation. The
+// multiline guard refused on one, rejecting a config it rewrites perfectly.
+test("enable hermes treats an indented comment as no continuation", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const original = ["model:", "  provider: openai", "    # model choice", "  base_url: https://api.openai.com/v1", ""].join("\n");
+  writeFileSync(configPath, original);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+  const enabled = await run(["enable", "hermes"], env);
+  assert.equal(enabled.code, 0, `an indented comment must not refuse the install: ${enabled.stderr}`);
+  const installed = readFileSync(configPath, "utf8");
+  assert.match(installed, /^ {2}provider: "custom"$/m, installed);
+  assert.match(installed, /^ {2}base_url: "http:\/\/127\.0\.0\.1:8787\/w\/hermes\/v1"$/m, installed);
+
+  assert.equal((await run(["disable", "hermes"], env)).code, 0);
+  assert.equal(readFileSync(configPath, "utf8"), original);
+});
+
+// #1529 review, the one that mattered most: hermesNativeMutations keyed its
+// map with a hardcoded `^  ([^:]+):`, which on a four-space line captures
+// "  provider". previous.provider was therefore undefined, refuseOwnEndpoint
+// got an undefined endpoint and returned without refusing — so the guard that
+// stops Caveman replacing a user's private gateway, and sending its requests
+// and key to the provider's public API, silently did not fire for any config
+// that did not use exactly two spaces.
+test("enable hermes still refuses a private endpoint at a non-two-space indent", async () => {
+  for (const indent of ["  ", "    "]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    const original = ["model:", `${indent}provider: custom`, `${indent}base_url: https://gateway.internal.example/v1`, ""].join("\n");
+    writeFileSync(configPath, original);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `${indent.length}-space private endpoint must be refused: ${enabled.stdout}`);
+    assert.match(enabled.stderr + enabled.stdout, /its own endpoint/,
+      `${indent.length}-space: refuseOwnEndpoint must see the real base_url`);
+    assert.match(enabled.stderr + enabled.stdout, /gateway\.internal\.example/,
+      `${indent.length}-space: the refusal must name the endpoint it protected`);
+    // Refusing writes nothing.
+    assert.equal(readFileSync(configPath, "utf8"), original, `${indent.length}-space rewrote the config`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false, `${indent.length}-space`);
+  }
+});
+
+// #1486, the other half: a shape the lexical writer cannot place exactly must
+// be refused BEFORE any integration file is written, not rewritten on a guess.
+// The reporter named both of these as reaching the same writer.
+test("enable hermes refuses a model block it cannot rewrite exactly", async () => {
+  for (const [label, config, expected] of [
+    ["multiline route value", "model:\n  base_url: >\n    http://example.test/v1\n", /multiline value/],
+    ["tab-indented block", "model:\n\tprovider: openai\n", /indented with tabs/],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    writeFileSync(configPath, config);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `${label} must not install: ${enabled.stdout}`);
+    assert.match(enabled.stderr + enabled.stdout, expected, label);
+    // The refusal leaves the user's document and the journal alone.
+    assert.equal(readFileSync(configPath, "utf8"), config, `${label} rewrote the config`);
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false, label);
+  }
+});
+
 // #1410: ownership used to be keyed on the literal comment-delimited blocks we
 // wrote. A YAML round-trip that changes no value at all — an editor, a config
 // manager, `yaml.safe_dump(yaml.safe_load(...))` — drops those comments and
@@ -2099,6 +2313,298 @@ test("hermes disable removes an owned MCP block whose command folds onto a #-lea
   assert.match(restored, /^_config_version: 52$/m);
 });
 
+// Found reproducing #1492, and the reason that issue's own baseline could not
+// be asserted: `caveman enable hermes` SUCCEEDS and the install then reads
+// `degraded` straight away, with Core, lifecycle and recovery all inactive —
+// for any config whose plugins.enabled list puts its items at two spaces.
+//
+// hermesPluginListContains scans for the next sibling mapping key BEFORE it
+// skips comments, and `/^  [^ ].*?:/` matches a two-space comment whose text
+// contains a colon. Caveman writes exactly one of those: the item-indent-padded
+// `# >>> caveman:native-hermes-plugin` marker. So our own marker ended the item
+// scan one line short of our own entry, hermesPluginOwned read false, and
+// ownedHealthy collapsed every component with it.
+//
+// Two spaces is not an exotic layout: it is what `yaml.safe_dump` emits and
+// what this suite's own round-trip fixture carries. Four spaces hid the bug
+// because the comment skip is reached first when the marker is deeper.
+test("hermes install reads healthy when plugins.enabled items sit at two spaces", async () => {
+  for (const [label, items] of [
+    ["two-space items", ["  - herdr-agent-state"]],
+    ["four-space items", ["    - herdr-agent-state"]],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    writeFileSync(configPath, [
+      "model:",
+      "  default: gpt-5.5",
+      "  provider: openai",
+      "  base_url: https://api.openai.com/v1",
+      "plugins:",
+      "  enabled:",
+      ...items,
+      "mcp_servers:",
+      "  keep:",
+      "    command: keep-mcp",
+      "    enabled: true",
+      "",
+    ].join("\n"));
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+    assert.equal((await run(["enable", "hermes"], env)).code, 0, label);
+
+    const doctor = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+    assert.equal(doctor.state, "installed",
+      `${label}: a fresh install must not read degraded:\n${readFileSync(configPath, "utf8")}`);
+    assert.equal(doctor.components.lifecycle_hooks, true, `${label}: ${JSON.stringify(doctor.components)}`);
+    assert.equal(doctor.components.mcp_recovery, true, `${label}: ${JSON.stringify(doctor.components)}`);
+    assert.equal(doctor.core_active, true, `${label}: Core must be active`);
+
+    // And the install is still fully reversible.
+    assert.equal((await run(["disable", "hermes"], env)).code, 0, label);
+    const restored = readFileSync(configPath, "utf8");
+    assert.doesNotMatch(restored, /caveman_native|caveman-native/, label);
+    assert.match(restored, /^  provider: openai$/m, label);
+    assert.match(restored, /- herdr-agent-state$/m, label);
+  }
+});
+
+// Same reader, fail-open direction: a comment between `disabled:` and its items
+// ended the scan, so an explicit deny read as "not listed" and enable installed
+// over it — the #1489 class, reached through a comment rather than an escape.
+test("hermes enable refuses a deny entry behind a comment line", async () => {
+  for (const list of [
+    ["plugins:", "  disabled:", "  # off for now: see notes", "  - caveman_native"],
+    ["plugins:", "  enabled: []", "  disabled:", "  # off for now: see notes", "  - caveman_native"],
+  ]) {
+    const fx = fixture();
+    const hermesHome = join(fx.home, ".hermes");
+    mkdirSync(hermesHome, { recursive: true });
+    const configPath = join(hermesHome, "config.yaml");
+    const config = [
+      "model:",
+      "  default: gpt-5.5",
+      "  provider: openai",
+      "  base_url: https://api.openai.com/v1",
+      ...list,
+      "",
+    ].join("\n");
+    writeFileSync(configPath, config);
+    const env = { ...fx.env, HERMES_HOME: hermesHome };
+
+    const enabled = await run(["enable", "hermes"], env);
+    assert.notEqual(enabled.code, 0, `an explicit deny must stop the install:\n${enabled.stdout}${enabled.stderr}`);
+    assert.match(enabled.stderr + enabled.stdout, /disabled|unsupported/i);
+    assert.equal(readFileSync(configPath, "utf8"), config, "the refusal must not rewrite the config");
+    assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), false);
+  }
+});
+
+// #1487: ownership proves OUR value is still there; it must not also claim
+// nothing of the user's has been ADDED. hermesMcpOwned compares `command` and
+// `enabled` only, so a user who adds `cwd` to the normalised caveman-native
+// entry still reads as unmodified — and the by-value restore then splices out
+// the whole server span, that field with it. Hermes launches stdio servers with
+// cwd, so this is a semantic edit, not formatting: disable must refuse, the way
+// it already refuses a CHANGED command.
+test("hermes disable refuses an MCP entry the user has added a field to", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  const edited = HERMES_ROUND_TRIPPED(command)
+    .replace("    enabled: true\n  keep:", `    enabled: true\n    cwd: ${join(fx.home, "custom-workdir")}\n  keep:`);
+  assert.match(edited, /^    cwd: /m, "the probe must actually add a field");
+  writeFileSync(configPath, edited);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.notEqual(disabled.code, 0, `an added MCP field must refuse destructive disable\n${disabled.stdout}${disabled.stderr}`);
+  // Refusing is only safe if it is atomic: the user's field and the journal
+  // that can still undo the install both survive.
+  assert.equal(readFileSync(configPath, "utf8"), edited, "config must be untouched");
+  assert.equal(existsSync(join(fx.home, ".caveman", "integrations", "hermes.json")), true, "journal must survive");
+});
+
+// #1490: `mcp_block: null` is the NON-OWNERSHIP sentinel — the user's own
+// caveman-native entry was already there, so disable never has to prove or
+// remove it. hermesMcpOwned returns true for it, which is right for disable and
+// wrong for everything that asks whether the server is still REGISTERED: delete
+// the entry and status keeps claiming recovery against a server Hermes has no
+// configuration to launch.
+test("hermes status stops claiming MCP recovery once a pre-existing entry is removed", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  const preexisting = [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "mcp_servers:",
+    "  caveman-native:",
+    "    command: their-own-caveman-mcp",
+    "    enabled: true",
+    "_config_version: 52",
+    "",
+  ].join("\n");
+  writeFileSync(configPath, preexisting);
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const journal = JSON.parse(readFileSync(join(fx.home, ".caveman", "integrations", "hermes.json"), "utf8"));
+  const config = journal.operations.find((operation) => operation.kind === "hermes-config");
+  assert.equal(config.owned.mcp_block, null, "the fixture must reach the non-ownership sentinel");
+
+  // Healthy to start with: the entry is there, whoever wrote it.
+  const before = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(before.components.mcp_recovery, true, JSON.stringify(before.components));
+
+  // The user removes their own entry. Hermes now has no caveman-native server.
+  writeFileSync(configPath, readFileSync(configPath, "utf8")
+    .replace("  caveman-native:\n    command: their-own-caveman-mcp\n    enabled: true\n", ""));
+  assert.doesNotMatch(readFileSync(configPath, "utf8"), /caveman-native/, "the probe must remove the entry");
+
+  const after = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(after.components.mcp_recovery, false,
+    `recovery must not be claimed with no server configured: ${JSON.stringify(after.components)}`);
+});
+
+// #1492: ownership and loadability are two questions (see the round-trip test
+// above, which pins that a user-added deny entry must NOT break disable). The
+// health side has the opposite obligation, and the comment over lifecycle_hooks
+// already states it — "a plugin the host cannot load runs no hooks" — while the
+// expression carries no membership term at all. Hermes applies `disabled` first
+// and refuses to load the plugin, so its hooks cannot run.
+test("hermes lifecycle hooks read inactive for a plugin the config disables", async () => {
+  const { fx, configPath, env } = hermesFixture();
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  const healthy = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(healthy.components.lifecycle_hooks, true, JSON.stringify(healthy.components));
+
+  // The user switches the plugin off the Hermes way, leaving our enabled entry
+  // (and so our ownership, and so a working disable) exactly where it is.
+  const installed = readFileSync(configPath, "utf8");
+  const edited = installed.replace(/^plugins:$/m, "plugins:\n  disabled:\n    - caveman_native");
+  assert.notEqual(edited, installed, "the probe must add a disabled list");
+  writeFileSync(configPath, edited);
+
+  const status = JSON.parse((await run(["doctor", "hermes"], env)).stdout);
+  assert.equal(status.components.lifecycle_hooks, false,
+    `a plugin Hermes refuses to load runs no hooks: ${JSON.stringify(status.components)}`);
+  // Ownership is untouched: disable must still be able to undo the install.
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+});
+
+// #1488, literal path. Enable created `plugins:` itself, so its journalled
+// block carries the parent key. Removing that block byte-for-byte takes the
+// parent with it — and a list the user added under it afterwards is left
+// dangling at two spaces under whatever section now precedes it. Here it lands
+// under `platforms:`, which is valid YAML saying something the user never
+// wrote: disable silently moved their plugin deny-list into another section.
+test("hermes disable keeps a foreign sibling the user added under a parent we created", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  // No plugins:, no mcp_servers: — enable creates both parents.
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "platforms:",
+    "  telegram:",
+    "    enabled: false",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  // The user adds their own deny-list under the plugins: we created, after our
+  // end marker, so every byte of our journalled block is still intact.
+  const installed = readFileSync(configPath, "utf8");
+  const endMarker = /^(.*caveman:native-hermes:plugin.*<<<.*|.*<<<.*caveman:native-hermes:plugin.*)$/m.exec(installed)
+    ?? /^.*<<<.*plugin.*$/m.exec(installed);
+  assert.ok(endMarker, `could not find the plugin end marker:\n${installed}`);
+  const edited = installed.replace(endMarker[0], `${endMarker[0]}\n  disabled:\n    - foreign_plugin`);
+  writeFileSync(configPath, edited);
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^  disabled:\n    - foreign_plugin$/m,
+    `the user's own list must survive:\n${restored}`);
+  // ... and must still be a child of plugins:, not of whatever section the
+  // removal left above it.
+  // `[ \t]*` rather than `\s*`, and `#[^\n]*` rather than `#.*`: with `\s*`
+  // able to eat the newline the group itself then requires, a run of N blank
+  // lines has 2^(N-1) partitions and the engine tries them all before failing.
+  // Measured on the previous form with a near-matching tail: 74ms at 22 blank
+  // lines, 1.2s at 26, 18s at 30 (CodeQL alert 119). Neither class can match a
+  // newline now, so each repetition consumes exactly one line and the match is
+  // linear. Semantics are unchanged — verified against this assertion's accept
+  // cases (direct child, blank and comment lines between, an indented comment)
+  // and its reject cases (another key between, a reparented list, a deeper
+  // nesting), which are what give it its teeth.
+  assert.match(restored, /^plugins:\n(?:[ \t]*(?:#[^\n]*)?\n)*  disabled:\n    - foreign_plugin$/m,
+    `the user's list lost its parent:\n${restored}`);
+  assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+});
+
+// #1488, by-value path. Same defect, reached through the reserialised-document
+// branch: hermesRestoreOwnedByValue drops the `enabled:` row and the `plugins:`
+// row whenever enable created them, without asking whether anything is still
+// under them. A second plugin the user enabled afterwards is enough.
+test("hermes value-restore keeps a second enabled plugin under a parent we created", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  const configPath = join(hermesHome, "config.yaml");
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: openai",
+    "  base_url: https://api.openai.com/v1",
+    "_config_version: 52",
+    "",
+  ].join("\n"));
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+  const command = journalledMcpCommand(fx.home);
+
+  // Markers gone (the #1410 round-trip), and the user has enabled one of their
+  // own plugins beside ours.
+  writeFileSync(configPath, [
+    "model:",
+    "  default: gpt-5.5",
+    "  provider: custom",
+    "  base_url: http://127.0.0.1:8787/w/hermes/v1",
+    "_config_version: 52",
+    "plugins:",
+    "  enabled:",
+    "  - caveman_native",
+    "  - herdr-agent-state",
+    "mcp_servers:",
+    "  caveman-native:",
+    `    command: ${command}`,
+    "    enabled: true",
+    "",
+  ].join("\n"));
+
+  const disabled = await run(["disable", "hermes"], env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = readFileSync(configPath, "utf8");
+  assert.match(restored, /^plugins:\n  enabled:\n  - herdr-agent-state$/m,
+    `the user's own plugin lost its parent keys:\n${restored}`);
+  assert.doesNotMatch(restored, /caveman_native|caveman-native/, `our entries must be gone:\n${restored}`);
+  assert.match(restored, /^  provider: openai$/m, "routing must be restored");
+});
+
 test("Hermes lifecycle bridge returns stable Core without persisting raw prompt", async () => {
   const fx = fixture();
   const secretPrompt = "fix auth with sk-secret-never-store";
@@ -2114,6 +2620,92 @@ test("Hermes lifecycle bridge returns stable Core without persisting raw prompt"
   const events = readFileSync(join(fx.home, ".caveman", "runtime", "native-events.jsonl"), "utf8");
   assert.match(events, /"agent":"hermes"/);
   assert.doesNotMatch(events, /sk-secret-never-store/);
+
+  // SessionStart returns stable Core, and initialized UserPromptSubmit skips
+  // re-emitting Core so turn 2+ keeps turn 1's cached prefix intact.
+  const started = await run(
+    ["native-hook", "hermes", "SessionStart"],
+    fx.env,
+    JSON.stringify({ event_name: "SessionStart", session_id: "s2" }),
+  );
+  assert.equal(started.code, 0, started.stderr);
+  const startResp = JSON.parse(started.stdout);
+  assert.match(startResp.context, /Build simplest complete system/);
+  const turn2 = await run(
+    ["native-hook", "hermes", "UserPromptSubmit"],
+    fx.env,
+    JSON.stringify({ event_name: "UserPromptSubmit", session_id: "s2", session_initialized: true, prompt: { bytes: 12, sha256: "sha256:def" } }),
+  );
+  assert.equal(turn2.code, 0, turn2.stderr);
+  assert.equal(turn2.stdout.trim(), "", "initialized follow-up prompt without dynamic runtime hint must not re-inject Core");
+});
+
+test("Hermes plugin injects Core + signed marker once on turn 1, preserves cache on turn 2+, and correlates tool session_id", async () => {
+  const fx = fixture();
+  const hermesHome = join(fx.home, ".hermes");
+  mkdirSync(hermesHome, { recursive: true });
+  writeFileSync(join(hermesHome, "config.yaml"), "model:\n  default: gpt-5.5\n  provider: openai\n  base_url: https://api.openai.com/v1\n");
+  const env = { ...fx.env, HERMES_HOME: hermesHome };
+  assert.equal((await run(["enable", "hermes"], env)).code, 0);
+
+  const pluginFile = join(hermesHome, "plugins", "caveman_native", "__init__.py");
+  const pluginSrc = readFileSync(pluginFile, "utf8");
+  assert.match(pluginSrc, /"SessionStart": 10/, "SessionStart must allow cold proxy revival");
+  assert.match(pluginSrc, /"UserPromptSubmit": 8/, "UserPromptSubmit must allow mid-session revival");
+
+  // Replace stub caveman with a script that mimics real SessionStart (Core + marker)
+  // and UserPromptSubmit (dynamic hint only when session_initialized is true).
+  const logFile = join(fx.home, "hermes-calls.jsonl");
+  writeFileSync(join(fx.home, "bin", "caveman"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const event = process.argv[4];
+const payload = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+fs.appendFileSync(${JSON.stringify(logFile)}, JSON.stringify({ event, payload }) + "\\n");
+if (event === "SessionStart") {
+  process.stdout.write(JSON.stringify({ context: "STABLE_CORE\\n[[caveman-session-v1 sid=\\"aGVybWVzOnMx\\" sig=\\"" + "a".repeat(64) + "\\"]]" }));
+} else if (event === "UserPromptSubmit") {
+  if (!payload.session_initialized) {
+    process.stdout.write(JSON.stringify({ context: "FALLBACK_CORE" }));
+  } else if (payload.task_type === "bugfix") {
+    process.stdout.write(JSON.stringify({ context: "DYNAMIC_BUGFIX_HINT" }));
+  }
+}
+`, { mode: 0o755 });
+
+  const pyScript = `
+import importlib.util, json, sys
+spec = importlib.util.spec_from_file_location("caveman_native", ${JSON.stringify(pluginFile)})
+mod = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(mod)
+hooks = {}
+class Ctx:
+    def register_hook(self, name, fn):
+        hooks[name] = fn
+mod.register(Ctx())
+hooks["on_session_start"](session_id="s1", model="gpt-5.5", platform="cli")
+t1 = hooks["pre_llm_call"](session_id="s1", user_message="fix cache bug", model="gpt-5.5", platform="cli")
+t2 = hooks["pre_llm_call"](session_id="s1", user_message="explain result", model="gpt-5.5", platform="cli")
+t3 = hooks["pre_llm_call"](session_id="s1", user_message="fix another error", model="gpt-5.5", platform="cli")
+hooks["pre_tool_call"](tool_name="bash", args={"cmd": "ls"}, task_id="task-9", session_id="s1")
+hooks["post_tool_call"](tool_name="bash", args={"cmd": "ls"}, result="ok", task_id="task-9", duration_ms=5, session_id="s1")
+hooks["pre_verify"](task_id="task-9", session_id="s1")
+hooks["on_session_end"](session_id="s1")
+print(json.dumps({"t1": t1, "t2": t2, "t3": t3}))
+`;
+  const py = spawnSync("python3", ["-c", pyScript], { env, encoding: "utf8" });
+  assert.equal(py.status, 0, py.stderr);
+  const res = JSON.parse(py.stdout);
+  assert.match(res.t1.context, /^STABLE_CORE\n\[\[caveman-session-v1 /, "turn 1 delivers Core + signed marker");
+  assert.match(res.t1.context, /DYNAMIC_BUGFIX_HINT/, "turn 1 keeps dynamic prompt guidance");
+  assert.equal(res.t2, null, "turn 2 without dynamic guidance injects nothing — Core is never repeated");
+  assert.equal(res.t3.context, "DYNAMIC_BUGFIX_HINT", "turn 3 delivers only dynamic guidance without repeating Core");
+
+  const calls = readFileSync(logFile, "utf8").trim().split("\n").map((line) => JSON.parse(line));
+  assert.deepEqual(calls.map((c) => c.event), ["SessionStart", "UserPromptSubmit", "UserPromptSubmit", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"]);
+  assert.equal(calls[1].payload.session_initialized, true);
+  assert.equal(calls[4].payload.session_id, "s1", "PreToolUse prefers session_id over task_id");
+  assert.equal(calls[5].payload.session_id, "s1", "PostToolUse prefers session_id over task_id");
+  assert.equal(calls[6].payload.session_id, "s1", "Stop prefers session_id over task_id");
 });
 
 test("enable/disable gemini installs lifecycle, MCP, routing and preserves later user edits", async () => {
@@ -2356,6 +2948,83 @@ test("status recognizes native OpenCode MCP recovery without a legacy marker", a
   const status = await run(["status"], fx.env);
   assert.equal(status.code, 0, status.stderr);
   assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+});
+
+test("enable/status/disable opencode preserves and routes OpenCode 2.x V2 providers and mcp.servers", async () => {
+  const fx = fixture({ opencodeVersion: "opencode v2.0.22" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  const configPath = join(configDir, "opencode.json");
+  writeFileSync(configPath, JSON.stringify({
+    $schema: "https://opencode.ai/config.json",
+    providers: {
+      openai: { settings: { baseURL: "http://127.0.0.1:9999/w/opencode/openai/v1", keep: true } },
+      custom: { settings: { baseURL: "https://custom.example" } },
+    },
+    mcp: {
+      servers: {
+        shadcn: { type: "local", command: ["npx", "shadcn@latest", "mcp"], disabled: false },
+      },
+    },
+  }, null, 2) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+
+  const installed = JSON.parse(readFileSync(configPath, "utf8"));
+  // OpenCode 2.x ignores V1 `provider` when V2 `providers` is present in the same file.
+  assert.equal(installed.provider, undefined);
+  assert.equal(installed.providers.openai.settings.baseURL, "http://127.0.0.1:8787/w/opencode/openai/v1");
+  assert.equal(installed.providers.openai.settings.keep, true);
+  assert.equal(installed.providers.anthropic.settings.baseURL, "http://127.0.0.1:8787/w/opencode/anthropic/v1");
+  assert.equal(installed.providers["opencode-go"].settings.baseURL, "http://127.0.0.1:8787/w/opencode/compat/opencode-go/v1");
+  assert.equal(installed.providers.custom.settings.baseURL, "https://custom.example");
+  assert.equal(installed.mcp.caveman, undefined);
+  assert.equal(installed.mcp.servers.shadcn.disabled, false);
+  assert.equal(installed.mcp.servers.caveman.disabled, false);
+
+  const status = await run(["status"], fx.env);
+  assert.equal(status.code, 0, status.stderr);
+  assert.doesNotMatch(status.stdout + status.stderr, /MCP recovery missing/);
+
+  const doctor = await run(["doctor", "opencode"], fx.env);
+  assert.equal(doctor.code, 0, doctor.stderr);
+  const report = JSON.parse(doctor.stdout);
+  assert.equal(report.state, "installed");
+  assert.equal(report.components.mcp_recovery, true);
+
+  installed.providers.openai.settings.later = 1;
+  writeFileSync(configPath, JSON.stringify(installed, null, 2) + "\n");
+
+  const disabled = await run(["disable", "opencode"], fx.env);
+  assert.equal(disabled.code, 0, disabled.stderr);
+  const restored = JSON.parse(readFileSync(configPath, "utf8"));
+  assert.equal(restored.providers.openai.settings.baseURL, "http://127.0.0.1:9999/w/opencode/openai/v1");
+  assert.equal(restored.providers.openai.settings.later, 1);
+  assert.equal(restored.providers.anthropic, undefined);
+  assert.equal(restored.providers["opencode-go"], undefined);
+  assert.equal(restored.providers.custom.settings.baseURL, "https://custom.example");
+  assert.equal(restored.mcp.servers.shadcn.disabled, false);
+  assert.equal(restored.mcp.servers.caveman, undefined);
+});
+
+test("routedOpenCodeArgs injects --standalone for OpenCode 2.x interactive and run launches only", async () => {
+  const { routedOpenCodeArgs } = await import("../dist/index.js");
+  // OpenCode 1.x never receives --standalone.
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["run", "hi"], 1), ["run", "hi"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", [], 1), []);
+  // OpenCode 2.x adds --standalone for default TUI, run, and mini.
+  assert.deepEqual(routedOpenCodeArgs("opencode", [], 2), ["--standalone"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["."], 2), ["--standalone", "."]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["run", "-m", "openai/gpt-5.4", "hi"], 2), ["run", "--standalone", "-m", "openai/gpt-5.4", "hi"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["mini", "-c"], 2), ["mini", "--standalone", "-c"]);
+  // Respects explicit standalone/server/help/version and non-session subcommands.
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["run", "--standalone", "hi"], 2), ["run", "--standalone", "hi"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["run", "--server", "http://127.0.0.1:4096", "hi"], 2), ["run", "--server", "http://127.0.0.1:4096", "hi"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["--server=http://127.0.0.1:4096"], 2), ["--server=http://127.0.0.1:4096"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["--help"], 2), ["--help"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["service", "status"], 2), ["service", "status"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["debug", "config"], 2), ["debug", "config"]);
 });
 
 test("status keeps native OpenCode MCP recovery when provider routing drifts", async () => {
@@ -2745,6 +3414,139 @@ for (const { major, version } of [{ major: 1, version: "opencode 1.19.5" }, { ma
   });
 }
 
+for (const major of [1, 2]) {
+  test(`OpenCode ${major} prompt hints persist with their user turn without changing the system prefix`, async () => {
+    const fx = fixture({ opencodeVersion: `opencode ${major}.0.0` });
+    const configDir = join(fx.home, ".config", "opencode");
+    mkdirSync(configDir, { recursive: true });
+    writeFileSync(join(configDir, "opencode.json"), "{}\n");
+    const enabled = await run(["enable", "opencode"], fx.env);
+    assert.equal(enabled.code, 0, enabled.stderr);
+    writeFileSync(join(fx.home, "bin", "caveman"), `#!/usr/bin/env node
+const fs = require("node:fs");
+const input = JSON.parse(fs.readFileSync(0, "utf8") || "{}");
+const event = process.argv[4];
+const hint = event === "SessionStart" ? "Stable Caveman context"
+  : event === "UserPromptSubmit" ? { bugfix: "Investigate the failing cache", feature: "Keep prior cache entries", general: "Inspect the supplied image" }[input.task_type]
+  : event === "PreToolUse" ? "Advisory reuse hint from an older runtime"
+  : undefined;
+process.stdout.write(JSON.stringify({ hookSpecificOutput: { additionalContext: hint } }));
+`, { mode: 0o755 });
+    const pluginURL = pathToFileURL(join(configDir, "plugins", "caveman-native.js")).href;
+    const connect = async (tag) => {
+      const mod = await import(`${pluginURL}?cache-prefix=${tag}`);
+      if (major === 1) {
+        const hooks = await mod.CavemanNative();
+        return {
+          prompt: async (messageID, text) => {
+            const message = { message: { id: messageID }, parts: [
+              { id: "prt_f00000000000aaaaaaaaaaaaaa", type: "text", text },
+              { id: "prt_f00000000001bbbbbbbbbbbbbb", type: "file", mime: "image/png", url: "data:image/png;base64,AAAA" },
+            ] };
+            await hooks["chat.message"]({ sessionID: "cache-session", messageID }, message);
+            assert.equal(message.parts[0].text, text, "the original user text stays intact");
+            assert.equal(message.parts[1].type, "file", "multimodal parts stay intact");
+            return message;
+          },
+          replay: async (message) => hooks["chat.message"]({ sessionID: "cache-session" }, message),
+          tool: async (failed) => {
+            const input = { tool: "read", sessionID: "cache-session", callID: failed ? "failed-read" : "read" };
+            const before = { args: { filePath: "source.ts" } };
+            await hooks["tool.execute.before"](input, before);
+            assert.deepEqual(before.args, { filePath: "source.ts" });
+            if (failed) return; // V1 does not invoke execute.after for errors.
+            const after = { title: "Read source", output: "exact tool output", metadata: { keep: true } };
+            await hooks["tool.execute.after"]({ ...input, args: before.args }, after);
+            assert.deepEqual(after, { title: "Read source", output: "exact tool output", metadata: { keep: true } });
+          },
+          system: async () => {
+            const output = { system: ["Host system"] };
+            await hooks["experimental.chat.system.transform"]({ sessionID: "cache-session" }, output);
+            return output.system;
+          },
+          cleanup: hooks.dispose,
+        };
+      }
+      const hooks = new Map();
+      const toolHooks = new Map();
+      const cleanup = await mod.default.setup({
+        location: { directory: fx.home },
+        event: { async *subscribe() {} },
+        session: { hook: async (name, cb) => { hooks.set(name, cb); } },
+        tool: { hook: async (name, cb) => { toolHooks.set(name, cb); } },
+      });
+      return {
+        prompt: async (messageID, text) => {
+          const message = { sessionID: "cache-session", messageID, metadata: { keep: true }, prompt: { text, files: [{ uri: "file:///image.png" }] } };
+          await hooks.get("prompt")(message);
+          assert.ok(message.prompt.text.startsWith(text));
+          assert.deepEqual(message.prompt.files, [{ uri: "file:///image.png" }]);
+          assert.equal(message.metadata.keep, true);
+          return message;
+        },
+        replay: hooks.get("prompt"),
+        tool: async (failed) => {
+          const input = { tool: "read", sessionID: "cache-session", id: failed ? "failed-read" : "read", input: { filePath: "source.ts" } };
+          await toolHooks.get("execute.before")(input);
+          assert.deepEqual(input.input, { filePath: "source.ts" });
+          const after = failed ? { ...input, status: "error", error: { message: "exact tool error" } }
+            : { ...input, status: "completed", result: { content: "exact tool output", metadata: { keep: true } } };
+          const original = JSON.stringify(after);
+          await toolHooks.get("execute.after")(after);
+          assert.equal(JSON.stringify(after), original);
+        },
+        system: async () => {
+          const event = { sessionID: "cache-session", system: [{ type: "text", text: "Host system" }] };
+          await hooks.get("context")(event);
+          return event.system;
+        },
+        cleanup,
+      };
+    };
+    const initial = await connect("initial");
+    const system = await initial.system();
+    const first = await initial.prompt("msg_first", "fix cache");
+    assert.match(JSON.stringify(first), /Investigate the failing cache/);
+    if (major === 1) {
+      assert.equal(first.parts[2].synthetic, true);
+      assert.equal(first.parts[2].messageID, "msg_first");
+      assert.equal(first.parts[2].sessionID, "cache-session");
+      assert.match(first.parts[2].id, /^prt_/);
+      assert.deepEqual([...first.parts].sort((a, b) => a.id.localeCompare(b.id)), first.parts,
+        "persisted part ordering must keep guidance after all existing parts, even with clock skew");
+    }
+    assert.deepEqual(await initial.system(), system, "a fresh hint must not change the system prefix");
+    assert.deepEqual(await initial.system(), system, "a repeated request must keep the same prefix");
+    const firstBytes = JSON.stringify(first);
+    await initial.replay(first);
+    assert.equal(JSON.stringify(first), firstBytes, "duplicate hook admission cannot append another hint");
+    const second = await initial.prompt("msg_second", "add test coverage");
+    assert.match(JSON.stringify(second), /Keep prior cache entries/);
+    assert.equal(JSON.stringify(first), firstBytes, "new hints cannot replace earlier history");
+    assert.deepEqual(await initial.system(), system);
+    const quiet = await initial.prompt("msg_quiet", "verify cache");
+    assert.doesNotMatch(JSON.stringify(quiet), /Investigate the failing cache|Keep prior cache entries/);
+    assert.equal(JSON.stringify(first), firstBytes, "a missing hint cannot remove earlier history");
+    assert.deepEqual(await initial.system(), system);
+    const imageOnly = await initial.prompt("msg_image", "");
+    assert.match(JSON.stringify(imageOnly), /Inspect the supplied image/,
+      "the documented empty-text file prompt still receives guidance");
+    for (const failed of [false, true]) {
+      await initial.tool(failed);
+      assert.deepEqual(await initial.system(), system, "tool hints cannot invalidate the system prefix");
+      assert.deepEqual(await initial.system(), system, "a missing tool hint cannot change a repeated request");
+    }
+    const savedHistory = JSON.parse(JSON.stringify([first, second, quiet, imageOnly]));
+    await initial.cleanup();
+    const resumed = await connect("reload");
+    assert.deepEqual(await resumed.system(), system);
+    await resumed.replay(savedHistory[0]);
+    assert.deepEqual([first, second, quiet, imageOnly], savedHistory,
+      "saved hook output retains its hints without duplicate admission after plugin reload");
+    await resumed.cleanup();
+  });
+}
+
 test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip native calls", async () => {
   const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
   const configDir = join(fx.home, ".config", "opencode");
@@ -2789,7 +3591,7 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
   writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
   try {
     const cleanup = await pluginModule.default.setup(fakeCtx);
-    assert.deepEqual([...sessionHooks.keys()].sort(), ["compaction", "context", "prompt"]);
+    assert.deepEqual([...sessionHooks.keys()].sort(), ["compaction", "context", "experimental.idle", "prompt"]);
     assert.deepEqual([...toolHooks.keys()].sort(), ["execute.after", "execute.before"]);
     await flush();
     assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
@@ -2800,8 +3602,20 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
     ]);
 
     writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
-    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "Yes, add billing support" } });
-    await sessionHooks.get("prompt")({ sessionID: "oc2-2", prompt: { text: "fix that" } });
+    await sessionHooks.get("experimental.idle")({ sessionID: "oc2-idle" });
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [
+      ["Stop", "oc2-idle"],
+    ]);
+
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    const firstPrompt = { sessionID: "oc2-2", prompt: { text: "Yes, add billing support" } };
+    const secondPrompt = { sessionID: "oc2-2", prompt: { text: "fix that" } };
+    await sessionHooks.get("prompt")(firstPrompt);
+    await sessionHooks.get("prompt")(secondPrompt);
+    assert.match(firstPrompt.prompt.text, /^Yes, add billing support\n\n/);
+    assert.match(firstPrompt.prompt.text, /prompt hint fixture/);
+    assert.match(secondPrompt.prompt.text, /^fix that\n\n/);
+    assert.match(secondPrompt.prompt.text, /prompt hint fixture/);
     const profiles = readCapture();
     assert.equal(profiles.length, 2, JSON.stringify(profiles));
     assert.equal(profiles[0].task_continuation, false);
@@ -2811,7 +3625,6 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
     await sessionHooks.get("context")(system);
     assert.deepEqual(system.system, [
       { type: "text", text: "Caveman Core fixture" },
-      { type: "text", text: "prompt hint fixture" },
     ]);
     const once = { sessionID: "oc2-2", system: [] };
     await sessionHooks.get("context")(once);
@@ -2855,7 +3668,94 @@ test("enable opencode on major 2 writes a V2 plugin whose setup hooks round-trip
   }
 });
 
-test("enable opencode with an unreadable version writes a plugin both majors load, and doctor names it", async () => {
+test("the V2 plugin reports a completed-model turn boundary exactly once (#1539)", async () => {
+  // OpenCode V2 has no "session.idle" bus event at all: its session-event
+  // schema names 54 session events and not one of them is idle. Completed
+  // model work reaches a plugin only through the session "experimental.idle"
+  // hook, which the host triggers at the point the session WOULD go idle and
+  // deliberately skips for control-only drains such as a manual compaction.
+  // Without a handler the V2 adapter emitted no Stop at all, so nothing
+  // downstream ever saw a turn end on that host (#1539).
+  //
+  // The risk in fixing it is double counting, which is worse than missing a
+  // boundary because the accounting silently inflates. So this also pins the
+  // ordering guard: the host calls the hook BEFORE the drain completes, so a
+  // bus "session.idle" from any 2.x host that does still publish one is the
+  // same boundary arriving second, and must not add a second Stop.
+  const fx = fixture({ opencodeVersion: "opencode 2.0.7" });
+  const configDir = join(fx.home, ".config", "opencode");
+  mkdirSync(configDir, { recursive: true });
+  writeFileSync(join(configDir, "opencode.json"), JSON.stringify({}) + "\n");
+
+  const enabled = await run(["enable", "opencode"], fx.env);
+  assert.equal(enabled.code, 0, enabled.stderr);
+  const pluginPath = join(configDir, "plugins", "caveman-native.js");
+  const pluginModule = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+
+  const sessionHooks = new Map();
+  let publish = () => {};
+  const bus = [];
+  const fakeCtx = {
+    location: { directory: fx.home, workspaceID: undefined },
+    event: {
+      async *subscribe() {
+        // A bus this test drives by hand, so an idle event can be delivered
+        // after the hook has fired for the same boundary.
+        while (true) {
+          if (bus.length) { yield bus.shift(); continue; }
+          const next = await new Promise((resolve) => { publish = resolve; });
+          if (next === null) return;
+          yield next;
+        }
+      },
+    },
+    session: { hook: async (name, cb) => { sessionHooks.set(name, cb); return { dispose: async () => {} }; } },
+    tool: { hook: async (name, cb) => { return { dispose: async () => {} }; } },
+  };
+  const readCapture = () => readFileSync(fx.env.CAVE_NATIVE_CAPTURE, "utf8").trim().split("\n").filter(Boolean)
+    .map((line) => JSON.parse(Buffer.from(line, "base64").toString("utf8")));
+  const flush = async () => { for (let i = 0; i < 25; i++) await new Promise((r) => setImmediate(r)); };
+  const previousCapture = process.env.CAVE_NATIVE_CAPTURE;
+  process.env.CAVE_NATIVE_CAPTURE = fx.env.CAVE_NATIVE_CAPTURE;
+  writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+  try {
+    await pluginModule.default.setup(fakeCtx);
+    assert.ok(sessionHooks.has("experimental.idle"),
+      "the V2 adapter must handle the hook the host actually calls at a completed-model boundary");
+
+    // One completed-model boundary → one Stop, carrying the instance session id.
+    await sessionHooks.get("experimental.idle")({ sessionID: "idle-1", background: [] });
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [["Stop", "idle-1"]]);
+
+    // The same boundary arriving a second time over the bus is not a new turn.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    publish({ type: "session.idle", location: { directory: fx.home }, data: { sessionID: "idle-1" } });
+    await flush();
+    assert.deepEqual(readCapture(), [],
+      "a bus session.idle after the hook has spoken is the same boundary, not a second turn");
+
+    // A later continuation turn is a real boundary and must still be reported.
+    await sessionHooks.get("experimental.idle")({ sessionID: "idle-1", background: [] });
+    await flush();
+    assert.deepEqual(readCapture().map((item) => [item.event_name, item.session_id]), [["Stop", "idle-1"]],
+      "a continuation turn reaching the hook again is a new boundary");
+
+    // An idle callback without a usable session id names no turn.
+    writeFileSync(fx.env.CAVE_NATIVE_CAPTURE, "");
+    await sessionHooks.get("experimental.idle")({ background: [] });
+    await sessionHooks.get("experimental.idle")({ sessionID: "" });
+    await sessionHooks.get("experimental.idle")(undefined);
+    await flush();
+    assert.deepEqual(readCapture(), []);
+  } finally {
+    publish(null);
+    if (previousCapture === undefined) delete process.env.CAVE_NATIVE_CAPTURE;
+    else process.env.CAVE_NATIVE_CAPTURE = previousCapture;
+  }
+});
+
+ test("enable opencode with an unreadable version writes a plugin both majors load, and doctor names it", async () => {
   // On a loaded machine `opencode --version` missed the probe timeout: doctor
   // called the host "unavailable", and enable fell back to the V1 hook map,
   // which OpenCode 2 refuses to load ("must export a default definition with
@@ -2875,7 +3775,7 @@ test("enable opencode with an unreadable version writes a plugin both majors loa
   assert.equal(syntax.status, 0, syntax.stderr);
   const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
   assert.equal(plugin.default.id, "caveman-native");
-  assert.equal(plugin.default.server, plugin.CavemanNative, "OpenCode 1.4+ loads default.server, the V1 hook map");
+  assert.equal(plugin.default.server, plugin.CavemanNative, "OpenCode 1.18.29+ loads default.server, the V1 hook map");
   assert.equal(typeof plugin.default.setup, "function", "OpenCode 2 loads default.setup");
   assert.equal(await plugin.default.setup({}), undefined, "OpenCode 1.x calls setup with no session API; it must do nothing");
   // On OpenCode 2 setup runs on the V1 helpers it shares, regex escapes included.
@@ -2972,6 +3872,44 @@ test("enable opencode emits the dual-major plugin when two opencode majors are i
   const doctor = await run(["doctor", "opencode"], fx.env);
   assert.equal(doctor.code, 0, doctor.stderr);
   assert.equal(JSON.parse(doctor.stdout).state, "installed");
+});
+
+for (const versions of [
+  { opencodeVersion: "version unreadable", opencode2Version: "opencode 2.0.26" },
+  { opencodeVersion: "opencode 1.19.3", opencode2Version: "version unreadable" },
+]) {
+  test(`enable opencode preserves both APIs when one installed binary has no readable version (${versions.opencodeVersion})`, async () => {
+    const fx = fixture(versions);
+    try {
+      assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+      const pluginPath = join(fx.home, ".config", "opencode", "plugins", "caveman-native.js");
+      const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+      assert.equal(typeof plugin.CavemanNative, "function", "the unreadable binary may be 1.x");
+      assert.equal(plugin.default?.server, plugin.CavemanNative);
+      assert.equal(typeof plugin.default?.setup, "function", "the unreadable binary may be 2.x");
+      assert.equal(await plugin.default.setup({}), undefined, "V1's context must not call V2 hooks");
+      const hooks = await plugin.CavemanNative();
+      assert.equal(typeof hooks["tool.execute.before"], "function");
+      assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+    } finally { rmSync(fx.home, { recursive: true, force: true }); }
+  });
+}
+
+test("doctor repairs a single-API opencode plugin when an unreadable second binary appears", async () => {
+  const fx = fixture({ opencodeVersion: "opencode 1.19.3" });
+  try {
+    assert.equal((await run(["enable", "opencode"], fx.env)).code, 0);
+    writeFileSync(join(fx.home, "bin", "opencode2"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
+    const doctor = await run(["doctor", "opencode"], fx.env);
+    assert.notEqual(doctor.code, 0, "the unreadable binary cannot vouch for a V1-only file");
+    assert.equal(JSON.parse(doctor.stdout).components.lifecycle_hooks, false);
+    assert.equal((await run(["doctor", "opencode", "--fix"], fx.env)).code, 0);
+    const pluginPath = join(fx.home, ".config", "opencode", "plugins", "caveman-native.js");
+    const plugin = await import(`${pathToFileURL(pluginPath).href}?test=${Date.now()}`);
+    assert.equal(plugin.default.server, plugin.CavemanNative);
+    assert.equal(typeof plugin.default.setup, "function");
+    assert.equal(JSON.parse((await run(["doctor", "opencode"], fx.env)).stdout).state, "installed");
+  } finally { rmSync(fx.home, { recursive: true, force: true }); }
 });
 
 // With only `opencode2` on PATH, binOf fell back to binary_names[0] ("opencode"),

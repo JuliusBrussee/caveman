@@ -301,6 +301,13 @@ function runSubagent(sessionCwd, sessionId, agentType) {
   if (!mode || INDEPENDENT_MODES.has(mode)) return;
   // cavecrew agents carry their own ultracave voice.
   if (/(^|:)cavecrew-/.test(agentType)) return;
+  // #1548: optional regex allowlist to scope SubagentStart injection by agent_type.
+  const matcher = process.env.CAVEMAN_SUBAGENT_MATCHER;
+  if (matcher) {
+    try {
+      if (!new RegExp(matcher).test(agentType || '')) return;
+    } catch (e) { /* invalid regex fails open so SubagentStart never crashes */ }
+  }
   // #634 repo opt-out, same gate as the tracker's per-turn reinforcement.
   if (getDefaultMode(sessionCwd) === 'off') return;
   process.stdout.write(JSON.stringify({

@@ -454,7 +454,9 @@ test("native-hook normalizes prompt digest and exact tool output over local runt
     assert.equal(requests[5].event.type, "session.start");
     assert.equal(requests[6].event.type, "prompt.submit");
     assert.equal(requests[6].session.caveman_session_id, "gemini:gemini-8");
-    assert.equal(JSON.parse(geminiPrompt.stdout).hookSpecificOutput.additionalContext, "Caveman task contract (dynamic tail): policy=surgical-patch");
+    const geminiPromptOut = JSON.parse(geminiPrompt.stdout);
+    assert.equal(geminiPromptOut.hookSpecificOutput.hookEventName, "BeforeAgent", "Gemini hook output must emit Gemini's native hookEventName, not Claude's UserPromptSubmit");
+    assert.equal(geminiPromptOut.hookSpecificOutput.additionalContext, "Caveman task contract (dynamic tail): policy=surgical-patch");
     assert.equal(requests[7].event.type, "tool.after");
     assert.equal(Buffer.from(requests[7].tool.output, "base64").toString("utf8"), "gemini output");
     const ended = await runNativeHook("claude", {
@@ -580,6 +582,11 @@ test("record policy keeps native hooks and shrink byte-pass-through", { skip: pr
     const env = {
       ...process.env, HOME: caveHome, CAVEMAN_HOME: caveHome, CAVEMAN_NATIVE_MODE: "record", CAVEMAN_TELEMETRY: "0",
       CAVE_GATEWAY_URL: "http://127.0.0.1:1",
+      // This case owns only the runtime socket and intentionally has no proxy.
+      // SessionStart otherwise revives a real PATH-installed proxy, whose
+      // existing-socket probe connects/closes without a JSON hook request.
+      CAVEMAN_PROXY_BIN: join(caveHome, "missing-proxy"),
+      CAVEMAN_MCP_BIN: join(caveHome, "missing-mcp"),
     };
     const start = await runNativeHook("claude", { hook_event_name: "SessionStart", session_id: "record-1" }, env);
     assert.equal(start.code, 0, start.stderr);
@@ -855,10 +862,20 @@ test("hooks uninstall codex still removes a legacy shrink-hook entry", async () 
 // ── opencode: plugin (hard tier, real RTK parity) ────────────────────────────
 // opencode CAN deterministically rewrite a command (a plugin's tool.execute.before
 // mutates output.args.command), so caveman ships a plugin file.
+function isolatedOpencodePath(home) {
+  const bin = join(home, "bin");
+  const runtimeBin = join(home, "runtime-bin");
+  mkdirSync(bin, { recursive: true });
+  mkdirSync(runtimeBin, { recursive: true });
+  symlinkSync(process.execPath, join(runtimeBin, "node"));
+  return { bin, path: `${bin}${delimiter}${runtimeBin}${delimiter}/usr/bin${delimiter}/bin` };
+}
+
 test("hooks install opencode writes a plugin, uninstall removes it", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
   const caveDir = mkdtempSync(join(tmpdir(), "cave-dot-"));
-  const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: caveDir };
+  const { path } = isolatedOpencodePath(home);
+  const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: caveDir, PATH: path };
 
   await runCli(["hooks", "install", "opencode"], env);
   const plugin = join(home, ".config", "opencode", "plugins", "caveman-shrink.js");
@@ -1073,7 +1090,8 @@ for (const original of ["[]", "\"a string\"", "42", "{ not json"]) {
 // the real shrink decision.
 test("the generated opencode plugin rewrites a noisy bash command and is byte-safe otherwise", async () => {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
-  const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")) };
+  const { path } = isolatedOpencodePath(home);
+  const env = { ...process.env, NO_COLOR: "1", HOME: home, CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")), PATH: path };
   await runCli(["hooks", "install", "opencode"], env);
   const plugin = join(home, ".config", "opencode", "plugins", "caveman-shrink.js");
   assert.ok(existsSync(plugin), "plugin must exist");
@@ -1114,8 +1132,7 @@ test("the generated opencode plugin rewrites a noisy bash command and is byte-sa
 // the shrink plugin now shares that same decision.
 function opencodeFixture(version) {
   const home = mkdtempSync(join(tmpdir(), "cave-home-"));
-  const bin = join(home, "bin");
-  mkdirSync(bin, { recursive: true });
+  const { bin, path } = isolatedOpencodePath(home);
   if (version) {
     writeFileSync(join(bin, "opencode"), `#!/bin/sh\nif [ "$1" = "--version" ]; then echo '${version}'; fi\n`, { mode: 0o755 });
   }
@@ -1127,7 +1144,7 @@ function opencodeFixture(version) {
       HOME: home,
       USERPROFILE: home,
       CAVEMAN_HOME: mkdtempSync(join(tmpdir(), "cave-dot-")),
-      PATH: `${bin}${delimiter}${process.env.PATH}`,
+      PATH: path,
     },
     plugin: join(home, ".config", "opencode", "plugins", "caveman-shrink.js"),
   };

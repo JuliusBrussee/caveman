@@ -527,6 +527,20 @@ function spawnOk(r) {
 // preferred once it has actually reported a version; anything else falls back.
 // Same reason the result is not symlink-resolved: the stable symlink IS the
 // wanted answer, and realpath would walk it straight back to the Cellar path.
+//
+// fnm is the one version manager that breaks the "PATH entry is the stable
+// name" premise: its PATH entry is a per-SHELL link
+// (/run/user/1000/fnm_multishells/<id>/bin, %LOCALAPPDATA%\fnm_multishells\ on
+// Windows) that fnm deletes when the shell exits and that is gone after a
+// reboot. It runs at install time, so neither the floor check nor the
+// exercise-the-candidate check can tell — every hook just fails with ENOENT in
+// the next session. process.execPath is the node version's own install dir and
+// lasts as long as that version is installed, so it is strictly better here.
+// The CLI refuses these in stableNodePath() and durableCavemen() (#1541); this
+// is the same rule on the standalone path, and
+// tests/installer/hook-node-fnm.test.mjs keeps the two literals identical.
+const FNM_MULTISHELL = /[\\/]fnm_multishells[\\/]/i;
+
 function absoluteNodePath() {
   if (!IS_WIN) {
     try {
@@ -534,7 +548,7 @@ function absoluteNodePath() {
       const candidate = (r.stdout || '').trim().split(/\r?\n/, 1)[0];
       if (r.status === 0 && candidate && path.isAbsolute(candidate)) {
         const resolved = path.resolve(candidate);
-        if (nodeMeetsFloor(resolved)) return resolved;
+        if (!FNM_MULTISHELL.test(resolved) && nodeMeetsFloor(resolved)) return resolved;
       }
     } catch (_) {}
   }

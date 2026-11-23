@@ -136,6 +136,23 @@ func bracketed(parts []byte) []byte { return append(append([]byte("["), parts...
 
 func asIs(parts []byte) []byte { return parts }
 
+// Pixel rendering replaces a whole text part with image parts. Only fields
+// whose semantics we preserve may be consumed: unknown metadata, citations,
+// signatures, and OpenAI prompt_cache_breakpoint must stay on the original text.
+// Anthropic cache_control is the one supported extension; keepMarker moves it.
+func pixelTextPartSupported(body []byte, part gatewayJSONSpan, anthropic bool) bool {
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(body[part.start:part.end], &fields) != nil {
+		return false
+	}
+	for field := range fields {
+		if field != "type" && field != "text" && !(anthropic && field == "cache_control") {
+			return false
+		}
+	}
+	return true
+}
+
 // keepMarker shapes the images that replace a whole Anthropic block. A
 // cache_control on that block moves onto the last image: without it the
 // provider writes no entry at the client's breakpoint, and the next turn has
@@ -367,6 +384,9 @@ func collectAnthropicPixelBlocks(body []byte, blocksSpan gatewayJSONSpan, d *pix
 		case "image":
 			d.clientImages++
 		case "text":
+			if !pixelTextPartSupported(body, block, true) {
+				continue
+			}
 			textSpan, ok := gatewayFindObjectField(body, block, "text")
 			if !ok || !gatewayIsJSONString(body, textSpan) {
 				continue
@@ -439,6 +459,9 @@ func collectOpenAIChatPixelLiveZone(body []byte, messagesSpan gatewayJSONSpan, d
 					continue
 				}
 				if typ := gatewayObjectStringField(body, part, "type"); typ != "text" && typ != "input_text" {
+					continue
+				}
+				if !pixelTextPartSupported(body, part, false) {
 					continue
 				}
 				textSpan, ok := gatewayFindObjectField(body, part, "text")
@@ -525,6 +548,9 @@ func collectOpenAIResponsesUserPixelCandidates(body []byte, item gatewayJSONSpan
 	for _, part := range parts {
 		typ := gatewayObjectStringField(body, part, "type")
 		if typ != "input_text" && typ != "text" {
+			continue
+		}
+		if !pixelTextPartSupported(body, part, false) {
 			continue
 		}
 		textSpan, found := gatewayFindObjectField(body, part, "text")

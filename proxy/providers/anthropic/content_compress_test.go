@@ -584,3 +584,36 @@ func TestCachedPrefixComponentsCoverTheMarkedMessage(t *testing.T) {
 		t.Fatal("count_tokens is never cached")
 	}
 }
+
+func TestMessageThreadContinueSkipsPrefixButCompressesLiveDelta(t *testing.T) {
+	adapter := Adapter{}
+	meta := providers.RequestMetadata{Provider: "anthropic", Endpoint: "/v1/messages"}
+	large := strings.Repeat("tool result line from server thread continuation\n", 40)
+
+	createBody := []byte(`{"model":"claude-sonnet-4-6","thread":{"type":"create"},"system":[{"type":"text","text":"sys","cache_control":{"type":"ephemeral"}}],"messages":[{"role":"user","content":[{"type":"text","text":` + strconv.Quote(large) + `}]}]}`)
+	if comps, ok := adapter.FrozenPrefixComponents(createBody, meta); !ok || len(comps) == 0 {
+		t.Fatalf("thread:create should still expose frozen prefix components, got ok=%v len=%d", ok, len(comps))
+	}
+	if comps, cached, ok := adapter.CachedPrefixComponents(createBody, meta); !ok || cached != 2 || len(comps) != 3 {
+		t.Fatalf("thread:create cached prefix = ok=%v cached=%d len=%d, want true/2/3", ok, cached, len(comps))
+	}
+
+	continueBody := []byte(`{"model":"claude-sonnet-4-6","thread":{"type":"continue","previous_message_id":"msg_01"},"messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_1","content":` + strconv.Quote(large) + `}]}]}`)
+	if _, ok := adapter.FrozenPrefixComponents(continueBody, meta); ok {
+		t.Fatal("thread:continue omits system/tools/history and must not fabricate frozen prefix components")
+	}
+	if _, _, ok := adapter.CachedPrefixComponents(continueBody, meta); ok {
+		t.Fatal("thread:continue omits system/tools/history and must not fabricate cached prefix components")
+	}
+	blocks, reassemble, ok := adapter.ExtractStabilizable(continueBody, meta)
+	if !ok || len(blocks) != 1 || !blocks[0].Live || string(blocks[0].Content) != large {
+		t.Fatalf("thread:continue ExtractStabilizable = ok=%v blocks=%d, want 1 live delta block", ok, len(blocks))
+	}
+	out, err := reassemble([][]byte{[]byte("COMPRESSED_DELTA")})
+	if err != nil {
+		t.Fatalf("reassemble thread:continue: %v", err)
+	}
+	if !bytes.Contains(out, []byte("COMPRESSED_DELTA")) || !bytes.Contains(out, []byte(`"previous_message_id":"msg_01"`)) {
+		t.Fatalf("thread:continue reassembly corrupted payload: %s", out)
+	}
+}

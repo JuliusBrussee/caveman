@@ -1,0 +1,65 @@
+<!doctype html>
+<html><head><title>Fleet Health</title>
+<style>.badge{padding:2px 4px}</style>
+<script>window.__STATE__={"refresh":30}</script></head>
+<body>
+<nav class="top"><a href="/">Home</a> <a href="/alerts">Alerts</a> <a href="/deploys">Deploys</a></nav>
+<main>
+<h1>Fleet health</h1>
+<div role="alert">1 service breaching SLO</div>
+<table>
+<thead><tr><th>Service</th><th>Region</th><th>Status</th><th>p99</th><th>Errors</th></tr></thead>
+<tbody>
+<tr><td><a href="/svc/0">svc-00</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>40 ms</td><td>0.00%</td></tr>
+<tr><td><a href="/svc/1">svc-01</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>47 ms</td><td>0.03%</td></tr>
+<tr><td><a href="/svc/2">svc-02</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>54 ms</td><td>0.06%</td></tr>
+<tr><td><a href="/svc/3">svc-03</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>61 ms</td><td>0.09%</td></tr>
+<tr><td><a href="/svc/4">svc-04</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>68 ms</td><td>0.12%</td></tr>
+<tr><td><a href="/svc/5">svc-05</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>75 ms</td><td>0.15%</td></tr>
+<tr><td><a href="/svc/6">svc-06</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>45 ms</td><td>0.18%</td></tr>
+<tr><td><a href="/svc/7">svc-07</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>52 ms</td><td>0.21%</td></tr>
+<tr><td><a href="/svc/8">svc-08</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>59 ms</td><td>0.24%</td></tr>
+<tr><td><a href="/svc/9">svc-09</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>66 ms</td><td>0.27%</td></tr>
+<tr><td><a href="/svc/10">svc-10</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>73 ms</td><td>0.01%</td></tr>
+<tr><td><a href="/svc/11">svc-11</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>43 ms</td><td>0.04%</td></tr>
+<tr><td><a href="/svc/12">svc-12</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>50 ms</td><td>0.07%</td></tr>
+<tr><td><a href="/svc/13">svc-13</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>57 ms</td><td>0.10%</td></tr>
+<tr><td><a href="/svc/14">svc-14</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>64 ms</td><td>0.13%</td></tr>
+<tr><td><a href="/svc/15">svc-15</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>71 ms</td><td>0.16%</td></tr>
+<tr><td><a href="/svc/16">svc-16</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>41 ms</td><td>0.19%</td></tr>
+<tr><td><a href="/svc/17">svc-17</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>48 ms</td><td>0.22%</td></tr>
+<tr><td><a href="/svc/18">svc-18</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>55 ms</td><td>0.25%</td></tr>
+<tr><td><a href="/svc/19">svc-19</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>62 ms</td><td>0.28%</td></tr>
+<tr><td><a href="/svc/20">svc-20</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>69 ms</td><td>0.02%</td></tr>
+<tr><td><a href="/svc/21">svc-21</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>76 ms</td><td>0.05%</td></tr>
+<tr><td><a href="/svc/22">svc-22</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>46 ms</td><td>0.08%</td></tr>
+<tr><td><a href="/svc/23">svc-23</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>53 ms</td><td>0.11%</td></tr>
+<tr><td><a href="/svc/24">svc-24</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>60 ms</td><td>0.14%</td></tr>
+<tr><td><a href="/svc/25">svc-25</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>67 ms</td><td>0.17%</td></tr>
+<tr><td><a href="/svc/26">svc-26</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>74 ms</td><td>0.20%</td></tr>
+<tr><td><a href="/svc/27">svc-27</a></td><td>eu-west-1</td><td><span class="badge">CRITICAL</span></td><td>4810 ms</td><td>38.12%</td></tr>
+<tr><td><a href="/svc/28">svc-28</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>51 ms</td><td>0.26%</td></tr>
+<tr><td><a href="/svc/29">svc-29</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>58 ms</td><td>0.00%</td></tr>
+<tr><td><a href="/svc/30">svc-30</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>65 ms</td><td>0.03%</td></tr>
+<tr><td><a href="/svc/31">svc-31</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>72 ms</td><td>0.06%</td></tr>
+<tr><td><a href="/svc/32">svc-32</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>42 ms</td><td>0.09%</td></tr>
+<tr><td><a href="/svc/33">svc-33</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>49 ms</td><td>0.12%</td></tr>
+<tr><td><a href="/svc/34">svc-34</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>56 ms</td><td>0.15%</td></tr>
+<tr><td><a href="/svc/35">svc-35</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>63 ms</td><td>0.18%</td></tr>
+<tr><td><a href="/svc/36">svc-36</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>70 ms</td><td>0.21%</td></tr>
+<tr><td><a href="/svc/37">svc-37</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>40 ms</td><td>0.24%</td></tr>
+<tr><td><a href="/svc/38">svc-38</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>47 ms</td><td>0.27%</td></tr>
+<tr><td><a href="/svc/39">svc-39</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>54 ms</td><td>0.01%</td></tr>
+<tr><td><a href="/svc/40">svc-40</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>61 ms</td><td>0.04%</td></tr>
+<tr><td><a href="/svc/41">svc-41</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>68 ms</td><td>0.07%</td></tr>
+<tr><td><a href="/svc/42">svc-42</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>75 ms</td><td>0.10%</td></tr>
+<tr><td><a href="/svc/43">svc-43</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>45 ms</td><td>0.13%</td></tr>
+<tr><td><a href="/svc/44">svc-44</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>52 ms</td><td>0.16%</td></tr>
+<tr><td><a href="/svc/45">svc-45</a></td><td>eu-west-1</td><td><span class="badge">healthy</span></td><td>59 ms</td><td>0.19%</td></tr>
+<tr><td><a href="/svc/46">svc-46</a></td><td>eu-west-2</td><td><span class="badge">healthy</span></td><td>66 ms</td><td>0.22%</td></tr>
+<tr><td><a href="/svc/47">svc-47</a></td><td>eu-west-3</td><td><span class="badge">healthy</span></td><td>73 ms</td><td>0.25%</td></tr>
+</tbody>
+</table>
+</main>
+<footer>ops dashboard</footer>
+</body></html>

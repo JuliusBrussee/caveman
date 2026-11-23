@@ -65,11 +65,11 @@ jobs:
           - id: aider
             install: python -m pip install aider-chat==0.86.2
           - id: claude
-            install: npm install -g @anthropic-ai/claude-code@2.1.318
+            install: npm install -g @anthropic-ai/claude-code@2.1.330
           - id: codex
-            install: npm install -g @openai/codex@0.166.0
+            install: npm install -g @openai/codex@0.171.0
           - id: gemini
-            install: npm install -g @google/gemini-cli@0.67.0
+            install: npm install -g @google/gemini-cli@0.70.0
           - id: hermes
             install: git clone --quiet --filter=blob:none https://github.com/NousResearch/hermes-agent.git "$RUNNER_TEMP/hermes-agent" && git -C "$RUNNER_TEMP/hermes-agent" checkout --quiet 2bd378ed1b8d6bf2192cb26e0a55ff3091e6bd19 && expected='hermes-agent==0.23.0' && tags="$(git -C "$RUNNER_TEMP/hermes-agent" tag --points-at HEAD)" && echo "$tags" && grep -qx "v${expected#*==}" <<<"$tags" && UV_PYTHON_DOWNLOADS=never uv sync --frozen --project "$RUNNER_TEMP/hermes-agent" --python "$(command -v python)" && echo "$RUNNER_TEMP/hermes-agent/.venv/bin" >> "$GITHUB_PATH"
             # hermes >=0.22 gates every core dependency on python_version >= '3.14' and
@@ -79,15 +79,15 @@ jobs:
             python: "3.14"
             uv: true
           - id: kilo
-            install: npm install -g @kilocode/cli@7.8.27
+            install: npm install -g @kilocode/cli@7.8.32
           - id: openclaw
-            install: npm install -g openclaw@2026.11.1
+            install: npm install -g openclaw@2026.11.6
           - id: opencode
-            install: npm install -g opencode-ai@1.19.5
+            install: npm install -g opencode-ai@1.19.6
           - id: pi
-            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.0.4
+            install: npm install -g --ignore-scripts @earendil-works/pi-coding-agent@1.6.0
           - id: qwen
-            install: npm install -g @qwen-code/qwen-code@0.26.8
+            install: npm install -g @qwen-code/qwen-code@0.28.3
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
         with:

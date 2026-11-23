@@ -13,6 +13,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 	"sync"
@@ -209,11 +210,16 @@ func (c Creds) Resolve(provider string, r *http.Request) providers.Credential {
 		// credential declares the scheme, so such a gateway answered 401 and no
 		// configuration both routed and authenticated (#1215).
 		//
-		// Scoped to openai_compatible because that is the only provider whose
-		// upstream header this decides. anthropic and gemini read a bearer as
-		// OAuth pass-through, which a duplicated API key must not opt into.
+		// Scoped to openai_compatible and custom (non-first-party) anthropic
+		// upstreams (#1215, #1286). First-party api.anthropic.com and gemini
+		// read a bearer as OAuth pass-through, which a duplicated API key must
+		// not opt into. On a custom Anthropic gateway (providers.anthropic.base_url),
+		// preserving both headers lets bearer-only and x-api-key gateways both
+		// authenticate the caller's single principal.
 		if provider == "openai_compatible" && inboundBearerEquals(r, k) {
 			credential.Scheme = "bearer"
+		} else if provider == "anthropic" && inboundBearerEquals(r, k) && !anthropicUpstreamIsFirstParty(c.cfg) {
+			credential.Scheme = "bearer_and_api_key"
 		}
 		return credential
 	}
@@ -289,6 +295,17 @@ func bearerKey(raw string) string {
 		return strings.TrimSpace(value[len("Bearer "):])
 	}
 	return strings.TrimSpace(strings.TrimPrefix(value, "Bearer "))
+}
+
+// anthropicUpstreamIsFirstParty reports whether providers.anthropic.base_url
+// resolves to Anthropic's own API (the default when unset).
+func anthropicUpstreamIsFirstParty(cfg config.Config) bool {
+	raw := strings.TrimSpace(cfg.BaseURL("anthropic", "https://api.anthropic.com"))
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return true
+	}
+	return strings.EqualFold(parsed.Hostname(), "api.anthropic.com")
 }
 
 // Options tunes the assembled server. A nil HTTPClient yields the SSRF-guarded

@@ -41,7 +41,7 @@ caveman tools config get think.mode
 | `think.core` | `true` | Boolean | Enable core context compression |
 | `think.toon` | `true` | Boolean | Allow TOON when it is smaller and supported |
 | `think.shrink` | `true` | Boolean | Enable output shrinking where supported |
-| `think.pixel.models` | `[]` | Model-name array | Models allowed to receive pixel context |
+| `think.pixel.models` | `[]` | Model-name array (empty uses built-in pixel defaults; `CAVE_PIXEL_MODELS=off` disables all) | Models allowed to receive pixel context in `pixel` mode |
 | `think.pixel.density` | `balanced` | `conservative`, `balanced`, `max` | Pixel packing density |
 | `remember.mem` | `true` | Boolean | Enable local memory integration |
 | `remember.offload` | `auto` | `auto`, `on`, `off` | Control automatic memory offload |
@@ -212,6 +212,34 @@ standard end-to-end fields.
 
 Self-hosted private or loopback upstreams require an explicit
 `CAVE_SSRF_ALLOWLIST` entry. See [Security and privacy](security-and-privacy.md).
+
+### Self-hosted gateway for OpenAI-wire agents
+
+The proxy picks the upstream by wire protocol, not by agent. Hermes Agent,
+Codex API-key mode, Aider and other OpenAI-wire agents send to
+`providers.openai.base_url`, which defaults to `https://api.openai.com`. If
+your agent talks to an OpenAI-compatible gateway, override it, in addition to
+`providers.anthropic` for Claude Code:
+
+```yaml
+providers:
+  anthropic:
+    base_url: https://gateway.example/litellm
+  openai:
+    base_url: https://gateway.example/litellm
+```
+
+Without the `openai` entry the gateway key is forwarded to `api.openai.com`,
+which answers `HTTP 401: Incorrect API key provided`. That looks like a bad key
+but is an upstream routing gap. If the gateway host resolves to a private
+address, also set `CAVE_SSRF_ALLOWLIST=<gateway host>`, and pass the gateway
+key to `caveman wrap` as `OPENAI_API_KEY`.
+
+`caveman enable hermes` (native mode) is separate: it refuses while Hermes has
+its own `model.base_url`, so use `caveman wrap hermes` for a custom gateway.
+
+The `providers.openai` override covers Codex in API-key mode only. Codex with
+ChatGPT sign-in (`openai-codex`) is a separate upstream and does not use it.
 
 ### Corporate networks: proxies and TLS inspection
 

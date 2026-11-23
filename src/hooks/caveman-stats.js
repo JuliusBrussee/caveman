@@ -523,11 +523,18 @@ function recordSnapshot({ claudeDir, historyPath, sessionFile, parsed, sessionId
   return { mode, attribution };
 }
 
+function detectHost(env = process.env) {
+  if (env.GEMINI_CLI === '1') return 'gemini';
+  if (env.CAVEMAN_HOST === 'omp' || env.OMP_PROFILE !== undefined || env.PI_CODING_AGENT_DIR !== undefined || env.PI_CONFIG_DIR === '.omp') {
+    return 'omp';
+  }
+  return 'claude';
+}
+
 function main() {
   const args = process.argv.slice(2);
   const hostIdx = args.indexOf('--host');
-  const host = hostIdx !== -1 ? args[hostIdx + 1]
-    : process.env.GEMINI_CLI === '1' ? 'gemini' : 'claude';
+  const host = hostIdx !== -1 ? args[hostIdx + 1] : detectHost(process.env);
   if (host === 'gemini') {
     // Gemini CLI's ShellExecutionService identifies child commands with
     // GEMINI_CLI=1. Its statistics live in the host session, not Claude JSONL.
@@ -535,8 +542,14 @@ function main() {
     process.stdout.write('Gemini CLI: use /stats model for current session token usage, or /stats session for session statistics.\nCaveman savings: unknown. Claude Code transcripts are not Gemini usage.\n');
     return;
   }
+  if (host === 'omp') {
+    // Oh My Pi (OMP) stores its own session transcripts outside Claude Code's
+    // JSONL layout. Stop before reading or touching Claude Code history/flags (#1531).
+    process.stdout.write('Oh My Pi (OMP): use /usage or your OMP session view for current session token usage.\nCaveman savings: unknown. Claude Code transcripts are not OMP usage.\n');
+    return;
+  }
   if (host !== 'claude') {
-    process.stderr.write('caveman-stats: --host must be claude or gemini.\n');
+    process.stderr.write('caveman-stats: --host must be claude, gemini, or omp.\n');
     process.exitCode = 2;
     return;
   }

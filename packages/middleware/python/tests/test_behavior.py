@@ -246,17 +246,16 @@ def drive_asgi(runtime, scope, **options):
 
 @driver("google", "caveman_middleware.google:manifest")
 def drive_google(runtime, scope, **options):
-    import httpx
     from google import genai
     from google.genai import types
-    from caveman_middleware.google import CavemanGoogleTransport, with_caveman_google
+    from caveman_middleware.google import CavemanGoogleTransport, with_caveman_google, _http
 
     received = []
 
     def provider(request):
         body = json.loads(request.content)
         received.append(body["contents"][2]["parts"][0]["functionResponse"]["response"]["output"])
-        return httpx.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP"}]})
+        return _http.Response(200, json={"candidates": [{"content": {"role": "model", "parts": [{"text": "done"}]}, "finishReason": "STOP"}]})
 
     def read_log() -> str:
         """Read the log."""
@@ -266,8 +265,8 @@ def drive_google(runtime, scope, **options):
                 types.Content(role="model", parts=[types.Part(function_call=types.FunctionCall(name="read_log", args={}))]),
                 types.Content(role="user", parts=[types.Part(function_response=types.FunctionResponse(name="read_log", response={"output": ORIGINAL}))])]
     same = untouched(contents)
-    transport = CavemanGoogleTransport(runtime=runtime, transport=httpx.MockTransport(provider), **options)
-    client = genai.Client(api_key="test", http_options=types.HttpOptions(httpx_client=httpx.Client(transport=transport)))
+    transport = CavemanGoogleTransport(runtime=runtime, transport=_http.MockTransport(provider), **options)
+    client = genai.Client(api_key="test", http_options=types.HttpOptions(httpx_client=_http.Client(transport=transport)))
     wrapped = with_caveman_google(client, runtime=runtime, scope=scope, **options)
     wrapped.models.generate_content(model="gemini-test", contents=contents, config=types.GenerateContentConfig(tools=[read_log]))
     assert same()

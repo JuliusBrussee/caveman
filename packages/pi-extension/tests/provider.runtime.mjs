@@ -1,12 +1,21 @@
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
+import { createRequire } from "node:module";
+import { dirname, join } from "node:path";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 import { ModelRegistry, ModelRuntime } from "@earendil-works/pi-coding-agent";
 import { ProviderRouter } from "../dist/testable.mjs";
 import "./provider-compat.runtime.mjs";
 
 // Test-only oracle: the pinned host's private helper is deliberately not
-// imported by shipped code. Its public package exports do not expose it.
-const { mergeProviderAttributionHeaders } = await import(new URL("./core/provider-attribution.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
+// imported by shipped code. Pi 1.6+ builds identity/attribution headers via
+// client-identity.js + pi-ai utils/identity.js.
+const { getClientIdentity } = await import(new URL("./core/client-identity.js", import.meta.resolve("@earendil-works/pi-coding-agent")));
+const hostRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
+const sdkManifest = hostRequire.resolve.paths("@earendil-works/pi-ai")
+  .map(root => join(root, "@earendil-works/pi-ai/package.json")).find(existsSync);
+const { getIdentityHeaders, getOpenCodeSessionHeaders } = await import(pathToFileURL(join(dirname(sdkManifest), "dist/utils/identity.js")));
 
 const GATEWAY = "http://127.0.0.1:8787";
 const ROUTE = `${GATEWAY}/w/pi/compat/relay/v1`;
@@ -431,15 +440,28 @@ test("late auth resolution cannot reopen a closed gate or replace a newer model"
 const ATTRIBUTION_CASES = [
   { provider: "openrouter", url: "https://openrouter.ai/api/v1", headers: { "HTTP-Referer": "https://pi.dev", "X-OpenRouter-Title": "pi", "X-OpenRouter-Categories": "cli-agent" } },
   { provider: "nvidia", url: "https://integrate.api.nvidia.com/v1", headers: { "X-BILLING-INVOKE-ORIGIN": "Pi" } },
-  { provider: "cloudflare-workers-ai", url: "https://api.cloudflare.com/fixture/v1", headers: { "User-Agent": "pi-coding-agent" } },
-  { provider: "cloudflare-ai-gateway", url: "https://gateway.ai.cloudflare.com/fixture/v1", headers: { "User-Agent": "pi-coding-agent" } },
   { provider: "opencode", url: "https://opencode.ai/zen/v1", headers: { "x-opencode-session": "fixture-session", "x-opencode-client": "pi" }, session: true },
   { provider: "opencode-go", url: "https://opencode.ai/go/v1", headers: { "x-opencode-session": "fixture-session", "x-opencode-client": "pi" }, session: true },
 ];
 
 function attributionWireHeaders(model, enabled, resolved) {
-  return { ...model.headers, ...mergeProviderAttributionHeaders(model, { getEnableInstallTelemetry: () => enabled }, "fixture-session", resolved) };
+  const identity = getClientIdentity({ getEnableInstallTelemetry: () => enabled });
+  const opencodeSession = getOpenCodeSessionHeaders(model, "fixture-session");
+  return { ...getIdentityHeaders(model, identity), ...model.headers, ...opencodeSession, ...resolved };
 }
+
+test("Cloudflare aliases keep identical User-Agent through routing in Pi 1.6+", async () => {
+  for (const url of ["https://api.cloudflare.com/fixture/v1", "https://gateway.ai.cloudflare.com/fixture/v1"]) {
+    const original = { ...MODELS[0], baseUrl: url }, h = harness([original]);
+    await h.router.openGate(GATEWAY, h.ctx, { relay: url });
+    assert.equal(h.router.routing(), true, h.notices.join("\n"));
+    for (const enabled of [true, false]) {
+      assert.deepEqual(attributionWireHeaders(h.ctx.model, enabled), attributionWireHeaders(original, enabled));
+    }
+    assert.equal(await h.router.closeGate(h.ctx), true);
+    assert.deepEqual(h.ctx.model, original);
+  }
+});
 
 test("canonical Pi attribution stays identical with telemetry enabled or disabled", async () => {
   const saved = process.env.PI_TELEMETRY;
@@ -503,17 +525,29 @@ test("explicit final or identical model headers make alias attribution independe
   } finally { if (saved === undefined) delete process.env.PI_TELEMETRY; else process.env.PI_TELEMETRY = saved; }
 });
 
-test("a model header overwritten by Pi's attribution does not falsely certify an alias", async () => {
+test("explicit model identity headers override attribution while mismatched OpenCode session headers stay direct", async () => {
   const saved = process.env.PI_TELEMETRY;
   try {
     process.env.PI_TELEMETRY = "1";
-    const original = { ...MODELS[0], baseUrl: "https://integrate.api.nvidia.com/v1", headers: { "X-BILLING-INVOKE-ORIGIN": "private-fixture-override" } };
-    const h = harness([original]);
-    await h.router.openGate(GATEWAY, h.ctx, { relay: original.baseUrl }, {}, { relay: ["x-billing-invoke-origin"] });
-    assert.equal(h.router.routing(), false);
-    assert.match(h.notices.at(-1), /cannot preserve URL-derived headers X-BILLING-INVOKE-ORIGIN/);
-    assert.notDeepEqual(attributionWireHeaders({ ...original, baseUrl: ROUTE }, true), attributionWireHeaders(original, true));
-    assert.doesNotMatch(h.notices.join("\n"), /private-fixture-override/);
+    // Pi 1.6+ applies getIdentityHeaders below model.headers, so an explicit
+    // model override produces identical wire headers direct and routed.
+    const nvidia = { ...MODELS[0], baseUrl: "https://integrate.api.nvidia.com/v1", headers: { "X-BILLING-INVOKE-ORIGIN": "private-fixture-override" } };
+    const nh = harness([nvidia]);
+    await nh.router.openGate(GATEWAY, nh.ctx, { relay: nvidia.baseUrl }, {}, { relay: ["x-billing-invoke-origin"] });
+    assert.equal(nh.router.routing(), true, nh.notices.join("\n"));
+    for (const enabled of [true, false]) {
+      assert.deepEqual(attributionWireHeaders(nh.ctx.model, enabled), attributionWireHeaders(nvidia, enabled));
+    }
+
+    // By contrast, getOpenCodeSessionHeaders runs in applyAuth optionsHeaders
+    // above model.headers, so a different model header does NOT match direct wire bytes.
+    const opencode = { ...MODELS[0], baseUrl: "https://opencode.ai/zen/v1", headers: { "x-opencode-client": "pi", "x-opencode-session": "other-session" } };
+    const oh = harness([opencode]);
+    await oh.router.openGate(GATEWAY, oh.ctx, { relay: opencode.baseUrl }, {}, { relay: ["x-opencode-client", "x-opencode-session"] });
+    assert.equal(oh.router.routing(), false);
+    assert.match(oh.notices.at(-1), /cannot preserve URL-derived headers x-opencode-session/);
+    assert.notDeepEqual(attributionWireHeaders({ ...opencode, baseUrl: ROUTE }, true), attributionWireHeaders(opencode, true));
+    assert.doesNotMatch(oh.notices.join("\n"), /other-session/);
   } finally { if (saved === undefined) delete process.env.PI_TELEMETRY; else process.env.PI_TELEMETRY = saved; }
 });
 

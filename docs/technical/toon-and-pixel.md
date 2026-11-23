@@ -61,7 +61,7 @@ Enable for one session:
 caveman wrap --pixel <agent>
 ```
 
-Pixel requires explicit model allowlisting:
+Pixel uses an explicit model allowlist:
 
 ```json
 {
@@ -73,6 +73,14 @@ Pixel requires explicit model allowlisting:
   }
 }
 ```
+
+When `think.pixel.models` (and `CAVE_PIXEL_MODELS`) is empty or unset in `pixel`
+mode, the proxy falls back to its built-in default allowlist (`claude-fable-5`,
+`gpt-5.6`). Set `CAVE_PIXEL_MODELS=off` (or `none`, `false`, `0`) to disable
+pixel conversion for all models, or set a non-empty list to allow only the
+named models. For skill installation, pass `--no-pixel` to
+`caveman tools skills install` or `caveman tools skills add` to install plain
+`SKILL.md` files without pixel conversion.
 
 Supported density values are `conservative`, `balanced`, and `max`. Higher
 density places more text into an image and can make small characters harder for
