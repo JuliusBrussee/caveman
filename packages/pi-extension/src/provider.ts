@@ -5,7 +5,7 @@
 
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { unforwardedProviderHeaders } from "../../cli/src/provider-routing.ts";
-import { compatForRoutedModel, unpreservedAttributionHeaders } from "./provider-compat.ts";
+import { compatForRoutedModel, piAiSupportsPromptCacheKeyMode, unpreservedAttributionHeaders } from "./provider-compat.ts";
 import { MAX_MESSAGE_BYTES, boundedString, compatUpstreamFor, hostOf, isLoopbackUrl, routeForApi, targetsGateway, upstreamHostFor } from "./protocol.ts";
 
 type Notify = (message: string, kind: "warning" | "info") => void;
@@ -26,10 +26,13 @@ export class ProviderRouter {
   private applying = false;
   private gateGeneration = 0;
   private warnedModels = new Set<string>();
+  private supportsOpenAIChatPromptCacheKeyMode: boolean;
 
-  constructor(pi: ExtensionAPI, notify: Notify) {
+  constructor(pi: ExtensionAPI, notify: Notify, options?: { supportsOpenAIChatPromptCacheKeyMode?: boolean }) {
     this.pi = pi;
     this.notify = notify;
+    this.supportsOpenAIChatPromptCacheKeyMode =
+      options?.supportsOpenAIChatPromptCacheKeyMode ?? piAiSupportsPromptCacheKeyMode();
   }
 
   // openGate is called once per session after the recovery gate held. Refuses
@@ -86,6 +89,16 @@ export class ProviderRouter {
     // models whose endpoints differ (#973).
     const original = this.isOwnedRoute(model) ? this.routed!.originalBaseUrl : model.baseUrl;
     const route = routeForApi(this.gateway, model.api, model.provider, original, this.compatUpstreams, this.providerUpstreams);
+    let originalHost = "";
+    try { originalHost = new URL(original).hostname.toLowerCase(); } catch { /* endpoint gate reports invalid URLs */ }
+    // Pi <1.6.0's OpenAI Chat adapter derives prompt_cache_key from the host URL
+    // and ignores compat.promptCacheKeyMode; leave api.openai.com direct there.
+    const compatibilityIssue =
+      model.api === "openai-completions" &&
+      originalHost === "api.openai.com" &&
+      !this.supportsOpenAIChatPromptCacheKeyMode
+        ? "Pi <1.6.0 cannot preserve this OpenAI Chat endpoint's prompt cache keys through routing"
+        : undefined;
     let headerIssue: string | undefined;
     let oauth = true;
     let authKnown = false;
@@ -103,7 +116,7 @@ export class ProviderRouter {
         : !oauth && chatGPTSubscriptionModel && route
           ? "ChatGPT subscription route requires OAuth"
           : undefined;
-    if (!oauth && route && !chatGPTSubscriptionModel) {
+    if (!oauth && route && !compatibilityIssue && !chatGPTSubscriptionModel) {
       try {
         // Pi adds configured provider/auth headers during request preparation;
         // they need not appear on model.headers. Use its public resolver and
@@ -138,7 +151,7 @@ export class ProviderRouter {
       // closes/reopens. A stale result must never select its old model again.
       if (!this.gateOpen || this.gateGeneration !== gateGeneration || ctx.model !== model) return;
     }
-    if (!route || authIssue || headerIssue) {
+    if (!route || authIssue || compatibilityIssue || headerIssue) {
       if (!(await this.restoreCurrentModel(ctx))) return;
       if (!this.warnedModels.has(key)) {
         this.warnedModels.add(key);
@@ -150,7 +163,7 @@ export class ProviderRouter {
         // rewrite the value the provider dispatches on and disable it. Never offer
         // that remedy for an endpoint with no host.
         const host = hostOf(original);
-        const reason = authIssue ?? headerIssue ?? (!host
+        const reason = authIssue ?? compatibilityIssue ?? headerIssue ?? (!host
             ? `provider endpoint "${original}" is not an HTTP URL; this provider sends no routable request`
             : targetsGateway(this.gateway, original)
               ? `provider baseUrl ${original} points at the Caveman proxy itself, so no mount can carry it; set it to the real upstream and add compat.${model.provider}.base_url to caveman.yaml to route it`

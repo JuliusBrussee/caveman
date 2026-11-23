@@ -200,7 +200,7 @@ func (r *tableRenderer) emitTable(caption string, rows [][]string, hasHeader boo
 				cells = append(cells, cell)
 			}
 		}
-		r.lines = append(r.lines, markdownRow(cells))
+		r.lines = append(r.lines, markdownRowCells(cells, i > 0))
 		if i == 0 {
 			r.lines = append(r.lines, markdownSeparator(len(cells)))
 		}
@@ -219,8 +219,14 @@ func gridHasMarker(rows [][]string) bool {
 }
 
 func markdownRow(cells []string) string {
-	for len(cells) > 1 && cells[len(cells)-1] == "" {
-		cells = cells[:len(cells)-1]
+	return markdownRowCells(cells, true)
+}
+
+func markdownRowCells(cells []string, trimTrailing bool) string {
+	if trimTrailing {
+		for len(cells) > 1 && cells[len(cells)-1] == "" {
+			cells = cells[:len(cells)-1]
+		}
 	}
 	var b strings.Builder
 	b.WriteString("|")
@@ -269,19 +275,30 @@ func isStructuralBlock(n *html.Node) bool {
 // path that a report splits into <span>/</span>home<span>/</span>… comes out
 // as one path, unless a letter or digit would meet a letter or digit: a badge
 // such as <span>FAILED</span>exit 1 relies on CSS for its gap, and "FAILEDexit"
-// would hide the word from every keyword rule downstream. Two elements that
-// touch are always separated, for the same reason. A block element or a <br>
-// separates what is on either side of it, and an image contributes its alt
-// text, which is often the only label a status icon has.
+// would hide the word from every keyword rule downstream. Two touching elements
+// are separated for the same reason, except inside literal code elements
+// (<code>, <kbd>, <samp>) or across path-separator boundaries (/, \, leading .)
+// so split paths such as <span>/usr</span><span>/local/bin</span> stay whole.
+// A block element or a <br> separates what is on either side of it, and an
+// image contributes its alt text, which is often the only label a status icon has.
 type inlineJoiner struct {
 	b        strings.Builder
 	last     rune
 	prevElem bool
 	started  bool
+	inCode   bool
+}
+
+func isCodeInlineAtom(a atom.Atom) bool {
+	return a == atom.Code || a == atom.Kbd || a == atom.Samp
+}
+
+func isPathJoinBoundary(prev, next rune) bool {
+	return prev == '/' || prev == '\\' || next == '/' || next == '\\' || next == '.'
 }
 
 func (j *inlineJoiner) add(n *html.Node) {
-	var part inlineJoiner
+	part := inlineJoiner{inCode: j.inCode}
 	part.write(n)
 	text := part.b.String()
 	if strings.TrimSpace(text) == "" {
@@ -292,9 +309,10 @@ func (j *inlineJoiner) add(n *html.Node) {
 		return
 	}
 	isElem := n.Type == html.ElementNode
-	if j.started {
+	if j.started && !j.inCode {
 		firstRune, _ := utf8.DecodeRuneInString(text)
-		if (j.prevElem && isElem) || (isWordRune(j.last) && isWordRune(firstRune)) {
+		touchingElems := j.prevElem && isElem && !isPathJoinBoundary(j.last, firstRune)
+		if touchingElems || (isWordRune(j.last) && isWordRune(firstRune)) {
 			j.b.WriteString(" ")
 		}
 	}
@@ -320,7 +338,7 @@ func (j *inlineJoiner) write(n *html.Node) {
 			if block {
 				j.b.WriteString(" ")
 			}
-			var inner inlineJoiner
+			inner := inlineJoiner{inCode: j.inCode || isCodeInlineAtom(n.DataAtom)}
 			for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
 				inner.add(ch)
 			}

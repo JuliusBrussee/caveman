@@ -1,7 +1,49 @@
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AnthropicMessagesCompat, OpenAICompletionsCompat, OpenAIResponsesCompat } from "@earendil-works/pi-ai";
 
 type SelectedModel = NonNullable<ExtensionContext["model"]>;
+
+let cachedPromptCacheKeyModeSupport: boolean | undefined;
+
+export function semverSupportsPromptCacheKeyMode(version: string | undefined): boolean {
+  if (!version) return false;
+  const m = /^(\d+)\.(\d+)\.(\d+)/.exec(version.trim());
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return major > 1 || (major === 1 && minor >= 6);
+}
+
+// Pi 1.6.0's @earendil-works/pi-ai added OpenAICompletionsCompat.promptCacheKeyMode.
+// Older Pi hosts (<1.6.0) ignore that field and drop prompt_cache_key if the
+// api.openai.com Chat Completions URL is rewritten; fail closed when unknown or <1.6.0.
+export function piAiSupportsPromptCacheKeyMode(): boolean {
+  if (cachedPromptCacheKeyModeSupport !== undefined) return cachedPromptCacheKeyModeSupport;
+  let version: string | undefined;
+  try {
+    const hostRequire = createRequire(import.meta.resolve("@earendil-works/pi-coding-agent"));
+    const sdkManifest = hostRequire.resolve.paths("@earendil-works/pi-ai")
+      ?.map((root) => join(root, "@earendil-works/pi-ai/package.json"))
+      .find(existsSync);
+    if (sdkManifest) {
+      const parsed = JSON.parse(readFileSync(sdkManifest, "utf8")) as { version?: unknown };
+      if (typeof parsed.version === "string") version = parsed.version;
+    }
+  } catch { /* fall through to direct peer resolution */ }
+  if (!version) {
+    try {
+      const localRequire = createRequire(import.meta.url);
+      const sdkManifest = localRequire.resolve("@earendil-works/pi-ai/package.json");
+      const parsed = JSON.parse(readFileSync(sdkManifest, "utf8")) as { version?: unknown };
+      if (typeof parsed.version === "string") version = parsed.version;
+    } catch { /* unknown host version stays fail-closed */ }
+  }
+  cachedPromptCacheKeyModeSupport = semverSupportsPromptCacheKeyMode(version);
+  return cachedPromptCacheKeyModeSupport;
+}
 
 // Pi's pi-ai identity layer adds attribution headers from model.provider/baseUrl
 // below model.headers and optionsHeaders (dist/utils/identity.js), while

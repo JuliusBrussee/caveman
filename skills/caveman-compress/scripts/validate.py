@@ -50,7 +50,13 @@ PATH_REGEX = re.compile(r"(?:\./|\.\./|/|[A-Za-z]:\\)[\w\-/\\\.]+|[\w\-\.]+[/\\]
 # discarded so only the digits are compared — and matching it is what makes
 # the boundary whole-token. A bare `(?!\w)` after the digits instead let
 # backtracking shorten the run until the guard passed, so "60s" read as "6".
-NUMBER_REGEX = re.compile(r"(?<![A-Za-z_\d])(\d+(?:[.,]\d+)*)[A-Za-z]*(?!\w)")
+# Capture an optional unary minus when preceded by start/whitespace or a
+# math/delimiter character (e.g. "-20 °C", "(-5, 3)", "offset=-1") so dropping
+# or flipping a sign is caught, while leaving dates ("2026-11-17"), ranges
+# ("10-20"), and hyphenated identifiers ("step-1", "utf-8") as unsigned parts.
+NUMBER_REGEX = re.compile(
+    r"(?<![A-Za-z_\d])((?:(?:(?<!\S)|(?<=[(\[{=:,;<>|*`$]))-)?\d+(?:[.,]\d+)*)[A-Za-z]*(?!\w)"
+)
 # ...which would also drop the v off a version. Removed before matching so
 # v4.0.1 is still read as the value 4.0.1. `\b` keeps it from firing inside a
 # word, so "rev2" is untouched.
@@ -80,6 +86,20 @@ WORD_NUMBERS = {
     "sixth": "6", "seventh": "7", "eighth": "8", "ninth": "9", "tenth": "10",
 }
 WORD_NUMBER_REGEX = re.compile(r"\b(" + "|".join(WORD_NUMBERS) + r")\b", re.IGNORECASE)
+TENS_WORDS = {
+    "twenty": 20, "thirty": 30, "forty": 40, "fifty": 50,
+    "sixty": 60, "seventy": 70, "eighty": 80, "ninety": 90,
+}
+ONES_WORDS = {
+    "one": 1, "two": 2, "three": 3, "four": 4, "five": 5,
+    "six": 6, "seven": 7, "eight": 8, "nine": 9,
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9,
+}
+COMPOUND_WORD_NUMBER_REGEX = re.compile(
+    r"\b(" + "|".join(TENS_WORDS) + r")[\s-]+(" + "|".join(ONES_WORDS) + r")\b",
+    re.IGNORECASE,
+)
 # A comma between a digit and exactly three digits is a thousands separator, so
 # 1,000 and 1000 are the same value written two ways. Normalizing it away is
 # deliberate: flagging pure reformatting would add noise and protect no value.
@@ -310,12 +330,15 @@ def extract_numbers(text):
 
 
 def spelled_numbers(text):
-    """Digits for the number words the text spells out ("three" -> "3").
+    """Digits for the number words the text spells out ("three" -> "3", "twenty-five" -> "25").
 
     Widens only what the ORIGINAL permits, never what the compressed side
     claims, so the check stays one-directional.
     """
-    return {WORD_NUMBERS[match.group(1).lower()] for match in WORD_NUMBER_REGEX.finditer(text)}
+    nums = {WORD_NUMBERS[match.group(1).lower()] for match in WORD_NUMBER_REGEX.finditer(text)}
+    for match in COMPOUND_WORD_NUMBER_REGEX.finditer(text):
+        nums.add(str(TENS_WORDS[match.group(1).lower()] + ONES_WORDS[match.group(2).lower()]))
+    return nums
 
 
 def extract_inline_codes(text):
