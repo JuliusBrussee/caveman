@@ -65,6 +65,13 @@ Spawn 2-3 `cavecrew-investigator` calls in one message (different angles: defs v
 **Single-shot edit** (when site is already known):
 Skip investigator. Hand exact path:line to `cavecrew-builder` directly.
 
+## Subagent briefing
+
+Give subagents concise, self-contained handoffs:
+- Name the exact working directory (or worktree path) and target `path:line` ranges up front.
+- Do not include slash-command triggers or hook keywords that would switch modes or fire unrelated hooks inside the subagent.
+- Keep git identity and config repo-local (`git -C <repo> config user.name ...`); never mutate global git config from a subagent.
+
 ## What NOT to do
 
 - Don't accept or reject a subagent's absence claim (`No match.`, `No issues.`, "section missing", "unchanged") without one targeted check of the relevant file, search scope, or diff. Check cited line numbers are within the file before acting.

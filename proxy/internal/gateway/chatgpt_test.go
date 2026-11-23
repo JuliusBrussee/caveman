@@ -67,9 +67,11 @@ func TestPiChatGPTSubscriptionDetection(t *testing.T) {
 		agent   string
 		account string
 		auth    string
+		upgrade bool
 		want    bool
 	}{
 		{name: "exact Pi request", method: http.MethodPost, path: "/codex/responses", agent: "pi", account: "acct", auth: "Bearer token", want: true},
+		{name: "Pi websocket upgrade", method: http.MethodGet, path: "/codex/responses", agent: "pi", account: "acct", auth: "Bearer token", upgrade: true, want: true},
 		{name: "wrong method", method: http.MethodGet, path: "/codex/responses", agent: "pi", account: "acct", auth: "Bearer token"},
 		{name: "wrong path", method: http.MethodPost, path: "/responses", agent: "pi", account: "acct", auth: "Bearer token"},
 		{name: "encoded path", method: http.MethodPost, path: "/codex/responses", rawPath: "/codex%2Fresponses", agent: "pi", account: "acct", auth: "Bearer token"},
@@ -86,6 +88,10 @@ func TestPiChatGPTSubscriptionDetection(t *testing.T) {
 			req.Header.Set("x-cave-agent", tt.agent)
 			req.Header.Set("ChatGPT-Account-ID", tt.account)
 			req.Header.Set("Authorization", tt.auth)
+			if tt.upgrade {
+				req.Header.Set("Upgrade", "websocket")
+				req.Header.Set("Connection", "Upgrade")
+			}
 			verifiedAgentPath := tt.agent == "pi"
 			if got := isPiChatGPTSubscription(req, verifiedAgentPath); got != tt.want {
 				t.Fatalf("isPiChatGPTSubscription() = %v, want %v", got, tt.want)
@@ -1128,6 +1134,7 @@ func TestOpenCodeChatGPTSubscriptionDetection(t *testing.T) {
 		path    string
 		agent   string
 		account string
+		upgrade bool
 		want    bool
 	}{
 		{
@@ -1136,6 +1143,32 @@ func TestOpenCodeChatGPTSubscriptionDetection(t *testing.T) {
 			path:    "/openai/v1/responses",
 			agent:   "opencode",
 			account: "acct",
+			want:    true,
+		},
+		{
+			name:    "opencode wrap v1 responses with account",
+			method:  http.MethodPost,
+			path:    "/v1/responses",
+			agent:   "opencode",
+			account: "acct",
+			want:    true,
+		},
+		{
+			name:    "opencode websocket upgrade on openai path",
+			method:  http.MethodGet,
+			path:    "/openai/v1/responses",
+			agent:   "opencode",
+			account: "acct",
+			upgrade: true,
+			want:    true,
+		},
+		{
+			name:    "opencode websocket upgrade on wrap v1 path",
+			method:  http.MethodGet,
+			path:    "/v1/responses",
+			agent:   "opencode",
+			account: "acct",
+			upgrade: true,
 			want:    true,
 		},
 		{
@@ -1173,6 +1206,10 @@ func TestOpenCodeChatGPTSubscriptionDetection(t *testing.T) {
 			req.Header.Set("x-cave-agent", tt.agent)
 			if tt.account != "" {
 				req.Header.Set("ChatGPT-Account-ID", tt.account)
+			}
+			if tt.upgrade {
+				req.Header.Set("Upgrade", "websocket")
+				req.Header.Set("Connection", "Upgrade")
 			}
 
 			if got := isOpenCodeChatGPTSubscription(req); got != tt.want {

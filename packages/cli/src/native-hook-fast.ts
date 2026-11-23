@@ -410,11 +410,12 @@ function fallback(entry: Record<string, unknown>): void {
 
 // Budget for the delegated child. This runs inside a host hook, so an
 // unbounded spawnSync could block the user's turn forever if index.js stalls,
-// and on Windows process spawn is ~10x macOS before antivirus (#819) — the
-// double-spawn alone can exceed the host's cap. Cap it below the host's and
-// fall through to the fail-open path on expiry, the way every other subprocess
-// in this package already does (#799).
-const DELEGATE_TIMEOUT_MS = 3000;
+// while cold SessionStart/UserPromptSubmit revival probes caveman-mcp and waits
+// for caveman-proxy /health/live before returning (#1503). On Windows process
+// spawn is ~10x macOS before antivirus (#819). 8s stays well below host hook
+// caps (30s) while letting cold proxy revival finish instead of leaving the
+// next turn with ECONNREFUSED; expiry still falls through fail-open (#799).
+const DELEGATE_TIMEOUT_MS = 8000;
 
 function delegateToFullCLI(raw: Buffer, agent: NativeAgent): boolean {
   const cli = join(dirname(fileURLToPath(import.meta.url)), "index.js");
@@ -429,6 +430,13 @@ function delegateToFullCLI(raw: Buffer, agent: NativeAgent): boolean {
     return true;
   }
   return false;
+}
+
+function hostEventName(agent: NativeAgent, eventName: string): string {
+  if (agent !== "gemini") return eventName;
+  if (eventName === "UserPromptSubmit") return "BeforeAgent";
+  if (eventName === "PreToolUse") return "BeforeTool";
+  return eventName;
 }
 
 async function main(): Promise<void> {
@@ -450,6 +458,9 @@ async function main(): Promise<void> {
   if (eventName === "SessionStart" || eventName === "PostCompact") {
     delegateToFullCLI(raw, agent);
     return;
+  }
+  if (agent === "hermes" && eventName === "UserPromptSubmit" && event.session_initialized !== true) {
+    if (delegateToFullCLI(raw, agent)) return;
   }
   const sessionID = bounded(event.session_id ?? event.sessionId);
   const entry: Record<string, unknown> = {
@@ -490,9 +501,9 @@ async function main(): Promise<void> {
   if (agent === "hermes" && eventName === "UserPromptSubmit" && context) {
     process.stdout.write(JSON.stringify({ context }));
   } else if (context && eventName === "UserPromptSubmit") {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: context } }));
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: hostEventName(agent, eventName), additionalContext: context } }));
   } else if (context && (eventName === "PreToolUse" || eventName === "PermissionRequest")) {
-    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: eventName, additionalContext: context } }));
+    process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: hostEventName(agent, eventName), additionalContext: context } }));
   } else if (mode !== "record" && agent === "claude" && eventName === "PostToolUse" && response?.output_replacement) {
     process.stdout.write(JSON.stringify({ hookSpecificOutput: { hookEventName: "PostToolUse", updatedToolOutput: response.output_replacement } }));
   } else if (mode !== "record" && (agent === "opencode" || agent === "pi") && (eventName === "PostToolUse" || eventName === "PostToolUseFailure") && response) {

@@ -1096,6 +1096,24 @@ test("Claude remote-control is a flag, not only a subcommand (#1101)", async () 
   }
 });
 
+test("Codex --ignore-user-config launches direct because it skips Caveman's config.toml route", async () => {
+  const here = dirname(fileURLToPath(import.meta.url));
+  const { buildWrapEnv } = await import(`${pathToFileURL(join(here, "..", "dist", "index.js")).href}?codex-ignore-user-config`);
+  const codex = PROFILES.find((profile) => profile.id === "codex");
+  for (const argv of [
+    ["--ignore-user-config"],
+    ["exec", "--ignore-user-config", "hi"],
+  ]) {
+    assert.throws(
+      () => buildWrapEnv(codex, "http://127.0.0.1:8787", "auto", argv),
+      /OpenAI Codex CLI --ignore-user-config skips \$CODEX_HOME\/config\.toml/,
+      `expected ${argv.join(" ")} to launch direct`,
+    );
+  }
+  const routed = buildWrapEnv(codex, "http://127.0.0.1:8787", "auto", ["exec", "--", "--ignore-user-config"]);
+  assert.equal(routed.OPENAI_BASE_URL, "http://127.0.0.1:8787/w/codex");
+});
+
 test("a corporate HTTPS_PROXY does not swallow the agent's loopback hop (#1001)", async () => {
   const here = dirname(fileURLToPath(import.meta.url));
   const { buildWrapEnv } = await import(`${pathToFileURL(join(here, "..", "dist", "index.js")).href}?gateway-no-proxy`);

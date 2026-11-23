@@ -430,6 +430,8 @@ type Server struct {
 	routes routeSessions
 	// recorder finishes rows off the request path (Config.AsyncRecord).
 	recorder *recorder
+	// websockets owns upgraded streams, which http.Server.Shutdown cannot drain.
+	websockets websocketSessions
 	// fanout staggers sibling children on one new prefix (route_cache.go).
 	fanout fanout
 	// warmer keeps Anthropic prompt-cache entries warm while a session pauses
@@ -596,6 +598,20 @@ func BoundUpstreamTransport(t *http.Transport) {
 	// idle timeout above still retires what goes quiet.
 	t.MaxIdleConns = 1024
 	t.MaxIdleConnsPerHost = 256
+	// An HTTP/2 connection silent for 15 s is pinged and dropped without an
+	// answer in 5 s, so a pooled socket that died silently on a network change
+	// or sleep cannot hang requests until the 15-minute header deadline (#1543).
+	var h2 http.HTTP2Config
+	if t.HTTP2 != nil {
+		h2 = *t.HTTP2
+	}
+	if h2.SendPingTimeout == 0 {
+		h2.SendPingTimeout = 15 * time.Second
+	}
+	if h2.PingTimeout == 0 {
+		h2.PingTimeout = 5 * time.Second
+	}
+	t.HTTP2 = &h2
 }
 
 // New constructs a standalone proxy Server.

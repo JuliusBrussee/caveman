@@ -1662,8 +1662,9 @@ func TestStandaloneClientLifetimeAndCancellation(t *testing.T) {
 	// upstream that connects and then never answers. It must be set, and it must
 	// be a header deadline only — the long stream below still has to complete.
 	transport := client.Transport.(*http.Transport)
-	if transport.ResponseHeaderTimeout != 15*time.Minute || transport.IdleConnTimeout == 0 || !transport.DisableCompression {
-		t.Fatalf("unbounded streaming transport: header timeout=%v idle=%v compression=%v", transport.ResponseHeaderTimeout, transport.IdleConnTimeout, transport.DisableCompression)
+	if transport.ResponseHeaderTimeout != 15*time.Minute || transport.IdleConnTimeout == 0 || !transport.DisableCompression ||
+		transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout <= 0 || transport.HTTP2.PingTimeout <= 0 {
+		t.Fatalf("unbounded streaming transport: header timeout=%v idle=%v compression=%v http2=%+v", transport.ResponseHeaderTimeout, transport.IdleConnTimeout, transport.DisableCompression, transport.HTTP2)
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "text/event-stream")
@@ -1807,6 +1808,79 @@ func TestStandaloneCABundle_TrustsPrivateRootForProviderTLS(t *testing.T) {
 			srv.Handler().ServeHTTP(rec, req)
 			if rec.Code != tc.want {
 				t.Fatalf("status=%d want %d body=%q", rec.Code, tc.want, rec.Body.Bytes())
+			}
+		})
+	}
+}
+
+// TestStandaloneCustomAnthropicDualAuthPreservesBearer verifies #1286: when a
+// client (e.g. Pi with authHeader: true) sends the same key in both x-api-key
+// and Authorization: Bearer against a custom providers.anthropic.base_url,
+// both headers survive so bearer-only gateways authenticate cleanly. First-party
+// api.anthropic.com and mismatched headers stay x-api-key-only.
+func TestStandaloneCustomAnthropicDualAuthPreservesBearer(t *testing.T) {
+	const body = `{"model":"claude-sonnet-4-6","max_tokens":16,"messages":[{"role":"user","content":"hi"}]}`
+	const resp = `{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-6","content":[{"type":"text","text":"ok"}],"usage":{"input_tokens":5,"output_tokens":2}}`
+	cases := []struct {
+		name       string
+		baseURL    string
+		apiKey     string
+		authHeader string
+		wantAPIKey string
+		wantAuth   string
+	}{
+		{
+			name:       "custom anthropic gateway keeps identical bearer and x-api-key",
+			baseURL:    "https://gateway.example/anthropic",
+			apiKey:     "gw-token-123",
+			authHeader: "Bearer gw-token-123",
+			wantAPIKey: "gw-token-123",
+			wantAuth:   "Bearer gw-token-123",
+		},
+		{
+			name:       "custom anthropic gateway drops mismatched bearer",
+			baseURL:    "https://gateway.example/anthropic",
+			apiKey:     "gw-token-123",
+			authHeader: "Bearer other-token",
+			wantAPIKey: "gw-token-123",
+			wantAuth:   "",
+		},
+		{
+			name:       "first-party api.anthropic.com keeps x-api-key only",
+			baseURL:    "https://api.anthropic.com",
+			apiKey:     "sk-ant-api03-test",
+			authHeader: "Bearer sk-ant-api03-test",
+			wantAPIKey: "sk-ant-api03-test",
+			wantAuth:   "",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			upstream := &captureUpstreamTransport{response: resp}
+			spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer spend.Close()
+			cfg := config.Config{
+				Mode:      "record",
+				Providers: map[string]config.ProviderConfig{"anthropic": {BaseURL: tc.baseURL}},
+			}
+			srv := New(cfg, spend, Options{HTTPClient: &http.Client{Transport: upstream}})
+			req := httptest.NewRequest(http.MethodPost, "/w/pi/anthropic/v1/messages", strings.NewReader(body))
+			req.Header.Set("x-api-key", tc.apiKey)
+			req.Header.Set("authorization", tc.authHeader)
+			req.Header.Set("anthropic-version", "2023-06-01")
+			rec := httptest.NewRecorder()
+			srv.Handler().ServeHTTP(rec, req)
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status=%d body=%s", rec.Code, rec.Body.String())
+			}
+			if got := upstream.headers.Get("x-api-key"); got != tc.wantAPIKey {
+				t.Errorf("x-api-key = %q, want %q", got, tc.wantAPIKey)
+			}
+			if got := upstream.headers.Get("authorization"); got != tc.wantAuth {
+				t.Errorf("authorization = %q, want %q", got, tc.wantAuth)
 			}
 		})
 	}

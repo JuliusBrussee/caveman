@@ -664,3 +664,19 @@ func TestCacheWarmClassifiesSpacedAndGzippedToolUse(t *testing.T) {
 		})
 	}
 }
+
+func TestCacheWarmSkipsAnthropicMessageThreads(t *testing.T) {
+	for name, extra := range map[string]string{
+		"create":   `"thread":{"type":"create"},`,
+		"continue": `"thread":{"type":"continue","previous_message_id":"msg_01"},`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if out, ttl := warmBody([]byte(reqBody(extra))); out != nil || ttl != 0 {
+				t.Fatalf("warmBody(%s) = (%s, %v), want nil/0", name, out, ttl)
+			}
+		})
+	}
+	if out, ttl := warmBody([]byte(reqBody(`"thread":null,`))); out == nil || ttl == 0 {
+		t.Fatalf("warmBody(thread:null) = (%v, %v), want warmable body", out != nil, ttl)
+	}
+}

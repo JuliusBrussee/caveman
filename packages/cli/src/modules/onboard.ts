@@ -548,7 +548,9 @@ function summaryRows(plan: ModulePlan, selection: ModuleSelection, agentNames: s
     ["Modules", MODULES.filter((m) => selection[m.id]).map((m) => m.title).join(" · ") || "none"],
     // What leaves the machine is said before the key that agrees to it.
     ...MODULES.filter((m) => m.needsSignIn && selection[m.id]).map((m): [string, string] => [`${m.title[0]!.toUpperCase()}${m.title.slice(1)}`, `${m.summary} · free account`]),
-    ["Changes", plan.lines.length === 0 ? "nothing: this is already set up" : changes.join(" · ") || "runs only"],
+    ["Changes", plan.lines.length === 0
+      ? (agentNames.length > 0 ? "nothing: this is already set up · undo: caveman off --all" : "nothing: this is already set up")
+      : changes.join(" · ") || "runs only"],
   ];
 }
 

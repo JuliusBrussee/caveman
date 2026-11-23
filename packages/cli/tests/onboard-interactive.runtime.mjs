@@ -188,6 +188,25 @@ test("a wired agent missing from PATH stays ticked, so the plan never unwires it
   assert.deepEqual(result.plan.agents, ["claude"], "re-run keeps the wired agent and adds nothing unasked");
 });
 
+test("already-set-up summary keeps the undo command visible when agents are wired (#1493)", async () => {
+  writeFileSync(configPath, JSON.stringify({ modules: { output: false, input: true, "waste-fixes": false, routing: false, scripts: false, browse: false } }));
+  const firstTty = terminal();
+  const firstRun = onboard({ yes: false, dryRun: false }, deps(firstTty, {
+    agents: [{ id: "claude", name: "Claude Code", installed: true, wired: false }],
+  }));
+  await firstTty.press(/esc cancels/, "\r");
+  const first = await firstRun;
+  assert.equal(first.ok, true);
+
+  const secondTty = terminal();
+  const secondRun = onboard({ yes: false, dryRun: false }, deps(secondTty, {
+    agents: [{ id: "claude", name: "Claude Code", installed: true, wired: true }],
+  }));
+  await secondTty.press(/nothing: this is already set up · undo: caveman off --all[^]*esc cancels/, "n");
+  const second = await secondRun;
+  assert.equal(second.confirmed, false);
+});
+
 const KEYS = [
   { id: "anthropic", name: "Anthropic", env: "ANTHROPIC_API_KEY", added: false },
   { id: "openrouter", name: "OpenRouter", env: "OPENROUTER_API_KEY", added: true },

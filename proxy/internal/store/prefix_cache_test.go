@@ -133,9 +133,8 @@ func TestPrefixReplacementIncompleteEntryRejected(t *testing.T) {
 	}
 }
 
-// TestPrefixReplacementEviction pins bounded storage: the table never grows past
-// prefixCacheMaxEntries. An evicted entry becomes a plain miss, which the gateway
-// degrades to forwarding the client's original bytes.
+// TestPrefixReplacementEviction pins bounded storage after provider caches expire.
+// Warm entries are protected separately by the retention-window regression.
 func TestPrefixReplacementEviction(t *testing.T) {
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
@@ -145,6 +144,7 @@ func TestPrefixReplacementEviction(t *testing.T) {
 
 	// Seed past the cap directly, in one transaction, so the test does not have
 	// to write a hundred thousand blobs through the hot path.
+	old := time.Now().UTC().Add(-48 * time.Hour).Format(storeTSLayout)
 	tx, err := s.db.Begin()
 	if err != nil {
 		t.Fatalf("begin: %v", err)
@@ -153,7 +153,7 @@ func TestPrefixReplacementEviction(t *testing.T) {
 		key := prefixCacheKey("unlocked", []byte{byte(i >> 16), byte(i >> 8), byte(i)})
 		if _, err := tx.Exec(
 			`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			key, "ccr_seed", []byte("R"), prefixCacheNow(), prefixCacheNow(),
+			key, "ccr_seed", []byte("R"), old, old,
 		); err != nil {
 			t.Fatalf("seed %d: %v", i, err)
 		}
@@ -356,7 +356,7 @@ func TestPrefixReplacementPixelRowsHaveTheirOwnCap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("begin: %v", err)
 	}
-	old := time.Now().UTC().Add(-time.Hour).Format(storeTSLayout)
+	old := time.Now().UTC().Add(-48 * time.Hour).Format(storeTSLayout)
 	for i := 0; i < prefixCachePixelMaxEntries+5; i++ {
 		key := prefixCacheKey("pixel:anthropic:claude-fable-5", []byte(fmt.Sprintf("rendered text %d", i)))
 		if _, err := tx.Exec(
@@ -413,7 +413,7 @@ func TestPrefixReplacementEvictionKeepsRawPins(t *testing.T) {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	oldest := time.Now().UTC().Add(-24 * time.Hour).Format(storeTSLayout)
+	oldest := time.Now().UTC().Add(-48 * time.Hour).Format(storeTSLayout)
 	pinKey := prefixCacheKey("rawpin", []byte("a conversation identity and slot"))
 	tx, err := s.db.Begin()
 	if err != nil {
@@ -429,7 +429,7 @@ func TestPrefixReplacementEvictionKeepsRawPins(t *testing.T) {
 		key := prefixCacheKey("unlocked", []byte{byte(i >> 16), byte(i >> 8), byte(i)})
 		if _, err := tx.Exec(
 			`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			key, "ccr_seed", []byte("R"), prefixCacheNow(), prefixCacheNow(),
+			key, "ccr_seed", []byte("R"), oldest, oldest,
 		); err != nil {
 			t.Fatalf("seed %d: %v", i, err)
 		}

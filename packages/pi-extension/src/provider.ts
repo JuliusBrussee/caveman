@@ -86,13 +86,6 @@ export class ProviderRouter {
     // models whose endpoints differ (#973).
     const original = this.isOwnedRoute(model) ? this.routed!.originalBaseUrl : model.baseUrl;
     const route = routeForApi(this.gateway, model.api, model.provider, original, this.compatUpstreams, this.providerUpstreams);
-    // Pi's Chat adapter derives short-retention prompt_cache_key directly from
-    // this URL; its public compat type has no override. The payload hook cannot
-    // recover the effective cache option or distinguish another extension's
-    // removal, so leave this specific endpoint direct. Responses is unaffected.
-    const compatibilityIssue = model.api === "openai-completions" && original.includes("api.openai.com")
-      ? "Pi cannot preserve this OpenAI Chat endpoint's prompt cache keys through routing"
-      : undefined;
     let headerIssue: string | undefined;
     let oauth = true;
     let authKnown = false;
@@ -110,7 +103,7 @@ export class ProviderRouter {
         : !oauth && chatGPTSubscriptionModel && route
           ? "ChatGPT subscription route requires OAuth"
           : undefined;
-    if (!oauth && route && !compatibilityIssue && !chatGPTSubscriptionModel) {
+    if (!oauth && route && !chatGPTSubscriptionModel) {
       try {
         // Pi adds configured provider/auth headers during request preparation;
         // they need not appear on model.headers. Use its public resolver and
@@ -145,7 +138,7 @@ export class ProviderRouter {
       // closes/reopens. A stale result must never select its old model again.
       if (!this.gateOpen || this.gateGeneration !== gateGeneration || ctx.model !== model) return;
     }
-    if (!route || authIssue || compatibilityIssue || headerIssue) {
+    if (!route || authIssue || headerIssue) {
       if (!(await this.restoreCurrentModel(ctx))) return;
       if (!this.warnedModels.has(key)) {
         this.warnedModels.add(key);
@@ -157,7 +150,7 @@ export class ProviderRouter {
         // rewrite the value the provider dispatches on and disable it. Never offer
         // that remedy for an endpoint with no host.
         const host = hostOf(original);
-        const reason = authIssue ?? compatibilityIssue ?? headerIssue ?? (!host
+        const reason = authIssue ?? headerIssue ?? (!host
             ? `provider endpoint "${original}" is not an HTTP URL; this provider sends no routable request`
             : targetsGateway(this.gateway, original)
               ? `provider baseUrl ${original} points at the Caveman proxy itself, so no mount can carry it; set it to the real upstream and add compat.${model.provider}.base_url to caveman.yaml to route it`

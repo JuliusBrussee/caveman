@@ -376,14 +376,37 @@ func (w effortWire) itemEffort(body []byte, item jsonsplice.Span) (string, bool)
 	return jsonsplice.StringField(body, object, "effort")
 }
 
+// anthropicThreadType reports whether an Anthropic Messages body carries a
+// non-null top-level "thread" field (message-threads-2026-08-12) and its
+// "type" ("create" or "continue").
+func anthropicThreadType(body []byte) (present bool, kind string) {
+	root, ok := objectRoot(body)
+	if !ok {
+		return false, ""
+	}
+	span, ok := jsonsplice.Field(body, root, "thread")
+	if !ok {
+		return false, ""
+	}
+	raw := strings.TrimSpace(string(body[span.Start:span.End]))
+	if raw == "" || raw == "null" {
+		return false, ""
+	}
+	kind, _ = jsonsplice.StringField(body, span, "type")
+	return true, kind
+}
+
 // fresh reports a conversation without a model turn yet (a Responses chain
-// continuing a stored response is not one).
+// continuing a stored response or an Anthropic message-thread continuation is
+// not one).
 func (w effortWire) fresh(body []byte) bool {
 	root, _, items, _ := w.spans(body)
 	if w.responses {
 		if span, ok := jsonsplice.Field(body, root, "previous_response_id"); ok && string(body[span.Start:span.End]) != "null" {
 			return false
 		}
+	} else if _, kind := anthropicThreadType(body); kind == "continue" {
+		return false
 	}
 	for _, item := range items {
 		if w.modelTurn(body, item) {
@@ -797,6 +820,13 @@ func (s *Server) applyEffort(run *routeRun, provider, endpoint, model string, bo
 	case strings.HasSuffix(endpoint, "/responses"):
 		run.wire = responsesWire
 	case provider == "anthropic":
+		// Anthropic message-threads enforces a fingerprint across create and
+		// continue (model, thinking, output_config, tool_choice, betas). Leaving
+		// effort, marks, drop_block, and per-message beta untouched avoids
+		// thread_fingerprint_mismatch across turns.
+		if present, _ := anthropicThreadType(body); present {
+			return body
+		}
 		run.wire = messagesWire
 	default:
 		return body

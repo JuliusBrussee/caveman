@@ -652,13 +652,21 @@ func (b Base) SanitizeAndMapHeaders(ctx context.Context, req *http.Request, cred
 	switch b.Provider {
 	case "anthropic":
 		if credential.Key != "" {
-			if credential.Scheme == "bearer" {
+			switch credential.Scheme {
+			case "bearer":
 				// Scheme-preserving pass-through: the agent authenticated with
 				// `Authorization: Bearer` (Claude Pro/Max OAuth or an
 				// ANTHROPIC_AUTH_TOKEN setup) — forward it the way it arrived;
 				// OAuth tokens are rejected when remapped to x-api-key.
 				out.Set("authorization", "Bearer "+credential.Key)
-			} else {
+			case "bearer_and_api_key":
+				// Custom (non-first-party) Anthropic gateway where the caller
+				// sent the same key in both x-api-key and Authorization: Bearer
+				// (e.g. Pi authHeader: true, #1286). Preserving both lets
+				// bearer-only and x-api-key gateways both accept the request.
+				out.Set("x-api-key", credential.Key)
+				out.Set("authorization", "Bearer "+credential.Key)
+			default:
 				out.Set("x-api-key", credential.Key)
 			}
 		}

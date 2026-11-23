@@ -726,6 +726,8 @@ func TestChatGPTAgentNamesCodexByItsOwnHeaders(t *testing.T) {
 		want   string
 	}{
 		{http.Header{"X-Cave-Agent": {"pi"}, "Originator": {"codex_cli_rs"}}, "pi"},
+		{http.Header{"Originator": {"codex_cli_rs"}, "User-Agent": {"codex_cli_rs/0.0.0 (Hermes Agent)"}}, "hermes"},
+		{http.Header{"Originator": {"hermes-agent"}, "User-Agent": {"HermesAgent/0.23.3"}}, "hermes"},
 		{http.Header{"Originator": {"codex_exec"}}, "codex"},
 		{http.Header{"User-Agent": {"codex_vscode/0.160.1"}}, "codex"},
 		{http.Header{"User-Agent": {"curl/8"}}, "unlabeled-agent"},

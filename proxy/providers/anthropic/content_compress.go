@@ -25,6 +25,12 @@ func (a Adapter) FrozenPrefixComponents(body []byte, meta providers.RequestMetad
 	if !ok {
 		return nil, false
 	}
+	// Anthropic message-threads continuation sends only delta messages (omitting
+	// system, tools, and prior messages stored server-side). Hashing that partial
+	// body would fabricate a false prefix identity and raw-pin anchor.
+	if isAnthropicThreadContinue(body, root) {
+		return nil, false
+	}
 	messagesValue, ok := findObjectField(body, root, "messages")
 	if !ok || messagesValue.start >= len(body) || body[messagesValue.start] != '[' {
 		return nil, false
@@ -70,6 +76,9 @@ func CachedPrefixComponents(body []byte) (components [][]byte, cached int, ok bo
 	if !ok {
 		return nil, 0, false
 	}
+	if isAnthropicThreadContinue(body, root) {
+		return nil, 0, false
+	}
 	messagesValue, ok := findObjectField(body, root, "messages")
 	if !ok || messagesValue.start >= len(body) || body[messagesValue.start] != '[' {
 		return nil, 0, false
@@ -111,6 +120,15 @@ func (a Adapter) CachedPrefixComponents(body []byte, meta providers.RequestMetad
 	return CachedPrefixComponents(body)
 }
 
+func isAnthropicThreadContinue(body []byte, root jsonSpan) bool {
+	threadSpan, ok := findObjectField(body, root, "thread")
+	if !ok || threadSpan.start >= threadSpan.end || body[threadSpan.start] != '{' {
+		return false
+	}
+	typ, ok := objectStringField(body, threadSpan, "type")
+	return ok && typ == "continue"
+}
+
 func frozenField(name string, value []byte) []byte {
 	var length [8]byte
 	binary.BigEndian.PutUint32(length[:4], uint32(len(name)))
@@ -139,7 +157,11 @@ func (a Adapter) ExtractCompressible(body []byte, meta providers.RequestMetadata
 	var candidates []spliceCandidate
 	for i, span := range messageSpans {
 		if live[i] {
-			candidates = append(candidates, collectAnthropicCandidates(body, span, recovered)...)
+			for _, c := range collectAnthropicCandidates(body, span, recovered) {
+				if newCompressionEligible(c.original) {
+					candidates = append(candidates, c)
+				}
+			}
 		}
 	}
 	if len(candidates) == 0 {
@@ -169,6 +191,8 @@ func (a Adapter) ExtractCompressible(body []byte, meta providers.RequestMetadata
 // stored replacement and the prefix stays byte-stable for the whole conversation.
 // Assistant blocks are never collected: the proxy never compresses them, so a
 // substitution could never exist for them.
+// Small tool JSON remains replayable when TOON is disabled, but is not Live:
+// changing the flag must suppress new compression without withdrawing old bytes.
 func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata) ([]providers.RewritableBlock, func([][]byte) ([]byte, error), bool) {
 	messageSpans, live, ok := messageZones(body, meta)
 	if !ok {
@@ -189,7 +213,7 @@ func (a Adapter) ExtractStabilizable(body []byte, meta providers.RequestMetadata
 			candidates = append(candidates, c)
 			blocks = append(blocks, providers.RewritableBlock{
 				Content: append([]byte(nil), c.original...),
-				Live:    live[i],
+				Live:    live[i] && newCompressionEligible(c.original),
 				Kind:    c.kind,
 			})
 		}
@@ -377,10 +401,13 @@ func collectStringCandidate(
 	*out = append(*out, spliceCandidate{jsonSpan: span, original: original, kind: kind})
 }
 
+// Discovery must survive configuration changes: a small tool JSON block may
+// already have a durable replacement that the provider cached on an earlier run.
 func forcedTOONCandidate(original []byte) bool {
-	if !strings.EqualFold(os.Getenv("CAVE_ENGINE_TOON"), "best-of") {
-		return false
-	}
 	trimmed := bytes.TrimSpace(original)
 	return len(trimmed) > 0 && (trimmed[0] == '{' || trimmed[0] == '[')
+}
+
+func newCompressionEligible(original []byte) bool {
+	return len(original) >= minCompressBlockBytes || strings.EqualFold(os.Getenv("CAVE_ENGINE_TOON"), "best-of")
 }

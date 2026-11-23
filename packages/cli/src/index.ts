@@ -1787,7 +1787,7 @@ async function spawnBrowse(bin: string, browserArgs: string[]) {
 
 function signalExitCode(signal: NodeJS.Signals | null): number {
   if (!signal) return 1;
-  const signals: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15 };
+  const signals: Partial<Record<NodeJS.Signals, number>> = { SIGHUP: 1, SIGINT: 2, SIGQUIT: 3, SIGTERM: 15, SIGBREAK: 21 };
   return 128 + (signals[signal] ?? 1);
 }
 
@@ -2771,15 +2771,40 @@ async function start(argv: string[] = []) {
     process.stderr.write(dim(`→ ${SUBSCRIPTION_NO_RECOVERY_NOTE}\n`));
   }
 
-  const child = spawn(resolved, [], { stdio: "inherit", env });
+  // The HTTP service does not read the terminal. Give it a separate POSIX
+  // process group so a terminal broadcast reaches only this launcher and every
+  // signal can be forwarded exactly once, even when sent directly to a TTY-bound
+  // launcher PID. Keep the child referenced: start still waits for its drain.
+  // Windows keeps its shared console so native Ctrl+C delivery remains intact.
+  const child = spawn(resolved, [], { stdio: "inherit", env, detached: process.platform !== "win32" });
+  const signalHandlers = new Map<NodeJS.Signals, () => void>();
+  const removeSignalHandlers = () => {
+    for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+  };
+  const stopSignals = process.platform === "win32" ? ["SIGHUP", "SIGINT", "SIGBREAK"] : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+  for (const signal of stopSignals as NodeJS.Signals[]) {
+    const handler = () => {
+      // Windows console events reach both attached processes even with piped
+      // stdin. Node's kill(SIGINT) is TerminateProcess, not graceful forwarding;
+      // SIGHUP/SIGBREAK cannot be forwarded with kill at all. Wait for the child.
+      if (process.platform === "win32") return;
+      child.kill(signal);
+    };
+    signalHandlers.set(signal, handler);
+    process.on(signal, handler);
+  }
   // This handler hard-exits with the child's code and never returns to main(),
   // so the run event goes out now (same pattern as wrap's pre-exec emit).
   emitCommandRunOnce("ok");
   child.on("error", (error) => {
+    removeSignalHandlers();
     console.error(`failed to launch ${bin}: ${error.message} (set CAVEMAN_PROXY_BIN or build the proxy)`);
     process.exit(1);
   });
-  child.on("exit", (code) => process.exit(code ?? 0));
+  child.on("exit", (code, signal) => {
+    removeSignalHandlers();
+    process.exit(code ?? signalExitCode(signal));
+  });
 }
 
 // startMissingProxyUI is the cohesive fallback when `caveman start` can't find a
@@ -4047,6 +4072,11 @@ function isEphemeralPath(path: string): boolean {
   return EPHEMERAL_PATH.test(path.replace(/\\/g, "/"));
 }
 
+// fnm puts a per-shell link to the active node version on PATH; the link is a
+// temp path that vanishes with its shell (and on reboot). The dir it links to
+// lasts as long as that node version is installed.
+const FNM_MULTISHELL = /[\\/]fnm_multishells[\\/]/i;
+
 function cliIsEphemeral(): boolean {
   return isEphemeralPath(fileURLToPath(import.meta.url));
 }
@@ -4067,8 +4097,12 @@ function durableCavemen(withPrivate = true): string[] {
   const found: string[] = [];
   for (const dir of [...(process.env.PATH ?? "").split(delimiter), ...(withPrivate ? [privateCliBin()] : [])]) {
     if (!dir || isEphemeralPath(dir)) continue;
+    let stableDir = dir;
+    if (FNM_MULTISHELL.test(dir)) {
+      try { stableDir = realpathSync(dir); } catch { continue; }
+    }
     for (const candidate of executableCandidateNames("caveman")) {
-      const full = join(dir, candidate);
+      const full = join(stableDir, candidate);
       if (!isExecutable(full) || found.includes(full)) continue;
       try { if (isEphemeralPath(realpathSync(full))) continue; } catch { continue; }
       found.push(full);
@@ -4394,7 +4428,8 @@ export function syncAutoEntries(): void {
               }
               if (Object.keys(env).length > 0) root.env = env; else delete root.env;
             } else {
-              const providers = objectValue(root.provider);
+              const providersKey = owned.config_schema === "v2" ? "providers" : "provider";
+              const providers = objectValue(root[providersKey]);
               const ours = Array.isArray(owned.auto_models) ? owned.auto_models.filter((id): id is string => typeof id === "string") : [];
               const next: string[] = [];
               for (const id of ["openai", "anthropic"] as const) {
@@ -6647,24 +6682,47 @@ async function agentShortcut(rest: string[]) {
     // the shared foreground group — forwarding would double-deliver them. But
     // process-directed SIGTERM/SIGHUP (timeout(1), supervisors, pkill) only hit
     // this launcher, so those must be forwarded. Either way the launcher
-    // re-raises on itself after the child exits so callers see a signal death,
-    // not a clean exit.
+    // re-raises on POSIX after the child exits so callers see a signal death,
+    // not a clean exit. Windows reports the corresponding nonzero exit code.
     let fatal: NodeJS.Signals | undefined;
-    for (const signal of ["SIGINT", "SIGQUIT"] as NodeJS.Signals[]) {
-      process.on(signal, () => { fatal = signal; /* the tty delivered it to the child already */ });
-    }
-    for (const signal of ["SIGHUP", "SIGTERM"] as NodeJS.Signals[]) {
-      process.on(signal, () => {
+    let grace: ReturnType<typeof setTimeout> | undefined;
+    const signalHandlers = new Map<NodeJS.Signals, () => void>();
+    const removeSignalHandlers = () => {
+      if (grace) clearTimeout(grace);
+      for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
+    };
+    const stopSignals = process.platform === "win32" ? ["SIGHUP", "SIGINT", "SIGBREAK"] : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"];
+    for (const signal of stopSignals as NodeJS.Signals[]) {
+      const handler = () => {
         fatal = signal;
+        // Windows broadcasts console events regardless of redirected stdin.
+        // Forwarding with kill would force-terminate the shared-console child.
+        if (process.platform === "win32") return;
+        // POSIX supervisors can send SIGINT/SIGQUIT directly to a non-interactive
+        // launcher PID; leaving those unforwarded would strand the agent.
+        if (process.stdin.isTTY && (signal === "SIGINT" || signal === "SIGQUIT")) return;
+        if (grace) {
+          child.kill("SIGKILL");
+          return;
+        }
         child.kill(signal);
-        const grace = setTimeout(() => child.kill("SIGKILL"), 10_000);
+        grace = setTimeout(() => child.kill("SIGKILL"), 10_000);
         grace.unref();
-      });
+      };
+      signalHandlers.set(signal, handler);
+      process.on(signal, handler);
     }
-    child.on("error", (error) => reject(new Error(`failed to exec ${bin}: ${error.message}`)));
+    child.on("error", (error) => {
+      removeSignalHandlers();
+      reject(new Error(`failed to exec ${bin}: ${error.message}`));
+    });
     child.on("exit", (exitCode, signal) => {
+      removeSignalHandlers();
       if (fatal) {
-        process.removeAllListeners(fatal);
+        if (process.platform === "win32") {
+          resolve(signalExitCode(fatal));
+          return;
+        }
         process.kill(process.pid, fatal);
         return;
       }
@@ -6703,6 +6761,40 @@ async function runWrapped(bin: string, cmdArgs: string[], agent?: AgentProfile, 
   }
   if (events.length > 0) await emitTelemetryEvents(events);
   process.exit(result.code);
+}
+
+const OPENCODE_V2_NON_STANDALONE_SUBCOMMANDS = new Set([
+  "upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp",
+  "plugin", "models", "stats", "session", "service", "reload", "pair", "serve",
+]);
+
+// OpenCode 2.x connects to a persistent background server (`opencode service`)
+// by default, which ignores this wrapped process's OPENCODE_CONFIG_CONTENT and
+// env vars unless `--standalone` is passed. Only OpenCode >=2 understands
+// `--standalone`; 1.x rejects unknown flags, so the flag is added strictly when
+// the resolved binary reports major >= 2 and the caller did not already choose
+// `--standalone`, `--server`, or a non-session subcommand.
+export function routedOpenCodeArgs(bin: string, args: string[], detectedMajor?: number): string[] {
+  const major = detectedMajor ?? (() => {
+    const probe = nativeBinaryProbe(bin);
+    const semver = probe?.launchable ? parsedSemver(probe.version) : undefined;
+    return semver?.[0];
+  })();
+  if (!major || major < 2) return args;
+  for (const arg of args) {
+    if (arg === "--") break;
+    if (arg === "--standalone" || arg === "--server" || arg.startsWith("--server=") || arg === "-h" || arg === "--help" || arg === "-v" || arg === "--version") {
+      return args;
+    }
+  }
+  const first = args[0];
+  if (first === "run" || first === "mini") {
+    return [first, "--standalone", ...args.slice(1)];
+  }
+  if (first && OPENCODE_V2_NON_STANDALONE_SUBCOMMANDS.has(first)) {
+    return args;
+  }
+  return ["--standalone", ...args];
 }
 
 const AIDER_ROUTED_DEFAULT_MODEL = "openai/gpt-5.5";
@@ -7123,6 +7215,7 @@ async function spawnWrapped(
       }
     }
     if (!direct && agent?.id === "aider") childArgs = routedAiderArgs(cmdArgs);
+    if (!direct && agent?.id === "opencode") childArgs = routedOpenCodeArgs(bin, cmdArgs);
   } catch (error) {
     direct = true;
     env = { ...process.env };
@@ -7173,16 +7266,24 @@ async function spawnWrapped(
       const removeSignalHandlers = () => {
         for (const [signal, handler] of signalHandlers) process.removeListener(signal, handler);
       };
-      const wrapSignals = ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"] as NodeJS.Signals[];
+      const wrapSignals = (process.platform === "win32"
+        ? ["SIGHUP", "SIGINT", "SIGBREAK"]
+        : ["SIGHUP", "SIGINT", "SIGQUIT", "SIGTERM"]) as NodeJS.Signals[];
       for (const signal of wrapSignals) {
         const handler = () => {
-          // Forward the signal but defer cleanup and self-termination until the
-          // child exits: deleting the wrap temp pack before the agent shuts down
+          // Defer cleanup and self-termination until the child exits:
+          // deleting the wrap temp pack before the agent shuts down
           // races its SessionEnd hooks, which still read the plugin directory.
           removeSignalHandlers();
           const finish = () => {
             cleanupWrapTempDirs();
             removeProxySessionMarker(sessionMarker);
+            // Windows has no signal re-raise equivalent, and kill(SIGHUP or
+            // SIGBREAK) is unsupported. Preserve failure status after cleanup.
+            if (process.platform === "win32") {
+              process.exit(signalExitCode(signal));
+              return;
+            }
             process.kill(process.pid, signal);
           };
           // Escape hatch: a second signal, or a child that traps the first one,
@@ -7198,7 +7299,12 @@ async function spawnWrapped(
             signalHandlers.set(s, escape);
             process.once(s, escape);
           }
-          child.kill(signal);
+          // Windows console events already reach the attached child, including
+          // with redirected stdin. Node's kill(SIGINT) would force-terminate it.
+          // POSIX terminal interrupts also reach the shared foreground group;
+          // forwarding those again can abort the child's graceful cleanup.
+          const terminalBroadcast = process.stdin.isTTY && (signal === "SIGINT" || signal === "SIGQUIT");
+          if (process.platform !== "win32" && !terminalBroadcast) child.kill(signal);
           const grace = setTimeout(escape, 10_000);
           grace.unref();
           child.once("exit", () => {
@@ -8132,7 +8238,7 @@ export function nativeHookInvocation(
 // per-shell temp paths that vanish with the shell, so never those.
 function stableNodePath(): string {
   const onPath = which("node");
-  return onPath && !/[\\/]fnm_multishells[\\/]/i.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
+  return onPath && !FNM_MULTISHELL.test(onPath) && samePath(onPath, process.execPath) ? onPath : process.execPath;
 }
 
 export function hookExecutableInvocation(
@@ -9086,6 +9192,21 @@ function codexOwnEndpoint(text: string, configPath: string): OwnEndpointSource |
   return endpoint ? { key: "OPENAI_BASE_URL", endpoint, routed: provider === "caveman" } : null;
 }
 
+function opencodeConfigUsesV2Providers(root: Record<string, unknown>): boolean {
+  return root.providers !== undefined && isPlainObject(root.providers);
+}
+
+function opencodeProviderBaseUrl(root: Record<string, unknown>, providerID: string): { key: string; value: unknown } {
+  // OpenCode 2.x prefers `providers.<id>.settings.baseURL` over V1
+  // `provider.<id>.options.baseURL` when both appear in the same document.
+  const v2 = objectValue(objectValue(objectValue(root.providers)[providerID]).settings).baseURL;
+  if (v2 !== undefined) return { key: `providers.${providerID}.settings.baseURL`, value: v2 };
+  return {
+    key: `provider.${providerID}.options.baseURL`,
+    value: objectValue(objectValue(objectValue(root.provider)[providerID]).options).baseURL,
+  };
+}
+
 // OpenCode merges config.json, opencode.json and opencode.jsonc from its config
 // dir, later over earlier, over the base URL a provider SDK takes from the
 // shell. Caveman's route goes in after every one of them.
@@ -9098,7 +9219,10 @@ function opencodeOwnEndpoint(): OwnEndpointSource | null {
     const shellKey = providerID === "openai" ? "OPENAI_BASE_URL" : providerID === "anthropic" ? "ANTHROPIC_BASE_URL" : undefined;
     const own = ownEndpointIn([
       ...(shellKey ? [{ key: shellKey, value: process.env[shellKey] }] : []),
-      ...roots.map(({ file, root }) => ({ key: `provider.${providerID}.options.baseURL`, value: objectValue(objectValue(objectValue(root.provider)[providerID]).options).baseURL, file })),
+      ...roots.map(({ file, root }) => {
+        const entry = opencodeProviderBaseUrl(root, providerID);
+        return { key: entry.key, value: entry.value, file };
+      }),
     ]);
     if (own) return own;
   }
@@ -9423,8 +9547,8 @@ function opencodeNativePluginPath(): string {
 // first-found probe, the gate read major 1, and OpenCode 2 refused the V1 hook
 // map outright: PluginModule.LoadError, missing "default" (#1316).
 //
-// Empty means no installed binary named a readable version — evidence of
-// neither major, not of absence.
+// Empty means some installed binary has an unreadable version (or none are
+// installed). A readable sibling cannot prove which API that unknown host uses.
 function opencodePluginMajors(): number[] {
   const profile = AGENTS.find((agent) => agent.id === "opencode");
   if (!profile) return [];
@@ -9433,6 +9557,7 @@ function opencodePluginMajors(): number[] {
     const probe = nativeBinaryProbe(name);
     // A failed probe's text is its error output, not a version.
     const semver = probe?.launchable ? parsedSemver(probe.version) : undefined;
+    if (probe && !semver) return [];
     if (semver) majors.add(semver[0]!);
   }
   return [...majors].sort((a, b) => a - b);
@@ -9445,10 +9570,11 @@ function opencodeNativePluginSource(): string {
   //
   // An unreadable version (#1081: a live 1.18.31 host; a slow `--version` on a
   // loaded machine) is evidence of neither major, so it gets the one file both
-  // load: V1's hook map behind a default { server } for OpenCode 1.4+, and the
+  // load: V1's hook map behind a default { server } for OpenCode 1.18.29+, and the
   // V2 { id, setup } beside it. 1.x also calls setup, with a context that has
   // no session or event API, so setup returns there. Checked against real
-  // OpenCode 1.18.35 and 2.0.22; 1.0-1.3 call every export and cannot load it.
+  // OpenCode 1.18.35 and 2.0.22. The official migrate-v1 guide documents dual
+  // entrypoints from 1.18.29; older V1 compatibility is not established here.
   //
   // Two installed majors take that same file, for the same reason: they share
   // this one plugins directory, so a file pinned to either API is one the other
@@ -9475,16 +9601,12 @@ import { createHash } from "node:crypto";
 
 const command = ${JSON.stringify(cmd)};
 const prefix = ${JSON.stringify(pre)};
-const contexts = new Map();
-const pending = new Map();
 
 // A host process can serve a project that is not its own launch directory, so
 // the served project travels with every call: in the payload, which
 // nativeRuntimeRequest reads as the session cwd, and as the child's working
 // directory, so anything it resolves relatively resolves there (#1443).
-let projectDir;
-
-function call(event, payload = {}, cwd = projectDir) {
+function call(event, payload = {}, cwd) {
   try {
     const raw = execFileSync(command, [...prefix, "native-hook", "opencode", event], {
       input: JSON.stringify({ event_name: event, ...(cwd ? { cwd } : {}), ...payload }),
@@ -9552,10 +9674,19 @@ function taskContinuation(value) {
   return /^(?:please\\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\\??|how\\??)[.!?\\s]*$/.test(prompt);
 }
 
+// OpenCode creates one factory per served project. Keep its callbacks and
+// session state together so creating or disposing another project is isolated.
+export const CavemanNative = async (ctx) => {
+const contexts = new Map();
+const projectDir = typeof ctx?.directory === "string" && ctx.directory
+  ? ctx.directory
+  : undefined;
+const emit = (event, payload = {}) => call(event, payload, projectDir);
+
 function sessionContext(sessionID) {
   if (!sessionID) return undefined;
   if (!contexts.has(sessionID)) {
-    const out = call("SessionStart", { session_id: sessionID, surface: "cli" });
+    const out = emit("SessionStart", { session_id: sessionID, surface: "cli" });
     const context = out?.hookSpecificOutput?.additionalContext;
     if (typeof context === "string" && context) contexts.set(sessionID, context);
   }
@@ -9568,20 +9699,20 @@ const hostHooks = {
     const props = event?.properties ?? {};
     const sessionID = props.sessionID ?? props.info?.id;
     if (type === "session.created") sessionContext(sessionID);
-    if (type === "session.idle") call("Stop", { session_id: sessionID });
+    if (type === "session.idle") emit("Stop", { session_id: sessionID });
     if (type === "session.compacted") {
-      const out = call("PostCompact", { session_id: sessionID });
+      const out = emit("PostCompact", { session_id: sessionID });
       const context = out?.hookSpecificOutput?.additionalContext;
       if (typeof context === "string" && context) contexts.set(sessionID, context);
     }
     if (type === "session.deleted") {
-      call("SessionEnd", { session_id: sessionID });
+      emit("SessionEnd", { session_id: sessionID });
       contexts.delete(sessionID);
-      pending.delete(sessionID);
     }
   },
   "chat.message": async (input, output) => {
-    const decision = call("UserPromptSubmit", {
+    if (output?.parts?.some((part) => part.synthetic && part.metadata?.cavemanPromptContext)) return;
+    const decision = emit("UserPromptSubmit", {
       session_id: input.sessionID,
       model: input.model?.modelID,
       provider: input.model?.providerID,
@@ -9591,26 +9722,40 @@ const hostHooks = {
       task_continuation: taskContinuation(output?.parts),
     });
     const dynamic = decision?.hookSpecificOutput?.additionalContext;
-    if (typeof dynamic === "string" && dynamic) pending.set(input.sessionID, dynamic);
+    // OpenCode saves chat.message parts after this hook. Keep per-turn
+    // guidance with that durable user message: adding/removing it in system
+    // context invalidates the provider's entire cached conversation prefix.
+    // https://github.com/anomalyco/opencode/blob/v1.3.7/packages/opencode/src/session/prompt.ts
+    // The host assigns output.message.id before invoking chat.message.
+    const messageID = output?.message?.id ?? input.messageID;
+    if (typeof dynamic === "string" && dynamic && typeof messageID === "string" &&
+        messageID && Array.isArray(output?.parts)) {
+      // IDs are prefix-validated strings and parts replay in ID order.
+      // Extending the greatest admitted ID preserves ordering and its host
+      // timestamp without depending on a new allocation or the wall clock.
+      const lastID = output.parts.map((part) => part.id)
+        .filter((id) => typeof id === "string" && id.startsWith("prt")).sort().at(-1);
+      const id = (lastID ?? messageID.replace(/^msg/, "prt")) + "_caveman";
+      output.parts.push({
+        id, sessionID: input.sessionID, messageID, type: "text", synthetic: true,
+        metadata: { cavemanPromptContext: true },
+        text: "<system-reminder>\\n" + dynamic + "\\n</system-reminder>",
+      });
+    }
   },
   "experimental.chat.system.transform": async (input, output) => {
     const stable = sessionContext(input.sessionID);
     if (stable) output.system.push(stable);
-    const hint = pending.get(input.sessionID);
-    if (hint) {
-      output.system.push(hint);
-      pending.delete(input.sessionID);
-    }
   },
   "tool.execute.before": async (input, output) => {
-    const decision = call("PreToolUse", {
+    // Advisory reuse hints have no durable failed-tool hook in V1. Skip
+    // that guidance, including from older runtimes, to keep system stable.
+    // Runtime still records this event and explains the cache-safety skip.
+    emit("PreToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: output.args,
     });
-    if (typeof decision?.hookSpecificOutput?.additionalContext === "string") {
-      pending.set(input.sessionID, decision.hookSpecificOutput.additionalContext);
-    }
     if (input.tool !== "bash" || typeof output?.args?.command !== "string") return;
     try {
       const raw = execFileSync(command, [...prefix, "shrink-hook"], {
@@ -9625,7 +9770,7 @@ const hostHooks = {
     } catch {}
   },
   "tool.execute.after": async (input, output) => {
-    const decision = call("PostToolUse", {
+    const decision = emit("PostToolUse", {
       session_id: input.sessionID,
       tool_name: input.tool,
       tool_input: input.args,
@@ -9638,22 +9783,16 @@ const hostHooks = {
     }
   },
   "experimental.session.compacting": async (input, output) => {
-    call("PreCompact", { session_id: input.sessionID });
+    emit("PreCompact", { session_id: input.sessionID });
     const stable = sessionContext(input.sessionID);
     if (stable) output.context.push(stable);
   },
   dispose: async () => {
-    for (const sessionID of contexts.keys()) call("SessionEnd", { session_id: sessionID });
+    for (const sessionID of contexts.keys()) emit("SessionEnd", { session_id: sessionID });
     contexts.clear();
-    pending.clear();
   },
 };
 
-// OpenCode's V1 plugin context names the served project \`directory\`. A host
-// that supplies none (or a caller that supplies no context at all) leaves
-// projectDir unset and every child inherits this process's cwd, as before.
-export const CavemanNative = async (ctx) => {
-  if (typeof ctx?.directory === "string" && ctx.directory) projectDir = ctx.directory;
   return hostHooks;
 };
 `;
@@ -9752,7 +9891,17 @@ export default {
     // project directory is per-instance for the same reason, so it is passed
     // to each child explicitly rather than parked in module scope (#1443).
     const contexts = new Map();
-    const pending = new Map();
+    // Which source this host uses to report a completed-model turn boundary.
+    // V2 has no "session.idle" bus event at all — its session-event schema
+    // names 54 session events and none of them is idle — so a V2 host speaks
+    // only through the "experimental.idle" session hook below (#1539). The bus
+    // branch is kept for any 2.x host that does publish one, but the hook is
+    // authoritative: the host triggers it at the point the session WOULD go
+    // idle, before the drain completes, so it always reaches us first for a
+    // given boundary. Once it has spoken, the bus branch stays quiet rather
+    // than counting the same turn twice; double counting inflates the
+    // accounting silently, which is worse than missing a boundary.
+    let idleHookSpoke = false;
     const projectCwd = typeof ctx.location?.directory === "string" && ctx.location.directory
       ? ctx.location.directory
       : undefined;
@@ -9795,7 +9944,7 @@ export default {
       const sessionID = event.data?.sessionID;
       if (typeof sessionID !== "string" || !sessionID) return;
       if (type === "session.created") sessionContext(sessionID);
-      if (type === "session.idle") emit("Stop", { session_id: sessionID });
+      if (type === "session.idle" && !idleHookSpoke) emit("Stop", { session_id: sessionID });
       // "session.compacted" is the V1 event name; V2 reports compaction
       // through "session.compaction.ended". Handle both.
       if (type === "session.compaction.ended" || type === "session.compacted") {
@@ -9806,11 +9955,11 @@ export default {
       if (type === "session.deleted") {
         emit("SessionEnd", { session_id: sessionID });
         contexts.delete(sessionID);
-        pending.delete(sessionID);
       }
     }
 
     await ctx.session.hook("prompt", (event) => {
+      if (event.metadata?.cavemanPromptContext) return;
       const prompt = event.prompt ?? {};
       const decision = emit("UserPromptSubmit", {
         session_id: event.sessionID,
@@ -9820,17 +9969,30 @@ export default {
         task_continuation: taskContinuation(prompt),
       });
       const dynamic = decision?.hookSpecificOutput?.additionalContext;
-      if (typeof dynamic === "string" && dynamic) pending.set(event.sessionID, dynamic);
+      // The V2 prompt hook runs before durable admission. Append here so
+      // later requests replay identical history even after a plugin reload.
+      // https://opencode.ai/v2/docs/build/plugins/migrate-v1
+      if (typeof dynamic === "string" && dynamic && typeof prompt.text === "string") {
+        const hint = "\\n\\n<system-reminder>\\n" + dynamic + "\\n</system-reminder>";
+        if (!prompt.text.endsWith(hint)) prompt.text += hint;
+        event.metadata = { ...event.metadata, cavemanPromptContext: true };
+      }
+    });
+
+    // The host skips this hook for control-only drains such as a manual
+    // compaction, which never ran the model, so every call is a real
+    // completed-model boundary — including the later continuation turns that
+    // follow when a plugin admits input and the drain loop keeps going.
+    await ctx.session.hook("experimental.idle", (event) => {
+      if (typeof event?.sessionID === "string" && event.sessionID) {
+        idleHookSpoke = true;
+        emit("Stop", { session_id: event.sessionID });
+      }
     });
 
     await ctx.session.hook("context", (event) => {
       const stable = sessionContext(event.sessionID);
       if (stable) event.system.push({ type: "text", text: stable });
-      const hint = pending.get(event.sessionID);
-      if (hint) {
-        event.system.push({ type: "text", text: hint });
-        pending.delete(event.sessionID);
-      }
     });
 
     await ctx.session.hook("compaction", (event) => {
@@ -9840,14 +10002,13 @@ export default {
     });
 
     await ctx.tool.hook("execute.before", (event) => {
-      const decision = emit("PreToolUse", {
+      // Match the V1 cache-safe contract: record the event, but never insert
+      // transient reuse guidance into the provider's cached system prefix.
+      emit("PreToolUse", {
         session_id: event.sessionID,
         tool_name: event.tool,
         tool_input: event.input,
       });
-      if (typeof decision?.hookSpecificOutput?.additionalContext === "string") {
-        pending.set(event.sessionID, decision.hookSpecificOutput.additionalContext);
-      }
       // V1 named this tool "bash"; V2 renamed the permission action to
       // "shell". Accept both so the rewrite survives either host.
       const input = event.input;
@@ -9885,7 +10046,6 @@ export default {
       controller.abort();
       for (const sessionID of contexts.keys()) emit("SessionEnd", { session_id: sessionID });
       contexts.clear();
-      pending.clear();
     };
   },
 };
@@ -9978,7 +10138,7 @@ function opencodeUnroutedActiveProvider(
     // endpoint in one is never shadowed by a missing mount named in another.
     let missing: string | null = null;
     for (const config of configs) {
-      const routing = opencodeBaseUrlRouting(objectValue(objectValue(objectValue(config.provider)[provider]).options).baseURL, gw);
+      const routing = opencodeBaseUrlRouting(opencodeProviderBaseUrl(config, provider).value, gw);
       if (routing?.routed === true) return null;
       if (routing?.routed === false) missing ??= routing.mount;
     }
@@ -10008,10 +10168,20 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
   if (root.provider !== undefined && (typeof root.provider !== "object" || root.provider === null || Array.isArray(root.provider))) {
     throw new Error(`${configPath} provider must be a JSON object; refusing to overwrite it`);
   }
+  if (root.providers !== undefined && (typeof root.providers !== "object" || root.providers === null || Array.isArray(root.providers))) {
+    throw new Error(`${configPath} providers must be a JSON object; refusing to overwrite it`);
+  }
   if (root.mcp !== undefined && (typeof root.mcp !== "object" || root.mcp === null || Array.isArray(root.mcp))) {
     throw new Error(`${configPath} mcp must be a JSON object; refusing to overwrite it`);
   }
-  const providers = root.provider && typeof root.provider === "object" && !Array.isArray(root.provider) ? root.provider as Record<string, unknown> : {};
+  // OpenCode 2.x ignores V1 `provider` entries in the same document when V2
+  // `providers` is already present. Preserve V1 when `providers` is absent (so
+  // 1.x and dual-major hosts continue to read it), and write into V2
+  // `providers.<id>.settings.baseURL` when the file already uses V2.
+  const useV2Providers = opencodeConfigUsesV2Providers(root);
+  const providersKey = useV2Providers ? "providers" : "provider";
+  const settingsKey = useV2Providers ? "settings" : "options";
+  const providers = root[providersKey] && typeof root[providersKey] === "object" && !Array.isArray(root[providersKey]) ? root[providersKey] as Record<string, unknown> : {};
   const previousRoutes: Record<string, unknown> = {};
   const autoModels: string[] = [];
   const routes = opencodeNativeRoutes(gw);
@@ -10019,12 +10189,12 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
   if (own) refuseOwnEndpoint("opencode", own.key, own.endpoint, own.file);
   for (const [providerID, route] of Object.entries(routes)) {
     const provider = providers[providerID] && typeof providers[providerID] === "object" && !Array.isArray(providers[providerID]) ? providers[providerID] as Record<string, unknown> : {};
-    const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options) ? provider.options as Record<string, unknown> : {};
-    previousRoutes[providerID] = options.baseURL ?? null;
-    options.baseURL = route;
-    provider.options = options;
+    const settings = provider[settingsKey] && typeof provider[settingsKey] === "object" && !Array.isArray(provider[settingsKey]) ? provider[settingsKey] as Record<string, unknown> : {};
+    previousRoutes[providerID] = settings.baseURL ?? null;
+    settings.baseURL = route;
+    provider[settingsKey] = settings;
     if (provider.models !== undefined && !isPlainObject(provider.models)) {
-      throw new Error(`${configPath} provider.${providerID}.models must be a JSON object; refusing to overwrite it`);
+      throw new Error(`${configPath} ${providersKey}.${providerID}.models must be a JSON object; refusing to overwrite it`);
     }
     if ((providerID === "openai" || providerID === "anthropic") && wrapMode(gw) === "local" && autoModelOffered(providerID) && (provider.models as Record<string, unknown> | undefined)?.[AUTO_MODEL] === undefined) {
       provider.models = { ...(provider.models as Record<string, unknown> | undefined), [AUTO_MODEL]: opencodeAutoModel(providerID) };
@@ -10032,11 +10202,25 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
     }
     providers[providerID] = provider;
   }
-  root.provider = providers;
+  root[providersKey] = providers;
   const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp) ? root.mcp as Record<string, unknown> : {};
-  const previousMcp = mcp.caveman;
-  const installedMcp = { type: "local", command: [mcpBinary], enabled: true };
-  mcp.caveman = installedMcp;
+  if (mcp.servers !== undefined && !isPlainObject(mcp.servers)) {
+    throw new Error(`${configPath} mcp.servers must be a JSON object; refusing to overwrite it`);
+  }
+  const useV2Mcp = isPlainObject(mcp.servers);
+  let previousMcp: unknown;
+  let installedMcp: Record<string, unknown>;
+  if (useV2Mcp) {
+    const servers = mcp.servers as Record<string, unknown>;
+    previousMcp = servers.caveman;
+    installedMcp = { type: "local", command: [mcpBinary], disabled: false };
+    servers.caveman = installedMcp;
+    mcp.servers = servers;
+  } else {
+    previousMcp = mcp.caveman;
+    installedMcp = { type: "local", command: [mcpBinary], enabled: true };
+    mcp.caveman = installedMcp;
+  }
   root.mcp = mcp;
 
   const pluginPath = opencodeNativePluginPath();
@@ -10050,7 +10234,15 @@ function opencodeNativeMutations(gw: string, mcpBinary: string, plan = false): N
       before,
       after: jsonBytes(root, before),
       kind: "opencode-config",
-      owned: { routes, previous_routes: previousRoutes, installed_mcp: installedMcp, previous_mcp: previousMcp ?? null, auto_models: autoModels },
+      owned: {
+        routes,
+        previous_routes: previousRoutes,
+        installed_mcp: installedMcp,
+        previous_mcp: previousMcp ?? null,
+        auto_models: autoModels,
+        ...(useV2Providers ? { config_schema: "v2" } : {}),
+        ...(useV2Mcp ? { mcp_schema: "v2" } : {}),
+      },
     },
     {
       file: pluginPath,
@@ -10496,6 +10688,23 @@ def _task_continuation(value):
     return re.match(r"^(?:please\s+)?(?:continue|go ahead|keep going|proceed|do (?:it|that)|fix (?:it|that)|retry|try again|explain (?:it|that)|what do you mean|yes|yep|yeah|why\??|how\??)[.!?\s]*$", prompt) is not None
 
 
+_EVENT_TIMEOUTS = {
+    "SessionStart": 10,
+    "UserPromptSubmit": 8,
+    "PostCompact": 8,
+}
+_SESSION_STABLE = {}
+_SESSION_INITIALIZED = set()
+
+
+def _remember_stable(session_id, context):
+    if len(_SESSION_STABLE) >= 128 and session_id not in _SESSION_STABLE:
+        oldest = next(iter(_SESSION_STABLE))
+        _SESSION_STABLE.pop(oldest, None)
+        _SESSION_INITIALIZED.discard(oldest)
+    _SESSION_STABLE[session_id] = context
+
+
 def _call(event, payload=None):
     try:
         body = {"event_name": event}
@@ -10506,7 +10715,7 @@ def _call(event, payload=None):
             input=json.dumps(body, ensure_ascii=False),
             text=True,
             capture_output=True,
-            timeout=1,
+            timeout=_EVENT_TIMEOUTS.get(event, 2),
             creationflags=_CAVEMAN_NO_WINDOW,
         )
         if proc.returncode != 0 or not proc.stdout.strip():
@@ -10518,30 +10727,51 @@ def _call(event, payload=None):
 
 
 def _on_session_start(session_id=None, model=None, platform=None, **kwargs):
-    _call("SessionStart", {"session_id": session_id, "model": model, "surface": platform})
+    out = _call("SessionStart", {"session_id": session_id, "model": model, "surface": platform})
+    context = out.get("context") if isinstance(out, dict) else None
+    if session_id and isinstance(context, str) and context:
+        _remember_stable(session_id, context)
+        _SESSION_INITIALIZED.discard(session_id)
 
 
 def _pre_llm_call(session_id=None, user_message=None, model=None, platform=None, **kwargs):
+    # Inject stable Core + signed session marker ONCE on the first turn so turn 1
+    # stays immutable in conversation history for prompt caching and every later
+    # turn correlates through that same marker without repeating Core.
+    already_initialized = bool(session_id and session_id in _SESSION_INITIALIZED)
+    if session_id and not already_initialized and session_id not in _SESSION_STABLE:
+        _on_session_start(session_id=session_id, model=model, platform=platform)
+    has_stable = bool(session_id and (already_initialized or session_id in _SESSION_STABLE))
     out = _call("UserPromptSubmit", {
         "session_id": session_id,
         "model": model,
         "surface": platform,
+        "session_initialized": has_stable,
         "prompt": _digest(user_message),
         "task_type": _task_type(user_message),
         "task_terms": _task_terms(user_message),
         "task_continuation": _task_continuation(user_message),
     })
-    context = out.get("context") if isinstance(out, dict) else None
-    return {"context": context} if isinstance(context, str) and context else None
+    dynamic = out.get("context") if isinstance(out, dict) else None
+    parts = []
+    if session_id and not already_initialized and session_id in _SESSION_STABLE:
+        parts.append(_SESSION_STABLE[session_id])
+        _SESSION_INITIALIZED.add(session_id)
+    if isinstance(dynamic, str) and dynamic:
+        parts.append(dynamic)
+        if session_id and not already_initialized:
+            _SESSION_INITIALIZED.add(session_id)
+    context = "\\n".join(parts)
+    return {"context": context} if context else None
 
 
 def _pre_tool_call(tool_name=None, args=None, task_id=None, **kwargs):
-    _call("PreToolUse", {"session_id": task_id, "tool_name": tool_name, "tool_input": _digest(args)})
+    _call("PreToolUse", {"session_id": kwargs.get("session_id") or task_id, "tool_name": tool_name, "tool_input": _digest(args)})
 
 
 def _post_tool_call(tool_name=None, args=None, result=None, task_id=None, duration_ms=None, **kwargs):
     _call("PostToolUse", {
-        "session_id": task_id,
+        "session_id": kwargs.get("session_id") or task_id,
         "tool_name": tool_name,
         "tool_input": _digest(args),
         "tool_output": _digest(result),
@@ -10550,7 +10780,7 @@ def _post_tool_call(tool_name=None, args=None, result=None, task_id=None, durati
 
 
 def _pre_verify(task_id=None, **kwargs):
-    _call("Stop", {"session_id": task_id})
+    _call("Stop", {"session_id": kwargs.get("session_id") or task_id})
 
 
 def _post_llm_call(session_id=None, model=None, **kwargs):
@@ -10558,10 +10788,16 @@ def _post_llm_call(session_id=None, model=None, **kwargs):
 
 
 def _on_session_end(session_id=None, **kwargs):
+    if session_id:
+        _SESSION_STABLE.pop(session_id, None)
+        _SESSION_INITIALIZED.discard(session_id)
     _call("SessionEnd", {"session_id": session_id})
 
 
 def _on_session_finalize(session_id=None, **kwargs):
+    if session_id:
+        _SESSION_STABLE.pop(session_id, None)
+        _SESSION_INITIALIZED.discard(session_id)
     _call("SessionEnd", {"session_id": session_id})
 
 
@@ -10617,6 +10853,9 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     if (source.includes(marker)) throw new Error("existing Hermes Caveman native block is unjournaled; run `caveman doctor hermes`");
   }
   const nativePluginMembership = hermesNamedPluginMembership(source, HERMES_NATIVE_PLUGIN_NAME);
+  if (nativePluginMembership === "unhandled") {
+    throw new Error("Hermes plugins.enabled or plugins.disabled uses unsupported YAML; refusing to modify configuration");
+  }
   if (nativePluginMembership === "disabled") {
     throw new Error(`Hermes plugin ${HERMES_NATIVE_PLUGIN_NAME} is explicitly disabled in plugins.disabled; remove that entry before enabling Caveman`);
   }
@@ -10626,15 +10865,75 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
     lines.splice(yamlBodyStart(lines), 0, "model:");
     model = topLevelSection(lines, "model")!;
   }
-  const routeIndexes: number[] = [];
-  const previousRouteLines: string[] = [];
+  // The route keys sit at whatever indent THIS document gives model:'s direct
+  // children, not a hardcoded two (#1486). A valid `model:\n    provider: x`
+  // matched nothing, so the old provider stayed put and a two-space routing
+  // block was spliced in ABOVE it; the surviving four-space line then nested
+  // under the new base_url scalar and the document stopped parsing — caveman
+  // corrupted a config it was asked to extend. The restore side already
+  // derives this width (hermesRestoreOwnedByValue); the writer was the one
+  // place that still assumed it.
+  // topLevelSection ends a block only at the next UNQUOTED top-level key, so a
+  // document-end `...`, a `---` separator, or a quoted top-level key AND ALL OF
+  // ITS CHILDREN sit inside the reported span. Measuring or scanning over that
+  // tail reads another section's layout as model's own: `"other":\n x: y` after
+  // a two-space model block measures 1, the real `  provider:` then matches
+  // nothing, and the route goes in one space deep above a line two spaces deep
+  // — the same corruption this is fixing, in a document the old hardcoded
+  // writer handled correctly. model's own children all precede the first
+  // indent-0 line, so that is the real end of the block.
+  let modelBodyEnd = model.end;
   for (let i = model.start + 1; i < model.end; i++) {
-    if (/^  (provider|base_url):/.test(lines[i]!)) {
-      routeIndexes.push(i);
-      previousRouteLines.push(lines[i]!);
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    if (line.length - line.replace(/^[ \t]*/, "").length === 0) {
+      modelBodyEnd = i;
+      break;
     }
   }
-  if (new Set(routeIndexes.map((index) => lines[index]!.match(/^  ([^:]+):/)?.[1])).size !== routeIndexes.length) {
+  // No indented line at all means the block is empty (we just created it),
+  // which takes the conventional two.
+  let measured: number | null = null;
+  for (let i = model.start + 1; i < modelBodyEnd; i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    // YAML forbids tabs as indentation, so a tab here is not a document we can
+    // measure — and emitting spaces into it would change its structure.
+    if (/^[ ]*\t/.test(line)) {
+      throw new Error("Hermes model: block is indented with tabs; refusing to rewrite it — set model.provider and model.base_url manually");
+    }
+    const width = line.length - line.replace(/^[ ]*/, "").length;
+    if (measured === null || width < measured) measured = width;
+  }
+  const modelIndent = measured ?? 2;
+  const routePad = " ".repeat(modelIndent);
+  // Quoted route keys reach the same writer, so accept them the way the restore
+  // regex does; capture group 2 is the bare key name.
+  const routeKey = new RegExp(`^[ ]{${modelIndent}}(["']?)(provider|base_url)\\1\\s*:(?=\\s|$)`);
+  const routeIndexes: number[] = [];
+  const previousRouteLines: string[] = [];
+  for (let i = model.start + 1; i < modelBodyEnd; i++) {
+    if (!routeKey.test(lines[i]!)) continue;
+    // A route value continued on later lines (block scalar, nested mapping, a
+    // flow collection spanning lines) cannot be removed by dropping its key
+    // line: the continuation would be orphaned under the replacement block.
+    // A blank line or a comment is not a continuation, whatever its indent —
+    // YAML indents comments independently of the scalar above them, so
+    // refusing on one rejected a config that rewrites perfectly well.
+    let continuation: string | undefined;
+    for (let next = i + 1; next < modelBodyEnd; next++) {
+      const line = lines[next]!;
+      if (/^\s*(?:#.*)?$/.test(line)) continue;
+      continuation = line;
+      break;
+    }
+    if (continuation !== undefined && continuation.length - continuation.replace(/^[ \t]*/, "").length > modelIndent) {
+      throw new Error("Hermes model provider/base_url carries a multiline value; refusing to rewrite it — set model.base_url manually");
+    }
+    routeIndexes.push(i);
+    previousRouteLines.push(lines[i]!);
+  }
+  if (new Set(routeIndexes.map((index) => lines[index]!.match(routeKey)?.[2])).size !== routeIndexes.length) {
     throw new Error("Hermes model provider/base_url keys are duplicated; refusing ambiguous install");
   }
   const insertAt = routeIndexes[0] ?? model.start + 1;
@@ -10642,15 +10941,15 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   // A named OAuth provider selects a credential and a transport that the
   // generic custom route cannot carry, so keep it and route to the handler
   // that speaks it. `api_mode` is not a route key, so it already survives.
-  const providerLine = previousRouteLines.find((line) => /^  provider:/.test(line));
+  const providerLine = previousRouteLines.find((line) => hermesRouteLineKey(line) === "provider");
   const previousProvider = providerLine ? configValue(providerLine.slice(providerLine.indexOf(":") + 1)) : undefined;
   const keptProvider = previousProvider && HERMES_CHATGPT_OAUTH_PROVIDERS.has(previousProvider) ? previousProvider : null;
   const route = hermesGatewayBase(gw, keptProvider);
   const routeBlock = [
-    `  ${HERMES_NATIVE_ROUTE_BEGIN}`,
-    keptProvider ? `  provider: ${keptProvider}` : '  provider: "custom"',
-    `  base_url: ${yamlQuote(route)}`,
-    `  ${HERMES_NATIVE_ROUTE_END}`,
+    `${routePad}${HERMES_NATIVE_ROUTE_BEGIN}`,
+    keptProvider ? `${routePad}provider: ${keptProvider}` : `${routePad}provider: "custom"`,
+    `${routePad}base_url: ${yamlQuote(route)}`,
+    `${routePad}${HERMES_NATIVE_ROUTE_END}`,
   ];
   lines.splice(insertAt, 0, ...routeBlock);
 
@@ -10659,8 +10958,8 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   if (plugins) {
     let enabled = -1;
     for (let i = plugins.start + 1; i < plugins.end; i++) {
-      if (/^  enabled:\s*\[/.test(lines[i]!)) throw new Error("Hermes plugins.enabled uses inline YAML; refusing unsafe native merge");
-      if (/^  enabled:\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*\[/.test(lines[i]!)) throw new Error("Hermes plugins.enabled uses inline YAML; refusing unsafe native merge");
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*(?:#.*)?$/.test(lines[i]!)) { enabled = i; break; }
     }
     if (enabled >= 0) {
       if (nativePluginMembership !== "enabled") {
@@ -10704,12 +11003,28 @@ function hermesNativeConfig(source: string, gw: string, mcpBinary: string): { te
   };
 }
 
+// The key of a model route line, whatever indent or quoting it carries. The
+// writer accepts both (#1486), so every reader of previous_route_lines has to
+// as well. hermesNativeMutations matched a hardcoded `^  ([^:]+):`, which on a
+// four-space line captured "  provider" — so `previous.provider` was undefined,
+// refuseOwnEndpoint was handed an undefined endpoint, and the refusal that
+// exists to stop Caveman replacing a user's private gateway silently did not
+// fire for any config that did not use exactly two spaces.
+function hermesRouteLineKey(line: string): string | null {
+  const match = line.replace(/^[ \t]+/, "").match(/^(["']?)(provider|base_url)\1\s*:/);
+  return match ? match[2]! : null;
+}
+
 function hermesNativeMutations(gw: string, mcpBinary: string): NativeMutation[] {
   const configPath = hermesConfigPath();
   const configBefore = fileBytes(configPath);
   const native = hermesNativeConfig(configBefore?.toString("utf8") ?? "", gw, mcpBinary);
   // A custom provider is the user's own endpoint; a named one is the vendor's.
-  const previous = Object.fromEntries((native.owned.previous_route_lines as string[]).map((line) => [line.match(/^  ([^:]+):/)![1]!, configValue(line.slice(line.indexOf(":") + 1))]));
+  const previous = Object.fromEntries((native.owned.previous_route_lines as string[])
+    .flatMap((line) => {
+      const key = hermesRouteLineKey(line);
+      return key ? [[key, configValue(line.slice(line.indexOf(":") + 1))] as const] : [];
+    }));
   if (!previous.provider || previous.provider === "custom" || previous.provider === "auto") refuseOwnEndpoint("hermes", "model.base_url", previous.base_url, configPath);
   const pluginDir = hermesNativePluginDir();
   const manifestPath = join(pluginDir, "plugin.yaml");
@@ -11381,19 +11696,22 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
   }
   if (operation.kind === "opencode-config") {
     const root = parseJsonFileObject(operation.file, current);
-    const providers = root.provider && typeof root.provider === "object" && !Array.isArray(root.provider) ? root.provider as Record<string, unknown> : {};
+    const useV2Providers = operation.owned?.config_schema === "v2";
+    const providersKey = useV2Providers ? "providers" : "provider";
+    const settingsKey = useV2Providers ? "settings" : "options";
+    const providers = root[providersKey] && typeof root[providersKey] === "object" && !Array.isArray(root[providersKey]) ? root[providersKey] as Record<string, unknown> : {};
     const routes = operation.owned?.routes && typeof operation.owned.routes === "object" && !Array.isArray(operation.owned.routes) ? operation.owned.routes as Record<string, unknown> : {};
     const previousRoutes = operation.owned?.previous_routes && typeof operation.owned.previous_routes === "object" && !Array.isArray(operation.owned.previous_routes) ? operation.owned.previous_routes as Record<string, unknown> : {};
     for (const providerID of Object.keys(routes)) {
       const provider = providers[providerID] && typeof providers[providerID] === "object" && !Array.isArray(providers[providerID]) ? providers[providerID] as Record<string, unknown> : {};
-      const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options) ? provider.options as Record<string, unknown> : {};
-      if (options.baseURL !== undefined && options.baseURL !== routes[providerID]) {
+      const settings = provider[settingsKey] && typeof provider[settingsKey] === "object" && !Array.isArray(provider[settingsKey]) ? provider[settingsKey] as Record<string, unknown> : {};
+      if (settings.baseURL !== undefined && settings.baseURL !== routes[providerID]) {
         throw new Error(`OpenCode ${providerID} baseURL changed after enable; refusing destructive disable`);
       }
-      if (previousRoutes[providerID] === null || previousRoutes[providerID] === undefined) delete options.baseURL;
-      else options.baseURL = previousRoutes[providerID];
-      if (Object.keys(options).length > 0) provider.options = options;
-      else delete provider.options;
+      if (previousRoutes[providerID] === null || previousRoutes[providerID] === undefined) delete settings.baseURL;
+      else settings.baseURL = previousRoutes[providerID];
+      if (Object.keys(settings).length > 0) provider[settingsKey] = settings;
+      else delete provider[settingsKey];
       // Auto's entry where this enable added it, while it still names Auto.
       const autoModels = Array.isArray(operation.owned?.auto_models) ? operation.owned.auto_models : [];
       if (autoModels.includes(providerID) && isPlainObject(provider.models) && objectValue(provider.models[AUTO_MODEL]).name === AUTO_NAME) {
@@ -11403,15 +11721,28 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
       if (Object.keys(provider).length > 0) providers[providerID] = provider;
       else delete providers[providerID];
     }
-    if (Object.keys(providers).length > 0) root.provider = providers;
-    else delete root.provider;
+    if (Object.keys(providers).length > 0) root[providersKey] = providers;
+    else delete root[providersKey];
     const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp) ? root.mcp as Record<string, unknown> : {};
-    if (mcp.caveman !== undefined && JSON.stringify(mcp.caveman) !== JSON.stringify(operation.owned?.installed_mcp)) {
-      throw new Error("OpenCode caveman MCP entry changed after enable; refusing destructive disable");
-    }
-    if (mcp.caveman !== undefined) {
-      if (operation.owned?.previous_mcp === null || operation.owned?.previous_mcp === undefined) delete mcp.caveman;
-      else mcp.caveman = operation.owned.previous_mcp;
+    if (operation.owned?.mcp_schema === "v2") {
+      const servers = isPlainObject(mcp.servers) ? mcp.servers as Record<string, unknown> : {};
+      if (servers.caveman !== undefined && JSON.stringify(servers.caveman) !== JSON.stringify(operation.owned?.installed_mcp)) {
+        throw new Error("OpenCode caveman MCP entry changed after enable; refusing destructive disable");
+      }
+      if (servers.caveman !== undefined) {
+        if (operation.owned?.previous_mcp === null || operation.owned?.previous_mcp === undefined) delete servers.caveman;
+        else servers.caveman = operation.owned.previous_mcp;
+      }
+      if (Object.keys(servers).length > 0) mcp.servers = servers;
+      else delete mcp.servers;
+    } else {
+      if (mcp.caveman !== undefined && JSON.stringify(mcp.caveman) !== JSON.stringify(operation.owned?.installed_mcp)) {
+        throw new Error("OpenCode caveman MCP entry changed after enable; refusing destructive disable");
+      }
+      if (mcp.caveman !== undefined) {
+        if (operation.owned?.previous_mcp === null || operation.owned?.previous_mcp === undefined) delete mcp.caveman;
+        else mcp.caveman = operation.owned.previous_mcp;
+      }
     }
     if (Object.keys(mcp).length > 0) root.mcp = mcp;
     else delete root.mcp;
@@ -11457,7 +11788,15 @@ function restoreNativeOperation(operation: NativeJournal["operations"][number]):
         const block = operation.owned?.[key];
         if (block === null || block === undefined) continue;
         if (typeof block !== "string" || !text.includes(block)) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
-        text = text.replace(block, "");
+        // Not a bare replace with "": the block carries the `plugins:` /
+        // `mcp_servers:` / `enabled:` keys enable created, and dropping those
+        // along with our entry orphaned every sibling the user had added under
+        // them since (#1488). This substitutes the ancestor keys the surviving
+        // lines still need, and leaves every other byte — line endings
+        // included — exactly where it was.
+        const removed = removeJournalledYamlBlock(text, block);
+        if (removed === null) throw new Error(`Hermes ${key.replace("_block", "")} block changed after enable; refusing destructive disable`);
+        text = removed;
       }
       return Buffer.from(text);
     }
@@ -11875,14 +12214,18 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
           owned = typeof block === "string" && current.toString("utf8").includes(block);
         } else if (operation.kind === "opencode-config") {
           const root = parseJsonFileObject(operation.file, current);
-          const providers = root.provider && typeof root.provider === "object" && !Array.isArray(root.provider) ? root.provider as Record<string, unknown> : {};
+          const useV2Providers = operation.owned?.config_schema === "v2";
+          const providersKey = useV2Providers ? "providers" : "provider";
+          const settingsKey = useV2Providers ? "settings" : "options";
+          const providers = root[providersKey] && typeof root[providersKey] === "object" && !Array.isArray(root[providersKey]) ? root[providersKey] as Record<string, unknown> : {};
           const routes = operation.owned?.routes && typeof operation.owned.routes === "object" && !Array.isArray(operation.owned.routes) ? operation.owned.routes as Record<string, unknown> : {};
           const mcp = root.mcp && typeof root.mcp === "object" && !Array.isArray(root.mcp) ? root.mcp as Record<string, unknown> : {};
+          const mcpEntry = operation.owned?.mcp_schema === "v2" ? objectValue(mcp.servers).caveman : mcp.caveman;
           owned = Object.keys(routes).every((providerID) => {
             const provider = providers[providerID] && typeof providers[providerID] === "object" && !Array.isArray(providers[providerID]) ? providers[providerID] as Record<string, unknown> : {};
-            const options = provider.options && typeof provider.options === "object" && !Array.isArray(provider.options) ? provider.options as Record<string, unknown> : {};
-            return options.baseURL === routes[providerID];
-          }) && JSON.stringify(mcp.caveman) === JSON.stringify(operation.owned?.installed_mcp);
+            const settings = provider[settingsKey] && typeof provider[settingsKey] === "object" && !Array.isArray(provider[settingsKey]) ? provider[settingsKey] as Record<string, unknown> : {};
+            return settings.baseURL === routes[providerID];
+          }) && JSON.stringify(mcpEntry) === JSON.stringify(operation.owned?.installed_mcp);
         } else if (operation.kind === "opencode-plugin") {
           const text = current.toString("utf8");
           owned = text.includes("caveman:native-opencode") && generatedArtifactTargetsExist(text);
@@ -12012,12 +12355,32 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   // or `mcp_servers:` key appearing in the plugin manifest later must not be
   // able to answer for the one in config.yaml.
   const hermesRouteFileText = agent === "hermes" && routeOperation ? fileBytes(routeOperation.file)?.toString("utf8") ?? "" : "";
+  // #1492 / #1490: `ownedHealthy` answers whether what we wrote is still ours,
+  // which disable needs and health must not be satisfied by. Two Hermes
+  // questions it cannot answer:
+  //   - would Hermes LOAD the plugin? It applies `disabled` first, so a user
+  //     who lists caveman_native there has not taken our plugins.enabled entry
+  //     away (hermesPluginOwned stays true, and disable must still undo the
+  //     install) but the plugin does not run, and neither do its hooks.
+  //   - is the MCP server still REGISTERED? See hermesMcpServerConfigured.
+  // Both read the config file the route operation names, not every journalled
+  // file concatenated, for the reason hermesRouteFileText already does.
+  const hermesPluginLoadable = agent !== "hermes" || !installed
+    || hermesNamedPluginMembership(hermesRouteFileText, HERMES_NATIVE_PLUGIN_NAME) === "enabled";
+  const hermesMcpPresent = agent !== "hermes" || !installed || hermesMcpServerConfigured(hermesRouteFileText);
+  if (agent === "hermes" && installed && !hermesPluginLoadable) {
+    warnings.push(`Hermes lists ${HERMES_NATIVE_PLUGIN_NAME} in plugins.disabled, so it loads no Caveman lifecycle hooks; remove that entry to turn them back on (\`caveman disable hermes\` still undoes the install)`);
+  }
+  if (agent === "hermes" && installed && !hermesMcpPresent) {
+    warnings.push(`Hermes has no enabled ${HERMES_NATIVE_MCP_SERVER} MCP server configured, so compressed context cannot be recovered; run \`caveman enable hermes\` to re-register it`);
+  }
   const components: NativeComponents = {
     routing: routeHealthy && proxyHealthy && (agent === "claude" ? fileText.includes("ANTHROPIC_BASE_URL") : agent === "codex" ? fileText.includes("model_providers.caveman") : agent === "hermes" ? hermesRouteOwned(hermesRouteFileText, routeOperation?.owned) : agent === "gemini" ? fileText.includes(GEMINI_NATIVE_ENV_BEGIN) : agent === "opencode" ? fileText.includes("caveman:native-opencode") : agent === "pi" ? fileText.includes("caveman:native-pi") : fileText.includes(AIDER_NATIVE_ROUTE_BEGIN)),
     // A plugin the host cannot load runs no hooks, whatever its bytes hash to.
-    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted,
-    core: coreActive,
-    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable,
+    lifecycle_hooks: agent !== "aider" && ownedHealthy && opencodePluginApiCurrent && hooksTrusted && hermesPluginLoadable,
+    // Core rides on those hooks, the way it rides on Codex trusting them.
+    core: coreActive && hermesPluginLoadable,
+    mcp_recovery: agent !== "aider" && ownedHealthy && mcpLaunchable && hermesMcpPresent,
     // Codex is false for the same reason hermes is: no command rewrite happens.
     // Since #1037 shrinkHook declines every Codex tool event, so Codex gets no
     // shrink-hook entry; an older install's entry reads degraded until --fix.
@@ -14236,7 +14599,8 @@ function nativeOpencodeMcpInstalled(): boolean {
     // these keys without changing the registration, and a raw stringify compare
     // would then report "MCP recovery missing" for a registration that is
     // present and correct — the same false negative this function exists to fix.
-    return canonicalize(mcp.caveman) === canonicalize(operation.owned.installed_mcp);
+    const mcpEntry = operation.owned.mcp_schema === "v2" ? objectValue(mcp.servers).caveman : mcp.caveman;
+    return canonicalize(mcpEntry) === canonicalize(operation.owned.installed_mcp);
   } catch {
     return false;
   }
@@ -14343,8 +14707,14 @@ function nativeMcpRegistered(agent: "claude" | "codex" | "hermes" | "gemini" | "
     try {
       if (agent === "codex") return typeof operation.owned?.tables_block === "string" && codexNativeTables(codexTomlLines(current.toString("utf8")), operation.owned.tables_block).get("mcp_servers.caveman") === true;
       // A null block: the user's own caveman-native entry was already there.
-      // Read by value, so a reserialised config still counts (#1410).
-      if (agent === "hermes") return hermesMcpOwned(current.toString("utf8"), operation.owned);
+      // Read by value, so a reserialised config still counts (#1410) — AND by
+      // presence, because that sentinel is true forever once journalled, so on
+      // its own it kept counting a registration the user had since deleted
+      // (#1490). Ownership and presence are different questions.
+      if (agent === "hermes") {
+        const text = current.toString("utf8");
+        return hermesMcpOwned(text, operation.owned) && hermesMcpServerConfigured(text);
+      }
       if (agent === "pi") return current.toString("utf8").includes("caveman:native-pi");
       const servers = objectValue(parseJsonFileObject(operation.file, current).mcpServers);
       return operation.owned?.installed_mcp !== undefined && canonicalize(servers.caveman) === canonicalize(operation.owned.installed_mcp);
@@ -14693,6 +15063,55 @@ function yamlMappingChildren(lines: string[], start: number, end: number): Map<s
   return children;
 }
 
+// Does the key at lines[keyAt] still have anything under it? #1488: native
+// disable removes `plugins:`, `plugins.enabled:` or `mcp_servers:` whenever
+// enable created that key — unconditionally, so a child the user added
+// afterwards survived as text and lost its parent. At best it reparents into
+// the section above (a plugin deny-list silently becoming part of
+// `platforms:`); at worst the document stops parsing and Hermes will not start.
+// A key we created is only ours to remove while it is still empty.
+function yamlKeyHasChildren(lines: string[], keyAt: number, end: number): boolean {
+  const key = lines[keyAt];
+  if (key === undefined) return false;
+  const indent = key.length - key.replace(/^[ \t]*/, "").length;
+  for (let i = keyAt + 1; i < Math.min(end, lines.length); i++) {
+    const line = lines[i]!;
+    if (/^\s*(?:#.*)?$/.test(line)) continue;
+    const width = line.length - line.replace(/^[ \t]*/, "").length;
+    if (width > indent) return true;
+    // A block sequence may be written at its OWN key's indent — `enabled:`
+    // followed by `- name` two spaces deep is one key with a list under it,
+    // which is the layout PyYAML emits and Hermes itself writes. Reading that
+    // item as a sibling called the key empty and removed it, leaving the list
+    // parentless: the very corruption this guard exists to stop.
+    if (width === indent && /^[ \t]*-(?:\s|$)/.test(line)) return true;
+    return false;
+  }
+  return false;
+}
+
+// Remove a journalled block that is still present byte for byte, keeping any
+// parent key it created that the user has since put something else under
+// (#1488). The block's own key-only lines are the ancestor chain it
+// introduced: whatever indent the first line after the block carries says
+// which of them that line still needs, so those are substituted back in the
+// block's place and the rest go. Everything outside the block — comments,
+// siblings, line endings — is untouched, so this stays the byte-preserving
+// path it has always been. null when the block is not there, which leaves the
+// caller's existing refusal to fire.
+function removeJournalledYamlBlock(text: string, block: string): string | null {
+  const at = text.indexOf(block);
+  if (at < 0) return null;
+  const indentOf = (line: string) => line.length - line.replace(/^[ \t]*/, "").length;
+  const createdKeys = yamlLines(block).filter((line) => /^[ \t]*(["']?)[^:"'\s][^:"']*\1\s*:\s*(?:#.*)?$/.test(line));
+  const after = text.slice(at + block.length);
+  const survivor = yamlLines(after).find((line) => !/^\s*(?:#.*)?$/.test(line));
+  const needed = survivor === undefined
+    ? []
+    : createdKeys.filter((line) => indentOf(line) < indentOf(survivor));
+  return `${text.slice(0, at)}${needed.join("\n")}${after}`;
+}
+
 // Span of the direct child `name` inside [start, end): its own line through the
 // last line indented deeper than it.
 function yamlChildSpan(lines: string[], start: number, end: number, name: string): { start: number; end: number } | null {
@@ -14743,16 +15162,25 @@ function hermesOwnedValues(text: string): { model: Map<string, string> | null; m
   };
 }
 
-// The `command` the journalled MCP block registered, read back out of the block
+// Every child the journalled MCP block registered, read back out of the block
 // itself so no journal format change is needed: an install made before this fix
-// is checked by value too.
-function hermesJournaledMcpCommand(block: string): string | null {
+// is checked by value too. The block may or may not carry the `mcp_servers:`
+// parent (it does when enable created the section), so the entry is found at
+// whatever depth it sits rather than as a direct child of a known span.
+function hermesJournaledMcpValues(block: string): Map<string, string> | null {
   const lines = yamlLines(block);
-  for (let i = 0; i < lines.length; i++) {
-    if (!/^\s*command\s*:/.test(lines[i]!)) continue;
-    return yamlScalarAfterKey(lines, i).value;
+  const key = new RegExp(`^[ \\t]*(["']?)${escapeRegExp(HERMES_NATIVE_MCP_SERVER)}\\1\\s*:(?=\\s|$)`);
+  const at = lines.findIndex((line) => key.test(line));
+  if (at < 0) return null;
+  const indent = lines[at]!.length - lines[at]!.replace(/^[ \t]*/, "").length;
+  let end = at + 1;
+  while (end < lines.length) {
+    const line = lines[end]!;
+    if (/^\s*(?:#.*)?$/.test(line)) break;
+    if (line.length - line.replace(/^[ \t]*/, "").length <= indent) break;
+    end++;
   }
-  return null;
+  return yamlMappingChildren(lines, at + 1, end);
 }
 
 // Does this config still carry Caveman's own Hermes routing, by value?
@@ -14774,10 +15202,35 @@ function hermesMcpOwned(text: string, owned: NativeJournal["operations"][number]
   if (block === null) return true;
   if (typeof block !== "string") return false;
   if (text.includes(block)) return true;
-  const command = hermesJournaledMcpCommand(block);
-  if (command === null) return false;
+  // #1487: the whole field set, not just `command` and `enabled`. Proving our
+  // two values are unchanged says nothing about what the user has ADDED, and
+  // the by-value restore removes the entry's whole span — so a `cwd` they added
+  // to launch the server from somewhere else was deleted with it, silently,
+  // under a check that had just called the entry unmodified. Hermes launches
+  // stdio servers with cwd, so that is a semantic edit; an entry carrying
+  // anything we did not write is no longer ours to remove, exactly as a changed
+  // command already was not.
+  const journalled = hermesJournaledMcpValues(block);
+  if (!journalled || journalled.size === 0) return false;
   const values = hermesOwnedValues(text).mcp;
-  return values?.get("command") === command && values.get("enabled") === "true";
+  if (!values || values.size !== journalled.size) return false;
+  for (const [name, value] of journalled) {
+    if (values.get(name) !== value) return false;
+  }
+  return true;
+}
+
+// Is a `caveman-native` MCP server configured in this document AT ALL? The
+// ownership helpers answer a different question (#1490): `mcp_block: null` is
+// the non-ownership sentinel — the user's own entry was already there, so
+// disable never owned it and never has to prove it — and it stays true after
+// they delete that entry. Anything asking whether Hermes still HAS a server to
+// launch has to read the file, so status stops claiming recovery against a
+// registration that is gone. An explicit `enabled: false` is Hermes declining
+// to launch it, which is the same answer; a missing key is not.
+function hermesMcpServerConfigured(text: string): boolean {
+  const values = hermesOwnedValues(text).mcp;
+  return Boolean(values) && values!.get("enabled") !== "false";
 }
 
 // Is the journalled `caveman_native` plugin still enabled? Same null rule.
@@ -14793,7 +15246,7 @@ function hermesPluginOwned(text: string, owned: NativeJournal["operations"][numb
   const block = owned?.plugin_block;
   if (block === null) return true;
   if (typeof block !== "string") return false;
-  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME);
+  return hermesPluginListContains(text, "enabled", HERMES_NATIVE_PLUGIN_NAME) === true;
 }
 
 // Indent shared by the direct children of [start, end), or null when there are
@@ -14866,8 +15319,15 @@ function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operation
     }
     if (itemAt < 0) throw new Error("Hermes plugin entry is gone; refusing destructive disable");
     lines.splice(itemAt, 1);
-    if (createdEnabled) lines.splice(enabledAt, 1);
-    if (createdSection) lines.splice(plugins.start, 1);
+    // Only while they are still empty: #1488 again, on the by-value path. A
+    // second plugin the user enabled beside ours is enough to make dropping
+    // `enabled:` — and then `plugins:` — produce a document that no longer
+    // parses. Each check runs against the array as it now stands, and the
+    // splices stay in descending order so the earlier indices remain valid.
+    if (createdEnabled && !yamlKeyHasChildren(lines, enabledAt, lines.length)) {
+      lines.splice(enabledAt, 1);
+      if (createdSection && !yamlKeyHasChildren(lines, plugins.start, lines.length)) lines.splice(plugins.start, 1);
+    }
   }
 
   // --- MCP registration ---
@@ -14879,7 +15339,7 @@ function hermesRestoreOwnedByValue(text: string, owned: NativeJournal["operation
     const native = yamlChildSpan(lines, servers.start + 1, servers.end, HERMES_NATIVE_MCP_SERVER);
     if (!native) throw new Error("Hermes MCP entry is gone; refusing destructive disable");
     lines.splice(native.start, native.end - native.start);
-    if (createdSection) lines.splice(servers.start, 1);
+    if (createdSection && !yamlKeyHasChildren(lines, servers.start, lines.length)) lines.splice(servers.start, 1);
   }
 
   // yamlText joins with \n. The literal path edits the raw string and so keeps
@@ -16477,6 +16937,11 @@ function agentRouteOverride(agent: AgentProfile, args: string[]): AgentRouteOver
   if (agent.id === "claude" && claudeStartsRemoteControl(args)) {
     return { surface: "remote-control", reason: "only runs against api.anthropic.com, so it cannot route through the proxy" };
   }
+  // Codex 0.171+ --ignore-user-config skips $CODEX_HOME/config.toml, which is
+  // where Caveman injects its model_provider route.
+  if (agent.id === "codex" && codexIgnoresUserConfig(args)) {
+    return { surface: "--ignore-user-config", reason: "skips $CODEX_HOME/config.toml, so Caveman cannot route it through the proxy" };
+  }
   // The wrap would replace an endpoint of the user's own with the proxy, which
   // cannot forward to it, and send its key to the provider's public API.
   const own = agentOwnEndpoint(agent.id);
@@ -16500,6 +16965,14 @@ function claudeStartsRemoteControl(args: string[]): boolean {
   for (const arg of args) {
     if (arg === "--") return false;
     if (arg === "--remote-control" || arg.startsWith("--remote-control=")) return true;
+  }
+  return false;
+}
+
+function codexIgnoresUserConfig(args: string[]): boolean {
+  for (const arg of args) {
+    if (arg === "--") return false;
+    if (arg === "--ignore-user-config") return true;
   }
   return false;
 }
@@ -18280,6 +18753,13 @@ function nativeWhy(argv: string[]) {
   if (explanation.recovery_ref) line("recovery", explanation.recovery_ref);
 }
 
+function hostHookEventName(agent: NativeAgent, normalizedEvent: string): string {
+  if (agent !== "gemini") return normalizedEvent;
+  if (normalizedEvent === "UserPromptSubmit") return "BeforeAgent";
+  if (normalizedEvent === "PreToolUse") return "BeforeTool";
+  return normalizedEvent;
+}
+
 // nativeHook is thin lifecycle glue. It sends normalized events to one local
 // runtime; unavailable runtime falls back to bounded metadata only. Raw prompts
 // never cross the adapter boundary. Any malformed input/write failure stays
@@ -18399,8 +18879,9 @@ async function nativeHook(argv: string[]) {
   const coreContext = policyMode === "record" || profile === "record-only" || !coreEnabled
     ? ""
     : profile === "core-lean-build" ? `${NATIVE_CORE} ${NATIVE_SKILL_INSTRUCTIONS["lean-build"]}` : NATIVE_CORE;
+  const hermesNeedsStable = agent === "hermes" && normalizedEvent === "UserPromptSubmit" && event.session_initialized !== true;
   let marker: string | undefined;
-  if (sessionId && runtimeResponse?.decision_id && (normalizedEvent === "SessionStart" || normalizedEvent === "PostCompact")) {
+  if (sessionId && runtimeResponse?.decision_id && (normalizedEvent === "SessionStart" || normalizedEvent === "PostCompact" || hermesNeedsStable)) {
     const opts = defaultWrapOptions();
     const gw = gatewayURL();
     const { host, port } = gatewayHostPort(gw);
@@ -18421,7 +18902,9 @@ async function nativeHook(argv: string[]) {
   const learnNudge = normalizedEvent === "SessionStart" && (agent === "claude" || agent === "codex" || agent === "gemini")
     ? claimLearnNudge(boundedHookString(event.source), learnNudgeToken)
     : undefined;
-  if (normalizedEvent === "SessionStart" && agent !== "hermes" && (stableContext || learnNudge)) {
+  if (normalizedEvent === "SessionStart" && agent === "hermes" && stableContext) {
+    process.stdout.write(JSON.stringify({ context: stableContext }));
+  } else if (normalizedEvent === "SessionStart" && agent !== "hermes" && (stableContext || learnNudge)) {
     process.stdout.write(JSON.stringify({
       ...(learnNudge ? { systemMessage: learnNudge } : {}),
       ...(stableContext ? { hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: stableContext } } : {}),
@@ -18433,15 +18916,16 @@ async function nativeHook(argv: string[]) {
     process.stdout.write(JSON.stringify({
       hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: compactContext },
     }));
-  } else if (agent === "hermes" && normalizedEvent === "UserPromptSubmit" && compactContext) {
-    process.stdout.write(JSON.stringify({ context: compactContext }));
+  } else if (agent === "hermes" && normalizedEvent === "UserPromptSubmit") {
+    const hermesContext = event.session_initialized === true ? runtimeContext : compactContext;
+    if (hermesContext) process.stdout.write(JSON.stringify({ context: hermesContext }));
   } else if (runtimeContext && normalizedEvent === "UserPromptSubmit") {
     process.stdout.write(JSON.stringify({
-      hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: runtimeContext },
+      hookSpecificOutput: { hookEventName: hostHookEventName(agent, normalizedEvent), additionalContext: runtimeContext },
     }));
   } else if (runtimeContext && (normalizedEvent === "PreToolUse" || normalizedEvent === "PermissionRequest")) {
     process.stdout.write(JSON.stringify({
-      hookSpecificOutput: { hookEventName: normalizedEvent, additionalContext: runtimeContext },
+      hookSpecificOutput: { hookEventName: hostHookEventName(agent, normalizedEvent), additionalContext: runtimeContext },
     }));
   } else if (policyMode !== "record" && agent === "claude" && normalizedEvent === "PostToolUse" && runtimeResponse?.output_replacement) {
     // Claude Code 2.1.226 supports updatedToolOutput for every tool. Other hosts
@@ -19265,16 +19749,90 @@ def register(ctx):
 `;
 }
 
-type HermesPluginMembership = "enabled" | "disabled" | "not-enabled";
+type HermesPluginMembership = "enabled" | "disabled" | "not-enabled" | "unhandled";
 
-function hermesFlowSequenceItems(raw: string): string[] | null {
+// Decode the quoted scalar subset used for plugin names. Unknown YAML escapes
+// are not guessed: membership callers must stop before making install writes.
+function hermesWithoutInlineComment(raw: string): string {
+  let quote: "'" | '"' | null = null;
+  let escaped = false;
+  let end = raw.length;
+  for (let i = 0; i < raw.length; i++) {
+    const char = raw[i]!;
+    if (quote === '"' && escaped) {
+      escaped = false;
+      continue;
+    }
+    if (quote === '"' && char === "\\") {
+      escaped = true;
+      continue;
+    }
+    if (quote === "'" && char === "'" && raw[i + 1] === "'") {
+      i++;
+      continue;
+    }
+    if (quote && char === quote) {
+      quote = null;
+      continue;
+    }
+    if (!quote && (char === "'" || char === '"')) {
+      quote = char;
+      continue;
+    }
+    if (!quote && char === "#" && (i === 0 || /\s/.test(raw[i - 1]!))) {
+      end = i;
+      break;
+    }
+  }
+  return raw.slice(0, end);
+}
+
+function hermesScalarValue(raw: string): string | null {
+  const value = hermesWithoutInlineComment(raw).trim();
+  if (value.startsWith('"') || value.endsWith('"')) {
+    if (!value.startsWith('"') || !value.endsWith('"')) return null;
+    const source = value.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < source.length; i++) {
+      const char = source[i]!;
+      if (char !== "\\") {
+        if (char === '"') return null;
+        decoded += char;
+        continue;
+      }
+      const next = source[++i];
+      if (next === '"' || next === "\\") decoded += next;
+      else if (next === "x" && /^[0-9a-fA-F]{2}/.test(source.slice(i + 1, i + 3))) {
+        decoded += String.fromCharCode(Number.parseInt(source.slice(i + 1, i + 3), 16));
+        i += 2;
+      } else return null;
+    }
+    return decoded;
+  }
+  if (value.startsWith("'") || value.endsWith("'")) {
+    if (!value.startsWith("'") || !value.endsWith("'")) return null;
+    const source = value.slice(1, -1);
+    let decoded = "";
+    for (let i = 0; i < source.length; i++) {
+      if (source[i] === "'") {
+        if (source[i + 1] !== "'") return null;
+        decoded += "'";
+        i++;
+      } else decoded += source[i];
+    }
+    return decoded;
+  }
+  if (value.includes('"') || value.includes("'") || /^[\[{&*!|>]/.test(value) || /:\s/.test(value)) return null;
+  return value;
+}
+
+function hermesFlowSequenceItems(raw: string): string[] | null | false {
   const start = raw.indexOf("[");
   if (start < 0) return null;
   const items: string[] = [];
   let item = "";
   let quote: "'" | '"' | null = null;
   let escaped = false;
-  let depth = 0;
   for (let i = start + 1; i < raw.length; i++) {
     const char = raw[i]!;
     if (quote) {
@@ -19304,26 +19862,17 @@ function hermesFlowSequenceItems(raw: string): string[] | null {
       item += char;
       continue;
     }
-    if (char === "[" || char === "{") {
-      depth++;
-      item += char;
-      continue;
-    }
+    if (char === "[" || char === "{") return false;
     if (char === "]") {
-      if (depth === 0) {
-        items.push(item);
-        return items.map(configValue).filter((value): value is string => value !== undefined);
-      }
-      depth--;
-      item += char;
-      continue;
+      items.push(item);
+      const trailing = raw.slice(i + 1).replace(/^\s+/, "");
+      if (trailing && !trailing.startsWith("#")) return false;
+      const values = items.map(hermesScalarValue);
+      if (values.some((value) => value === null)) return false;
+      return values as string[];
     }
-    if (char === "}" && depth > 0) {
-      depth--;
-      item += char;
-      continue;
-    }
-    if (char === "," && depth === 0) {
+    if (char === "}") return false;
+    if (char === ",") {
       items.push(item);
       item = "";
       continue;
@@ -19333,14 +19882,43 @@ function hermesFlowSequenceItems(raw: string): string[] | null {
   return null;
 }
 
-function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean {
+// A comment is never a key, and this reader has to say so BEFORE it asks
+// whether a line opens the next sibling mapping. `^  [^ ].*?:` matches a
+// two-space comment the moment its text contains a colon, and Caveman writes
+// exactly such a line: the item-indent-padded `# >>> caveman:native-hermes-plugin`
+// marker. So our own marker was read as the key after `enabled:` and ended the
+// item scan one line above our own entry — hermesPluginOwned went false on a
+// config we had just written, ownedHealthy collapsed every component with it,
+// and `enable hermes` reported success into an install `doctor` called
+// `degraded`. In the deny direction the same break fails OPEN: a comment
+// between `disabled:` and its items made an explicit deny read as "not listed"
+// and enable installed over it. Four-space lists never showed either, because
+// the comment skip below is reached first when the marker is deeper.
+function hermesCommentOrBlank(line: string): boolean {
+  return /^\s*(?:#.*)?$/.test(line);
+}
+
+function hermesPluginListContains(text: string, listName: "enabled" | "disabled", name: string): boolean | "unhandled" {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
   if (!plugins) return false;
+  let listKeyCount = 0;
   for (let i = plugins.start + 1; i < plugins.end; i++) {
-    const match = lines[i]!.match(/^  (enabled|disabled):(?:\s*(.*))?$/);
-    if (!match || match[1] !== listName) continue;
-    const raw = (match[2] ?? "").replace(/\s+#.*$/, "").trim();
+    if (hermesCommentOrBlank(lines[i]!)) continue;
+    const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
+    if (!match) continue;
+    const key = hermesScalarValue(match[1]!);
+    if (key === null) return "unhandled";
+    if (key === listName && ++listKeyCount > 1) return "unhandled";
+  }
+  for (let i = plugins.start + 1; i < plugins.end; i++) {
+    if (hermesCommentOrBlank(lines[i]!)) continue;
+    const match = lines[i]!.match(/^  ([^ ].*?):(?:\s*(.*))?$/);
+    if (!match) continue;
+    const key = hermesScalarValue(match[1]!);
+    if (key === null) return "unhandled";
+    if (key !== listName) continue;
+    const raw = hermesWithoutInlineComment(match[2] ?? "").trim();
     if (raw.startsWith("[")) {
       let flow = raw;
       let items = hermesFlowSequenceItems(flow);
@@ -19348,22 +19926,29 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
         flow += `\n${lines[next]}`;
         items = hermesFlowSequenceItems(flow);
       }
-      return items?.includes(name) ?? false;
+      if (!items) return "unhandled";
+      return items.includes(name);
     }
-    if (raw && !raw.startsWith("#")) return false;
+    if (raw && raw !== "null" && raw !== "~") return "unhandled";
     let sequenceIndent: number | null = null;
     for (let next = i + 1; next < plugins.end; next++) {
       const line = lines[next]!;
-      if (/^  [A-Za-z0-9_-]+:\s*/.test(line)) break;
-      if (!line.trim() || /^\s*#/.test(line)) continue;
+      // Blanks and comments first: see hermesCommentOrBlank above.
+      if (hermesCommentOrBlank(line)) continue;
+      if (/^  [^ ].*?:/.test(line)) break;
       const item = line.match(/^(\s*)-\s*(.*?)\s*$/);
       if (!item) {
-        if (sequenceIndent !== null && line.search(/\S/) > sequenceIndent) continue;
+        const indent = line.search(/\S/);
+        if (sequenceIndent !== null && indent > sequenceIndent) return "unhandled";
+        if (indent > 2) return "unhandled";
         break;
       }
       const indent = item[1]!.length;
       if (sequenceIndent === null) sequenceIndent = indent;
-      if (indent === sequenceIndent && configValue(item[2]) === name) return true;
+      if (indent !== sequenceIndent) return "unhandled";
+      const value = hermesScalarValue(item[2]!);
+      if (value === null) return "unhandled";
+      if (value === name) return true;
     }
     return false;
   }
@@ -19371,15 +19956,22 @@ function hermesPluginListContains(text: string, listName: "enabled" | "disabled"
 }
 
 function hermesNamedPluginMembership(text: string, name: string): HermesPluginMembership {
-  if (hermesPluginListContains(text, "disabled", name)) return "disabled";
-  if (hermesPluginListContains(text, "enabled", name)) return "enabled";
+  const disabled = hermesPluginListContains(text, "disabled", name);
+  if (disabled === "unhandled") return "unhandled";
+  if (disabled) return "disabled";
+  const enabled = hermesPluginListContains(text, "enabled", name);
+  if (enabled === "unhandled") return "unhandled";
+  if (enabled) return "enabled";
   return "not-enabled";
 }
 
 function hermesEnabledListIsInline(text: string): boolean {
   const lines = yamlLines(text);
   const plugins = topLevelSection(lines, "plugins");
-  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => /^  enabled:\s*\[/.test(line)));
+  return Boolean(plugins && lines.slice(plugins.start + 1, plugins.end).some((line) => {
+    const match = line.match(/^  ([^ ].*?):\s*(.*)$/);
+    return match && hermesScalarValue(match[1]!) === "enabled" && match[2]!.trim().startsWith("[");
+  }));
 }
 
 function hermesPluginInstallConfigReady(): boolean {
@@ -19394,6 +19986,10 @@ function hermesPluginInstallConfigReady(): boolean {
     }
   }
   const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "unhandled") {
+    console.error(`${mark("warn")} ${path} uses an unsupported plugins.enabled or plugins.disabled YAML form; refusing to install the Hermes plugin`);
+    return false;
+  }
   if (membership === "disabled") {
     console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; no hook was installed`);
     return false;
@@ -19417,6 +20013,10 @@ function enableHermesPluginInConfig(): boolean {
     }
   }
   const membership = hermesNamedPluginMembership(existing, HERMES_PLUGIN_NAME);
+  if (membership === "unhandled") {
+    console.error(`${mark("warn")} ${path} uses an unsupported plugins.enabled or plugins.disabled YAML form; refusing to modify Hermes configuration`);
+    return false;
+  }
   if (membership === "disabled") {
     console.error(`${mark("warn")} ${path} explicitly disables ${HERMES_PLUGIN_NAME} in plugins.disabled; remove that entry before installing`);
     return false;
@@ -19430,11 +20030,11 @@ function enableHermesPluginInConfig(): boolean {
     let inlineEnabled = false;
     for (let i = plugins.start + 1; i < plugins.end; i++) {
       const line = lines[i]!;
-      if (/^  enabled:\s*(?:#.*)?$/.test(line)) {
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*(?:#.*)?$/.test(line)) {
         enabledLine = i;
         break;
       }
-      if (/^  enabled:\s*\[/.test(line)) {
+      if (/^  (?:enabled|"enabled"|'enabled'):\s*\[/.test(line)) {
         enabledLine = i;
         inlineEnabled = true;
         break;

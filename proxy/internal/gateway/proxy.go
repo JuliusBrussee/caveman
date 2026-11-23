@@ -61,6 +61,9 @@ func (s *Server) doUpstream(ctx context.Context, build func() (*http.Request, er
 			return nil, err
 		}
 		if attempt >= 2 || ctx.Err() != nil || !connectionSetupFailure(err) {
+			if ctx.Err() == nil && isDeadUpstreamConnError(err) {
+				s.httpClient.CloseIdleConnections()
+			}
 			return nil, err
 		}
 		if s.logger != nil {
@@ -108,18 +111,34 @@ func connectionSetupFailure(err error) bool {
 	return opErr.Op == "dial" || opErr.Op == "proxyconnect"
 }
 
+// isDeadUpstreamConnError reports errors that indicate a pooled upstream
+// connection died silently (network timeout or lost HTTP/2 ping), so sibling
+// idle connections bound to the same dead network path can be dropped (#1543).
+func isDeadUpstreamConnError(err error) bool {
+	var netErr net.Error
+	if errors.As(err, &netErr) && netErr.Timeout() {
+		return true
+	}
+	return strings.Contains(err.Error(), "http2: client connection lost")
+}
+
+func isResponsesWebSocketUpgrade(r *http.Request) bool {
+	return r.Method == http.MethodGet &&
+		r.URL.RawPath == "" &&
+		strings.EqualFold(r.Header.Get("Upgrade"), "websocket") &&
+		hasUpgradeToken(r.Header)
+}
+
 func isOpenCodeChatGPTSubscription(r *http.Request) bool {
-
-	return r.Method == http.MethodPost &&
-		r.URL.Path == "/openai/v1/responses" &&
+	return (r.Method == http.MethodPost || isResponsesWebSocketUpgrade(r)) &&
+		(r.URL.Path == "/openai/v1/responses" || r.URL.Path == "/v1/responses") &&
 		r.Header.Get("x-cave-agent") == "opencode" &&
-		r.Header.Get("ChatGPT-Account-ID") != ""
-
+		strings.TrimSpace(r.Header.Get("ChatGPT-Account-ID")) != ""
 }
 
 func isPiChatGPTSubscription(r *http.Request, verifiedAgentPath bool) bool {
 	return verifiedAgentPath &&
-		r.Method == http.MethodPost &&
+		(r.Method == http.MethodPost || isResponsesWebSocketUpgrade(r)) &&
 		r.URL.Path == "/codex/responses" &&
 		r.URL.RawPath == "" &&
 		r.URL.RawQuery == "" &&
@@ -167,6 +186,10 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 	// either, so it gets the same treatment, without a provider credential.
 	if adapter := s.matchOAuthTokenAdapter(r); adapter != nil {
 		s.oauthTokenPassthrough(w, r, adapter, requestID)
+		return
+	}
+	if adapter := s.matchResponsesWebSocket(r); adapter != nil {
+		s.responsesWebSocket(w, r, adapter, requestID)
 		return
 	}
 	adapter := s.matchAdapter(r)
@@ -422,7 +445,12 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 		}
 		allowNativeTransforms := true
 		if s.compressor != nil {
-			serverRetrieve := authMode == AuthModePAYG && !s.recoveryViaMCP && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint)
+			// Anthropic message-threads omits tools on thread:continue (so injecting
+			// caveman_retrieve fails with 400) and binds server state per reply on
+			// thread:create (so server-side retrieve turns break client continuation).
+			// MCP recovery still compresses both create and continue via markers.
+			anthropicThread, _ := anthropicThreadType(body)
+			serverRetrieve := authMode == AuthModePAYG && !s.recoveryViaMCP && !hasRetrieveTool(body) && serverRetrieveSupported(meta.Provider, meta.Endpoint) && !(meta.Provider == "anthropic" && anthropicThread)
 			if serverRetrieve {
 				if _, canRetrieve := s.compressor.(Retriever); !canRetrieve {
 					serverRetrieve = false
@@ -601,6 +629,19 @@ func (s *Server) proxy(w http.ResponseWriter, r *http.Request) {
 			// Cloud failed: the session's cache is on this model, not the
 			// fallback. A side request has a prefix of its own.
 			answer.Model, held = model, true
+		}
+		// An Anthropic message-thread continuation references a previous_message_id
+		// on Anthropic's own server and locks the thread fingerprint to Turn 1's model.
+		// Never cross-host or swap to a different model mid-thread.
+		if meta.Provider == "anthropic" {
+			if _, threadKind := anthropicThreadType(transform.Body); threadKind == "continue" {
+				answer.Target = nil
+				if last != nil && last.provider == "anthropic" && last.sent != "" {
+					answer.Model = last.sent
+				} else {
+					answer.Model = ""
+				}
+			}
 		}
 		if target := answer.Target; target != nil {
 			// The bytes compression produced go, unless they lean on the
@@ -2492,6 +2533,9 @@ func (s *Server) streamResponse(w http.ResponseWriter, r *http.Request, src io.R
 		}
 		if r.Context().Err() != nil {
 			return counter, "cave_client_canceled"
+		}
+		if s.httpClient != nil && isDeadUpstreamConnError(err) {
+			s.httpClient.CloseIdleConnections()
 		}
 		return counter, "cave_upstream_body_read_failed"
 	}

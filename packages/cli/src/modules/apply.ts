@@ -528,7 +528,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const target = h.agentTraffic().target === "local" ? "local runtime" : "managed gateway";
   for (const agent of refresh) step(agent, h.agentStaleRoute(agent) ? `routing: ${target}` : "hooks refreshed", () => h.refreshAgent(agent));
   if (startsRuntime) {
-    say(await h.runtimeListening(1000) ? "✓ local runtime started" : "○ local runtime starts with your next agent session");
+    say(await h.runtimeListening(3000) ? "✓ local runtime started" : "○ local runtime starts with your next agent session");
   }
   for (const run of runs) {
     const name = run.def.external!.binary;

@@ -164,3 +164,228 @@ func TestDefaultUpstreamClientKeepsConnectionsForConcurrentCallers(t *testing.T)
 		t.Fatalf("%d callers over %d rounds opened %d upstream connections, want %d", callers, rounds, got, callers)
 	}
 }
+
+// blackholeConn wraps a live TCP connection and, once blackholed, silently
+// drops all outbound writes (mimicking a dead NAT entry or vanished IPv6
+// prefix where neither RST nor FIN arrives) until Close tears down the socket.
+type blackholeConn struct {
+	net.Conn
+	blackholed atomic.Bool
+	closed     atomic.Bool
+}
+
+func (c *blackholeConn) Write(p []byte) (int, error) {
+	if c.closed.Load() {
+		return 0, net.ErrClosed
+	}
+	if c.blackholed.Load() {
+		return len(p), nil
+	}
+	return c.Conn.Write(p)
+}
+
+func (c *blackholeConn) Close() error {
+	c.closed.Store(true)
+	return c.Conn.Close()
+}
+
+// #1543: a pooled HTTP/2 upstream connection that dies silently (no RST, no
+// FIN) must not hang requests until the 15-minute header deadline or poison
+// every subsequent request on the pool.
+func TestDeadPooledHTTP2ConnFailsFastAndRecovers(t *testing.T) {
+	const reqBody = `{"model":"claude-sonnet-5","messages":[]}`
+	const respBody = `{"id":"msg","type":"message","model":"claude-sonnet-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`
+
+	newTestGateway := func(t *testing.T) (*Server, *atomic.Int64, func() *blackholeConn) {
+		t.Helper()
+		upstream := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = io.Copy(io.Discard, r.Body)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, respBody)
+		}))
+		upstream.EnableHTTP2 = true
+		upstream.StartTLS()
+		t.Cleanup(upstream.Close)
+
+		var dials atomic.Int64
+		var mu sync.Mutex
+		var lastConn *blackholeConn
+
+		transport := upstream.Client().Transport.(*http.Transport).Clone()
+		transport.ForceAttemptHTTP2 = true
+		transport.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			raw, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			dials.Add(1)
+			bc := &blackholeConn{Conn: raw}
+			mu.Lock()
+			lastConn = bc
+			mu.Unlock()
+			return bc, nil
+		}
+		BoundUpstreamTransport(transport)
+		if transport.HTTP2 != nil && transport.HTTP2.SendPingTimeout > 0 && transport.HTTP2.PingTimeout > 0 {
+			// Compress the production 15s/5s health-check timers so the test
+			// proves real HTTP/2 ping eviction in milliseconds.
+			transport.HTTP2.SendPingTimeout = 50 * time.Millisecond
+			transport.HTTP2.PingTimeout = 50 * time.Millisecond
+		}
+		t.Cleanup(transport.CloseIdleConnections)
+
+		s := New(Config{
+			Adapters:   []providers.Adapter{anthropic.New(upstream.URL)},
+			Auth:       stubAuth{rc: RequestContext{RuntimeMode: "record"}},
+			Creds:      stubCreds{key: "sk-test"},
+			HTTPClient: &http.Client{Transport: transport},
+		})
+		return s, &dials, func() *blackholeConn {
+			mu.Lock()
+			defer mu.Unlock()
+			return lastConn
+		}
+	}
+
+	call := func(t *testing.T, s *Server, timeout time.Duration) (int, bool) {
+		t.Helper()
+		done := make(chan int, 1)
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		go func() {
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/v1/messages", strings.NewReader(reqBody)).WithContext(ctx)
+			s.Handler().ServeHTTP(rec, req)
+			done <- rec.Code
+		}()
+		select {
+		case code := <-done:
+			return code, false
+		case <-time.After(timeout):
+			cancel()
+			<-done
+			return 0, true
+		}
+	}
+
+	t.Run("default transport enables HTTP/2 ping health checks", func(t *testing.T) {
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		BoundUpstreamTransport(transport)
+		if transport.HTTP2 == nil || transport.HTTP2.SendPingTimeout != 15*time.Second || transport.HTTP2.PingTimeout != 5*time.Second {
+			t.Fatalf("HTTP2 config = %+v, want SendPingTimeout=15s PingTimeout=5s", transport.HTTP2)
+		}
+	})
+
+	t.Run("in-flight request on dead pooled conn fails fast and next request recovers", func(t *testing.T) {
+		s, dials, lastConn := newTestGateway(t)
+
+		if code, hung := call(t, s, 2*time.Second); hung || code != http.StatusOK {
+			t.Fatalf("warm request: code=%d hung=%v, want 200", code, hung)
+		}
+		if got := dials.Load(); got != 1 {
+			t.Fatalf("warm dials = %d, want 1", got)
+		}
+
+		// Silently drop all packets on the pooled HTTP/2 connection.
+		lastConn().blackholed.Store(true)
+
+		code, hung := call(t, s, 2*time.Second)
+		if hung {
+			t.Fatal("request on dead pooled HTTP/2 conn hung past deadline")
+		}
+		if code != http.StatusBadGateway {
+			t.Fatalf("request on dead pooled conn = %d, want 502", code)
+		}
+
+		// Dead conn must be evicted so the next request dials fresh and succeeds.
+		if code, hung := call(t, s, 2*time.Second); hung || code != http.StatusOK {
+			t.Fatalf("recovery request: code=%d hung=%v, want 200", code, hung)
+		}
+		if got := dials.Load(); got != 2 {
+			t.Fatalf("recovery dials = %d, want 2", got)
+		}
+	})
+
+	t.Run("idle dead pooled conn is evicted before next request", func(t *testing.T) {
+		s, dials, lastConn := newTestGateway(t)
+
+		if code, hung := call(t, s, 2*time.Second); hung || code != http.StatusOK {
+			t.Fatalf("warm request: code=%d hung=%v, want 200", code, hung)
+		}
+
+		lastConn().blackholed.Store(true)
+		// Wait for SendPingTimeout + PingTimeout so background health check evicts it.
+		time.Sleep(250 * time.Millisecond)
+
+		code, hung := call(t, s, 2*time.Second)
+		if hung {
+			t.Fatal("request after idle conn death hung past deadline")
+		}
+		if code != http.StatusOK {
+			t.Fatalf("request after idle eviction = %d, want 200", code)
+		}
+		if got := dials.Load(); got != 2 {
+			t.Fatalf("dials after idle eviction = %d, want 2", got)
+		}
+	})
+}
+
+type closeIdleTrackingTransport struct {
+	roundTrip  func(*http.Request) (*http.Response, error)
+	closedIdle atomic.Int64
+}
+
+func (t *closeIdleTrackingTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	return t.roundTrip(r)
+}
+
+func (t *closeIdleTrackingTransport) CloseIdleConnections() {
+	t.closedIdle.Add(1)
+}
+
+type timeoutErr struct{}
+
+func (timeoutErr) Error() string   { return "read tcp: connection timed out" }
+func (timeoutErr) Timeout() bool   { return true }
+func (timeoutErr) Temporary() bool { return true }
+
+type errReader struct{ err error }
+
+func (e errReader) Read([]byte) (int, error) { return 0, e.err }
+
+// #1543: when an upstream request or stream dies with a network timeout (such
+// as a vanished IPv6 source prefix), sibling idle connections in the pool are
+// likely bound to the same dead address and must be dropped immediately.
+func TestUpstreamTimeoutEvictsIdlePool(t *testing.T) {
+	t.Run("doUpstream timeout closes idle connections", func(t *testing.T) {
+		tr := &closeIdleTrackingTransport{
+			roundTrip: func(*http.Request) (*http.Response, error) {
+				return nil, timeoutErr{}
+			},
+		}
+		s := New(Config{HTTPClient: &http.Client{Transport: tr}})
+		_, err := s.doUpstream(context.Background(), func() (*http.Request, error) {
+			return http.NewRequest(http.MethodPost, "https://provider.test/v1/messages", strings.NewReader(`{}`))
+		})
+		if err == nil {
+			t.Fatal("expected timeout error")
+		}
+		if tr.closedIdle.Load() == 0 {
+			t.Fatal("upstream timeout did not close idle connections")
+		}
+	})
+
+	t.Run("stream read timeout closes idle connections", func(t *testing.T) {
+		tr := &closeIdleTrackingTransport{}
+		s := New(Config{HTTPClient: &http.Client{Transport: tr}})
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodPost, "/v1/messages", nil)
+		_, code := s.streamResponse(rec, req, errReader{err: timeoutErr{}}, true, "req-1", nil)
+		if code != "cave_upstream_body_read_failed" {
+			t.Fatalf("code = %q, want cave_upstream_body_read_failed", code)
+		}
+		if tr.closedIdle.Load() == 0 {
+			t.Fatal("stream read timeout did not close idle connections")
+		}
+	})
+}

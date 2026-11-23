@@ -27,6 +27,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -58,12 +59,59 @@ func runVersion(args []string, stdout io.Writer) {
 	fmt.Fprintln(stdout, version)
 }
 
+// exitInternalError is the status for an engine defect that reached the CLI as
+// a panic. It is deliberately distinct from fatal()'s 1 (an operational or
+// usage failure the caller can act on) and from the unknown-subcommand 2, so a
+// wrapper can tell "caveman is misconfigured" from "the engine has a bug on
+// this payload" — #1522 reported `caveman tools shrink` reading the latter as
+// the former and telling the user to run `caveman setup`.
+const exitInternalError = 3
+
 func main() {
 	args := os.Args[1:]
 	cmd := "help"
 	if len(args) > 0 {
 		cmd = args[0]
 	}
+	if code := guardInternalError(cmd, os.Stderr, func() { dispatch(cmd, args) }); code != 0 {
+		os.Exit(code)
+	}
+}
+
+// guardInternalError converts a panic out of the engine into a readable error
+// and a non-zero status, instead of a Go panic trace and the runtime's exit 2.
+//
+// The engine is reachable by payload shape alone: #1508's whitespace-only
+// listing body and #1522's `{"exit_code":0,"output":"\n"}` tool result both
+// panicked inside unwrapFileWrapper. The proxy already turns such a panic into
+// a per-segment decline (Server.safeEngineCall), so the request fails open; the
+// CLI had no equivalent and surfaced a raw trace, which reads as a crashed tool
+// rather than a bug report worth filing.
+//
+// This is a backstop for a defect, not an excuse for one, so the stack still
+// goes to stderr — it is what makes the report actionable. It changes no data
+// path: a panic in `compress` happens before emitCompressResult writes, so
+// stdout was empty then and is empty now. A panic on another goroutine cannot
+// be recovered here and still takes the process down.
+func guardInternalError(cmd string, stderr io.Writer, run func()) (code int) {
+	defer func() {
+		v := recover()
+		if v == nil {
+			return
+		}
+		code = exitInternalError
+		fmt.Fprintf(stderr, "caveman-engine: internal error in %q: %v\n", cmd, v)
+		fmt.Fprintln(stderr, "nothing was written to stdout and no input was transformed.")
+		fmt.Fprintln(stderr, "this is a bug in the compression engine, not a configuration problem.")
+		fmt.Fprintln(stderr, "please report it with the command you ran and, if you can share it, the input:")
+		fmt.Fprintln(stderr, "  https://github.com/JuliusBrussee/caveman/issues")
+		fmt.Fprintf(stderr, "\n%s", debug.Stack())
+	}()
+	run()
+	return 0
+}
+
+func dispatch(cmd string, args []string) {
 	switch cmd {
 	case "compress":
 		runCompress(args[1:])

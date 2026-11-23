@@ -3,10 +3,12 @@ package gateway
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/proxy/providers"
@@ -41,6 +43,41 @@ func (rejectingAuth) Authenticate(context.Context, *http.Request) (RequestContex
 }
 
 const modelsCatalog = `{"object":"list","data":[{"id":"Main","object":"model","context_length":1000000}]}`
+
+func TestInterruptedMetadataResponseAbortsClientFraming(t *testing.T) {
+	for _, http2 := range []bool{false, true} {
+		t.Run(fmt.Sprintf("http2=%v", http2), func(t *testing.T) {
+			var calls atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				calls.Add(1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, `{"object":"list","data":[`)
+				w.(http.Flusher).Flush()
+				panic(http.ErrAbortHandler)
+			}))
+			defer upstream.Close()
+			srv := New(Config{
+				Adapters: []providers.Adapter{openai.New(upstream.URL)},
+				Auth:     stubAuth{}, Creds: stubCreds{}, HTTPClient: upstream.Client(),
+			})
+			proxy := httptest.NewUnstartedServer(srv.Handler())
+			proxy.EnableHTTP2 = http2
+			proxy.StartTLS()
+			defer proxy.Close()
+			resp, err := proxy.Client().Get(proxy.URL + "/v1/models")
+			if err == nil {
+				_, err = io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+			}
+			if err == nil {
+				t.Fatal("truncated upstream catalog became a clean client EOF")
+			}
+			if calls.Load() != 1 {
+				t.Fatalf("partial catalog replayed %d times", calls.Load())
+			}
+		})
+	}
+}
 
 // TestModelsMetadataRouteForwardsUnchanged is issue #1187: every
 // OpenAI-compatible client reads model metadata from GET /v1/models, and Hermes

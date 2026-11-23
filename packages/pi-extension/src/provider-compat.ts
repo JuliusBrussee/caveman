@@ -3,49 +3,61 @@ import type { AnthropicMessagesCompat, OpenAICompletionsCompat, OpenAIResponsesC
 
 type SelectedModel = NonNullable<ExtensionContext["model"]>;
 
-// Pi's coding-agent layer adds these after auth resolution, outside model.compat.
-// Canonical provider IDs keep their original attribution branch after routing.
-// For aliases, an explicit later header or an identical model header can make
-// the result independent of the active (private) telemetry setting. Require the
-// original spelling: Pi merges these objects case-sensitively before the SDK.
+// Pi's pi-ai identity layer adds attribution headers from model.provider/baseUrl
+// below model.headers and optionsHeaders (dist/utils/identity.js), while
+// Models.applyAuth adds OpenCode's x-opencode-session into optionsHeaders below
+// resolved auth headers and above model.headers (dist/models.js). Canonical
+// provider IDs keep their original branches after routing; for aliases, check
+// that explicit headers make the wire result independent of URL and telemetry.
 export function unpreservedAttributionHeaders(
   model: SelectedModel, resolvedHeaders: Record<string, string | null> | undefined,
   sessionId: string | undefined, telemetryEnv = process.env.PI_TELEMETRY,
 ): string[] {
   let host: string | undefined;
   try { host = new URL(model.baseUrl).hostname; } catch { /* endpoint gate reports invalid URLs */ }
-  const expected: Record<string, string | undefined> = {};
   const telemetryDisabled = telemetryEnv !== undefined && !["1", "true", "yes"].includes(telemetryEnv.toLowerCase());
+  const missing = new Set<string>();
+
+  const identityHeaders: string[] = [];
   if (!telemetryDisabled) {
     if (model.provider !== "openrouter" && model.baseUrl.includes("openrouter.ai")) {
-      Object.assign(expected, { "HTTP-Referer": "https://pi.dev", "X-OpenRouter-Title": "pi", "X-OpenRouter-Categories": "cli-agent" });
+      identityHeaders.push("HTTP-Referer", "X-OpenRouter-Title", "X-OpenRouter-Categories");
     }
-    if (model.provider !== "nvidia" && host === "integrate.api.nvidia.com") expected["X-BILLING-INVOKE-ORIGIN"] = "Pi";
-    if (!["cloudflare-workers-ai", "cloudflare-ai-gateway"].includes(model.provider)
-      && ["api.cloudflare.com", "gateway.ai.cloudflare.com"].includes(host ?? "")) expected["User-Agent"] = "pi-coding-agent";
+    if (model.provider !== "nvidia" && host === "integrate.api.nvidia.com") {
+      identityHeaders.push("X-BILLING-INVOKE-ORIGIN");
+    }
+    if (!["opencode", "opencode-go"].includes(model.provider) && host === "opencode.ai") {
+      identityHeaders.push("x-opencode-client");
+    }
   }
+  for (const name of identityHeaders) {
+    // pi-ai merges identity, model, and option headers with case-sensitive
+    // object spread before fetch normalization, so require exact key ownership.
+    const coveredByModel = Boolean(model.headers && Object.hasOwn(model.headers, name));
+    const coveredByResolved = Boolean(resolvedHeaders && Object.hasOwn(resolvedHeaders, name));
+    if (!coveredByModel && !coveredByResolved) missing.add(name);
+  }
+
   if (!["opencode", "opencode-go"].includes(model.provider) && host === "opencode.ai") {
-    expected["x-opencode-session"] = sessionId;
-    expected["x-opencode-client"] = "pi";
+    const coveredByResolved = Boolean(resolvedHeaders && Object.hasOwn(resolvedHeaders, "x-opencode-session"));
+    const coveredByModel = sessionId !== undefined && model.headers?.["x-opencode-session"] === sessionId;
+    if (!coveredByResolved && !coveredByModel) missing.add("x-opencode-session");
   }
-  return Object.entries(expected).filter(([name, value]) => {
-    if (resolvedHeaders && Object.hasOwn(resolvedHeaders, name)) return false;
-    return value === undefined || model.headers?.[name] !== value;
-  }).map(([name]) => name).sort();
+
+  return [...missing].sort();
 }
 
 // Freeze only URL-dependent defaults before replacing the endpoint. Pi's
 // public compat overrides take precedence over detection (nullish values do
 // not override defaults). Provider/id-based behavior keeps its original input.
-// Oracle: Pi 1.0.0's pi-ai 1.0.0, api/openai-completions.ts detectCompat/getCompat,
+// Oracle: Pi 1.6.0's pi-ai 1.6.0, api/openai-completions.ts detectCompat/getCompat,
 // api/openai-responses.ts detectSessionAffinityFormat and
 // api/anthropic-messages.ts getAnthropicCompat. Real SDK payload tests cover
 // this boundary so dependency updates cannot silently change semantics.
-// 1.0.0 changes carried here: OpenRouter hosts send session-affinity headers by
-// default on Chat and Anthropic; Chat strict mode is a constant false (so it is
-// no longer frozen). Its ChatGPT sign-in heuristic (openai + api.openai.com +
-// non-`sk-` key) is URL-derived too, but that credential is OAuth and the
-// router already keeps OAuth models direct.
+// 1.6.0 changes carried here: supportsDeveloperRole on OpenAI Chat is OpenAI-only
+// (provider === "openai" || baseUrl includes "api.openai.com"); OpenAI Chat
+// exposes promptCacheKeyMode so api.openai.com routes with prompt_cache_key
+// intact; Anthropic Messages enables supportsMessageThreads on api.anthropic.com.
 export function compatForRoutedModel(model: SelectedModel): SelectedModel["compat"] {
   const provider = model.provider;
   const url = model.baseUrl;
@@ -55,12 +67,18 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
     return { ...explicit, sessionAffinityFormat: explicit?.sessionAffinityFormat ?? (openRouter ? "openrouter" : "openai") };
   }
   if (model.api === "anthropic-messages") {
-    if (!openRouter) return model.compat;
     const explicit = model.compat as AnthropicMessagesCompat | undefined;
+    const messageThreads = url.includes("api.anthropic.com");
+    if (!openRouter && !messageThreads) return model.compat;
     return {
       ...explicit,
-      sendSessionAffinityHeaders: explicit?.sendSessionAffinityHeaders ?? true,
-      sessionAffinityFormat: explicit?.sessionAffinityFormat ?? "openrouter",
+      ...(openRouter ? {
+        sendSessionAffinityHeaders: explicit?.sendSessionAffinityHeaders ?? true,
+        sessionAffinityFormat: explicit?.sessionAffinityFormat ?? "openrouter",
+      } : {}),
+      ...(messageThreads ? {
+        supportsMessageThreads: explicit?.supportsMessageThreads ?? true,
+      } : {}),
     };
   }
   if (model.api !== "openai-completions") return model.compat;
@@ -75,15 +93,15 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
   const antLing = provider === "ant-ling" || url.includes("api.ant-ling.com");
   const grok = provider === "xai" || url.includes("api.x.ai");
   const deepseek = provider === "deepseek" || url.toLowerCase().includes("deepseek.com");
+  const isOpenAI = provider === "openai" || url.includes("api.openai.com");
   const nonStandard = nvidia || provider === "cerebras" || url.includes("cerebras.ai") || grok || together
     || url.includes("chutes.ai") || deepseek || zai || moonshot
     || provider === "opencode" || url.includes("opencode.ai") || cloudflareWorkers || cloudflareGateway || antLing;
   const maxTokens = url.includes("chutes.ai") || deepseek || moonshot || cloudflareGateway || together || nvidia || antLing || zai;
-  const openRouterDeveloper = openRouter && (model.id.startsWith("anthropic/") || model.id.startsWith("openai/"));
   return {
     ...explicit,
     supportsStore: explicit?.supportsStore ?? !nonStandard,
-    supportsDeveloperRole: explicit?.supportsDeveloperRole ?? (openRouterDeveloper || (!nonStandard && !openRouter)),
+    supportsDeveloperRole: explicit?.supportsDeveloperRole ?? isOpenAI,
     supportsReasoningEffort: explicit?.supportsReasoningEffort ?? !(grok || zai || moonshot || together || cloudflareGateway || nvidia || antLing),
     maxTokensField: explicit?.maxTokensField ?? (maxTokens ? "max_tokens" : "max_completion_tokens"),
     requiresReasoningContentOnAssistantMessages: explicit?.requiresReasoningContentOnAssistantMessages ?? deepseek,
@@ -91,5 +109,6 @@ export function compatForRoutedModel(model: SelectedModel): SelectedModel["compa
     sendSessionAffinityHeaders: explicit?.sendSessionAffinityHeaders ?? openRouter,
     sessionAffinityFormat: explicit?.sessionAffinityFormat ?? (openRouter ? "openrouter" : "openai"),
     supportsLongCacheRetention: explicit?.supportsLongCacheRetention ?? !(together || cloudflareWorkers || cloudflareGateway || nvidia || antLing),
+    ...(url.includes("api.openai.com") ? { promptCacheKeyMode: explicit?.promptCacheKeyMode ?? "enabled" } : {}),
   };
 }

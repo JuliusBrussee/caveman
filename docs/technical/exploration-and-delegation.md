@@ -34,7 +34,9 @@ transcript isolation has dedicated proof.
 ## Permission boundary
 
 Explorer agent has only Read, Glob, and Grep tools. It cannot edit files or run
-commands. Its contract returns one verified citation per line:
+commands. In Claude Code the skill runs as a forked Explore subagent
+(`context: fork`), so its reads stay out of solver context and agent type
+enforces read-only. Its contract returns one verified citation per line:
 
 ```text
 path/to/file.ext:START-END  reason location matters

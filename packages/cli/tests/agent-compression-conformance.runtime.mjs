@@ -482,6 +482,9 @@ test("every shipped profile's selected supported transport preserves recovery th
         USERPROFILE: home,
         PATH: `${binDir}${delimiter}${process.env.PATH}`,
         CAVEMAN_PROXY_BIN: proxyBin,
+        // This matrix exercises server-side retrieval. A developer's MCP
+        // binary must not change Pi's launch-time recovery gate to agent-side.
+        CAVEMAN_MCP_BIN: join(binDir, "missing-caveman-mcp"),
         CAVE_GATEWAY_URL: `http://127.0.0.1:${proxyPort}`,
         CAVE_NO_KEYCHAIN: "1",
         NO_COLOR: "1",

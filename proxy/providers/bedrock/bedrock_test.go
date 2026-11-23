@@ -71,6 +71,22 @@ func TestResolveUpstreamURL_StripsBedrockPrefix(t *testing.T) {
 	}
 }
 
+func TestResolveUpstreamURLPreservesEscapedModelARN(t *testing.T) {
+	const arn = "arn%3Aaws%3Abedrock%3Aus-east-1%3A123456789012%3Aapplication-inference-profile%2Fabc123"
+	for _, action := range []string{"invoke", "invoke-with-response-stream", "converse", "converse-stream"} {
+		t.Run(action, func(t *testing.T) {
+			got, err := resolve(t, newAdapter(t), invokePath(arn, action), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := stubBase + "/model/" + arn + "/" + action
+			if got != want {
+				t.Fatalf("escaped model ARN changed: got %s want %s", got, want)
+			}
+		})
+	}
+}
+
 func TestResolveUpstreamURL_RejectsUnknownModel(t *testing.T) {
 	a := newAdapter(t)
 	if _, err := resolve(t, a, invokePath("evil.unlisted-model", "invoke"), nil); err == nil {

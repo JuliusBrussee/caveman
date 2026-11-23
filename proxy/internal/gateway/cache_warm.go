@@ -399,6 +399,12 @@ func warmBody(body []byte) ([]byte, time.Duration) {
 	}
 	// Anthropic rejects max_tokens 0 with each of these; budget thinking also
 	// renders its budget into the prompt, so no other cap would hit the same key.
+	// Message-threads requests carry server-side continuation state: replaying
+	// a create creates stray threads and replaying a continue fails with
+	// thread_already_continued.
+	if span, ok := jsonsplice.Field(body, root, "thread"); ok && strings.TrimSpace(string(body[span.Start:span.End])) != "null" {
+		return nil, 0
+	}
 	if field("thinking", "type") == "enabled" {
 		return nil, 0
 	}
