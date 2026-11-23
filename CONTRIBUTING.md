@@ -3,7 +3,7 @@
 Thanks for helping make the cave bigger. PRs are welcome: new compressors,
 integrations, agent recipes, bug fixes, docs.
 
-A new content-type compressor can add support for CSV, HTML, SQL dumps, notebook
+A new content-type compressor can add support for SQL dumps, notebook
 output, or OpenAPI specs. Each one makes Caveman
 useful to a whole new slice of payloads. Start from an existing one under
 `engine/` and copy its shape.
@@ -49,4 +49,4 @@ authorship and DCO sign-off.
   untouched.
 - Match the surrounding style. Small, focused PRs review fastest.
 
-Questions → open a discussion or ping us at **hello@caveman.so**.
+Questions → open a [GitHub Discussion](https://github.com/JuliusBrussee/caveman/discussions) or [issue](https://github.com/JuliusBrussee/caveman/issues).

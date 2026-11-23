@@ -93,8 +93,10 @@ plugin root is the repository root. That has three consequences:
   scanned.
 
 Cursor's plugin (`.cursor-plugin/plugin.json`) reads `skills/` and
-`hooks/hooks-cursor.json`. Never add `hooks/hooks.json`: Claude Code and Gemini
-load it automatically from the plugin or extension root.
+`hooks/hooks-cursor.json`. Codex's marketplace manifest lives at
+`.codex-plugin/plugin.json` (root) alongside the mirrored `plugins/caveman/.codex-plugin/plugin.json`.
+Never add `hooks/hooks.json`: Claude Code and Gemini load it automatically
+from the plugin or extension root.
 
 `plugins/caveman/` is the CI-mirrored Claude Code plugin copy.
 `.github/workflows/sync-skill.yml` runs on pushes to `main` that touch the
@@ -157,8 +159,8 @@ kept for older hooks and statuslines.
   tools that parse the reply get no ruleset. An explicit `CAVEMAN_DEFAULT_MODE`
   opts back in. Hook tests drop `CLAUDE_CODE_ENTRYPOINT` from the environment.
 - The SubagentStart path prints nothing for a stored `off`, a one-shot mode,
-  `cavecrew-*` agents (they carry their own voice), or a repo
-  `defaultMode: "off"`.
+  `cavecrew-*` agents (they carry their own voice), agents outside
+  `CAVEMAN_SUBAGENT_MATCHER` (when configured), or a repo `defaultMode: "off"`.
 
 ### Rules for hook code
 

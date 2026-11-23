@@ -27,6 +27,26 @@ It exposes five tool classes:
 MCP transport is local process I/O, and host agent decides when tools can be
 called. Configure its tool permissions as narrowly as possible.
 
+## Code Mode MCP gateway
+
+`caveman-mcp codemode` (invoked through `caveman codemode` or opt-in
+`caveman wrap --codemode <agent>`) multiplexes external stdio and Streamable
+HTTP MCP servers behind a compact static meta-tool surface backed by an
+embedded QuickJS sandbox (`modernc.org/quickjs`):
+
+- `codemode_search_tools` — BM25 discovery returning compact typed signatures and read/write access tags
+- `codemode_execute` — read-only multi-step pipeline or QuickJS snippet (`readOnlyHint: true`), archiving large payloads in CCR before elision
+- `codemode_mutate` — state-changing tool calls kept separate so host approval prompts still guard writes
+- `caveman_retrieve` — byte-exact recovery of archived CCR handles
+
+Workspace-local MCP configs (`.mcp.json`, `.codex/config.toml`, `.gemini/settings.json`,
+`.qwen/settings.json`, `opencode.json*`, `kilo.json*`) are skipped by default;
+pass `--trust-workspace-mcp` or `CAVEMAN_TRUST_WORKSPACE_MCP=1` to include them.
+On OpenCode V2, overlays disable bridged OpenCode-owned servers through
+`mcp.servers.<name>.disabled` while keeping V1 `{ enabled: false }` for V1 hosts;
+on Hermes, in-session `config.yaml` edits preserve both block-style and flow-style
+`mcp_servers` definitions and fail closed if an unsupported YAML shape cannot be merged.
+
 ## Cavemem
 
 Cavemem stores durable project facts in SQLite and retrieves them with local

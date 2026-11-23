@@ -44,7 +44,7 @@ an already-running Kilo editor extension.
 Install the verified Kilo CLI version before using either shortcut:
 
 ```bash
-npm install -g @kilocode/cli@7.5.6
+npm install -g @kilocode/cli@7.8.32
 caveman kilo
 ```
 
@@ -62,7 +62,7 @@ confinement or MCP recovery that later policy could override.
 Install Qwen Code's CLI before using its shortcut:
 
 ```bash
-npm i -g @qwen-code/qwen-code@0.22.3
+npm i -g @qwen-code/qwen-code@0.28.3
 caveman qwen
 ```
 
@@ -74,8 +74,23 @@ macOS, `/etc/qwen-code/settings.json` on Linux, and
 local or managed OpenAI-compatible route into a temporary file and points Qwen
 at that overlay. Enterprise policy and unrelated provider settings survive the
 merge; the source system settings and `~/.qwen/settings.json` are not rewritten.
-The pinned real-CLI route smoke covers Qwen Code 0.22.3 in both local and
+The pinned real-CLI route smoke covers Qwen Code 0.28.3 in both local and
 managed modes.
+
+### OpenCode 2.x, Pi 1.6.0, and Codex WebSockets
+
+- **OpenCode 2.x** connects to a persistent background service unless
+  `--standalone` is passed; `caveman wrap opencode` automatically injects
+  `--standalone` for session commands when the resolved binary reports major
+  version 2 or newer, preserves V2 `providers` / `mcp.servers` schemas, and
+  emits `Stop` from the V2 `experimental.idle` session hook without double-emitting.
+- **Pi 1.6.0** (`@caveman-ai/pi` 0.4.0) keeps provider attribution on
+  `ClientIdentity`, preserves `prompt_cache_key` routing on OpenAI Chat, freezes
+  `supportsMessageThreads` on `api.anthropic.com`, and relays ChatGPT WebSocket
+  turns without mutating the cached system prompt.
+- **Codex** relays `/chatgpt/responses` and `/v1/responses` WebSockets with
+  origin and SSRF checks, correlates ChatGPT native sessions, and ships a root
+  `.codex-plugin/plugin.json` manifest for marketplace installs.
 
 Arguments after the shortcut are passed through:
 
