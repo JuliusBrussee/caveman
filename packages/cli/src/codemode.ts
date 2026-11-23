@@ -218,29 +218,65 @@ function parseJsonServers(raw: unknown): Record<string, CodemodeServerConfig> {
   return out;
 }
 
+function isPlainRecord(raw: unknown): raw is Record<string, unknown> {
+  return Boolean(raw) && typeof raw === "object" && !Array.isArray(raw);
+}
+
+function looksLikeSingleOpenCodeServer(raw: unknown): boolean {
+  if (!isPlainRecord(raw)) return false;
+  return (
+    raw.type === "local" ||
+    raw.type === "remote" ||
+    typeof raw.url === "string" ||
+    Array.isArray(raw.command) ||
+    typeof raw.command === "string"
+  );
+}
+
+function isOpenCodeV2McpObject(mcp: Record<string, unknown>): boolean {
+  return isPlainRecord(mcp.servers) && !looksLikeSingleOpenCodeServer(mcp.servers);
+}
+
+function parseOpenCodeServerEntry(name: string, value: unknown): CodemodeServerConfig | null {
+  if (!isPlainRecord(value)) return null;
+  if (value.enabled === false || value.disabled === true) return null;
+  const entry: CodemodeServerConfig = {};
+  if (typeof value.url === "string" && value.url.trim()) {
+    entry.url = value.url.trim();
+    const headers = stringMap(value.headers);
+    if (headers) entry.headers = headers;
+  } else if (Array.isArray(value.command) && value.command.length > 0 && typeof value.command[0] === "string") {
+    entry.command = value.command[0].trim();
+    if (value.command.length > 1) {
+      entry.args = value.command.slice(1).filter((item): item is string => typeof item === "string");
+    }
+    const env = stringMap(value.environment ?? value.env);
+    if (env) entry.env = env;
+  } else if (typeof value.command === "string" && value.command.trim()) {
+    entry.command = value.command.trim();
+    if (Array.isArray(value.args)) {
+      entry.args = value.args.filter((item): item is string => typeof item === "string");
+    }
+    const env = stringMap(value.environment ?? value.env);
+    if (env) entry.env = env;
+  }
+  return isValidServer(entry) && !isSelfServer(name, entry) ? entry : null;
+}
+
 function parseOpenCodeMcp(raw: unknown): Record<string, CodemodeServerConfig> {
   const out: Record<string, CodemodeServerConfig> = {};
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return out;
-  for (const [name, value] of Object.entries(raw as Record<string, unknown>)) {
-    if (!value || typeof value !== "object" || Array.isArray(value)) continue;
-    const obj = value as Record<string, unknown>;
-    if (obj.enabled === false) continue;
-    const entry: CodemodeServerConfig = {};
-    if (typeof obj.url === "string" && obj.url.trim()) {
-      entry.url = obj.url.trim();
-      const headers = stringMap(obj.headers);
-      if (headers) entry.headers = headers;
-    } else if (Array.isArray(obj.command) && obj.command.length > 0 && typeof obj.command[0] === "string") {
-      entry.command = obj.command[0].trim();
-      if (obj.command.length > 1) {
-        entry.args = obj.command.slice(1).filter((item): item is string => typeof item === "string");
-      }
-      const env = stringMap(obj.environment ?? obj.env);
-      if (env) entry.env = env;
+  if (!isPlainRecord(raw)) return out;
+  const hasV2Servers = isOpenCodeV2McpObject(raw);
+  if (hasV2Servers) {
+    for (const [name, value] of Object.entries(raw.servers as Record<string, unknown>)) {
+      const entry = parseOpenCodeServerEntry(name, value);
+      if (entry) out[name] = entry;
     }
-    if (isValidServer(entry) && !isSelfServer(name, entry)) {
-      out[name] = entry;
-    }
+  }
+  for (const [name, value] of Object.entries(raw)) {
+    if (hasV2Servers && name === "servers") continue;
+    const entry = parseOpenCodeServerEntry(name, value);
+    if (entry && !out[name]) out[name] = entry;
   }
   return out;
 }
@@ -391,18 +427,320 @@ function splitTomlHeader(header: string): string[] {
   return parts;
 }
 
+type YamlFlowSpanResult =
+  | { ok: true; endLineIdx: number; rawFlow: string; rawLines: string[] }
+  | { ok: false; reason: string };
+
+function scanYamlFlowSpan(lines: string[], startLineIdx: number, startCol: number): YamlFlowSpanResult {
+  const opener = lines[startLineIdx]?.[startCol];
+  if (opener !== "{" && opener !== "[") {
+    return { ok: false, reason: "flow span must begin with '{' or '['" };
+  }
+  const stack: string[] = [];
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  const collected: string[] = [];
+
+  for (let lineIdx = startLineIdx; lineIdx < lines.length; lineIdx++) {
+    const line = lines[lineIdx]!;
+    const from = lineIdx === startLineIdx ? startCol : 0;
+    let sliceEnd = line.length;
+    for (let i = from; i < line.length; i++) {
+      const c = line[i]!;
+      if (inDouble) {
+        if (escaped) {
+          escaped = false;
+        } else if (c === "\\") {
+          escaped = true;
+        } else if (c === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+      if (inSingle) {
+        if (c === "'") {
+          if (line[i + 1] === "'") {
+            i++;
+          } else {
+            inSingle = false;
+          }
+        }
+        continue;
+      }
+      if (c === '"') {
+        inDouble = true;
+        continue;
+      }
+      if (c === "'") {
+        inSingle = true;
+        continue;
+      }
+      if (c === "#" && (i === 0 || line[i - 1] === " " || line[i - 1] === "\t")) {
+        sliceEnd = i;
+        break;
+      }
+      if (c === "{" || c === "[") {
+        stack.push(c);
+      } else if (c === "}" || c === "]") {
+        const expected = c === "}" ? "{" : "[";
+        if (stack.length === 0 || stack[stack.length - 1] !== expected) {
+          return { ok: false, reason: `mismatched '${c}' in YAML flow collection` };
+        }
+        stack.pop();
+        if (stack.length === 0) {
+          const rest = stripYamlComment(line.slice(i + 1)).trim();
+          if (rest) {
+            return { ok: false, reason: `unexpected trailing content after flow collection: ${rest}` };
+          }
+          collected.push(line.slice(from, i + 1));
+          return {
+            ok: true,
+            endLineIdx: lineIdx,
+            rawFlow: collected.join("\n"),
+            rawLines: lines.slice(startLineIdx, lineIdx + 1),
+          };
+        }
+      }
+    }
+    collected.push(line.slice(from, sliceEnd));
+  }
+  return { ok: false, reason: "unterminated YAML flow collection" };
+}
+
+function hasUnsupportedYamlToken(text: string): string | null {
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i]!;
+    if (inDouble) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inDouble = false;
+      continue;
+    }
+    if (inSingle) {
+      if (c === "'") {
+        if (text[i + 1] === "'") i++;
+        else inSingle = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === "#" && (i === 0 || text[i - 1] === " " || text[i - 1] === "\t" || text[i - 1] === "\n")) {
+      while (i < text.length && text[i] !== "\n") i++;
+      continue;
+    }
+    const prev = i === 0 ? "" : text[i - 1]!;
+    const atBoundary = i === 0 || prev === " " || prev === "\t" || prev === "\n" || prev === "\r" || prev === "{" || prev === "[" || prev === "," || prev === ":";
+    if (!atBoundary) continue;
+    const next = text[i + 1] ?? "";
+    if (c === "&" && /[A-Za-z0-9_-]/.test(next)) return "YAML anchors (&) are not supported in merge";
+    if (c === "*" && /[A-Za-z0-9_-]/.test(next)) return "YAML aliases (*) are not supported in merge";
+    if (c === "!" && next !== "") return "YAML tags (!) are not supported in merge";
+    if (c === "?" && (next === "" || next === " " || next === "\t" || next === "\n" || next === "\r")) {
+      return "YAML explicit mapping keys (?) are not supported in merge";
+    }
+    if (c === "<" && next === "<" && (text[i + 2] === ":" || text[i + 2] === " ")) {
+      return "YAML merge keys (<<) are not supported in merge";
+    }
+  }
+  return null;
+}
+
+function splitYamlFlowItems(inner: string): { ok: true; items: string[] } | { ok: false; reason: string } {
+  const items: string[] = [];
+  let start = 0;
+  let depth = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let i = 0; i < inner.length; i++) {
+    const c = inner[i]!;
+    if (inDouble) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') inDouble = false;
+      continue;
+    }
+    if (inSingle) {
+      if (c === "'") {
+        if (inner[i + 1] === "'") i++;
+        else inSingle = false;
+      }
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === "#" && (i === 0 || inner[i - 1] === " " || inner[i - 1] === "\t" || inner[i - 1] === "\n")) {
+      while (i < inner.length && inner[i] !== "\n") i++;
+      continue;
+    }
+    if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") depth--;
+    else if (c === "," && depth === 0) {
+      const seg = inner.slice(start, i).trim();
+      if (!seg) return { ok: false, reason: "empty item between commas in YAML flow collection" };
+      items.push(seg);
+      start = i + 1;
+    }
+  }
+  if (depth !== 0 || inSingle || inDouble) {
+    return { ok: false, reason: "unbalanced YAML flow collection" };
+  }
+  const tail = inner.slice(start).trim();
+  if (tail) items.push(tail);
+  return { ok: true, items };
+}
+
+function findYamlFlowColon(entry: string): number {
+  let depth = 0;
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  let sawQuotedKeyEnd = false;
+  for (let i = 0; i < entry.length; i++) {
+    const c = entry[i]!;
+    if (inDouble) {
+      if (escaped) escaped = false;
+      else if (c === "\\") escaped = true;
+      else if (c === '"') {
+        inDouble = false;
+        if (depth === 0) sawQuotedKeyEnd = true;
+      }
+      continue;
+    }
+    if (inSingle) {
+      if (c === "'") {
+        if (entry[i + 1] === "'") i++;
+        else {
+          inSingle = false;
+          if (depth === 0) sawQuotedKeyEnd = true;
+        }
+      }
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      continue;
+    }
+    if (c === "{" || c === "[") depth++;
+    else if (c === "}" || c === "]") depth--;
+    else if (c === ":" && depth === 0) {
+      const next = entry[i + 1];
+      if (
+        sawQuotedKeyEnd ||
+        next === undefined ||
+        next === " " ||
+        next === "\t" ||
+        next === "\n" ||
+        next === "\r" ||
+        next === "," ||
+        next === "}" ||
+        next === "]"
+      ) {
+        return i;
+      }
+    }
+  }
+  return -1;
+}
+
+type YamlFlowMappingEntry = {
+  key: string;
+  rawKey: string;
+  rawValue: string;
+};
+
+function parseYamlFlowMappingEntries(
+  rawFlow: string,
+): { ok: true; entries: YamlFlowMappingEntry[] } | { ok: false; reason: string } {
+  const trimmed = rawFlow.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return { ok: false, reason: "expected YAML flow mapping enclosed in '{...}'" };
+  }
+  const unsupported = hasUnsupportedYamlToken(trimmed);
+  if (unsupported) return { ok: false, reason: unsupported };
+  const inner = trimmed.slice(1, -1).trim();
+  if (!inner) return { ok: true, entries: [] };
+  const split = splitYamlFlowItems(inner);
+  if (!split.ok) return split;
+  const entries: YamlFlowMappingEntry[] = [];
+  for (const item of split.items) {
+    const colon = findYamlFlowColon(item);
+    if (colon <= 0) {
+      return { ok: false, reason: `invalid YAML flow mapping entry: ${item.slice(0, 60)}` };
+    }
+    const rawKey = item.slice(0, colon).trim();
+    const rawValue = item.slice(colon + 1).trim();
+    const key = unquoteKey(rawKey);
+    if (!key) return { ok: false, reason: "empty key in YAML flow mapping" };
+    entries.push({ key, rawKey, rawValue });
+  }
+  return { ok: true, entries };
+}
+
+function parseYamlFlowValue(raw: string): unknown {
+  const s = raw.trim();
+  if (!s || s === "null" || s === "~") return null;
+  if (s === "true") return true;
+  if (s === "false") return false;
+  if (s.startsWith("{") && s.endsWith("}")) {
+    const parsed = parseYamlFlowMappingEntries(s);
+    if (!parsed.ok) return undefined;
+    const out: Record<string, unknown> = {};
+    for (const entry of parsed.entries) {
+      out[entry.key] = parseYamlFlowValue(entry.rawValue);
+    }
+    return out;
+  }
+  if (s.startsWith("[") && s.endsWith("]")) {
+    const inner = s.slice(1, -1).trim();
+    if (!inner) return [];
+    const split = splitYamlFlowItems(inner);
+    if (!split.ok) return undefined;
+    return split.items.map((item) => parseYamlFlowValue(item));
+  }
+  if (s.length >= 2 && s.startsWith('"') && s.endsWith('"')) {
+    try {
+      return JSON.parse(s);
+    } catch {
+      return s.slice(1, -1);
+    }
+  }
+  if (s.length >= 2 && s.startsWith("'") && s.endsWith("'")) {
+    return s.slice(1, -1).replace(/''/g, "'");
+  }
+  return s;
+}
+
 function parseYamlFlowMap(val: string): Record<string, string> | undefined {
   const s = val.trim();
   if (!s.startsWith("{") || !s.endsWith("}")) return undefined;
-  const inner = s.slice(1, -1).trim();
-  if (!inner) return undefined;
+  const parsed = parseYamlFlowMappingEntries(s);
+  if (!parsed.ok || parsed.entries.length === 0) return undefined;
   const out: Record<string, string> = {};
-  for (const item of splitList(inner)) {
-    const colon = item.indexOf(":");
-    if (colon <= 0) continue;
-    const k = unquoteKey(item.slice(0, colon));
-    const v = unquoteKey(item.slice(colon + 1));
-    if (k) out[k] = v;
+  for (const entry of parsed.entries) {
+    const v = parseYamlFlowValue(entry.rawValue);
+    if (typeof v === "string") out[entry.key] = v;
   }
   return Object.keys(out).length > 0 ? out : undefined;
 }
@@ -561,7 +899,9 @@ export function parseHermesMcpServersYaml(yaml: string): Record<string, Codemode
   let mode: "" | "args" | "env" | "headers" | "tools" | "tools_include" | "tools_exclude" = "";
   let modeIndent = -1;
 
-  for (const rawLine of yaml.split(/\r?\n/)) {
+  const lines = yaml.split(/\r?\n/);
+  for (let lineIdx = 0; lineIdx < lines.length; lineIdx++) {
+    const rawLine = lines[lineIdx]!;
     const trimmed = stripYamlComment(rawLine).trim();
     if (!trimmed) continue;
     const indent = rawLine.length - rawLine.trimStart().length;
@@ -579,6 +919,35 @@ export function parseHermesMcpServersYaml(yaml: string): Record<string, Codemode
       const colon = trimmed.indexOf(":");
       const topKey = colon > 0 ? unquoteKey(trimmed.slice(0, colon)) : "";
       const topRest = colon > 0 ? trimmed.slice(colon + 1).trim() : "";
+      if (topKey === "mcp_servers" && topRest.startsWith("{")) {
+        const startCol = rawLine.indexOf("{", rawLine.indexOf(":") + 1);
+        const span = startCol >= 0 ? scanYamlFlowSpan(lines, lineIdx, startCol) : { ok: false as const, reason: "missing '{'" };
+        if (span.ok) {
+          lineIdx = span.endLineIdx;
+          const entries = parseYamlFlowMappingEntries(span.rawFlow);
+          if (entries.ok) {
+            for (const entry of entries.entries) {
+              const parsed = parseYamlFlowValue(entry.rawValue);
+              if (isPlainRecord(parsed)) {
+                if (parsed.enabled === false) {
+                  disabled.add(entry.key);
+                } else {
+                  const normalized = normalizeServerEntry(parsed);
+                  if (normalized) raw[entry.key] = normalized;
+                }
+              }
+            }
+          }
+        }
+        inSection = false;
+        current = "";
+        serverIndent = -1;
+        propIndent = -1;
+        toolsIndent = -1;
+        mode = "";
+        modeIndent = -1;
+        continue;
+      }
       inSection = topKey === "mcp_servers" && topRest === "";
       current = "";
       serverIndent = -1;
@@ -589,14 +958,43 @@ export function parseHermesMcpServersYaml(yaml: string): Record<string, Codemode
       continue;
     }
     if (!inSection) continue;
-    if ((serverIndent < 0 || indent === serverIndent) && trimmed.endsWith(":") && !trimmed.startsWith("-")) {
-      current = unquoteKey(trimmed.slice(0, -1));
-      serverIndent = indent;
-      propIndent = -1;
-      toolsIndent = -1;
-      mode = "";
-      modeIndent = -1;
-      continue;
+    if ((serverIndent < 0 || indent === serverIndent) && !trimmed.startsWith("-")) {
+      if (trimmed.endsWith(":")) {
+        current = unquoteKey(trimmed.slice(0, -1));
+        serverIndent = indent;
+        propIndent = -1;
+        toolsIndent = -1;
+        mode = "";
+        modeIndent = -1;
+        continue;
+      }
+      const srvColon = trimmed.indexOf(":");
+      if (srvColon > 0) {
+        const srvName = unquoteKey(trimmed.slice(0, srvColon));
+        const srvRest = trimmed.slice(srvColon + 1).trim();
+        if (srvName && srvRest.startsWith("{")) {
+          const startCol = rawLine.indexOf("{", rawLine.indexOf(":") + 1);
+          const span = startCol >= 0 ? scanYamlFlowSpan(lines, lineIdx, startCol) : { ok: false as const, reason: "missing '{'" };
+          if (span.ok) {
+            lineIdx = span.endLineIdx;
+            const parsed = parseYamlFlowValue(span.rawFlow);
+            if (isPlainRecord(parsed)) {
+              if (parsed.enabled === false) disabled.add(srvName);
+              else {
+                const normalized = normalizeServerEntry(parsed);
+                if (normalized) raw[srvName] = normalized;
+              }
+            }
+          }
+          serverIndent = indent;
+          current = "";
+          propIndent = -1;
+          toolsIndent = -1;
+          mode = "";
+          modeIndent = -1;
+          continue;
+        }
+      }
     }
     if (!current || indent <= serverIndent) continue;
     const cfg = (raw[current] ??= {});
@@ -1027,27 +1425,114 @@ export function writeGeminiCodemodeSettingsOverlay(
   return outPath;
 }
 
+export type OpenCodeMcpSchema = "v1" | "v2";
+
+function detectOpenCodeDocSchema(doc: unknown): OpenCodeMcpSchema | "unknown" {
+  if (!isPlainRecord(doc)) return "unknown";
+  if (isPlainRecord(doc.mcp) && isOpenCodeV2McpObject(doc.mcp)) return "v2";
+  if (isPlainRecord(doc.providers) && !isPlainRecord(doc.provider)) return "v2";
+  if (isPlainRecord(doc.mcp)) {
+    for (const value of Object.values(doc.mcp)) {
+      if (looksLikeSingleOpenCodeServer(value)) return "v1";
+    }
+  }
+  if (isPlainRecord(doc.provider)) return "v1";
+  return "unknown";
+}
+
 /**
- * Injects `mcp["caveman-codemode"]` into an ephemeral `OPENCODE_CONFIG_CONTENT`
- * JSON payload and disables already-bridged OpenCode-owned MCP servers in the
+ * Determines whether OpenCode uses V2 (`mcp.servers.<name>.disabled`) or V1
+ * (`mcp.<name>.enabled`) MCP schema for the active launch.
+ *
+ * Host binary major version takes precedence because OpenCode V2 drops
+ * V1-style enabled-only overrides (`{ enabled: false }`) during normalization
+ * even when the user's on-disk config still uses the flat V1 shape.
+ */
+export function detectOpenCodeConfigSchema(
+  workspaceDir: string,
+  homeDir: string,
+  env: NodeJS.ProcessEnv = process.env,
+  trustWorkspace = false,
+  hostMajor?: number,
+): OpenCodeMcpSchema | "unknown" {
+  if (typeof hostMajor === "number" && Number.isFinite(hostMajor)) {
+    return hostMajor >= 2 ? "v2" : "v1";
+  }
+  let sawV1 = false;
+  if (env.OPENCODE_CONFIG_CONTENT) {
+    try {
+      const schema = detectOpenCodeDocSchema(parseJsonRelaxed(env.OPENCODE_CONFIG_CONTENT));
+      if (schema === "v2") return "v2";
+      if (schema === "v1") sawV1 = true;
+    } catch { /* unreadable inline config */ }
+  }
+  for (const p of openCodeConfigPaths(workspaceDir, homeDir, env, trustWorkspace)) {
+    try {
+      const schema = detectOpenCodeDocSchema(parseJsonRelaxed(readFileSync(p, "utf8")));
+      if (schema === "v2") return "v2";
+      if (schema === "v1") sawV1 = true;
+    } catch { /* absent or unreadable */ }
+  }
+  return sawV1 ? "v1" : "unknown";
+}
+
+/**
+ * Injects `caveman-codemode` into an ephemeral `OPENCODE_CONFIG_CONTENT` JSON
+ * payload and disables already-bridged OpenCode-owned MCP servers in the
  * overlay ONLY (never touching `~/.config/opencode/opencode.json`).
+ *
+ * Recognizes both OpenCode V1 (`mcp.<name> = { enabled: false }`) and OpenCode
+ * V2 (`mcp.servers.<name> = { disabled: true }`) formats. Throws when V2 is
+ * requested but the existing overlay cannot safely carry `mcp.servers`.
  */
 export function applyOpenCodeCodemodeOverlay(
   rawConfigJson: string | undefined,
   bridgedOpenCodeServerNames: readonly string[],
   cmEntry: CodemodeLaunchEntry,
+  opts?: { schema?: OpenCodeMcpSchema },
 ): string {
   let doc: Record<string, unknown> = {};
-  if (rawConfigJson) {
+  if (rawConfigJson && rawConfigJson.trim()) {
     try {
       const parsed = parseJsonRelaxed(rawConfigJson);
-      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) doc = parsed as Record<string, unknown>;
-    } catch { /* fallback to empty */ }
+      if (isPlainRecord(parsed)) {
+        doc = parsed;
+      } else if (opts?.schema === "v2") {
+        throw new Error("OpenCode V2 overlay cannot disable bridged MCP servers: OPENCODE_CONFIG_CONTENT must be a JSON object");
+      }
+    } catch (err) {
+      if (opts?.schema === "v2") {
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(`OpenCode V2 overlay cannot disable bridged MCP servers: ${msg}`);
+      }
+    }
   }
-  const existingMcp =
-    doc.mcp && typeof doc.mcp === "object" && !Array.isArray(doc.mcp)
-      ? { ...(doc.mcp as Record<string, unknown>) }
-      : {};
+  const detected = detectOpenCodeDocSchema(doc);
+  const schema: OpenCodeMcpSchema = opts?.schema ?? (detected === "v2" ? "v2" : "v1");
+
+  if (schema === "v2") {
+    if (doc.mcp !== undefined && !isPlainRecord(doc.mcp)) {
+      throw new Error("OpenCode V2 overlay cannot disable bridged MCP servers: existing mcp field is not a JSON object");
+    }
+    const existingMcp = isPlainRecord(doc.mcp) ? { ...doc.mcp } : {};
+    if (existingMcp.servers !== undefined && !isPlainRecord(existingMcp.servers)) {
+      throw new Error("OpenCode V2 overlay cannot disable bridged MCP servers: existing mcp.servers field is not a JSON object");
+    }
+    const servers = isPlainRecord(existingMcp.servers) ? { ...existingMcp.servers } : {};
+    for (const name of bridgedOpenCodeServerNames) {
+      const prev = isPlainRecord(servers[name]) ? servers[name] : {};
+      servers[name] = { ...prev, disabled: true };
+    }
+    servers["caveman-codemode"] = {
+      type: "local",
+      command: [cmEntry.command, ...cmEntry.args],
+      disabled: false,
+    };
+    existingMcp.servers = servers;
+    return JSON.stringify({ ...doc, mcp: existingMcp });
+  }
+
+  const existingMcp = isPlainRecord(doc.mcp) ? { ...doc.mcp } : {};
   for (const name of bridgedOpenCodeServerNames) {
     existingMcp[name] = { enabled: false };
   }
@@ -1153,16 +1638,12 @@ export function patchEphemeralQwenCodemode(
   writeFileSync(ephemeralSystemSettingsPath, JSON.stringify(next, null, 2) + "\n", { mode: 0o600 });
 }
 
-/**
- * Strips any top-level `mcp_servers:` YAML entry (including inline `{}` / `null` /
- * `~` and quoted `"mcp_servers":`) from an ephemeral Hermes `config.yaml` and
- * inserts `caveman-codemode` before any trailing `...` YAML document-end marker,
- * leaving auth/models/plugins untouched and keeping `ruamel.yaml` happy.
- */
-export function rewriteHermesCodemodeYaml(sourceYaml: string, cmEntry: CodemodeLaunchEntry): string {
+function stripHermesMcpServersSection(sourceYaml: string): string[] {
+  const lines = sourceYaml.split(/\r?\n/);
   const kept: string[] = [];
   let skipping = false;
-  for (const line of sourceYaml.split(/\r?\n/)) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     const trimmed = stripYamlComment(line).trim();
     const indent = line.length - line.trimStart().length;
     if (trimmed && indent === 0) {
@@ -1171,11 +1652,37 @@ export function rewriteHermesCodemodeYaml(sourceYaml: string, cmEntry: CodemodeL
       } else {
         const colon = trimmed.indexOf(":");
         const key = colon > 0 ? unquoteKey(trimmed.slice(0, colon)) : "";
-        skipping = key === "mcp_servers";
+        if (key === "mcp_servers") {
+          const rest = trimmed.slice(colon + 1).trim();
+          if (rest.startsWith("{") || rest.startsWith("[")) {
+            const openIdx = line.indexOf(rest[0]!, line.indexOf(":") + 1);
+            const span = openIdx >= 0 ? scanYamlFlowSpan(lines, i, openIdx) : { ok: false as const, reason: "" };
+            if (span.ok) {
+              i = span.endLineIdx;
+              skipping = false;
+              continue;
+            }
+          }
+          skipping = true;
+          continue;
+        }
+        skipping = false;
       }
     }
     if (!skipping) kept.push(line);
   }
+  return kept;
+}
+
+/**
+ * Strips any top-level `mcp_servers:` YAML entry (block style, single-line or
+ * multi-line flow style `{...}`, inline `null` / `~`, and quoted
+ * `"mcp_servers":`) from an ephemeral Hermes `config.yaml` and inserts
+ * `caveman-codemode` before any trailing `...` YAML document-end marker,
+ * leaving auth/models/plugins untouched and keeping `ruamel.yaml` happy.
+ */
+export function rewriteHermesCodemodeYaml(sourceYaml: string, cmEntry: CodemodeLaunchEntry): string {
+  const kept = stripHermesMcpServersSection(sourceYaml);
 
   const block = [
     "mcp_servers:",
@@ -1202,8 +1709,33 @@ export function rewriteHermesCodemodeYaml(sourceYaml: string, cmEntry: CodemodeL
 
 const HERMES_CODEMODE_BASELINE_FILE = ".caveman-codemode-baseline.yaml";
 
-function extractHermesMcpServerBlocks(yaml: string): Map<string, string[]> {
+type ExtractedHermesMcpServers =
+  | {
+      ok: true;
+      kind: "absent" | "empty" | "block" | "flow";
+      entries: Map<string, string[]>;
+      rawFlowLines?: string[];
+    }
+  | { ok: false; reason: string };
+
+function formatFlowEntryAsBlockLines(entry: YamlFlowMappingEntry): string[] {
+  const valueLines = entry.rawValue.split(/\r?\n/);
+  if (valueLines.length === 1) {
+    return [`  ${entry.rawKey}: ${valueLines[0]}`];
+  }
+  const out = [`  ${entry.rawKey}: ${valueLines[0]}`];
+  for (let i = 1; i < valueLines.length; i++) {
+    const ln = valueLines[i]!;
+    out.push(ln.trim() ? `    ${ln.trimStart()}` : "");
+  }
+  return out;
+}
+
+function extractHermesMcpServers(yaml: string): ExtractedHermesMcpServers {
   const blocks = new Map<string, string[]>();
+  let seenSection = false;
+  let kind: "absent" | "empty" | "block" | "flow" = "absent";
+  let rawFlowLines: string[] | undefined;
   let inSection = false;
   let serverIndent = -1;
   let currentName = "";
@@ -1211,7 +1743,6 @@ function extractHermesMcpServerBlocks(yaml: string): Map<string, string[]> {
 
   const flush = () => {
     if (currentName && currentLines.length > 0) {
-      // Trim trailing blank lines attached to a server block.
       while (currentLines.length > 1 && currentLines[currentLines.length - 1]!.trim() === "") {
         currentLines.pop();
       }
@@ -1221,7 +1752,9 @@ function extractHermesMcpServerBlocks(yaml: string): Map<string, string[]> {
     currentLines = [];
   };
 
-  for (const line of yaml.split(/\r?\n/)) {
+  const lines = yaml.split(/\r?\n/);
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
     const trimmed = stripYamlComment(line).trim();
     const indent = line.length - line.trimStart().length;
     if (trimmed && indent === 0) {
@@ -1235,9 +1768,37 @@ function extractHermesMcpServerBlocks(yaml: string): Map<string, string[]> {
       const colon = trimmed.indexOf(":");
       const key = colon > 0 ? unquoteKey(trimmed.slice(0, colon)) : "";
       if (key === "mcp_servers") {
-        inSection = true;
-        serverIndent = -1;
-        continue;
+        if (seenSection) {
+          return { ok: false, reason: "duplicate top-level mcp_servers sections" };
+        }
+        seenSection = true;
+        const rest = trimmed.slice(colon + 1).trim();
+        if (rest === "" || rest === "null" || rest === "~") {
+          inSection = rest === "";
+          kind = "empty";
+          serverIndent = -1;
+          continue;
+        }
+        if (rest.startsWith("{")) {
+          const openIdx = line.indexOf("{", line.indexOf(":") + 1);
+          const span = openIdx >= 0 ? scanYamlFlowSpan(lines, i, openIdx) : { ok: false as const, reason: "missing '{'" };
+          if (!span.ok) return { ok: false, reason: span.reason };
+          const parsed = parseYamlFlowMappingEntries(span.rawFlow);
+          if (!parsed.ok) return { ok: false, reason: parsed.reason };
+          i = span.endLineIdx;
+          if (parsed.entries.length === 0) {
+            kind = "empty";
+          } else {
+            kind = "flow";
+            rawFlowLines = span.rawLines;
+            for (const entry of parsed.entries) {
+              blocks.set(entry.key, formatFlowEntryAsBlockLines(entry));
+            }
+          }
+          inSection = false;
+          continue;
+        }
+        return { ok: false, reason: `unsupported mcp_servers value shape: ${rest.slice(0, 60)}` };
       }
       if (inSection) {
         flush();
@@ -1250,34 +1811,95 @@ function extractHermesMcpServerBlocks(yaml: string): Map<string, string[]> {
       if (currentName) currentLines.push(line);
       continue;
     }
+    const unsupported = hasUnsupportedYamlToken(trimmed);
+    if (unsupported) return { ok: false, reason: unsupported };
     if (serverIndent < 0) serverIndent = indent;
     if (indent === serverIndent) {
       flush();
-      const colon = trimmed.indexOf(":");
-      if (colon > 0) {
-        currentName = unquoteKey(trimmed.slice(0, colon));
-        currentLines = [line];
+      if (trimmed.startsWith("-") || trimmed.startsWith("?")) {
+        return { ok: false, reason: `unsupported block entry under mcp_servers: ${trimmed.slice(0, 40)}` };
       }
+      const colon = trimmed.indexOf(":");
+      if (colon <= 0) {
+        return { ok: false, reason: `unparseable mcp_servers entry: ${trimmed.slice(0, 40)}` };
+      }
+      currentName = unquoteKey(trimmed.slice(0, colon));
+      const rest = trimmed.slice(colon + 1).trim();
+      if (rest.startsWith("{") || rest.startsWith("[")) {
+        const openIdx = line.indexOf(rest[0]!, line.indexOf(":") + 1);
+        const span = openIdx >= 0 ? scanYamlFlowSpan(lines, i, openIdx) : { ok: false as const, reason: "missing opener" };
+        if (!span.ok) return { ok: false, reason: span.reason };
+        const flowUnsupported = hasUnsupportedYamlToken(span.rawFlow);
+        if (flowUnsupported) return { ok: false, reason: flowUnsupported };
+        currentLines = span.rawLines;
+        i = span.endLineIdx;
+        kind = "block";
+        flush();
+        continue;
+      }
+      currentLines = [line];
+      kind = "block";
       continue;
     }
     if (currentName && indent > serverIndent) {
       currentLines.push(line);
+    } else {
+      return { ok: false, reason: "unexpected indentation inside mcp_servers" };
     }
   }
   if (inSection) flush();
-  return blocks;
+  if (blocks.size > 0 && kind === "empty") kind = "block";
+  return { ok: true, kind, entries: blocks, ...(rawFlowLines ? { rawFlowLines } : {}) };
 }
 
 /**
  * Merges in-session Hermes `config.yaml` edits (e.g., `hermes mcp add ...` or
  * model/provider changes) back onto the user's pre-wrap `config.yaml` while
  * removing the ephemeral `caveman-codemode` overlay entry and preserving all
- * pre-existing user `mcp_servers` entries that were masked during the wrap.
+ * pre-existing user `mcp_servers` entries (both block-style and flow-style)
+ * that were masked during the wrap.
+ *
+ * Throws if either input contains an `mcp_servers` shape that cannot be safely
+ * preserved, so callers leave the original file untouched and warn.
  */
 export function mergeHermesConfigEdits(editedYaml: string, originalYaml: string): string {
-  const editedEntries = extractHermesMcpServerBlocks(editedYaml);
+  const editedExtracted = extractHermesMcpServers(editedYaml);
+  if (!editedExtracted.ok) {
+    throw new Error(`cannot preserve edited Hermes mcp_servers: ${editedExtracted.reason}`);
+  }
+  const origExtracted = extractHermesMcpServers(originalYaml);
+  if (!origExtracted.ok) {
+    throw new Error(`cannot preserve original Hermes mcp_servers: ${origExtracted.reason}`);
+  }
+
+  const editedEntries = editedExtracted.entries;
   editedEntries.delete("caveman-codemode");
-  const origEntries = extractHermesMcpServerBlocks(originalYaml);
+  const origEntries = origExtracted.entries;
+
+  const kept = stripHermesMcpServersSection(editedYaml);
+
+  const insertBlock = (blockText: string): string => {
+    const docEndIdx = kept.findIndex((line) => {
+      const t = stripYamlComment(line).trim();
+      return t === "..." && line.length - line.trimStart().length === 0;
+    });
+    if (docEndIdx >= 0) {
+      const before = kept.slice(0, docEndIdx).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+      const after = kept.slice(docEndIdx).join("\n").trimEnd();
+      return before ? `${before}\n\n${blockText}\n${after}\n` : `${blockText}\n${after}\n`;
+    }
+    const base = kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
+    return base ? `${base}\n\n${blockText}\n` : `${blockText}\n`;
+  };
+
+  if (
+    editedEntries.size === 0 &&
+    origExtracted.kind === "flow" &&
+    origExtracted.rawFlowLines &&
+    !origEntries.has("caveman-codemode")
+  ) {
+    return insertBlock(origExtracted.rawFlowLines.join("\n"));
+  }
 
   const mergedServerLines: string[] = [];
   for (const [name, lines] of origEntries) {
@@ -1289,40 +1911,12 @@ export function mergeHermesConfigEdits(editedYaml: string, originalYaml: string)
     mergedServerLines.push(...lines);
   }
 
-  const kept: string[] = [];
-  let skipping = false;
-  for (const line of editedYaml.split(/\r?\n/)) {
-    const trimmed = stripYamlComment(line).trim();
-    const indent = line.length - line.trimStart().length;
-    if (trimmed && indent === 0) {
-      if (trimmed === "..." || trimmed === "---") {
-        skipping = false;
-      } else {
-        const colon = trimmed.indexOf(":");
-        const key = colon > 0 ? unquoteKey(trimmed.slice(0, colon)) : "";
-        skipping = key === "mcp_servers";
-      }
-    }
-    if (!skipping) kept.push(line);
-  }
-
   if (mergedServerLines.length === 0) {
     const base = kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
     return base ? `${base}\n` : "";
   }
 
-  const block = ["mcp_servers:", ...mergedServerLines].join("\n");
-  const docEndIdx = kept.findIndex((line) => {
-    const t = stripYamlComment(line).trim();
-    return t === "..." && line.length - line.trimStart().length === 0;
-  });
-  if (docEndIdx >= 0) {
-    const before = kept.slice(0, docEndIdx).join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
-    const after = kept.slice(docEndIdx).join("\n").trimEnd();
-    return before ? `${before}\n\n${block}\n${after}\n` : `${block}\n${after}\n`;
-  }
-  const base = kept.join("\n").replace(/\n{3,}/g, "\n\n").trimEnd();
-  return base ? `${base}\n\n${block}\n` : `${block}\n`;
+  return insertBlock(["mcp_servers:", ...mergedServerLines].join("\n"));
 }
 
 /**
@@ -1397,7 +1991,10 @@ export function syncBackHermesEphemeralHome(outDir: string, sourceHome: string):
           const tmp = `${dst}.caveman-sync-${process.pid}-${Date.now()}`;
           writeFileSync(tmp, merged, { mode: 0o600 });
           renameSync(tmp, dst);
-        } catch { /* best-effort */ }
+        } catch (err) {
+          const reason = err instanceof Error ? err.message : String(err);
+          process.stderr.write(`caveman: warning: Hermes config.yaml sync-back skipped (${reason}); original config.yaml left untouched\n`);
+        }
         continue;
       }
       const src = join(outDir, entry);

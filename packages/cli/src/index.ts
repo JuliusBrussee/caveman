@@ -37,6 +37,7 @@ import {
   applyKiloCodemodeOverlay,
   applyOpenCodeCodemodeOverlay,
   buildHermesEphemeralCodemodeHome,
+  detectOpenCodeConfigSchema,
   discoverCodemodeServers,
   discoverKiloOwnServerNames,
   discoverOpenCodeOwnServerNames,
@@ -7154,13 +7155,7 @@ async function spawnWrapped(
         childArgs = ["--plugin-dir", pluginDir, ...cmdArgs];
       }
     }
-    if (!direct && codemodeEnabled) {
-      const bridgedCount = Object.keys(codemodeServers).length;
-      const nativeNote = agent && NATIVE_CODEMODE_AGENTS.has(agent.id)
-        ? ` (opt-in alongside ${agent.display_name}'s native codemode)`
-        : "";
-      process.stderr.write(dim(`→ codemode active (${agent?.id}) · QuickJS sandbox bridging ${bridgedCount} MCP server${bridgedCount === 1 ? "" : "s"} + built-ins (repo, pr, browse) behind 4 read/write-split meta-tools + CCR recovery${nativeNote}\n`));
-    }
+    let codemodeOverlayApplied = codemodeEnabled;
     if (!direct && agent?.id === "pi") {
       childArgs = buildPiWrapArgs(cmdArgs, env, gw);
       if (codemodeEnabled && codemodeLaunch) {
@@ -7195,11 +7190,26 @@ async function spawnWrapped(
         patchEphemeralQwenCodemode(env.QWEN_CODE_SYSTEM_SETTINGS_PATH, cmEntry);
         env.QWEN_CODE_LEGACY_MCP_BLOCKING = "1";
       } else if (agent.id === "opencode") {
-        env.OPENCODE_CONFIG_CONTENT = applyOpenCodeCodemodeOverlay(
-          env.OPENCODE_CONFIG_CONTENT,
-          discoverOpenCodeOwnServerNames(process.cwd(), homedir(), process.env, trustWorkspaceMcp),
-          cmEntry,
-        );
+        const ocProbe = nativeBinaryProbe(bin);
+        const ocMajor = ocProbe?.launchable ? parsedSemver(ocProbe.version)?.[0] : undefined;
+        const ocOwnServers = discoverOpenCodeOwnServerNames(process.cwd(), homedir(), process.env, trustWorkspaceMcp);
+        const ocSchema = detectOpenCodeConfigSchema(process.cwd(), homedir(), env, trustWorkspaceMcp, ocMajor);
+        if (ocSchema === "unknown" && ocOwnServers.length > 0) {
+          codemodeOverlayApplied = false;
+          process.stderr.write(`${mark("warn")} OpenCode version/schema could not be determined; cannot safely mask bridged OpenCode MCP servers (${ocOwnServers.join(", ")}), skipping Code Mode overlay\n`);
+        } else {
+          try {
+            env.OPENCODE_CONFIG_CONTENT = applyOpenCodeCodemodeOverlay(
+              env.OPENCODE_CONFIG_CONTENT,
+              ocOwnServers,
+              cmEntry,
+              { schema: ocSchema === "v2" ? "v2" : "v1" },
+            );
+          } catch (err) {
+            codemodeOverlayApplied = false;
+            process.stderr.write(`${mark("warn")} ${(err as Error).message}; skipping OpenCode Code Mode overlay\n`);
+          }
+        }
       } else if (agent.id === "kilo") {
         env.KILO_CONFIG_CONTENT = applyKiloCodemodeOverlay(
           env.KILO_CONFIG_CONTENT,
@@ -7213,6 +7223,13 @@ async function spawnWrapped(
         hermesEphemeralSyncPairs.set(cmDir, srcHermesHome);
         env.HERMES_HOME = buildHermesEphemeralCodemodeHome(srcHermesHome, cmDir, cmEntry);
       }
+    }
+    if (!direct && codemodeOverlayApplied) {
+      const bridgedCount = Object.keys(codemodeServers).length;
+      const nativeNote = agent && NATIVE_CODEMODE_AGENTS.has(agent.id)
+        ? ` (opt-in alongside ${agent.display_name}'s native codemode)`
+        : "";
+      process.stderr.write(dim(`→ codemode active (${agent?.id}) · QuickJS sandbox bridging ${bridgedCount} MCP server${bridgedCount === 1 ? "" : "s"} + built-ins (repo, pr, browse) behind 4 read/write-split meta-tools + CCR recovery${nativeNote}\n`));
     }
     if (!direct && agent?.id === "aider") childArgs = routedAiderArgs(cmdArgs);
     if (!direct && agent?.id === "opencode") childArgs = routedOpenCodeArgs(bin, cmdArgs);
