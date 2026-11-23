@@ -443,7 +443,7 @@ SUPPORTED_PROVIDERS = frozenset({
 })
 DEFAULT_OPENAI_COMPAT_ENDPOINT = "http://localhost:11434/v1"  # Ollama
 
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-5"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
 CLAUDE_CLI = "claude"
 CLAUDE_PRINT_ARG = "--print"
 CLAUDE_SETTING_SOURCES_ARG = "--setting-sources"
@@ -476,8 +476,8 @@ OPENCODE_PROMPT_MESSAGE = "Follow the attached prompt exactly. Return only the f
 # deny is therefore also bound to OPENCODE_AGENT, an agent only we define.
 OPENCODE_PERMISSION_DENY = {"*": "deny"}
 
-# Output ceiling for one SDK call: the max output of the default model
-# (claude-sonnet-4-5). A body that needs more is refused in call_claude(),
+# Output ceiling for one SDK call, within the max output of the default model
+# (claude-sonnet-4-6). A body that needs more is refused in call_claude(),
 # never written back truncated.
 MAX_OUTPUT_TOKENS = 64000
 
@@ -485,7 +485,7 @@ MAX_OUTPUT_TOKENS = 64000
 def resolve_max_output_tokens() -> int:
     """Output ceiling for one SDK call, overridable per model.
 
-    The default tracks the max output of the default model. CAVEMAN_MODEL lets
+    The default is within the default model's max output. CAVEMAN_MODEL lets
     a user pin a model whose ceiling is lower (claude-opus-4-0 tops out at
     32K), and asking for more output than the model allows is a 400 from the
     API — an opaque failure in place of the truncation this cap exists to
