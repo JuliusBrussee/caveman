@@ -205,3 +205,56 @@ func TestCodeModeGatewaySearchExecuteAndCCRRecovery(t *testing.T) {
 		t.Fatalf("caveman_retrieve did not return original archived PR payload: %.200s", recOut.String())
 	}
 }
+
+func TestReadOnlyExecuteDoesNotRunCompoundWriteTool(t *testing.T) {
+	store, err := ccr.OpenMemory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	gw := codemode.NewGateway(store, nil, nil)
+	up := codemode.NewInProcessUpstream("repo")
+	writes := 0
+	up.Register(codemode.ToolSpec{
+		Name:        "find_and_replace",
+		Description: "Find and replace matches in a file.",
+	}, func(_ context.Context, args map[string]any) (any, error) {
+		writes++
+		return map[string]any{"replaced": args["pattern"]}, nil
+	})
+	if err := gw.AddUpstream(context.Background(), up); err != nil {
+		t.Fatal(err)
+	}
+
+	srv := codemode.NewServer(gw, nil)
+	execReq := `{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"codemode_execute","arguments":{"steps":[{"id":"edit","op":"call","tool":"repo.find_and_replace","args":{"path":"a.go","pattern":"foo"}}]}}}` + "\n"
+	var out bytes.Buffer
+	if err := srv.Serve(strings.NewReader(execReq), &out); err != nil {
+		t.Fatalf("serve execute: %v", err)
+	}
+	if !strings.Contains(out.String(), "cave_write_not_allowed") {
+		t.Fatalf("codemode_execute must refuse compound write tool, got: %s", out.String())
+	}
+	if writes != 0 {
+		t.Fatalf("writes = %d after refused codemode_execute, want 0", writes)
+	}
+
+	mutReq := `{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"codemode_mutate","arguments":{"tool":"repo.find_and_replace","args":{"path":"a.go","pattern":"foo"}}}}` + "\n"
+	out.Reset()
+	if err := srv.Serve(strings.NewReader(mutReq), &out); err != nil {
+		t.Fatalf("serve mutate: %v", err)
+	}
+	var mutResp struct {
+		Result struct {
+			Content []struct{ Text string } `json:"content"`
+			IsError bool                    `json:"isError"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(bytes.TrimSpace(out.Bytes()), &mutResp); err != nil {
+		t.Fatalf("unmarshal mutate response: %v (%s)", err, out.String())
+	}
+	if mutResp.Result.IsError || len(mutResp.Result.Content) == 0 || !strings.Contains(mutResp.Result.Content[0].Text, `"replaced":"foo"`) || writes != 1 {
+		t.Fatalf("codemode_mutate failed: writes=%d out=%s", writes, out.String())
+	}
+}

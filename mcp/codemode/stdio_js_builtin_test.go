@@ -972,7 +972,13 @@ func TestBrowseUpstreamSurvivesCanceledFirstCallContext(t *testing.T) {
 }
 
 func TestIsReadOnlyToolCompoundTokensAndQuickJSPrototypeHardening(t *testing.T) {
-	for _, mutating := range []string{"get_and_delete-issue", "listAndDropTables", "read_or_update", "fetchAndCreateUser"} {
+	for _, mutating := range []string{
+		"get_and_delete-issue", "listAndDropTables", "read_or_update", "fetchAndCreateUser",
+		// Compound <read>_<write> names that the first/last read-verb rule must never promote.
+		"find_and_replace", "search_replace", "read_and_replace", "list_and_append",
+		"get_and_overwrite", "view_and_save", "show_then_upload", "find_and_move",
+		"findAndReplace", "listAndAppend",
+	} {
 		if IsReadOnlyTool(ToolSpec{Name: mutating}) {
 			t.Errorf("IsReadOnlyTool(%q) = true, want false (compound mutating token)", mutating)
 		}
