@@ -68,6 +68,26 @@ type ToolSpec struct {
 	Annotations *ToolAnnotations `json:"annotations,omitempty"`
 }
 
+// mutatingToolVerbs are the name tokens that mark a downstream MCP tool as
+// state-changing.
+//
+// A verb missing here is not a missing prompt: IsReadOnlyTool grants the
+// read-only surface to a name whose first or last token is a read verb, so any
+// name shaped `<read verb>_and_<unlisted write verb>` (e.g. `find_and_replace`,
+// `search_replace`, `list_and_append`) is promoted to read-only and
+// `codemode_execute` runs it under read-only annotations with no host approval
+// prompt. Every write verb a catalog can spell as an exact token belongs here.
+var mutatingToolVerbs = []string{
+	"create", "update", "delete", "remove", "destroy", "drop", "write", "edit",
+	"patch", "put", "post", "set", "merge", "close", "reopen", "approve", "cancel",
+	"kill", "stop", "start", "launch", "run", "exec", "eval", "act", "click", "type",
+	"push", "commit", "send", "respond", "review", "comment", "deploy", "mutate",
+	"insert", "upsert", "rename", "archive", "link", "unlink", "schedule", "rerun",
+	"replace", "append", "prepend", "overwrite", "save", "upload", "move", "copy",
+	"clone", "toggle", "enable", "disable", "install", "uninstall", "reset",
+	"restore", "purge", "truncate",
+}
+
 // IsReadOnlyTool classifies whether a downstream MCP tool is safe for read-only
 // execution (`codemode_execute`) vs requiring `codemode_mutate` so the host
 // coding agent's native approval prompt still guards state-changing calls.
@@ -83,13 +103,7 @@ func IsReadOnlyTool(spec ToolSpec) bool {
 	// Split identifier into tokens across _, -, ., /, and camelCase boundaries so
 	// mixed names like "get_and_delete-issue" or "readFileWrite" never fail open.
 	tokens := splitToolNameTokens(spec.Name)
-	for _, verb := range []string{
-		"create", "update", "delete", "remove", "destroy", "drop", "write", "edit",
-		"patch", "put", "post", "set", "merge", "close", "reopen", "approve", "cancel",
-		"kill", "stop", "start", "launch", "run", "exec", "eval", "act", "click", "type",
-		"push", "commit", "send", "respond", "review", "comment", "deploy", "mutate",
-		"insert", "upsert", "rename", "archive", "link", "unlink", "schedule", "rerun",
-	} {
+	for _, verb := range mutatingToolVerbs {
 		for _, tok := range tokens {
 			if tok == verb {
 				return false

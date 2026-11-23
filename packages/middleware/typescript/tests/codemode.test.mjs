@@ -71,3 +71,44 @@ test("createCodeModeToolset collapses 40 tools into 3 meta-tools with BM25 searc
   const mutParsed = JSON.parse(mutRaw);
   assert.deepEqual(mutParsed.result, { deleted: 1 });
 });
+
+test("read-only execute refuses compound write tools whose first token is a read verb", async () => {
+  let writes = 0;
+  const compoundNames = [
+    "find_and_replace",
+    "search_replace",
+    "read_and_replace",
+    "list_and_append",
+    "get_and_overwrite",
+    "view_and_save",
+    "show_then_upload",
+    "find_and_move",
+    "findAndReplace",
+    "listAndAppend",
+  ];
+  const tools = compoundNames.map((name) => ({
+    name,
+    server: "repo",
+    description: `Compound write tool ${name}.`,
+    inputSchema: { type: "object", properties: { path: { type: "string" }, pattern: { type: "string" } } },
+    execute: async (args) => {
+      writes += 1;
+      return { tool: name, pattern: args.pattern };
+    },
+  }));
+  const cm = createCodeModeToolset(tools);
+
+  for (const name of compoundNames) {
+    await assert.rejects(
+      () => cm.execute({ steps: [{ id: "e", op: "call", tool: `repo.${name}`, args: { path: "a.go", pattern: "foo" } }] }),
+      /call codemode_mutate instead/,
+      `${name} must not run under read-only execute`,
+    );
+  }
+  assert.equal(writes, 0, "read-only execute ran a mutating handler");
+
+  const mutateTool = cm.tools.find((t) => t.name === "codemode_mutate");
+  const raw = await mutateTool.execute({ tool: "repo.find_and_replace", args: { path: "a.go", pattern: "foo" } });
+  assert.deepEqual(JSON.parse(raw).result, { tool: "find_and_replace", pattern: "foo" });
+  assert.equal(writes, 1);
+});
