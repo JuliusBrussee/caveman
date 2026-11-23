@@ -147,6 +147,22 @@ class BodyOnlyTests(unittest.TestCase):
         repair = EXTRA + "---\nupdated: 2026-10-22\n---\nKeep guidance. Read https://example.com/rules."
         self.run_reply(original, ["Keep guidance.", repair], False)
 
+    def test_frontmatter_only_without_final_newline_never_reaches_provider(self):
+        # A closing `---` at end of file is still a closing delimiter. Without
+        # it being recognised the whole file went to the provider as body and
+        # the reply replaced the frontmatter.
+        for original in ("---\nname: task\n---", "---\r\nname: task\r\n---"):
+            with self.subTest(original=original):
+                prompts = self.run_reply(original, ["Keep guidance."], False)
+                self.assertEqual(prompts, [])
+
+    def test_split_frontmatter_at_end_of_file(self):
+        self.assertEqual(compress.split_frontmatter("---\nname: task\n---"), ("---\nname: task\n---", ""))
+        self.assertEqual(compress.split_frontmatter("---\nname: task\n---\nBody\n"), ("---\nname: task\n---\n", "Body\n"))
+        # `----` and `---x` do not close the block.
+        self.assertEqual(compress.split_frontmatter("---\nname: task\n----"), ("", "---\nname: task\n----"))
+        self.assertEqual(compress.split_frontmatter("---\nname: task\n---x"), ("", "---\nname: task\n---x"))
+
 
 class CompressPromptRuleTests(unittest.TestCase):
     """The rules that reach the provider, which is the only place they act.

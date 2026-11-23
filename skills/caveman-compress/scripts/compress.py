@@ -45,8 +45,10 @@ FENCE_LINE_REGEX = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
 
 # YAML frontmatter: starts at file start with --- on its own line, ends with --- on its own line.
 # Captures the entire block (including delimiters and trailing newline) and the body after.
+# The closing `---` may end the file: a frontmatter-only file saved without a
+# final newline is still frontmatter, not body to send to the provider.
 FRONTMATTER_REGEX = re.compile(
-    r"\A(---\r?\n.*?\r?\n---\r?\n)(.*)", re.DOTALL
+    r"\A(---\r?\n.*?\r?\n---(?:\r?\n|\Z))(.*)", re.DOTALL
 )
 
 
