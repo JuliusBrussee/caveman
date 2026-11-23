@@ -19,10 +19,10 @@
   },
   "command_hook": { "method": "codex-pretooluse", "file": "~/.codex/AGENTS.md" },
   "attribution": { "header": "x-cave-agent" },
-  "tested_agent_version": "0.166.0",
+  "tested_agent_version": "0.171.0",
   "injection_completeness": "code-only",
-  "last_verified_at": "2026-11-02",
-  "verified_by": "Windows x64 route probes (@openai/codex 0.166.0, Node 24.16.0; --version and --help exit 0): actual caveman wrap codex exec from two scratch homes sent POST /w/codex/v1/responses with dummy bearer auth, model gpt-5.5 from config.toml (no CLI model override), stream true; scripted SSE replies consumed, both exit 0. Attribution uses /w/codex; X-Cave-Agent header absent. API-key path with proxy/MCP/shrink/browse disabled; no subscription, compression, live-provider or task-quality verification",
+  "last_verified_at": "2026-11-21",
+  "verified_by": "Local macOS arm64 binary and route probe (@openai/codex 0.171.0, agents/probe-installed.mjs: --version and --help exit 0): from a scratch HOME and CODEX_HOME with config.toml model gpt-5.5 and model_provider caveman, `codex exec --skip-git-repo-check --ephemeral` sent POST /w/codex/v1/responses with dummy bearer auth and originator codex_exec; scripted SSE reply consumed, exit 0. No subscription, compression, live-provider, or task-quality verification",
   "fallback": "generic-env",
   "maintainer": null
 }
