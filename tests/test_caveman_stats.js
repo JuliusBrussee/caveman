@@ -430,6 +430,19 @@ test('--record appends a SessionEnd snapshot silently, with this session\'s own 
   assert.match(all, /Output tokens:\s+350/);
 });
 
+test('--record skips oversized transcripts without recording partial stats', (tmp) => {
+  const sess = makeSession(tmp, [
+    { type: 'assistant', message: { usage: { output_tokens: 350 } } },
+  ]);
+  fs.appendFileSync(sess, '\n');
+  fs.truncateSync(sess, 50 * 1024 * 1024 + 1);
+  const r = runRecord(tmp, JSON.stringify({ session_id: SESSION_END_SESSION_ID, transcript_path: sess }));
+  assert.strictEqual(r.status, 0, r.stderr);
+  assert.strictEqual(r.stderr, '');
+  assert.strictEqual(r.stdout, '');
+  assert.strictEqual(fs.existsSync(path.join(tmp, '.caveman-history.jsonl')), false);
+});
+
 test('--record ignores malformed hook stdin without guessing a session', (tmp) => {
   const sess = makeSession(tmp, [
     { type: 'assistant', message: { model: 'claude-sonnet-4-7', usage: { output_tokens: 350 } } },
