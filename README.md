@@ -155,7 +155,7 @@ npx skills add JuliusBrussee/caveman -g
 Or with the GitHub CLI:
 
 ```bash
-gh skill install JuliusBrussee/caveman caveman --scope user
+gh skill install JuliusBrussee/caveman caveman
 ```
 
 <a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman" alt="skills.sh"></a>
