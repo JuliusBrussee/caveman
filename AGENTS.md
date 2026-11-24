@@ -128,3 +128,9 @@ Run the narrowest suite for what you changed first, then `verify_repo.py`.
 - Security and telemetry: [`SECURITY.md`](SECURITY.md)
 - Licensing: [`LICENSING.md`](LICENSING.md)
 - Testing and benchmark rules: [`docs/technical/testing-and-benchmarks.md`](docs/technical/testing-and-benchmarks.md)
+- Public Caveman ecosystem repositories:
+  - [`caveman-ai/caveman-code`](https://github.com/caveman-ai/caveman-code) — Desktop, CLI (`@caveman-ai/code`), Web, and Mobile coding agent
+  - [`caveman-ai/agent-sdk`](https://github.com/caveman-ai/agent-sdk) — Agent SDK, Harness v4, Session Protocol, and Evals
+  - [`caveman-ai/cloud-sdk`](https://github.com/caveman-ai/cloud-sdk) — Caveman Cloud CLI (`cvm`), TypeScript/Python/Go SDKs, and Cloud skills
+  - [`caveman-ai/caveman-docs`](https://github.com/caveman-ai/caveman-docs) — Public documentation site (`docs.caveman.so`)
+  - [`caveman-ai/blocks`](https://github.com/caveman-ai/blocks), [`caveman-ai/trim-1`](https://github.com/caveman-ai/trim-1), [`JuliusBrussee/caveman-browse`](https://github.com/JuliusBrussee/caveman-browse) — Standalone reusable blocks, line-trimming model, and browser MCP driver
