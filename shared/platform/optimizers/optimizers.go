@@ -311,7 +311,7 @@ var membership = func() map[string]int {
 
 // FamilyIndexOf returns the index (into Families) of the mutex family the
 // optimizer belongs to, or -1 if the optimizer is not part of any family (its
-// opportunities are never deduped). Both cloud/worker and cloud/control-api key
+// opportunities are never deduped). Both write-time and read-time dedup paths key
 // their dedup on this value, so they can never disagree.
 func FamilyIndexOf(optimizerID string) int {
 	if i, ok := membership[optimizerID]; ok {

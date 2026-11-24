@@ -99,7 +99,7 @@ func TestResidualRiskDoesNotFlagUUIDs(t *testing.T) {
 // diversity are not secrets.
 func TestResidualRiskDoesNotFlagOrdinaryLongStrings(t *testing.T) {
 	clean := []string{
-		`{"path":"cloud/worker/internal/corpus/builder_test_helpers_for_things.go"}`,
+		`{"path":"internal/worker/corpus/builder_test_helpers_for_things.go"}`,
 		`{"text":"` + strings.Repeat("the quick brown fox ", 8) + `"}`,
 		`{"const":"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}`,
 		`{"snake":"a_very_long_but_entirely_ordinary_identifier_name_here"}`,

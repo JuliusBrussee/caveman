@@ -79,12 +79,10 @@ local evidence to `verified` savings or projects a window into a monthly claim.
 
 ## Research and design references
 
-[Headroom's savings command](https://github.com/headroomlabs-ai/headroom/blob/main/docs/content/docs/savings.mdx)
-uses a durable event ledger and groups savings by time, model and client.
-[Its metrics documentation](https://headroomlabs-ai.github.io/headroom/metrics/)
-also describes historical series and usage visibility. Those are useful
-product patterns. Caveman keeps unpriced usage explicit rather than assigning
-a blended rate to an unknown model.
+`caveman stats` uses a durable event ledger grouped by time, model, and client
+so historical usage and savings series stay inspectable without mutating past
+records. Caveman keeps unpriced usage explicit rather than assigning a blended
+rate to an unknown model.
 
 Provider billing categories come from the published
 [Anthropic pricing documentation](https://platform.claude.com/docs/en/about-claude/pricing),
