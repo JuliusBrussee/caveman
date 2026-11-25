@@ -3025,6 +3025,7 @@ test("routedOpenCodeArgs injects --standalone for OpenCode 2.x interactive and r
   assert.deepEqual(routedOpenCodeArgs("opencode", ["--help"], 2), ["--help"]);
   assert.deepEqual(routedOpenCodeArgs("opencode", ["service", "status"], 2), ["service", "status"]);
   assert.deepEqual(routedOpenCodeArgs("opencode", ["debug", "config"], 2), ["debug", "config"]);
+  assert.deepEqual(routedOpenCodeArgs("opencode", ["machine", "list"], 2), ["machine", "list"]);
 });
 
 test("status keeps native OpenCode MCP recovery when provider routing drifts", async () => {
