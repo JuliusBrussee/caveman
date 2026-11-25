@@ -443,7 +443,7 @@ SUPPORTED_PROVIDERS = frozenset({
 })
 DEFAULT_OPENAI_COMPAT_ENDPOINT = "http://localhost:11434/v1"  # Ollama
 
-DEFAULT_CLAUDE_MODEL = "claude-sonnet-4-6"
+DEFAULT_CLAUDE_MODEL = "claude-sonnet-5-5"
 CLAUDE_CLI = "claude"
 CLAUDE_PRINT_ARG = "--print"
 CLAUDE_SETTING_SOURCES_ARG = "--setting-sources"
@@ -477,7 +477,7 @@ OPENCODE_PROMPT_MESSAGE = "Follow the attached prompt exactly. Return only the f
 OPENCODE_PERMISSION_DENY = {"*": "deny"}
 
 # Output ceiling for one SDK call, within the max output of the default model
-# (claude-sonnet-4-6). A body that needs more is refused in call_claude(),
+# (claude-sonnet-5-5). A body that needs more is refused in call_claude(),
 # never written back truncated.
 MAX_OUTPUT_TOKENS = 64000
 
