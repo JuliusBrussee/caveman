@@ -118,3 +118,40 @@ func TestDuplicateCredentialDoesNotChangeResolvedAuthMode(t *testing.T) {
 		t.Fatalf("preserving the bearer scheme changed the auth mode: %v -> %v", without, with)
 	}
 }
+
+func TestOpenCodeGoMessagesPrefersXAPIKeyWhenOneKeyArrivesInBothHeaders(t *testing.T) {
+	observed := make(chan http.Header, 1)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		observed <- r.Header.Clone()
+		w.Header().Set("Content-Type", "application/json")
+		io.WriteString(w, `{"id":"fixture","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`)
+	}))
+	defer upstream.Close()
+
+	spend, err := store.Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer spend.Close()
+	srv := New(config.Config{Mode: "record", Compat: map[string]config.CompatConfig{
+		"opencode-go": {BaseURL: upstream.URL},
+	}}, spend, Options{HTTPClient: &http.Client{}})
+
+	req := httptest.NewRequest(http.MethodPost, "/compat/opencode-go/v1/messages",
+		strings.NewReader(`{"model":"fixture","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("Authorization", "Bearer one-key")
+	req.Header.Set("x-api-key", "one-key")
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	srv.Handler().ServeHTTP(rec, req)
+	if rec.Code != 200 {
+		t.Fatalf("status %d: %s", rec.Code, rec.Body.String())
+	}
+	captured := <-observed
+	if got := captured.Get("X-Api-Key"); got != "one-key" {
+		t.Fatalf("x-api-key dropped on opencode-go /v1/messages: x-api-key=%q Authorization=%q", got, captured.Get("Authorization"))
+	}
+	if got := captured.Get("Authorization"); got != "" {
+		t.Fatalf("opencode-go /v1/messages received duplicate Bearer header: Authorization=%q x-api-key=%q", got, captured.Get("X-Api-Key"))
+	}
+}

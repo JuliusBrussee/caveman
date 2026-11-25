@@ -227,6 +227,7 @@ func TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader(t *testing.T) {
 	adapter := mustNamed(t, "opencode-go", "https://opencode.ai/zen/go")
 	apiKey := providers.Credential{Mode: "ephemeral_header", Key: "sk-test"}
 	realBearer := providers.Credential{Mode: "ephemeral_header", Key: "sk-oauth", Scheme: "bearer"}
+	dupBoth := providers.Credential{Mode: "ephemeral_header", Key: "sk-test", Scheme: "bearer_and_api_key"}
 	placeholder := providers.Credential{Mode: "ephemeral_header", Key: "no-key-required", Scheme: "bearer"}
 
 	cases := []struct {
@@ -240,6 +241,7 @@ func TestNewNamed_AnthropicMessagesPathUsesAPIKeyHeader(t *testing.T) {
 	}{
 		{name: "messages", path: "/compat/opencode-go/v1/messages", credential: apiKey, wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
 		{name: "messages keeps a real bearer", path: "/compat/opencode-go/v1/messages", credential: realBearer, wantAuth: "Bearer sk-oauth", wantVersion: "2023-06-01"},
+		{name: "messages uses x-api-key for duplicated credential", path: "/compat/opencode-go/v1/messages", credential: dupBoth, wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
 		{name: "messages remaps the placeholder", path: "/compat/opencode-go/v1/messages", credential: placeholder, wantAPIKey: "no-key-required", wantVersion: "2023-06-01"},
 		{name: "messages sub-path", path: "/compat/opencode-go/v1/messages/count_tokens", credential: apiKey, wantAPIKey: "sk-test", wantVersion: "2023-06-01"},
 		{name: "messages keeps inbound version", path: "/compat/opencode-go/v1/messages", credential: apiKey, inbound: map[string]string{"anthropic-version": "2024-01-01"}, wantAPIKey: "sk-test", wantVersion: "2024-01-01"},

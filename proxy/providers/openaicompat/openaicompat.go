@@ -325,7 +325,11 @@ func (a namedAdapter) SanitizeAndMapHeaders(ctx context.Context, req *http.Reque
 	if !a.anthropicMessagesPath(req.URL.Path) {
 		return out, nil
 	}
-	if credential.Key != "" && !realBearer(credential) {
+	keepDuplicateBearer := credential.Scheme == "bearer_and_api_key" &&
+		credential.Key != "no-key-required" &&
+		a.prefix != openCodeGoPrefix &&
+		a.wireDialect != "anthropic"
+	if credential.Key != "" && !realBearer(credential) && !keepDuplicateBearer {
 		out.Del("authorization")
 		out.Set("x-api-key", credential.Key)
 	}
