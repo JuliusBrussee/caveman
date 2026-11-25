@@ -217,7 +217,7 @@ func (c Creds) Resolve(provider string, r *http.Request) providers.Credential {
 		// preserving both headers lets bearer-only and x-api-key gateways both
 		// authenticate the caller's single principal.
 		if provider == "openai_compatible" && inboundBearerEquals(r, k) {
-			credential.Scheme = "bearer"
+			credential.Scheme = "bearer_and_api_key"
 		} else if provider == "anthropic" && inboundBearerEquals(r, k) && !anthropicUpstreamIsFirstParty(c.cfg) {
 			credential.Scheme = "bearer_and_api_key"
 		}
