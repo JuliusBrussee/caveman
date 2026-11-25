@@ -250,15 +250,18 @@ function parseOpenCodeServerEntry(name: string, value: unknown): CodemodeServerC
     if (value.command.length > 1) {
       entry.args = value.command.slice(1).filter((item): item is string => typeof item === "string");
     }
-    const env = stringMap(value.environment ?? value.env);
-    if (env) entry.env = env;
   } else if (typeof value.command === "string" && value.command.trim()) {
     entry.command = value.command.trim();
     if (Array.isArray(value.args)) {
       entry.args = value.args.filter((item): item is string => typeof item === "string");
     }
+  }
+  if (entry.command) {
     const env = stringMap(value.environment ?? value.env);
     if (env) entry.env = env;
+    if (typeof value.cwd === "string" && value.cwd.trim()) {
+      entry.cwd = value.cwd.trim();
+    }
   }
   return isValidServer(entry) && !isSelfServer(name, entry) ? entry : null;
 }

@@ -779,3 +779,34 @@ if [ "$1" = "--version" ]; then echo "2.0.22"; exit 0; fi
     isolated.cleanup();
   }
 });
+
+test("OpenCode Code Mode discovery preserves cwd on local MCP servers (#1576)", () => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-oc-cwd-"));
+  const home = join(root, "home");
+  const ws = join(root, "ws");
+  try {
+    mkdirSync(join(home, ".config", "opencode"), { recursive: true });
+    mkdirSync(ws, { recursive: true });
+    writeFileSync(
+      join(home, ".config", "opencode", "opencode.json"),
+      JSON.stringify({
+        mcp: {
+          servers: {
+            arr_tool: { type: "local", command: ["arr-mcp", "--stdio"], cwd: "  /srv/arr  ", environment: { A: "1" } },
+            str_tool: { command: "str-mcp", args: ["--flag"], cwd: "/srv/str", env: { B: "2" } },
+            blank_cwd: { type: "local", command: ["plain-mcp"], cwd: "   " },
+          },
+        },
+      }),
+    );
+
+    const discovered = discoverCodemodeServers(ws, home, {});
+    assert.equal(discovered.arr_tool?.cwd, "/srv/arr");
+    assert.deepEqual(discovered.arr_tool?.env, { A: "1" });
+    assert.equal(discovered.str_tool?.cwd, "/srv/str");
+    assert.deepEqual(discovered.str_tool?.env, { B: "2" });
+    assert.equal(discovered.blank_cwd?.cwd, undefined);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
