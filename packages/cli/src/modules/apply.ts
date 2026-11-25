@@ -77,6 +77,9 @@ export type ModuleHost = {
   useRuntimePort(port: number): void;
   // True when wiring an agent will start the local runtime.
   runtimeAutostarts(): Promise<boolean>;
+  // Starts the local runtime in the background for a wired agent, the way
+  // its hooks and `caveman doctor <agent> --fix` do.
+  startRuntime(agent: string): void;
   // Whether the local runtime answers, waiting up to waitMs for it.
   runtimeListening(waitMs: number): Promise<boolean>;
   agentState(agent: string): string;
@@ -222,6 +225,17 @@ function refreshAgents(effects: readonly (readonly [string, unknown])[], unwire:
   return h.nativeAgents()
     .filter((agent) => agent.wired && !unwire.includes(agent.id) && (keyChanged || h.agentStaleRoute(agent.id) || h.agentIncomplete(agent.id)))
     .map((agent) => agent.id);
+}
+
+// The wired agent whose runtime this plan restarts: an agent that stays wired
+// sends its requests to a local runtime that is down (a reboot, `caveman
+// stop`), so every request fails until something starts it. Wiring a new agent
+// starts it anyway; aider's wiring starts none.
+async function runtimeRestart(selection: ModuleSelection, wire: string[], unwire: string[], only: ModuleId[] | undefined): Promise<string | undefined> {
+  const h = moduleHost();
+  if (!MODULES.some((m) => m.wiresAgents && inScope(m.id, only) && selection[m.id]) || wire.some((agent) => agent !== "aider")) return undefined;
+  const kept = h.nativeAgents().find((agent) => agent.wired && agent.id !== "aider" && !unwire.includes(agent.id));
+  return kept && await h.runtimeDown() && await h.runtimeAutostarts() ? kept.id : undefined;
 }
 
 // Modules in scope that are on and miss a binary they need. An external
@@ -429,7 +443,7 @@ export async function planModules(selection: ModuleSelection, agents: string[], 
     }
   }
   // aider is wired without the runtime; every other agent starts it.
-  if (wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) {
+  if ((wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) || await runtimeRestart(selection, wire, unwire, only)) {
     lines.push({ action: "RUN", target: "caveman-proxy", detail: "start local runtime" });
   }
   for (const run of externalRuns(selection, only, agents, wire.length > 0)) {
@@ -491,7 +505,8 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   const refresh = refreshAgents(effects, unwire, state);
   if (wire.some((agent) => agent !== "aider") || refresh.some((agent) => h.agentStaleRoute(agent))) await claimRuntimePort(say);
   const runs = externalRuns(plan.selection, plan.only, plan.agents, wire.length > 0);
-  const startsRuntime = wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts();
+  const restart = await runtimeRestart(plan.selection, wire, unwire, plan.only);
+  const startsRuntime = (wire.some((agent) => agent !== "aider") && await h.runtimeAutostarts()) || Boolean(restart);
 
   const step = (agent: string, done: string, act: () => void) => {
     try {
@@ -527,6 +542,7 @@ export async function applyModules(plan: ModulePlan, opts: { yes: boolean; progr
   for (const agent of wire) step(agent, "wired", () => h.wireAgent(agent));
   const target = h.agentTraffic().target === "local" ? "local runtime" : "managed gateway";
   for (const agent of refresh) step(agent, h.agentStaleRoute(agent) ? `routing: ${target}` : "hooks refreshed", () => h.refreshAgent(agent));
+  if (restart) h.startRuntime(restart);
   if (startsRuntime) {
     say(await h.runtimeListening(3000) ? "✓ local runtime started" : "○ local runtime starts with your next agent session");
   }
