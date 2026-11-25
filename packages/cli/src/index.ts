@@ -6767,6 +6767,7 @@ async function runWrapped(bin: string, cmdArgs: string[], agent?: AgentProfile, 
 const OPENCODE_V2_NON_STANDALONE_SUBCOMMANDS = new Set([
   "upgrade", "update", "uninstall", "acp", "api", "debug", "auth", "mcp",
   "plugin", "models", "stats", "session", "service", "reload", "pair", "serve",
+  "machine",
 ]);
 
 // OpenCode 2.x connects to a persistent background server (`opencode service`)
