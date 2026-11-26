@@ -183,7 +183,7 @@ jobs:
             curl -fsSL -r 0-0 -o /dev/null "$base/$asset" || { echo "missing release asset: $base/$asset" >&2; exit 1; }
           done
       # The CLI suite drives the real proxy (conformance tests).
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v5
         if: startsWith(github.ref_name, 'cli-v')
         with:
           go-version-file: go.mod
