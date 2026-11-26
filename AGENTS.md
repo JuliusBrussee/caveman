@@ -113,8 +113,13 @@ Run the narrowest suite for what you changed first, then `verify_repo.py`.
 
 ## Commits and pull requests
 
+- Work in a clean branch or worktree off `origin/main`; never commit or push
+  directly to `main`.
 - Scoped conventional commits (`fix(proxy): ...`, `docs(readme): ...`), signed
-  off for the DCO (`git commit -s`). Stage files explicitly.
+  off for the DCO (`git commit -s`). Stage files explicitly (`git commit --only
+  -- <paths>`), never `git add -A`.
+- Run `python3 tests/verify_repo.py` and touched suites before pushing, then
+  open a PR targeting `main` and squash-merge on green CI.
 - Generated files land in the same commit as their source.
 - `sync-skill.yml` pushes a `[skip ci]` mirror commit to `main` after a skill
   change merges; pull before checking branch state.
