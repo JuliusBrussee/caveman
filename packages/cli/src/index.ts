@@ -12336,8 +12336,13 @@ function nativeIntegrationStatus(agent: NativeAgent, { probe = true }: { probe?:
   // Recovery is real only when a current caveman-mcp is resolvable AND the
   // command the host will actually launch still exists. Both the component
   // below and this verdict read the one term, so they cannot disagree.
+  // For Hermes, a user-disabled MCP entry must also degrade the verdict:
+  // otherwise components.mcp_recovery=false while doctor reports installed
+  // (#1579). Do not reactivate the entry here; just reflect it.
   const mcpLaunchable = Boolean(mcp?.probe.current) && journaledMcpTargetsExist(journal);
-  const recoveryHealthy = agent === "aider" || mcpLaunchable;
+  const hermesRouteTextEarly = agent === "hermes" && routeOperation ? fileBytes(routeOperation.file)?.toString("utf8") ?? "" : "";
+  const hermesMcpConfiguredEarly = agent !== "hermes" || !installed || hermesMcpServerConfigured(hermesRouteTextEarly);
+  const recoveryHealthy = agent === "aider" || (mcpLaunchable && hermesMcpConfiguredEarly);
   const state = !available ? "unavailable" : transactionPending ? "degraded" : !installed ? "available" : !packCurrent || !ownedHealthy || !routeHealthy || !proxyHealthy || !recoveryHealthy || !opencodePluginApiCurrent || unwiredProfiles.length > 0 ? "degraded" : "installed";
 	const coreSupported = agent === "aider" ? ownedHealthy : ownedHealthy && Boolean(NATIVE_PACK.core);
   // Codex runs none of the hooks until the user trusts them; Core rides on them.
