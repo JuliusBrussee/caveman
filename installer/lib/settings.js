@@ -389,6 +389,11 @@ function pruneOrphanedManagedHooks(settings, configDir, platform = process.platf
         // referencesManagedScript(). Plain basename() misses a Windows-written
         // command when a roaming $CLAUDE_CONFIG_DIR is processed on POSIX.
         if (!MANAGED_HOOK_BASENAMES.has(path.win32.basename(tok))) continue;
+        // `$VAR` and a leading `~` are expanded by the shell at run time, not
+        // by existsSync: a hand-written `bash ~/.claude/hooks/...` command works
+        // but reads as missing here. Treat it as unknown, as
+        // caveman-activate.js statuslineScripts() does.
+        if (/^~|\$/.test(tok)) return false;
         // A path absolute on the OTHER platform (`C:\...` seen from POSIX) is
         // not ours to judge: posix isAbsolute() says false, we would join it
         // under baseDir, find nothing, and prune a hook that is live on the
