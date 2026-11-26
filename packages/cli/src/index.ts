@@ -19568,11 +19568,12 @@ function opencodeShrinkPluginPreamble(): string {
 import { execFileSync } from "node:child_process";
 
 // Returns the rewritten command, or undefined to leave the original alone.
-function rewrite(command) {
+function rewrite(command, cwd) {
   if (typeof command !== "string" || !command.trim()) return undefined;
   try {
     const res = execFileSync(${JSON.stringify(cmd)}, ${argv}, {
       input: JSON.stringify({ tool_name: "Bash", tool_input: { command } }),
+      cwd,
       encoding: "utf8",
       windowsHide: true,
     });
@@ -19590,10 +19591,10 @@ function rewrite(command) {
 // V1: a named factory returning a hook map, mutating output.args.command.
 function opencodeShrinkPluginHookMapV1(): string {
   return `
-export const CavemanShrink = async () => ({
+export const CavemanShrink = async (ctx) => ({
   "tool.execute.before": async (input, output) => {
     if (input?.tool !== "bash") return;
-    const next = rewrite(output?.args?.command);
+    const next = rewrite(output?.args?.command, ctx?.directory);
     if (next) output.args.command = next;
   },
 });
@@ -19614,7 +19615,7 @@ ${extra}  async setup(ctx) {
       if (event?.tool !== "bash" && event?.tool !== "shell") return;
       const input = event.input;
       if (!input || typeof input !== "object") return;
-      const next = rewrite(input.command);
+      const next = rewrite(input.command, ctx.location?.directory);
       if (next) input.command = next;
     });
   },
