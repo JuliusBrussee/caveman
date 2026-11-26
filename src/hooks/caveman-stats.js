@@ -607,6 +607,8 @@ function main() {
   }
 }
 
+const MAX_RECORD_TRANSCRIPT_BYTES = 50 * 1024 * 1024;
+
 // SessionEnd payload: { session_id, transcript_path, reason, ... }. Only the
 // transcript the host names is read; never guess the newest one on disk.
 function recordFromHook(payload) {
@@ -615,6 +617,7 @@ function recordFromHook(payload) {
   if (!data || typeof data.transcript_path !== 'string' || !data.transcript_path) return;
   const claudeDir = process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude');
   const sessionFile = data.transcript_path;
+  if (fs.statSync(sessionFile).size > MAX_RECORD_TRANSCRIPT_BYTES) return;
   const parsed = parseSession(sessionFile);
   recordSnapshot({
     claudeDir,

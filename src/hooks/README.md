@@ -78,6 +78,7 @@ environment to opt a headless run back in.
 
 ### `caveman-stats.js --record` — SessionEnd hook
 
+- Skips transcripts larger than 50 MiB to keep session shutdown fast. These sessions receive no automatic history snapshot.
 - Runs when Claude Code ends a session
 - Reads `session_id` and `transcript_path` from the hook payload on stdin (first complete JSON object, 2s watchdog) and appends one snapshot to `$CLAUDE_CONFIG_DIR/.caveman-history.jsonl`: recorded output and cache-read tokens, turns, and per-mode attribution. No savings figures
 - Writes no stdout and always exits 0, so it never interrupts shutdown
