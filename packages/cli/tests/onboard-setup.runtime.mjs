@@ -3,7 +3,7 @@ import { createServer } from "node:net";
 import { createServer as createHttpServer } from "node:http";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { cpSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isolatedCliEnv, runCli as runIsolated } from "./_cli.mjs";
@@ -182,6 +182,29 @@ test("--only, --skip and --agents pick modules and agents; a re-run keeps the cu
     assert.equal(again.code, 0, again.stderr);
     assert.match(again.stdout, /\nModules {2}output · input\n/, "re-running starts from what is on, not the defaults");
     assert.match(again.stdout, /\nFound Claude Code and Codex 1\.0\n/, "a wired agent's version comes from its journal, not from running it");
+  } finally {
+    fx.cleanup();
+  }
+});
+
+// A reboot or `caveman stop` leaves wired agents sending every request to a
+// runtime that is down. Running setup again is the obvious repair: it starts
+// the runtime the way `caveman doctor <agent> --fix` does, never "change nothing".
+test("setup --yes after a reboot starts the runtime the wired agents point at", { skip }, async () => {
+  const fx = modulesFixture({ agents: ["claude"] });
+  const spawned = join(fx.home, "proxy-spawns.log");
+  try {
+    assert.equal((await runCli(["setup", "--yes"], fx.env)).code, 0);
+    // How the CLI starts the runtime: caveman-proxy with no arguments.
+    const stub = fx.env.CAVEMAN_PROXY_BIN;
+    writeFileSync(stub, readFileSync(stub, "utf8").replace("#!/bin/sh\n", `#!/bin/sh\n[ $# -eq 0 ] && echo spawned >> "${spawned}"\n`));
+    rmSync(join(fx.env.CAVEMAN_HOME, "run", "9.json"));
+    const again = await runCli(["setup", "--yes"], fx.env);
+    assert.equal(again.code, 0, again.stderr);
+    assert.doesNotMatch(again.stdout, /change nothing/);
+    assert.match(again.stdout, /\n {2}RUN +caveman-proxy +start local runtime\n/);
+    for (let i = 0; i < 50 && !existsSync(spawned); i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(existsSync(spawned), "setup started caveman-proxy");
   } finally {
     fx.cleanup();
   }

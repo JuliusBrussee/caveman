@@ -688,6 +688,7 @@ setModuleHost({
     const { host, port } = gatewayHostPort(gw);
     return !(await portListening(host, port));
   },
+  startRuntime: (agent) => ensureLocalProxyForNative(agent as NativeAgent, gatewayURL()),
   agentState: (agent) => nativeIntegrationStatus(agent as NativeAgent).state,
   agentFix: (agent) => nativeRepairFix(agent as NativeAgent),
   coreActive: () => nativeCoreRuntimeState().active,
