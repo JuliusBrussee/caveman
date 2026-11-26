@@ -62,6 +62,18 @@ Automatic detection recognizes:
 - configuration text;
 - general text.
 
+### Redirected pytest output
+
+`caveman compress < pytest.txt` detects the content type from the file's
+bytes. Redirected `pytest -v` output often has neither ANSI escape sequences
+nor progress redraws, so the engine can classify it as general text and
+return it unchanged. A list of test names and pass/fail statuses is different
+from a structured JUnit or pytest JSON report.
+
+When running the tests yourself, use `caveman shrink -- python -m pytest -v`.
+The default compressor for `shrink` is terminal. For an existing transcript,
+use `caveman shrink --file pytest.txt`.
+
 Some compressors are explicit-only because automatic selection would be
 ambiguous or unsafe. TOON, accessibility trees, tool-schema transforms,
 repetition transforms, and tool-schema annotation transforms are not selected
