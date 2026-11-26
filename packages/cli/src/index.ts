@@ -6925,6 +6925,21 @@ async function spawnWrapped(
         // Kilo and Qwen can apply policy after user-owned config; they prove
         // recovery in band rather than via a proxy-wide recovery assertion.
         codemodeVerifiedRecovery = agent!.id !== "kilo" && agent!.id !== "qwen";
+        // OpenCode V2 overlay can reject the temporary MCP config after the
+        // proxy already started with recovery=true (#1575). Pre-validate the
+        // known-reject case (unknown schema with own servers) so the proxy
+        // flag is false up front; the overlay step below still warns and
+        // skips. Throw-case failures remain fail-open with a warning.
+        if (codemodeVerifiedRecovery && agent?.id === "opencode" && codemodeLaunch) {
+          try {
+            const trustEarly = Boolean(opts.trustWorkspaceMcp || process.env.CAVEMAN_TRUST_WORKSPACE_MCP === "1");
+            const ocProbeEarly = nativeBinaryProbe(bin);
+            const ocMajorEarly = ocProbeEarly?.launchable ? parsedSemver(ocProbeEarly.version)?.[0] : undefined;
+            const ocOwnEarly = discoverOpenCodeOwnServerNames(process.cwd(), homedir(), process.env, trustEarly);
+            const ocSchemaEarly = detectOpenCodeConfigSchema(process.cwd(), homedir(), process.env, trustEarly, ocMajorEarly);
+            if (ocSchemaEarly === "unknown" && ocOwnEarly.length > 0) codemodeVerifiedRecovery = false;
+          } catch { /* fail-open: overlay step warns */ }
+        }
       } else {
         queueStaleMcpBinary(ephemeralMcp.probe);
         process.stderr.write(`${mark("warn")} caveman-mcp (${ephemeralMcp.probe.version}) lacks Code Mode support; run \`caveman setup --install\` — launching without --codemode\n`);
