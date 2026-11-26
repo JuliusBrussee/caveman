@@ -152,6 +152,12 @@ Example run, n=10, not a claim. Ten dev questions on claude-opus-5-5:
 npx skills add JuliusBrussee/caveman -g
 ```
 
+Or with the GitHub CLI:
+
+```bash
+gh skill install JuliusBrussee/caveman caveman
+```
+
 <a href="https://skills.sh/JuliusBrussee/caveman"><img src="https://skills.sh/b/JuliusBrussee/caveman" alt="skills.sh"></a>
 
 Type `/caveman` (`$caveman` in Codex) if it doesn't start on its own. Say `stop caveman` to go back.
