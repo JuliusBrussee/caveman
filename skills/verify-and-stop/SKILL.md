@@ -9,6 +9,7 @@ Translate acceptance conditions into smallest sufficient proof set.
 
 - Reuse still-current results with matching repository state.
 - Run focused checks before wider gates.
+- UI change: prove in running app. Project has `e2e.config.ts`: `npx e2e run <file>:<line>`, keep screenshot or video as proof.
 - Distinguish pass, fail, unavailable, and blocked exactly.
 - Do not edit product code unless verification request includes fixes.
 - Do not add polish, cleanup, or unrelated tests after criteria pass.

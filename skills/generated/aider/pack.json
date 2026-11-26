@@ -152,7 +152,7 @@
       ],
       "entry_condition": "task asks for proof or completion validation",
       "stop_condition": "acceptance proof is complete",
-      "instructions": "# Verify and stop\n\nTranslate acceptance conditions into smallest sufficient proof set.\n\n- Reuse still-current results with matching repository state.\n- Run focused checks before wider gates.\n- Distinguish pass, fail, unavailable, and blocked exactly.\n- Do not edit product code unless verification request includes fixes.\n- Do not add polish, cleanup, or unrelated tests after criteria pass.\n\nStop immediately when acceptance proof is complete. Report commands, results, and unresolved risk only."
+      "instructions": "# Verify and stop\n\nTranslate acceptance conditions into smallest sufficient proof set.\n\n- Reuse still-current results with matching repository state.\n- Run focused checks before wider gates.\n- UI change: prove in running app. Project has `e2e.config.ts`: `npx e2e run <file>:<line>`, keep screenshot or video as proof.\n- Distinguish pass, fail, unavailable, and blocked exactly.\n- Do not edit product code unless verification request includes fixes.\n- Do not add polish, cleanup, or unrelated tests after criteria pass.\n\nStop immediately when acceptance proof is complete. Report commands, results, and unresolved risk only."
     }
   ],
   "target": "aider",
