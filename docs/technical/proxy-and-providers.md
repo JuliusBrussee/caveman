@@ -302,3 +302,33 @@ Displayed provider cost is a list-price subtotal, not a provider invoice. See
   fails parse, size, policy, or recovery gates.
 - For behavior comparison, repeat request in record mode and compare provider
   request and response classes, not secret-bearing raw logs.
+
+## Comparing the system prefix across Claude SDK turns
+
+When a Claude SDK session repeatedly reports a changing system prefix, compare
+two consecutive Anthropic Messages request bodies from the same session. Use
+local copies of the outgoing JSON captured before proxy transforms. A zero
+token delta alone cannot identify which block changed.
+
+Run this locally with jq. It prints only positional block indices and change
+types. It handles both the string and array forms of `system` and compares
+parsed block values. Moving a block can therefore change several indices.
+
+```sh
+jq -ns --slurpfile before turn-1.json --slurpfile after turn-2.json '
+  def blocks:
+    .system | if type == "array" then . elif type == "string" then [.] else [] end;
+  ($before[0] | blocks) as $a | ($after[0] | blocks) as $b |
+  range(0; ([$a, $b] | map(length) | max)) as $i |
+  if $i >= ($a | length) then {index: $i, change: "added"}
+  elif $i >= ($b | length) then {index: $i, change: "removed"}
+  elif $a[$i] != $b[$i] then {index: $i, change: "changed"}
+  else empty end
+'
+```
+
+Share the indices and SDK version in the issue. Keep the captures local:
+request bodies contain prompt text and tool definitions. A reported change
+may be limited to a cache marker, which the Anthropic frozen-prefix adapter
+strips before comparing components. Empty output means the parsed blocks
+match, although their wire formatting may still differ.
