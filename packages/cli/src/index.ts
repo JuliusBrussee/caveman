@@ -18166,12 +18166,18 @@ async function shrinkHook() {
   const command = evt.tool_input?.command;
   if (typeof command !== "string" || !shouldShrink(command)) process.exit(0);
   // updatedInput.command executes in the host's own shell — Git Bash under Claude
-  // Code on Windows, PowerShell under the opencode plugin, cmd.exe under Gemini —
-  // never the hook's explicit PowerShell shell, so this prefix is rendered bare
-  // rather than quoted or `&`-prefixed. When no form serves all three (a space in
-  // the path), there is no rewrite: the command runs as the host sent it, which is
-  // the same safe direction as every other decline above.
-  const prefix = cavemanBinForHostShell();
+  // Code on Windows, PowerShell under Gemini CLI — never the hook's explicit
+  // PowerShell shell, so this prefix is rendered bare rather than quoted or
+  // `&`-prefixed, except for Gemini on Windows where the host runs
+  // `powershell.exe -NoProfile -Command` and a bare quoted path dies as a
+  // string literal (`UnexpectedToken 'shrink'`, #1567). There the PowerShell
+  // `&`-form is required and space-safe. When no portable form exists
+  // (a space in the path for Bash), there is no rewrite: the command runs
+  // as the host sent it, which is the same safe direction as every other
+  // decline above.
+  const prefix = isGemini && process.platform === "win32"
+    ? cavemanBinForHook(true)
+    : cavemanBinForHostShell();
   if (!prefix) process.exit(0);
   const rewritten = `${prefix} shrink -- ${command.trim()}`;
   // Gemini merges hookSpecificOutput.tool_input (snake_case, no event discriminator);
