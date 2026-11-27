@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import test from "node:test";
@@ -248,4 +248,29 @@ test("root installer runs npm and pnpm shims that forward to an .exe directly", 
   assert.throws(() => invoke(), /cannot safely launch non-Node Windows command shim/);
   writeFileSync(shim, '"%~dp0missing.exe" %*\r\n');
   assert.throws(() => invoke(), /Windows command shim target is missing/);
+});
+
+test("resolvePosixCommand preserves symlink + .. PATH entries and checks executable bit", { skip: process.platform === "win32" }, (t) => {
+  const root = mkdtempSync(join(tmpdir(), "caveman-posix-path-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  // Layout: root/real/sub (target of root/link), root/real/agents/tool (executable).
+  // Under POSIX, root/link/../agents resolves via root/real/sub/.. -> root/real/agents.
+  // path.join() would lexically collapse root/link/../agents to root/agents and miss it.
+  const sub = join(root, "real", "sub");
+  const agents = join(root, "real", "agents");
+  const link = join(root, "link");
+  mkdirSync(sub, { recursive: true });
+  mkdirSync(agents, { recursive: true });
+  symlinkSync(sub, link);
+  const tool = join(agents, "my-agent");
+  writeFileSync(tool, "#!/bin/sh\nexit 0\n");
+  chmodSync(tool, 0o755);
+  const nonExec = join(agents, "not-exec");
+  writeFileSync(nonExec, "#!/bin/sh\nexit 0\n");
+  chmodSync(nonExec, 0o644);
+
+  const pathEntry = `${link}/../agents`;
+  assert.equal(portable.resolvePosixCommand("my-agent", { PATH: pathEntry }), `${pathEntry}/my-agent`);
+  assert.equal(portable.resolvePosixCommand("not-exec", { PATH: pathEntry }), null);
+  assert.equal(portable.resolvePosixCommand("my-agent", { PATH: "" }), null);
 });

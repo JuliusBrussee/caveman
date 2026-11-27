@@ -202,18 +202,26 @@ test("shell install hands the first run to a caveman on PATH that is this releas
     ["0.0.1", viaNpx],
     ["banana", viaNpx],
   ];
-  const [versionResults, badJson, hung] = await Promise.all([
+  const [versionResults, badJson, hung, invalidTimeout] = await Promise.all([
     Promise.all(cases.map(async ([version, want]) => [version, want, await runCase(`printf '%s\\n' '${JSON.stringify({ version })}'`)])),
     runCase("echo not json"),
     // A `caveman --version` that never answers is given up on after 10s
     // (overridden here so the test does not sleep 10s; default 1e4 is pinned below).
     runCase("exec sleep 120", { CAVEMAN_PROBE_TIMEOUT_MS: "300" }),
+    // Invalid timeout values fall back to 1e4 rather than causing spawnSync to throw.
+    Promise.all(["-5", "0", "1.5", "Infinity", "nope"].map(async (bad) => [
+      bad,
+      await runCase(`printf '%s\\n' '${JSON.stringify({ version: cli })}'`, { CAVEMAN_PROBE_TIMEOUT_MS: bad }),
+    ])),
   ]);
   for (const [version, want, res] of versionResults) {
     assert.equal(res.stdout, want, version);
   }
   assert.equal(badJson.stdout, viaNpx);
   assert.equal(hung.stdout, viaNpx, hung.error?.message);
+  for (const [bad, res] of invalidTimeout) {
+    assert.equal(res.stdout, viaPath, `invalid CAVEMAN_PROBE_TIMEOUT_MS=${bad} must fall back to default timeout`);
+  }
 });
 
 // Both shims ask the caveman on PATH the same question in the same words.
@@ -224,7 +232,7 @@ test("both shims carry the same PATH CLI probe", () => {
   assert.equal(ps1, sh, "install.ps1 probes the PATH CLI differently from install.sh");
   // PowerShell 5.1 drops a double quote inside an argument to a native command (#249).
   assert.doesNotMatch(sh, /"/);
-  assert.match(sh, /timeout:\+process\.env\.CAVEMAN_PROBE_TIMEOUT_MS\|\|1e4/);
+  assert.match(sh, /timeout:Number\.isInteger\(t\)&&t>0&&t<=2147483647\?t:1e4/);
 });
 
 // Two prereleases of one release rank by semver precedence: a PATH CLI at

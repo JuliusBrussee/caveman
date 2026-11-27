@@ -130,4 +130,31 @@ function portableInvocation(command, args, {
   return { command: execPath, args: [script, ...args] };
 }
 
-module.exports = { parseWindowsExeShim, parseWindowsNodeShim, portableInvocation, resolveWindowsCommand };
+function resolvePosixCommand(command, env = process.env) {
+  if (!command) return null;
+  if (command.includes('/')) {
+    try {
+      if (fs.statSync(command).isFile()) {
+        fs.accessSync(command, fs.constants.X_OK);
+        return command;
+      }
+    } catch (_) {}
+    return null;
+  }
+  const pathEnv = env.PATH === undefined ? '/usr/bin:/bin' : env.PATH;
+  if (!pathEnv) return null;
+  for (const dir of pathEnv.split(':')) {
+    const base = dir || '.';
+    // Raw concatenation (not path.join) preserves POSIX symlink+`..` resolution.
+    const candidate = `${base}${base.endsWith('/') ? '' : '/'}${command}`;
+    try {
+      if (fs.statSync(candidate).isFile()) {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return candidate;
+      }
+    } catch (_) {}
+  }
+  return null;
+}
+
+module.exports = { parseWindowsExeShim, parseWindowsNodeShim, portableInvocation, resolvePosixCommand, resolveWindowsCommand };

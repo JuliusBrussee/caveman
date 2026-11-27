@@ -116,7 +116,6 @@ func TestTransformAnthropicKeepSharpAndRecoverable(t *testing.T) {
 }
 
 func TestTransformAnthropicStaticTagCanary(t *testing.T) {
-	t.Parallel()
 	resetStaticTagObservationsForTest()
 	body1 := mustJSONBytes(t, map[string]any{
 		"model":  "claude-fable-5",
@@ -153,7 +152,6 @@ func TestTransformAnthropicStaticTagCanary(t *testing.T) {
 }
 
 func TestObserveStaticTagChurnConcurrent(t *testing.T) {
-	t.Parallel()
 	resetStaticTagObservationsForTest()
 	var wg sync.WaitGroup
 	for g := 0; g < 32; g++ {
