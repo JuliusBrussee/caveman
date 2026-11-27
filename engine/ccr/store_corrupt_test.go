@@ -22,6 +22,7 @@ func putRepositoryMap(t *testing.T, s *Store, session string, data []byte) strin
 }
 
 func TestGetRefusesBlobThatDoesNotMatchHandle(t *testing.T) {
+	t.Parallel()
 	s, err := OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -48,6 +49,7 @@ func TestGetRefusesBlobThatDoesNotMatchHandle(t *testing.T) {
 }
 
 func TestGetObjectRefusesDataThatDoesNotMatchContentHash(t *testing.T) {
+	t.Parallel()
 	s, err := OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -78,6 +80,7 @@ func TestGetObjectRefusesDataThatDoesNotMatchContentHash(t *testing.T) {
 }
 
 func TestDedupReferenceRefusesDamagedOwnerData(t *testing.T) {
+	t.Parallel()
 	s, err := OpenMemory()
 	if err != nil {
 		t.Fatal(err)

@@ -10,6 +10,7 @@ import (
 // proxy.log used to rotate only at startup, so a long-lived proxy writing a
 // middleware audit line per request grew it without bound.
 func TestProxyLogRotatesWhileServing(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "proxy.log")
 	log := openProxyLog(path, 100)
 	if log == nil {

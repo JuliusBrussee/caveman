@@ -8,6 +8,7 @@ import (
 )
 
 func TestCacheWarmSwitchFollowsWasteFixesModule(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	path := filepath.Join(home, "cloud.json")
 	on := cacheWarmSwitch(home, "")

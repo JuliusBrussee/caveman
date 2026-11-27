@@ -434,7 +434,12 @@ func TestRepeatedAskGetsItsOwnDecision(t *testing.T) {
 func TestAskFailsOpen(t *testing.T) {
 	cases := map[string]http.HandlerFunc{
 		"cloud 500": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusInternalServerError) },
-		"timeout":   func(w http.ResponseWriter, r *http.Request) { time.Sleep(1500 * time.Millisecond) },
+		"timeout": func(w http.ResponseWriter, r *http.Request) {
+			select {
+			case <-r.Context().Done():
+			case <-time.After(1500 * time.Millisecond):
+			}
+		},
 		"cloud 401": func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) },
 		"allowance": func(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.WriteString(w, `{"model":"claude-opus-5-5","reason":"allowance","decision_id":"0b9f6e4e-3b1a-4c7e-9a4e-1d2c3b4a5f60"}`)

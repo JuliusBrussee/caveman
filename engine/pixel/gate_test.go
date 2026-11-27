@@ -9,6 +9,7 @@ import (
 )
 
 func TestGateAntiFlap(t *testing.T) {
+	t.Parallel()
 	if !IsCompressionProfitable(strings.Repeat("x", 50000), 100, 0, 2, 4, 0, 0, true, ReadableCharsPerImage, conservativeStdParams) {
 		t.Fatal("clearly-profitable cold case rejected")
 	}
@@ -35,6 +36,7 @@ func TestGateAntiFlap(t *testing.T) {
 }
 
 func TestEvalCompressionProfitability(t *testing.T) {
+	t.Parallel()
 	samples := []struct {
 		text     string
 		warmText float64
@@ -75,6 +77,7 @@ func TestEvalCompressionProfitability(t *testing.T) {
 }
 
 func TestGateAmortizedAndMaxChars(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("x", 50000)
 	cold := IsCompressionProfitableAmortized(text, 100, 0, 2, 4, 1, 0, 0, true, ReadableCharsPerImage, conservativeStdParams)
 	base := IsCompressionProfitable(text, 100, 0, 2, 4, 0, 0, true, ReadableCharsPerImage, conservativeStdParams)

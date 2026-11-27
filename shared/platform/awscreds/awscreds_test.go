@@ -63,6 +63,7 @@ func credJSON(expiry time.Time) string {
 }
 
 func TestEnvWinsOverEverything(t *testing.T) {
+	t.Parallel()
 	blocked := &failTransport{t: t}
 	p, _ := newProvider(t, map[string]string{
 		"AWS_ACCESS_KEY_ID":                      " AKIDENV ",
@@ -85,6 +86,7 @@ func TestEnvWinsOverEverything(t *testing.T) {
 }
 
 func TestPartialEnvPairFailsClosed(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	p := New(Options{
 		Getenv: func(k string) string {
@@ -107,6 +109,7 @@ func TestPartialEnvPairFailsClosed(t *testing.T) {
 }
 
 func TestLoneSessionTokenIsNotAPair(t *testing.T) {
+	t.Parallel()
 	p, _, fetches, done := containerProvider(t)
 	defer done()
 	base := p.getenv
@@ -125,6 +128,7 @@ func TestLoneSessionTokenIsNotAPair(t *testing.T) {
 }
 
 func TestContainerRelativeURIAndTokenFile(t *testing.T) {
+	t.Parallel()
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte("  Bearer container-secret\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -164,6 +168,7 @@ func TestContainerRelativeURIAndTokenFile(t *testing.T) {
 }
 
 func TestContainerRejectsPlaintextNonLoopbackHost(t *testing.T) {
+	t.Parallel()
 	blocked := &failTransport{t: t}
 	p, _ := newProvider(t, map[string]string{
 		"AWS_CONTAINER_CREDENTIALS_FULL_URI": "http://evil.example.com/creds",
@@ -186,6 +191,7 @@ func TestContainerRejectsPlaintextNonLoopbackHost(t *testing.T) {
 // other listener on the link, and the container endpoint is handed an
 // Authorization token.
 func TestContainerPlaintextAllowlistIsECSAndEKSOnly(t *testing.T) {
+	t.Parallel()
 	for _, endpoint := range []string{
 		"http://169.254.170.2/creds",  // ECS task role
 		"http://169.254.170.23/creds", // EKS Pod Identity
@@ -212,6 +218,7 @@ func TestContainerPlaintextAllowlistIsECSAndEKSOnly(t *testing.T) {
 // AWS_EC2_METADATA_SERVICE_ENDPOINT was taken verbatim and then dialled with the
 // client that ignores every proxy setting.
 func TestIMDSEndpointAllowlist(t *testing.T) {
+	t.Parallel()
 	for _, endpoint := range []string{
 		"http://169.254.169.254", "http://[fd00:ec2::254]", "http://127.0.0.1:1234",
 		"http://localhost:8080", "https://imds.example.internal",
@@ -233,6 +240,7 @@ func TestIMDSEndpointAllowlist(t *testing.T) {
 
 // A rejected endpoint must be rejected before anything is dialled.
 func TestIMDSEndpointRejectionNeverDials(t *testing.T) {
+	t.Parallel()
 	blocked := &failTransport{t: t}
 	p, _ := newProvider(t, map[string]string{
 		"AWS_EC2_METADATA_SERVICE_ENDPOINT": "http://metadata.attacker.example",
@@ -287,6 +295,7 @@ func imdsStub(t *testing.T, clk *clock, servePUT bool) (*httptest.Server, *atomi
 }
 
 func TestIMDSv2Sequence(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	srv, gets := imdsStub(t, clk, true)
 	defer srv.Close()
@@ -313,6 +322,7 @@ func TestIMDSv2Sequence(t *testing.T) {
 }
 
 func TestIMDSWithoutTokenEndpointFails(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	srv, gets := imdsStub(t, clk, false)
 	defer srv.Close()
@@ -333,6 +343,7 @@ func TestIMDSWithoutTokenEndpointFails(t *testing.T) {
 }
 
 func TestIMDSDisabledSkipsEndpoint(t *testing.T) {
+	t.Parallel()
 	blocked := &failTransport{t: t}
 	p, _ := newProvider(t, map[string]string{
 		"AWS_EC2_METADATA_DISABLED":         "TRUE",
@@ -350,6 +361,7 @@ func TestIMDSDisabledSkipsEndpoint(t *testing.T) {
 }
 
 func TestIMDSHangFailsFast(t *testing.T) {
+	t.Parallel()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
@@ -371,6 +383,7 @@ func TestIMDSHangFailsFast(t *testing.T) {
 const webIdentityToken = "eyJhbGciOi.super-secret-oidc-token.signature"
 
 func TestWebIdentity(t *testing.T) {
+	t.Parallel()
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte(webIdentityToken+"\n"), 0o600); err != nil {
 		t.Fatal(err)
@@ -434,6 +447,7 @@ func TestWebIdentity(t *testing.T) {
 }
 
 func TestWebIdentityErrorOmitsToken(t *testing.T) {
+	t.Parallel()
 	tokenFile := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(tokenFile, []byte(webIdentityToken), 0o600); err != nil {
 		t.Fatal(err)
@@ -488,6 +502,7 @@ func containerProvider(t *testing.T) (*Provider, *clock, *atomic.Int32, func()) 
 }
 
 func TestCacheRefreshesInsideExpiryWindow(t *testing.T) {
+	t.Parallel()
 	p, clk, fetches, done := containerProvider(t)
 	defer done()
 	ctx := context.Background()
@@ -512,6 +527,7 @@ func TestCacheRefreshesInsideExpiryWindow(t *testing.T) {
 }
 
 func TestNegativeCache(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	var fetches atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -553,6 +569,7 @@ func TestNegativeCache(t *testing.T) {
 }
 
 func TestConcurrentCallsShareOneFetch(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	var fetches atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -590,6 +607,7 @@ func TestConcurrentCallsShareOneFetch(t *testing.T) {
 }
 
 func TestRegionFallback(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		opts    Options
@@ -637,6 +655,7 @@ func outageProvider(t *testing.T) (*Provider, *clock, *atomic.Int32, *atomic.Boo
 }
 
 func TestStaleButValidCredentialsServedDuringOutage(t *testing.T) {
+	t.Parallel()
 	p, clk, fetches, down, done := outageProvider(t)
 	defer done()
 	ctx := context.Background()
@@ -672,6 +691,7 @@ func TestStaleButValidCredentialsServedDuringOutage(t *testing.T) {
 }
 
 func TestCancelledCallerIsNotNegativeCached(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	var fetches atomic.Int32
 	release := make(chan struct{})
@@ -714,6 +734,7 @@ func TestCancelledCallerIsNotNegativeCached(t *testing.T) {
 }
 
 func TestTemporaryCredentialWithoutExpiryStillRefreshes(t *testing.T) {
+	t.Parallel()
 	clk := newClock()
 	var fetches atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -752,6 +773,7 @@ func TestTemporaryCredentialWithoutExpiryStillRefreshes(t *testing.T) {
 // request behind it for the sum of the source timeouts. fetchTimeout caps one
 // walk at three seconds.
 func TestStalledEndpointBoundsCredentialsLatency(t *testing.T) {
+	t.Parallel()
 	stalled := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		// Drain first: with an unread request body the server cannot notice the
 		// client hanging up, and httptest.Server.Close would wait out the sleep.

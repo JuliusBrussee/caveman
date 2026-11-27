@@ -47,6 +47,7 @@ const sampleCatalog = `{
 }`
 
 func TestToolSchemaPreservesSelectionTokens(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	out, ok := c.Compress([]byte(sampleCatalog))
 	if !ok {
@@ -87,6 +88,7 @@ func TestToolSchemaPreservesSelectionTokens(t *testing.T) {
 }
 
 func TestToolSchemaPreservesEnvelopeAndMCPAnnotationTitle(t *testing.T) {
+	t.Parallel()
 	input := []byte(`{"tools":[{"name":"Read","description":"Read one file with all provider-visible selection detail intact.","annotations":{"title":"Read a file","readOnlyHint":true},"_meta":{"title":"vendor title","examples":[1]},"inputSchema":{"title":"ReadArgs","type":"object","properties":{"path":{"type":"string","title":"Path","description":"Target path."}}}}],"title":"catalog title"}`)
 	out, ok := NewToolSchema().Compress(input)
 	if !ok {
@@ -123,6 +125,7 @@ func TestToolSchemaPreservesEnvelopeAndMCPAnnotationTitle(t *testing.T) {
 }
 
 func TestToolSchemaPropertyNamedDescriptionSurvives(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	out, ok := c.Compress([]byte(sampleCatalog))
 	if !ok {
@@ -150,6 +153,7 @@ func TestToolSchemaPropertyNamedDescriptionSurvives(t *testing.T) {
 }
 
 func TestToolSchemaDependencyPropertyNamesSurvive(t *testing.T) {
+	t.Parallel()
 	input := []byte(`{"type":"object","dependentSchemas":{"title":{"properties":{"example":{"type":"string"}}},"$comment":{"required":["title"]}},"dependentRequired":{"example":["title"],"$comment":["example"]},"dependencies":{"title":{"properties":{"$comment":{"type":"boolean"}}},"example":["title"]}}`)
 	out, ok := NewToolSchema().Compress(input)
 	if !ok {
@@ -179,6 +183,7 @@ func TestToolSchemaDependencyPropertyNamesSurvive(t *testing.T) {
 }
 
 func TestToolSchemaByteSafeOnMalformed(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	if _, ok := c.Compress([]byte(`{not valid json`)); ok {
 		t.Fatal("expected ok=false on malformed JSON (caller forwards original)")
@@ -189,6 +194,7 @@ func TestToolSchemaByteSafeOnMalformed(t *testing.T) {
 }
 
 func TestToolSchemaRejectsEveryTrailingNonWhitespaceToken(t *testing.T) {
+	t.Parallel()
 	for _, suffix := range []string{"}", "]", " }", "\n]", " {}", " null", " true", " 17", " trailing", " /* comment */"} {
 		t.Run(strconv.Quote(suffix), func(t *testing.T) {
 			input := []byte(sampleCatalog + suffix)
@@ -206,6 +212,7 @@ func TestToolSchemaRejectsEveryTrailingNonWhitespaceToken(t *testing.T) {
 }
 
 func TestToolSchemaIdempotent(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	once, ok := c.Compress([]byte(sampleCatalog))
 	if !ok {
@@ -232,6 +239,7 @@ func TestToolSchemaIdempotent(t *testing.T) {
 // becomes an actual utf8.RuneError rune — and assert no string value contains it.
 // The test fails when truncation splits a UTF-8 sequence and passes on capRunes.
 func TestToolSchemaDescriptionTruncationStaysUTF8(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	// A description long enough to be reduced, whose byte cap falls inside the
 	// multi-byte "é": 79 'a', then "é" (bytes 79–80), then filler.
@@ -279,6 +287,7 @@ func forEachStringValue(v any, fn func(string)) {
 // constraint buried in a genuinely large description (retained by its bound marker
 // through eliding). Over-keeping is the safe direction; under-keeping is the bug.
 func TestToolSchemaRetainsMarkerlessConstraints(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	cases := []struct {
 		name string
@@ -320,6 +329,7 @@ func mustJSON(s string) string {
 // must not cut inside an abbreviation. "Target path, e.g. /srv/data" must survive
 // whole rather than collapsing to "Target path, e." — the old first-period cut.
 func TestToolSchemaAbbreviationNotSplit(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	input := []byte(`{"tools":[{"name":"t","inputSchema":{"type":"object","properties":{"path":{"type":"string","description":"Target path, e.g. /srv/data."}}}}]}`)
 	out, ok := c.Compress(input)
@@ -338,6 +348,7 @@ func TestToolSchemaAbbreviationNotSplit(t *testing.T) {
 // argument construction (an agent omits the argument to inherit it), so unlike
 // pure annotation metadata it must NOT be dropped.
 func TestToolSchemaKeepsDefault(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	input := []byte(`{"tools":[{"name":"t","inputSchema":{"type":"object","properties":{"mode":{"type":"string","enum":["a","b"],"default":"a","description":"Mode."}}}}]}`)
 	out, ok := c.Compress(input)
@@ -354,6 +365,7 @@ func TestToolSchemaKeepsDefault(t *testing.T) {
 // targets it dangles. It also asserts the general property that every $ref in the
 // compressed output still resolves to an existing definition.
 func TestToolSchemaRefIntegrity(t *testing.T) {
+	t.Parallel()
 	c := NewToolSchema()
 	input := []byte(`{"name":"t","inputSchema":{"type":"object","properties":{"x":{"$ref":"#/$defs/title"},"slash":{"$ref":"#/$defs/a~1b"},"tilde":{"$ref":"#/$defs/til~0de"}},"$defs":{"title":{"type":"string","enum":["a","b"]},"a/b":{"type":"number"},"til~de":{"type":"boolean"},"Widget":{"type":"object"}}}}`)
 	out, ok := c.Compress(input)
@@ -503,6 +515,7 @@ func decodeJSONPointerToken(encoded string) (string, bool) {
 // it must report a dropped definition as unresolvable and a present one as
 // resolvable. Without this, TestToolSchemaRefIntegrity could pass vacuously.
 func TestRefIntegrityGuardDetectsDrop(t *testing.T) {
+	t.Parallel()
 	var root any
 	if err := json.Unmarshal([]byte(`{"properties":{"x":{"$ref":"#/$defs/gone"}},"$defs":{"kept":{"type":"string"}}}`), &root); err != nil {
 		t.Fatal(err)
@@ -520,6 +533,7 @@ func TestRefIntegrityGuardDetectsDrop(t *testing.T) {
 }
 
 func TestRefIntegrityGuardDoesNotCrossToolSchemaRoots(t *testing.T) {
+	t.Parallel()
 	var catalog any
 	if err := json.Unmarshal([]byte(`{"tools":[{"name":"broken","inputSchema":{"properties":{"x":{"$ref":"#/$defs/shared"}},"$defs":{}}},{"name":"other","inputSchema":{"$defs":{"shared":{"type":"string"}}}}]}`), &catalog); err != nil {
 		t.Fatal(err)
@@ -530,6 +544,7 @@ func TestRefIntegrityGuardDoesNotCrossToolSchemaRoots(t *testing.T) {
 }
 
 func TestRefIntegrityGuardUsesNearestIDResourceRoot(t *testing.T) {
+	t.Parallel()
 	var schema any
 	if err := json.Unmarshal([]byte(`{"$defs":{"shared":{"type":"string"}},"properties":{"nested":{"$id":"nested.json","properties":{"x":{"$ref":"#/$defs/shared"}},"$defs":{}}}}`), &schema); err != nil {
 		t.Fatal(err)
@@ -540,6 +555,7 @@ func TestRefIntegrityGuardUsesNearestIDResourceRoot(t *testing.T) {
 }
 
 func TestRefIntegrityGuardRejectsNonCanonicalArrayIndex(t *testing.T) {
+	t.Parallel()
 	var schema any
 	if err := json.Unmarshal([]byte(`{"properties":{"x":{"$ref":"#/items/+0"}},"items":[{"type":"string"}]}`), &schema); err != nil {
 		t.Fatal(err)
@@ -557,6 +573,7 @@ func TestRefIntegrityGuardRejectsNonCanonicalArrayIndex(t *testing.T) {
 // separately asserts each individual constraint token, so a regression in either
 // the split logic or the marker set fails loudly.
 func TestToolSchemaPreservesArgumentConstraints(t *testing.T) {
+	t.Parallel()
 	in, err := os.ReadFile("testdata/toolschema_constraints_catalog.json")
 	if err != nil {
 		t.Fatal(err)

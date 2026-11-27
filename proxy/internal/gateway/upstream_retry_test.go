@@ -17,6 +17,7 @@ import (
 
 // Dial failures occur before the request reaches the provider and can be retried.
 func TestUpstreamTransportErrorRetries(t *testing.T) {
+	t.Parallel()
 	const body = `{"model":"claude-sonnet-5","max_tokens":16,"messages":[{"role":"user","content":"ping"}]}`
 	const response = `{"id":"msg","type":"message","model":"claude-sonnet-5","content":[],"usage":{"input_tokens":1,"output_tokens":1}}`
 
@@ -31,6 +32,7 @@ func TestUpstreamTransportErrorRetries(t *testing.T) {
 	}
 
 	t.Run("succeeds after transient dial failures", func(t *testing.T) {
+		t.Parallel()
 		attempts := 0
 		srv := newServer(func(r *http.Request) (*http.Response, error) {
 			attempts++
@@ -58,6 +60,7 @@ func TestUpstreamTransportErrorRetries(t *testing.T) {
 	})
 
 	t.Run("exhausted retries still 502", func(t *testing.T) {
+		t.Parallel()
 		attempts := 0
 		srv := newServer(func(r *http.Request) (*http.Response, error) {
 			attempts++
@@ -80,6 +83,7 @@ func TestUpstreamTransportErrorRetries(t *testing.T) {
 // net/http reports as Op "proxyconnect", not Op "dial". A dial-only test left
 // the documented retry dead for exactly the proxied population.
 func TestUpstreamProxyConnectFailureRetries(t *testing.T) {
+	t.Parallel()
 	attempts := 0
 	s := New(Config{HTTPClient: &http.Client{Transport: roundTripFunc(func(r *http.Request) (*http.Response, error) {
 		attempts++
@@ -101,6 +105,7 @@ func TestUpstreamProxyConnectFailureRetries(t *testing.T) {
 }
 
 func TestUpstreamAmbiguousFailureNeverReplaysInference(t *testing.T) {
+	t.Parallel()
 	for _, failure := range []error{
 		io.ErrUnexpectedEOF,
 		&net.OpError{Op: "write", Net: "tcp", Err: syscall.ECONNRESET},

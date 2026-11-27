@@ -50,6 +50,7 @@ func statsAssertMoney(t *testing.T, got *float64, want float64) {
 }
 
 func TestStatsReportKeepsAPISavingsAndSubscriptionEquivalentSeparate(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	s.Record(statsTestRecord("api", "payg"))
 	s.Record(statsTestRecord("oauth", "oauth"))
@@ -78,6 +79,7 @@ func TestStatsReportKeepsAPISavingsAndSubscriptionEquivalentSeparate(t *testing.
 }
 
 func TestStatsReportUnknownAndIncompleteStayNull(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	unknown := statsTestRecord("unknown", "unknown")
 	s.Record(unknown)
@@ -102,6 +104,7 @@ func TestStatsReportUnknownAndIncompleteStayNull(t *testing.T) {
 }
 
 func TestStatsReportKeepsRegressionsAndExcludesFailedAndLegacySavings(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	expanded := statsTestRecord("expanded", "payg")
 	expanded.RequestTokensBefore = 100
@@ -139,6 +142,7 @@ func TestStatsReportKeepsRegressionsAndExcludesFailedAndLegacySavings(t *testing
 }
 
 func TestStatsReportFiltersJointGroupsAndUTCWindow(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	for i, row := range []struct{ ts, provider, model, agent, auth string }{
 		{"2026-09-07 23:59:59.999", "anthropic", "exact-model", "claude", "payg"},
@@ -166,6 +170,7 @@ func TestStatsReportFiltersJointGroupsAndUTCWindow(t *testing.T) {
 }
 
 func TestStatsReportEmptyAndZeroDiffer(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	empty := statsTestReport(t, s, StatsReportOptions{Days: 30})
 	if empty.Totals.APISpendUSD != nil || empty.Totals.APISavingsUSD != nil {
@@ -190,6 +195,7 @@ func TestStatsReportEmptyAndZeroDiffer(t *testing.T) {
 }
 
 func TestStatsReportMissingIdentityFiltersMatchDisplayedLabels(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	for _, id := range []string{"empty", "null"} {
 		rec := statsTestRecord(id, "unknown")
@@ -206,6 +212,7 @@ func TestStatsReportMissingIdentityFiltersMatchDisplayedLabels(t *testing.T) {
 }
 
 func TestStatsReportMixedHistoricalTimestampsUseUTCInstants(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	for _, test := range []struct{ id, ts string }{
 		{"old-space", "2026-09-08 10:00:00.000"},
@@ -233,6 +240,7 @@ func TestStatsReportMixedHistoricalTimestampsUseUTCInstants(t *testing.T) {
 }
 
 func TestStatsPersistenceRejectsInvalidSnapshotAndTokenBuckets(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	bad := statsTestRecord("bad-price", "payg")
 	bad.PriceInputPerMillion = math.NaN()
@@ -253,6 +261,7 @@ func TestStatsPersistenceRejectsInvalidSnapshotAndTokenBuckets(t *testing.T) {
 }
 
 func TestStatsReceiptBoundDoesNotTruncateTotals(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	for i := 0; i < statsReceiptLimit+2; i++ {
 		rec := statsTestRecord(strings.Repeat("x", i+1), "payg")
@@ -265,6 +274,7 @@ func TestStatsReceiptBoundDoesNotTruncateTotals(t *testing.T) {
 }
 
 func TestStatsPersistenceKeepsReceiptEquationConsistent(t *testing.T) {
+	t.Parallel()
 	s := statsTestStore(t)
 	rec := statsTestRecord("wrong-arithmetic", "payg")
 	wrong := 500.0
@@ -279,6 +289,7 @@ func TestStatsPersistenceKeepsReceiptEquationConsistent(t *testing.T) {
 }
 
 func TestStatsMissingObservedBucketRateStaysUnpriced(t *testing.T) {
+	t.Parallel()
 	for _, test := range []struct {
 		name   string
 		remove func(*gateway.RequestRecord)
@@ -358,10 +369,12 @@ func statsAssertIndexedPlan(t *testing.T, s *Store) {
 }
 
 func TestStatsQueryUsesJulianDayIndex(t *testing.T) {
+	t.Parallel()
 	statsAssertIndexedPlan(t, statsTestStore(t))
 }
 
 func TestOpenAddsJulianDayIndexToExistingDatabase(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "old.db")
 	// An old database has the requests table and no index.
 	old, err := sql.Open("sqlite", sqliteDSN(path))

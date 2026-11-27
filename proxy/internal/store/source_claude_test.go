@@ -7,6 +7,7 @@ import (
 )
 
 func TestClaudeSessionSourceUsesTranscriptCWDForHyphenatedRepo(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	realRepo := "/Users/dev/src/project-a"
 	otherRepo := "/Users/dev/src/other-repo"
@@ -48,6 +49,7 @@ func TestClaudeSessionSourceUsesTranscriptCWDForHyphenatedRepo(t *testing.T) {
 }
 
 func TestClaudeSessionSourceExcludesStaleSessionOnlyFromSessionsScanned(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeClaudeProject(t, root, "repo", "stale.jsonl", []string{
 		`{"type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"model":"claude-sonnet-5","usage":{"input_tokens":100,"output_tokens":10}}}`,
@@ -67,6 +69,7 @@ func TestClaudeSessionSourceExcludesStaleSessionOnlyFromSessionsScanned(t *testi
 }
 
 func TestClaudeTaskSpawnsCountsAgentToolName(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeClaudeProject(t, root, "repo", "s.jsonl", []string{
 		`{"type":"assistant","timestamp":"2026-09-16T00:00:00Z","message":{"model":"claude-sonnet-5","content":[{"type":"tool_use","id":"t1","name":"Agent","input":{}}],"usage":{"input_tokens":100,"output_tokens":10}}}`,
@@ -87,6 +90,7 @@ func TestClaudeTaskSpawnsCountsAgentToolName(t *testing.T) {
 // per-type breakdown went blank on current transcripts even once the spawn
 // count itself was fixed (#1075).
 func TestClaudeStructuredSkillReferencesReadsAgentSubagentType(t *testing.T) {
+	t.Parallel()
 	obj := map[string]any{
 		"type": "assistant",
 		"message": map[string]any{
@@ -121,6 +125,7 @@ func TestClaudeStructuredSkillReferencesReadsAgentSubagentType(t *testing.T) {
 // phantom spawns and inflate exactly the subagent findings the rename fix was
 // meant to make trustworthy. Count decoded tool_use blocks instead.
 func TestClaudeTaskSpawnsIgnoresNestedAgentFields(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeClaudeProject(t, root, "repo", "s.jsonl", []string{
 		// The invoked tool is Configure; "agent" is just one of its arguments.

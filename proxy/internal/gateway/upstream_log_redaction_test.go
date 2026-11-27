@@ -12,6 +12,7 @@ import (
 )
 
 func TestUpstreamRetryLogRemovesURLCredentials(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	attempts := 0
 	// An injected logger need not have the application's redaction hook.

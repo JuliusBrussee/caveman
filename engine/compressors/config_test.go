@@ -22,6 +22,7 @@ func yamlFixture() []byte {
 }
 
 func TestConfigYAMLKeepsParentsImportantAndQueryRelevantLines(t *testing.T) {
+	t.Parallel()
 	c, ok := compressors.NewConfig().(compressors.QueryAwareCompressor)
 	if !ok {
 		t.Fatal("config compressor must be query-aware")
@@ -58,6 +59,7 @@ func TestConfigYAMLKeepsParentsImportantAndQueryRelevantLines(t *testing.T) {
 }
 
 func TestConfigYAMLQueryKeepsSequenceItemParent(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("services:\n")
 	for i := 0; i < 100; i++ {
@@ -90,6 +92,7 @@ func TestConfigYAMLQueryKeepsSequenceItemParent(t *testing.T) {
 }
 
 func TestConfigTOMLKeepsSectionHeadersAndRelevantValue(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 30; i++ {
 		fmt.Fprintf(&b, "[feature.%02d]\nenabled = %t\nowner = \"team-%02d\"\n", i, i%2 == 0, i)
@@ -108,6 +111,7 @@ func TestConfigTOMLKeepsSectionHeadersAndRelevantValue(t *testing.T) {
 }
 
 func TestConfigINIStaysSectionShapedAndKeepsQueryValue(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 30; i++ {
 		fmt.Fprintf(&b, "[feature.%02d]\nenabled = %t\nowner = team-%02d\n", i, i%2 == 0, i)
@@ -133,6 +137,7 @@ func TestConfigINIStaysSectionShapedAndKeepsQueryValue(t *testing.T) {
 }
 
 func TestConfigPreservesCRLFWithoutAddingTrailingNewline(t *testing.T) {
+	t.Parallel()
 	input := bytes.ReplaceAll(bytes.TrimSuffix(yamlFixture(), []byte("\n")), []byte("\n"), []byte("\r\n"))
 	out, ok := compressors.NewConfig().Compress(input)
 	if !ok {
@@ -147,6 +152,7 @@ func TestConfigPreservesCRLFWithoutAddingTrailingNewline(t *testing.T) {
 }
 
 func TestConfigInvalidTinyOrBinaryPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewConfig()
 	var malformed strings.Builder
 	malformed.WriteString("service:\n")

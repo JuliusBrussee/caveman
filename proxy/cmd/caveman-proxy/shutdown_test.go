@@ -27,12 +27,14 @@ func TestServeShutdown(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("Windows does not support sending POSIX signals to another process")
 	}
+	t.Parallel()
 	for _, force := range []bool{false, true} {
 		name := "drain"
 		if force {
 			name = "second-signal"
 		}
 		t.Run(name, func(t *testing.T) {
+			t.Parallel()
 			release := make(chan struct{})
 			defer close(release)
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

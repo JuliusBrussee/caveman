@@ -7,6 +7,8 @@ import (
 	"net/http/httptest"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -55,8 +57,7 @@ func framingBroken(out string) string {
 }
 
 func TestPingNeverSplitsARelayedEvent(t *testing.T) {
-	defer func(ping, hold time.Duration) { pingInterval, gateHold = ping, hold }(pingInterval, gateHold)
-	pingInterval = time.Hour
+	t.Parallel()
 	frames := []string{`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`,
 		`{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`}
 	for i := range 300 {
@@ -64,51 +65,85 @@ func TestPingNeverSplitsARelayedEvent(t *testing.T) {
 	}
 	frames = append(frames, `{"type":"content_block_stop","index":0}`, `{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":3}}`, `{"type":"message_stop"}`)
 	payload := sse(frames...)
-	broken := 0
+	var broken atomic.Int32
+	errs := make([]error, 20)
+	reasons := make([]string, 20)
+	var wg sync.WaitGroup
 	for run := range 20 {
-		gateHold = time.Duration(5+run) * time.Millisecond
-		rec := slowRecorder{httptest.NewRecorder()}
-		_, err := Relay(Messages, []byte(`{"stream":true}`), "m").Serve(rec, &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(payload))})
-		if err != nil {
-			t.Fatalf("err %v", err)
-		}
-		if why := framingBroken(rec.Body.String()); why != "" {
-			broken++
-			if broken == 1 {
-				t.Logf("run %d: %s", run, why)
+		wg.Add(1)
+		go func(run int) {
+			defer wg.Done()
+			r := Relay(Messages, []byte(`{"stream":true}`), "m")
+			r.ping = time.Hour
+			r.hold = time.Duration(5+run) * time.Millisecond
+			rec := slowRecorder{httptest.NewRecorder()}
+			_, err := r.Serve(rec, &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(strings.NewReader(payload))})
+			if err != nil {
+				errs[run] = err
+				return
 			}
+			if why := framingBroken(rec.Body.String()); why != "" {
+				broken.Add(1)
+				reasons[run] = why
+			}
+		}(run)
+	}
+	wg.Wait()
+	for run, err := range errs {
+		if err != nil {
+			t.Fatalf("run %d: err %v", run, err)
 		}
 	}
-	if broken > 0 {
-		t.Errorf("%d/20 relayed streams had a ping spliced into an event", broken)
+	for run, why := range reasons {
+		if why != "" {
+			t.Logf("run %d: %s", run, why)
+			break
+		}
+	}
+	if n := broken.Load(); n > 0 {
+		t.Errorf("%d/20 relayed streams had a ping spliced into an event", n)
 	}
 }
 
 func TestPingNeverSplitsAPacedRelayedEvent(t *testing.T) {
-	defer func(ping, hold time.Duration) { pingInterval, gateHold = ping, hold }(pingInterval, gateHold)
-	pingInterval = time.Hour
-	broken := 0
-	runs := 200
+	t.Parallel()
+	const runs = 200
+	var broken atomic.Int32
+	jobs := make(chan int, runs)
 	for run := range runs {
-		gateHold = time.Duration(3000+run*37) * time.Microsecond
-		reader, writer := io.Pipe()
-		go func() {
-			_, _ = io.WriteString(writer, sse(`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`, `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
-			for i := range 60 {
-				_, _ = io.WriteString(writer, sse(fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"w%d "}}`, i)))
-				time.Sleep(100 * time.Microsecond)
-			}
-			_, _ = io.WriteString(writer, sse(`{"type":"content_block_stop","index":0}`, `{"type":"message_stop"}`))
-			_ = writer.Close()
-		}()
-		rec := httptest.NewRecorder()
-		_, _ = Relay(Messages, []byte(`{"stream":true}`), "m").Serve(rec, &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(reader)})
-		if framingBroken(rec.Body.String()) != "" {
-			broken++
-		}
+		jobs <- run
 	}
-	if broken > 0 {
-		t.Errorf("%d/%d paced streams had a ping spliced into an event", broken, runs)
+	close(jobs)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for run := range jobs {
+				r := Relay(Messages, []byte(`{"stream":true}`), "m")
+				r.ping = time.Hour
+				r.hold = time.Duration(3000+run*37) * time.Microsecond
+				reader, writer := io.Pipe()
+				go func() {
+					_, _ = io.WriteString(writer, sse(`{"type":"message_start","message":{"id":"m","model":"x","usage":{"input_tokens":1}}}`, `{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}`))
+					for i := range 60 {
+						_, _ = io.WriteString(writer, sse(fmt.Sprintf(`{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"w%d "}}`, i)))
+						time.Sleep(100 * time.Microsecond)
+					}
+					_, _ = io.WriteString(writer, sse(`{"type":"content_block_stop","index":0}`, `{"type":"message_stop"}`))
+					_ = writer.Close()
+				}()
+				rec := httptest.NewRecorder()
+				_, _ = r.Serve(rec, &http.Response{StatusCode: 200, Header: http.Header{}, Body: io.NopCloser(reader)})
+				if framingBroken(rec.Body.String()) != "" {
+					broken.Add(1)
+				}
+			}
+		}()
+	}
+	wg.Wait()
+	if n := broken.Load(); n > 0 {
+		t.Errorf("%d/%d paced streams had a ping spliced into an event", n, runs)
 	}
 }
 

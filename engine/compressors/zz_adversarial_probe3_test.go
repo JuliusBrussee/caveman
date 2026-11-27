@@ -19,6 +19,7 @@ func show3(b []byte) string {
 // Precise false-win probe: truly DISTINCT padding (no accidental collapse),
 // one short qualifying run of a tiny line. Does ok=true but output grow?
 func TestProbe3_PreciseByteFalseWin(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	var b strings.Builder
 	for i := 0; i < 6; i++ {
@@ -52,6 +53,7 @@ func TestProbe3_PreciseByteFalseWin(t *testing.T) {
 // and the literal "7 identical" content is partly elided. CCR recovers exact bytes, but
 // the COMPRESSED view shown to the model now has nonsensical/conflicting markers.
 func TestProbe3_MarkerRunCollapsesIntoWrongCount(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	marker := "… caveman: 999 identical lines elided …"
 	// 5 identical real-looking marker lines in the ORIGINAL (e.g. a log that quotes caveman output)

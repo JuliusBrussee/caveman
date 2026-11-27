@@ -23,6 +23,7 @@ import (
 // point): the proxy and the simulator that measured the policy plan alike,
 // prices included. Regenerate these with the table.
 func TestCacheWarmPlanMatchesTheSimulator(t *testing.T) {
+	t.Parallel()
 	table := newWarmTable("")
 	for name, want := range map[string]string{
 		"main/end/5m:300000:10:claude-opus-5":          "1111000000000",
@@ -71,6 +72,7 @@ func atoi(t *testing.T, s string) int {
 // at 0.10 buy 0.5 x 1.00; at 0.13 they do not. A realized that also averaged
 // in the never-returning half (0.5) would refuse the first chain.
 func TestCacheWarmPlanCountsNeverReturningOnce(t *testing.T) {
+	t.Parallel()
 	table := returnsAt(20 * time.Minute)
 	p := table.prior["all"].P
 	p[40], p[240] = 0.5, 0.5
@@ -91,6 +93,7 @@ func TestCacheWarmPlanCountsNeverReturningOnce(t *testing.T) {
 }
 
 func TestCacheWarmToolStopAcrossAnyReads(t *testing.T) {
+	t.Parallel()
 	stream := `data: {"type":"message_delta","delta":{"stop_reason":"tool_use","stop_sequence":null}}`
 	for _, size := range []int{1, 2, 5, 7, 23, 24, 1000} {
 		var s toolStop
@@ -112,6 +115,7 @@ func TestCacheWarmToolStopAcrossAnyReads(t *testing.T) {
 }
 
 func TestCacheWarmCorruptGapsFileStartsFromDefaults(t *testing.T) {
+	t.Parallel()
 	good := `[` + strings.Repeat("1,", 240) + `1]`
 	want, _, _ := newWarmTable("").probs("main/end/5m")
 	for name, raw := range map[string]string{
@@ -168,6 +172,7 @@ func TestCacheWarmCorruptGapsFileStartsFromDefaults(t *testing.T) {
 // coming back later than it was seen silent, never dropped: the returns that
 // came first are all counted, so dropping the rest reads as "always returns".
 func TestCacheWarmEvictedPendingStreamIsCounted(t *testing.T) {
+	t.Parallel()
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { return true })
 	w.arm("first", "main/end/5m", nil, c.Now())
 	c.advance(10 * time.Minute)
@@ -214,6 +219,7 @@ func sum(v []float64) float64 {
 }
 
 func TestCacheWarmShutdownSavesWhatItLearned(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "gaps.json")
 	sent := 0
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { sent++; return true })
@@ -250,6 +256,7 @@ func TestCacheWarmShutdownSavesWhatItLearned(t *testing.T) {
 // The held request (body and credential headers) goes as soon as the chain
 // is over, not when the stream is next heard from or evicted.
 func TestCacheWarmReleasesTheRequestWhenTheChainEnds(t *testing.T) {
+	t.Parallel()
 	body := []byte("0123456789")
 	for name, tc := range map[string]struct {
 		again bool
@@ -284,6 +291,7 @@ func TestCacheWarmReleasesTheRequestWhenTheChainEnds(t *testing.T) {
 // The gaps file is written with the warmer unlocked: a slow disk never holds
 // up the other streams' requests.
 func TestCacheWarmSavesOutsideTheWarmerLock(t *testing.T) {
+	t.Parallel()
 	w, c := newUnitWarmer(func(context.Context, *warmRequest) bool { return true })
 	w.table = newWarmTable(filepath.Join(t.TempDir(), "gaps.json"))
 	w.arm("s", "main/end/5m", nil, c.Now())
@@ -316,6 +324,7 @@ func TestCacheWarmSavesOutsideTheWarmerLock(t *testing.T) {
 }
 
 func TestCacheWarmMixedLifetimesAreNotWarmed(t *testing.T) {
+	t.Parallel()
 	mixed := `{"model":"m","max_tokens":10,"system":[{"type":"text","text":"a","cache_control":{"type":"ephemeral","ttl":"1h"}}],` +
 		`"messages":[{"role":"user","content":[{"type":"text","text":"b","cache_control":{"type":"ephemeral"}}]}]}`
 	if ttl := declaredCacheTTL([]byte(mixed)); ttl != 0 {
@@ -352,6 +361,7 @@ func warmAnswerFor(model string, tool, encoded bool) warmAnswer {
 // One line per answered request says what was planned (info) or why nothing was (debug),
 // with the session as a hash and no content or credential.
 func TestCacheWarmLogsThePlanOrTheSkip(t *testing.T) {
+	t.Parallel()
 	var logs bytes.Buffer
 	f := newWarmFixture(t, &warmTransport{}, anthropicAPI, slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug})))
 	r := httptest.NewRequest("POST", "/v1/messages", nil)
@@ -400,6 +410,7 @@ func TestCacheWarmLogsThePlanOrTheSkip(t *testing.T) {
 // An encoded answer's stop reason is not read: the stream is planned as
 // whichever class warms less, and its next gap teaches neither class.
 func TestCacheWarmEncodedAnswerIsNotClassed(t *testing.T) {
+	t.Parallel()
 	f := newWarmFixture(t, &warmTransport{}, anthropicAPI, nil)
 	table := returnsAt(20 * time.Minute) // tool turns come back, finished turns never
 	never := make([]float64, 241)

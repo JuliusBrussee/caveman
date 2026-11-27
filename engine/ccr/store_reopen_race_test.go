@@ -147,6 +147,7 @@ func TestOpenRejectsImpossibleBudgetBeforePreparingFiles(t *testing.T) {
 // ccr.db at once. Switching it to WAL can return SQLITE_BUSY without waiting on
 // busy_timeout; before Open retried that, most runs of this lost an open.
 func TestConcurrentFreshOpensAllSucceed(t *testing.T) {
+	t.Parallel()
 	for round := 0; round < 40; round++ {
 		path := filepath.Join(t.TempDir(), "ccr.db")
 		var wg sync.WaitGroup

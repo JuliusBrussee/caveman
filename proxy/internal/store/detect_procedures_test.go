@@ -24,6 +24,7 @@ var loopSteps = [][2]string{
 // user repeats across sessions surfaces as a distillation candidate carrying
 // the measured cost of re-deriving it.
 func TestProcedureMiningFindsRepeatedSequences(t *testing.T) {
+	t.Parallel()
 	miner := newProcedureMiner()
 	for _, session := range []string{"s1", "s2", "s3", "s4"} {
 		miner.observeSession(session, procedureCalls(loopSteps, 6_000))
@@ -72,6 +73,7 @@ func TestProcedureMiningFindsRepeatedSequences(t *testing.T) {
 // TestProcedureMiningIgnoresOneOffs keeps a sequence that happened once out of
 // the report, and refuses a "procedure" that is one call repeated.
 func TestProcedureMiningIgnoresOneOffs(t *testing.T) {
+	t.Parallel()
 	once := newProcedureMiner()
 	once.observeSession("s1", procedureCalls(loopSteps, 50_000))
 	if got := procedureSinks(once, nil); len(got) != 0 {
@@ -99,6 +101,7 @@ func TestProcedureMiningIgnoresOneOffs(t *testing.T) {
 // TestProcedureCandidatesDoNotTeachTheSameThingTwice pins the overlap filter:
 // a short candidate contained in a longer kept one is dropped.
 func TestProcedureCandidatesDoNotTeachTheSameThingTwice(t *testing.T) {
+	t.Parallel()
 	miner := newProcedureMiner()
 	for _, session := range []string{"s1", "s2", "s3", "s4", "s5"} {
 		miner.observeSession(session, procedureCalls(loopSteps, 8_000))
@@ -127,6 +130,7 @@ func TestProcedureCandidatesDoNotTeachTheSameThingTwice(t *testing.T) {
 // TestProcedureMiningDoesNotInflateOnTightLoops proves one session's repeated
 // span is booked once per procedure, so a loop cannot manufacture value.
 func TestProcedureMiningDoesNotInflateOnTightLoops(t *testing.T) {
+	t.Parallel()
 	repeated := append(append([]([2]string){}, loopSteps...), loopSteps...)
 	looped := newProcedureMiner()
 	single := newProcedureMiner()

@@ -36,6 +36,7 @@ func get(t *testing.T, srv *Server, path, bearer string) *httptest.ResponseRecor
 // Middleware 401s bypass rejectUnauthorized; the mount must still count them,
 // and /metrics must describe every series.
 func TestMiddlewareUnauthorizedCountedAndMetricsTyped(t *testing.T) {
+	t.Parallel()
 	srv := New(Config{Middleware: fakeMiddleware{}})
 	if rec := get(t, srv, "/caveman/v1/middleware/capabilities", ""); rec.Code != http.StatusUnauthorized {
 		t.Fatalf("status = %d", rec.Code)
@@ -53,6 +54,7 @@ func TestMiddlewareUnauthorizedCountedAndMetricsTyped(t *testing.T) {
 }
 
 func TestMetricsTokenGatesMetricsOnly(t *testing.T) {
+	t.Parallel()
 	srv := New(Config{MetricsToken: "metrics-secret-value"})
 	for bearer, want := range map[string]int{"": 401, "wrong": 401, "metrics-secret-value": 200} {
 		if rec := get(t, srv, "/metrics", bearer); rec.Code != want {
@@ -75,6 +77,7 @@ func (closedAuth) RefusesAll() bool { return true }
 // A middleware store outage degrades readiness only where the middleware is all
 // the listener serves; provider inference keeps its replicas in the Service.
 func TestReadinessReflectsMiddlewareStore(t *testing.T) {
+	t.Parallel()
 	down := fakeMiddleware{readyErr: errors.New("attempt to write a readonly database")}
 	for _, tc := range []struct {
 		middleware http.Handler

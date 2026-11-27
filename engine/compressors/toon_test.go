@@ -8,6 +8,7 @@ import (
 )
 
 func TestTOONCompressorTabularArrayRoundTrips(t *testing.T) {
+	t.Parallel()
 	c := NewTOON()
 	in := []byte(`{"hikes":[{"id":1,"name":"Blue Lake","distanceKm":7.5,"sunny":true},{"id":2,"name":"Ridge","distanceKm":9.2,"sunny":false},{"id":3,"name":"Loop","distanceKm":5.1,"sunny":true}],"friends":["ana","luis","sam"],"meta":{"season":"spring_2025"}}`)
 
@@ -25,6 +26,7 @@ func TestTOONCompressorTabularArrayRoundTrips(t *testing.T) {
 }
 
 func TestTOONCompressorUnsupportedShapesPassThrough(t *testing.T) {
+	t.Parallel()
 	c := NewTOON()
 	cases := [][]byte{
 		[]byte(`{"rows":[{"id":1,"name":"a"},{"id":2,"label":"b"}]}`),
@@ -39,6 +41,7 @@ func TestTOONCompressorUnsupportedShapesPassThrough(t *testing.T) {
 }
 
 func TestTOONStringsNeedingQuotesRoundTrip(t *testing.T) {
+	t.Parallel()
 	c := NewTOON()
 	in := []byte(`{"rows":[{"id":1,"value":"a,b"},{"id":2,"value":"true"},{"id":3,"value":"123"},{"id":4,"value":""},{"id":5,"value":" leading"},{"id":6,"value":"line\nbreak"},{"id":7,"value":"a\"b"}]}`)
 
@@ -55,6 +58,7 @@ func TestTOONStringsNeedingQuotesRoundTrip(t *testing.T) {
 }
 
 func TestTOONNumbersPreserveLexicalForm(t *testing.T) {
+	t.Parallel()
 	c := NewTOON()
 	in := []byte(`{"rows":[{"id":1,"n":7.50},{"id":2,"n":1e9},{"id":3,"n":123456789012345678901234567890}]}`)
 
@@ -71,6 +75,7 @@ func TestTOONNumbersPreserveLexicalForm(t *testing.T) {
 }
 
 func TestTOONDeterministic(t *testing.T) {
+	t.Parallel()
 	c := NewTOON()
 	in := []byte(`{"rows":[{"id":1,"name":"a"},{"id":2,"name":"b"}],"tags":["x","y"]}`)
 	first, ok := c.Compress(in)
@@ -87,6 +92,7 @@ func TestTOONDeterministic(t *testing.T) {
 }
 
 func TestTOONSortsNonTabularObjectKeys(t *testing.T) {
+	t.Parallel()
 	a, ok := NewTOON().Compress([]byte(`{"b":1,"a":2,"nested":{"z":3,"c":4}}`))
 	if !ok {
 		t.Fatal("expected compression")
@@ -104,6 +110,7 @@ func TestTOONSortsNonTabularObjectKeys(t *testing.T) {
 }
 
 func TestTOONRootScalarAndScalarArrayRoundTrip(t *testing.T) {
+	t.Parallel()
 	for _, in := range [][]byte{
 		[]byte(`["ana","luis","sam"]`),
 		[]byte(`"plain"`),

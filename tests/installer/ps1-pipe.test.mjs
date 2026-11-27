@@ -11,11 +11,38 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+
+function spawnAsync(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    let timedOut = false;
+    const timer = opts.timeout
+      ? setTimeout(() => { timedOut = true; child.kill('SIGKILL'); }, opts.timeout)
+      : null;
+    child.stdout.on('data', (d) => { stdout += d; });
+    child.stderr.on('data', (d) => { stderr += d; });
+    child.on('error', (error) => {
+      if (timer) clearTimeout(timer);
+      resolve({ status: null, stdout, stderr, error });
+    });
+    child.on('close', (status) => {
+      if (timer) clearTimeout(timer);
+      resolve({ status, stdout, stderr, error: timedOut ? new Error('ETIMEDOUT') : undefined });
+    });
+    child.stdin.end(opts.input ?? '');
+  });
+}
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(HERE, '..', '..');
@@ -95,46 +122,99 @@ test('install.ps1 never exits the session that piped it to iex', () => {
 // npx (on a pseudo-terminal for the first run) stand in for the machine.
 const pwsh = spawnSync('sh', ['-c', 'command -v pwsh'], { encoding: 'utf8' }).stdout?.trim();
 const python = spawnSync('sh', ['-c', 'command -v python3'], { encoding: 'utf8' }).stdout?.trim();
-test('install.ps1 under pwsh: iex keeps the session, the first run follows the rules', { skip: process.platform === 'win32' || !pwsh || !python }, () => {
-  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-ps1-iex-'));
-  const bin = path.join(cwd, 'bin');
-  fs.mkdirSync(bin);
+test('install.ps1 under pwsh: iex keeps the session, the first run follows the rules', { skip: process.platform === 'win32' || !pwsh || !python }, async () => {
   const cli = JSON.parse(fs.readFileSync(path.join(REPO_ROOT, 'packages', 'cli', 'package.json'), 'utf8')).version;
-  // node answers the version questions, runs the PATH CLI probe and is the
-  // local installer; npx is the remote one.
-  fs.writeFileSync(path.join(bin, 'node'), `#!/bin/sh\n[ "$1" = -e ] && exec '${process.execPath}' "$@"\ncase "$2" in *split*) echo 24 ;; *versions*) echo 24.0.0 ;; *) exit $STUB_EXIT ;; esac\n`, { mode: 0o755 });
-  fs.writeFileSync(path.join(bin, 'npx'), `#!/bin/sh\necho "$*" >> '${path.join(cwd, 'npx.log')}'\n[ "$1" = --version ] && echo 10.0.0\nexit $STUB_EXIT\n`, { mode: 0o755 });
-  const caveman = (version) => fs.writeFileSync(path.join(bin, 'caveman'), `#!/bin/sh\nprintf '{\\n  "version": "%s"\\n}\\n' ${version}\n`, { mode: 0o755 });
-  const env = (exit) => ({ HOME: cwd, PATH: `${bin}:/usr/bin:/bin`, TERM: 'xterm', STUB_EXIT: String(exit), POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off' });
-  const piped = (exit, args = '') => spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
-    `Get-Content -Raw '${path.join(REPO_ROOT, 'install.ps1')}' | Invoke-Expression${args}; Write-Host "alive $LASTEXITCODE"`,
-  ], { cwd, input: '', env: env(exit), encoding: 'utf8', timeout: 60_000 });
-
-  const ok = piped(0);
-  assert.match(ok.stdout, new RegExp(`Next: npx -y @caveman-ai/cli@${cli.replaceAll('.', '\\.')} setup\nalive 0\n$`), ok.stdout + ok.stderr);
-  assert.match(piped(3).stdout, /alive 3\n$/, 'a failed install leaves the session open and says so');
-  const file = spawnSync(pwsh, ['-NoProfile', '-NonInteractive', '-File', path.join(REPO_ROOT, 'install.ps1')], { cwd, input: '', env: env(3), encoding: 'utf8', timeout: 60_000 });
-  assert.equal(file.status, 3, 'a file run still exits with the result');
+  const makeFixture = (cavemanVersion = null) => {
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'caveman-ps1-iex-'));
+    const bin = path.join(cwd, 'bin');
+    fs.mkdirSync(bin);
+    // node answers the version questions, runs the PATH CLI probe and is the
+    // local installer; npx is the remote one.
+    fs.writeFileSync(path.join(bin, 'node'), `#!/bin/sh\n[ "$1" = -e ] && exec '${process.execPath}' "$@"\ncase "$2" in *split*) echo 24 ;; *versions*) echo 24.0.0 ;; *) exit $STUB_EXIT ;; esac\n`, { mode: 0o755 });
+    fs.writeFileSync(path.join(bin, 'npx'), `#!/bin/sh\necho "$*" >> '${path.join(cwd, 'npx.log')}'\n[ "$1" = --version ] && echo 10.0.0\nexit $STUB_EXIT\n`, { mode: 0o755 });
+    if (cavemanVersion !== null) {
+      fs.writeFileSync(path.join(bin, 'caveman'), `#!/bin/sh\nprintf '{\\n  "version": "%s"\\n}\\n' ${cavemanVersion}\n`, { mode: 0o755 });
+    }
+    const env = (exit) => ({ HOME: cwd, PATH: `${bin}:/usr/bin:/bin`, TERM: 'xterm', STUB_EXIT: String(exit), POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off' });
+    return { cwd, env, cleanup: () => fs.rmSync(cwd, { recursive: true, force: true }) };
+  };
+  const runPiped = async (exit, cavemanVersion = null, args = '') => {
+    const f = makeFixture(cavemanVersion);
+    try {
+      return await spawnAsync(pwsh, ['-NoProfile', '-NonInteractive', '-Command',
+        `Get-Content -Raw '${path.join(REPO_ROOT, 'install.ps1')}' | Invoke-Expression${args}; Write-Host "alive $LASTEXITCODE"`,
+      ], { cwd: f.cwd, input: '', env: f.env(exit), timeout: 60_000 });
+    } finally {
+      f.cleanup();
+    }
+  };
+  const runFile = async (exit) => {
+    const f = makeFixture();
+    try {
+      return await spawnAsync(pwsh, ['-NoProfile', '-NonInteractive', '-File', path.join(REPO_ROOT, 'install.ps1')], {
+        cwd: f.cwd, input: '', env: f.env(exit), timeout: 60_000,
+      });
+    } finally {
+      f.cleanup();
+    }
+  };
+  const runTerminal = async (...args) => {
+    const f = makeFixture();
+    try {
+      const script = path.join(f.cwd, 'install.ps1');
+      fs.copyFileSync(path.join(REPO_ROOT, 'install.ps1'), script);
+      const out = await spawnAsync(python, ['-c', 'import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)', pwsh, '-NoProfile', '-File', script, ...args], {
+        cwd: f.cwd, input: '', env: f.env(0), timeout: 60_000,
+      });
+      return { ...out, npx: fs.readFileSync(path.join(f.cwd, 'npx.log'), 'utf8') };
+    } finally {
+      f.cleanup();
+    }
+  };
 
   // The caveman on PATH runs the first run when it is this release or newer:
   // npx would put this release over a newer one.
   const [major, minor, patch] = cli.split('.').map(Number);
-  for (const [version, viaPath] of [[cli, true], [`${major}.${minor}.${patch + 1}`, true], [`${major + 1}.0.0`, true],
-    [`${cli}-rc.1`, false], ['0.0.1', false], ['banana', false]]) {
-    caveman(version);
-    assert.match(piped(0).stdout, viaPath ? /Next: caveman setup\n/ : /Next: npx -y @caveman-ai\/cli@/, version);
-  }
+  const versionCases = [
+    [cli, true],
+    [`${major}.${minor}.${patch + 1}`, true],
+    [`${major + 1}.0.0`, true],
+    [`${cli}-rc.1`, false],
+    ['0.0.1', false],
+    ['banana', false],
+  ];
 
-  // In a terminal the first run starts, unless --non-interactive.
-  const script = path.join(cwd, 'install.ps1');
-  fs.copyFileSync(path.join(REPO_ROOT, 'install.ps1'), script);
-  const terminal = (...args) => {
-    fs.rmSync(path.join(cwd, 'npx.log'), { force: true });
-    const out = spawnSync(python, ['-c', 'import pty,sys; sys.exit(pty.spawn(sys.argv[1:]) >> 8)', pwsh, '-NoProfile', '-File', script, ...args], { cwd, input: '', env: env(0), encoding: 'utf8', timeout: 60_000 });
-    return { ...out, npx: fs.readFileSync(path.join(cwd, 'npx.log'), 'utf8') };
+  const runLimited = async (tasks, limit) => {
+    const out = new Array(tasks.length);
+    let next = 0;
+    const worker = async () => {
+      while (next < tasks.length) {
+        const i = next++;
+        out[i] = await tasks[i]();
+      }
+    };
+    await Promise.all(Array.from({ length: Math.min(limit, tasks.length) }, worker));
+    return out;
   };
-  assert.match(terminal().npx, /^-y @caveman-ai\/cli@\S+ setup$/m, 'a terminal starts the first run');
-  const quiet = terminal('--non-interactive');
+
+  const limit = Math.max(1, Math.min(4, os.cpus().length - 1));
+  const [ok, fail, file, interactive, quiet, ...versionResults] = await runLimited([
+    () => runPiped(0),
+    () => runPiped(3),
+    () => runFile(3),
+    () => runTerminal(),
+    () => runTerminal('--non-interactive'),
+    ...versionCases.map(([version, viaPath]) => async () => [version, viaPath, await runPiped(0, version)]),
+  ], limit);
+
+  assert.match(ok.stdout, new RegExp(`Next: npx -y @caveman-ai/cli@${cli.replaceAll('.', '\\.')} setup\nalive 0\n$`), ok.stdout + ok.stderr);
+  assert.match(fail.stdout, /alive 3\n$/, 'a failed install leaves the session open and says so');
+  assert.equal(file.status, 3, 'a file run still exits with the result');
+  for (const [version, viaPath, res] of versionResults) {
+    assert.match(res.stdout, viaPath ? /Next: caveman setup\n/ : /Next: npx -y @caveman-ai\/cli@/, version);
+  }
+  // In a terminal the first run starts, unless --non-interactive.
+  assert.match(interactive.npx, /^-y @caveman-ai\/cli@\S+ setup$/m, 'a terminal starts the first run');
   assert.doesNotMatch(quiet.npx, /setup/);
   assert.match(quiet.stdout, /Next: npx -y @caveman-ai\/cli@\S+ setup/);
 });

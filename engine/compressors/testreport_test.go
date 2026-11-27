@@ -127,6 +127,7 @@ func jestMixed() []byte {
 // Test format parsing
 
 func TestTestReportJUnitXML(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	t.Run("single_suite", func(t *testing.T) {
@@ -217,6 +218,7 @@ func TestTestReportJUnitXML(t *testing.T) {
 }
 
 func TestTestReportPytestJSON(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	out, ok := c.Compress(pytestMixed())
@@ -262,6 +264,7 @@ func TestTestReportPytestJSON(t *testing.T) {
 }
 
 func TestTestReportJestJSON(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	out, ok := c.Compress(jestMixed())
@@ -301,6 +304,7 @@ func TestTestReportJestJSON(t *testing.T) {
 // trimmed from real `jest --json` output (Jest 29.7.0; the first one was
 // captured with FORCE_COLOR=1, so it carries ANSI escapes).
 func TestTestReportJestSuiteFailures(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 	out, ok := c.Compress([]byte(`{"numFailedTests":0,"numPassedTests":3,"numPendingTests":0,"numFailedTestSuites":2,"success":false,"testResults":[
 		{"name":"/repo/src/user.test.js","status":"failed","assertionResults":[],
@@ -349,6 +353,7 @@ func TestTestReportJestSuiteFailures(t *testing.T) {
 // longreprs below are trimmed from real runs (pytest 9.2.0, pytest-json-report
 // 1.5.0); that run printed "1 passed, 1 skipped, 2 errors" and exited 1.
 func TestTestReportPytestCollectionErrors(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 	out, ok := c.Compress([]byte(`{"exitcode":1,"duration":0.03,
 		"summary":{"passed":1,"total":1,"collected":1},
@@ -425,6 +430,7 @@ func TestTestReportPytestCollectionErrors(t *testing.T) {
 // Test detection
 
 func TestTestReportDetection(t *testing.T) {
+	t.Parallel()
 	e := engine.New(nil, nil)
 
 	cases := []struct {
@@ -478,6 +484,7 @@ func TestTestReportDetection(t *testing.T) {
 // payload passes through uncompressed instead of getting diff/code/JSON
 // compression.
 func TestTestReportDetectionIsAnchored(t *testing.T) {
+	t.Parallel()
 	e := engine.New(nil, nil)
 	cases := []struct {
 		name  string
@@ -525,6 +532,7 @@ func junitCases(n int, ansi bool) string {
 // masking test-report output, so a shape detected here but rejected by the
 // parser would be neither masked nor compressed.
 func TestTestReportDetectedShapesCompress(t *testing.T) {
+	t.Parallel()
 	store, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -563,6 +571,7 @@ func TestTestReportDetectedShapesCompress(t *testing.T) {
 // compressor cannot read keeps its pre-test-report routing instead of being
 // claimed by a compressor that will decline it.
 func TestTestReportDetectionRequiresParse(t *testing.T) {
+	t.Parallel()
 	e := engine.New(nil, nil)
 	full := string(junitSingleSuite())
 	for name, input := range map[string]string{
@@ -584,6 +593,7 @@ func TestTestReportDetectionRequiresParse(t *testing.T) {
 // teardown error keeps its reason (pytest-json-report stores it under that
 // stage, not under call).
 func TestTestReportPytestKeepsEveryOutcome(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 	out, ok := c.Compress([]byte(`{"exitcode":1,"tests":[
 		{"nodeid":"t.py::a","outcome":"passed"},
@@ -604,6 +614,7 @@ func TestTestReportPytestKeepsEveryOutcome(t *testing.T) {
 // Test behavior
 
 func TestTestReportFailClosed(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	cases := []struct {
@@ -628,6 +639,7 @@ func TestTestReportFailClosed(t *testing.T) {
 }
 
 func TestTestReportIdempotent(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	// Test with each format
@@ -664,6 +676,7 @@ func TestTestReportIdempotent(t *testing.T) {
 }
 
 func TestTestReportAllPassed(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	// All-passed report with no failures
@@ -703,6 +716,7 @@ func TestTestReportAllPassed(t *testing.T) {
 }
 
 func TestTestReportStackTrimming(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 
 	// Create a failure with a long stack (more than keepHead+keepTail+3 = 8 frames)
@@ -792,6 +806,7 @@ func TestTestReportStackTrimming(t *testing.T) {
 }
 
 func TestTestReportGoBuildFailurePreservesDiagnostics(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTestReport()
 	raw := []byte(`# github.com/example/app/broken
 broken/main.go:12:5: undefined: doesNotExist

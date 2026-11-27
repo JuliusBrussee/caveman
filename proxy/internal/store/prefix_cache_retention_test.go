@@ -1,7 +1,6 @@
 package store
 
 import (
-	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -13,31 +12,27 @@ import (
 // trail its latest reuse by another ten minutes, so capacity pressure must not
 // discard decisions in that window, including raw and pixel decisions.
 func TestPrefixReplacementEvictionRetainsProviderCacheWindow(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer s.Close()
-	tx, err := s.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback()
 	stamp := time.Now().UTC().Add(-24*time.Hour - 5*time.Minute).Format(storeTSLayout)
-	for i := 0; i < prefixCacheMaxEntries+5; i++ {
-		handle, replacement := "ccr_test", []byte("COMPRESSED")
-		if i < prefixCachePixelMaxEntries+5 {
-			handle = gateway.PixelHandle
-		} else if i%2 == 0 {
-			handle, replacement = gateway.RawDecisionHandle, []byte{}
-		}
-		if _, err := tx.Exec(`INSERT INTO prefix_replacements
-			(original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			fmt.Sprintf("warm-%06d", i), handle, replacement, stamp, stamp); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
+	if _, err := s.db.Exec(
+		`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < ?)
+		 INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at)
+		 SELECT
+		   printf('warm-%06d', v),
+		   CASE WHEN v < ? THEN ? WHEN v % 2 = 0 THEN ? ELSE 'ccr_test' END,
+		   CASE WHEN v >= ? AND v % 2 = 0 THEN zeroblob(0) ELSE ? END,
+		   ?, ?
+		 FROM n`,
+		prefixCacheMaxEntries+4,
+		prefixCachePixelMaxEntries+5, gateway.PixelHandle, gateway.RawDecisionHandle,
+		prefixCachePixelMaxEntries+5, []byte("COMPRESSED"),
+		stamp, stamp,
+	); err != nil {
 		t.Fatal(err)
 	}
 	s.evictPrefixReplacements()

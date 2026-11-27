@@ -358,6 +358,10 @@ func resolvePixelDensity(flag string) pixel.DensityLevel {
 }
 
 func runPixelRender(args []string) {
+	runPixelRenderTo(args, os.Stdout)
+}
+
+func runPixelRenderTo(args []string, out io.Writer) {
 	cols := pixel.DefaultCols
 	colsSet := false
 	multicol := 1
@@ -464,7 +468,7 @@ func runPixelRender(args []string) {
 		fatal("pixel render: %v", err)
 	}
 	reports, summary := pixelRenderReports(images, input, level)
-	enc := json.NewEncoder(os.Stdout)
+	enc := json.NewEncoder(out)
 	for i, img := range images {
 		outPath := fmt.Sprintf("%s.px%d.png", file, i+1)
 		if err := os.WriteFile(outPath, img.PNG, 0o644); err != nil {

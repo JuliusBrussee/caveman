@@ -1,4 +1,4 @@
-# caveman — installer shim (Windows / PowerShell).
+﻿# caveman — installer shim (Windows / PowerShell).
 #
 # Thin wrapper around installer/install.js (the unified Node installer). Every flag
 # you'd pass to installer/install.js can be passed here; we just forward them.
@@ -136,7 +136,7 @@ caveman: Node.js (>=18) or Bun required. Install:
   $setup = @("npx", "-y", "@caveman-ai/cli@$CliVersion", "setup")
   if (Get-Command caveman -ErrorAction SilentlyContinue) {
     try {
-      & node -e 'const r=require(`child_process`).spawnSync(`caveman --version`,{shell:true,encoding:`utf8`,timeout:1e4,killSignal:`SIGKILL`,stdio:[`ignore`,`pipe`,`ignore`],windowsHide:true});const v=s=>(s=/^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?/.exec(s))&&[s[1],s[2],s[3],+!s[4],...s[4]?s[4].split(`.`):[]].map(x=>/^\d+$/.test(x)?+x:x);let h;try{h=v(JSON.parse(r.stdout).version)}catch{}const c=(a,b)=>a===b?0:a===undefined?-1:b===undefined?1:typeof a!=typeof b?(typeof a==`number`?-1:1):a<b?-1:1;const w=v(process.argv[1]),d=h&&w&&[...h,...w].map((_,i)=>c(h[i],w[i])).find(x=>x);process.exitCode=h&&w&&!(d<0)?0:1' $CliVersion 2>$null
+      & node -e 'const r=require(`child_process`).spawnSync(`caveman --version`,{shell:true,encoding:`utf8`,timeout:+process.env.CAVEMAN_PROBE_TIMEOUT_MS||1e4,killSignal:`SIGKILL`,stdio:[`ignore`,`pipe`,`ignore`],windowsHide:true});const v=s=>(s=/^(\d+)\.(\d+)\.(\d+)(?:-([\w.-]+))?/.exec(s))&&[s[1],s[2],s[3],+!s[4],...s[4]?s[4].split(`.`):[]].map(x=>/^\d+$/.test(x)?+x:x);let h;try{h=v(JSON.parse(r.stdout).version)}catch{}const c=(a,b)=>a===b?0:a===undefined?-1:b===undefined?1:typeof a!=typeof b?(typeof a==`number`?-1:1):a<b?-1:1;const w=v(process.argv[1]),d=h&&w&&[...h,...w].map((_,i)=>c(h[i],w[i])).find(x=>x);process.exitCode=h&&w&&!(d<0)?0:1' $CliVersion 2>$null
       if ($LASTEXITCODE -eq 0) { $setup = @("caveman", "setup") }
     } catch { }
   }

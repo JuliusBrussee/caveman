@@ -56,6 +56,7 @@ const planBody = `{"model":"claude-sonnet-4-6","max_tokens":1024,` +
 // TestBreakpointPlanIsOffByDefault is the default-off pin: an unconfigured wrap
 // forwards the request byte-identically and claims nothing.
 func TestBreakpointPlanIsOffByDefault(t *testing.T) {
+	t.Parallel()
 	rt := &captureTransport{responses: []string{planRespBody(0)}}
 	srv, sink := newBreakpointPlanServer(t, anthropic.New("https://upstream.test"), rt, Config{})
 
@@ -76,6 +77,7 @@ func TestBreakpointPlanIsOffByDefault(t *testing.T) {
 // config loader does not recognize normalizes to "off", and the decision point
 // re-checks the exact enabling value rather than "not empty".
 func TestBreakpointPlanUnknownFlagValueIsOff(t *testing.T) {
+	t.Parallel()
 	for _, mode := range []string{"", "off", "on", "true", "Frontier", "aggressive"} {
 		t.Run("mode="+mode, func(t *testing.T) {
 			rt := &captureTransport{responses: []string{planRespBody(0)}}
@@ -94,6 +96,7 @@ func TestBreakpointPlanUnknownFlagValueIsOff(t *testing.T) {
 // TestBreakpointPlanPlacesAndDiscloses: enabled, the planner places its cold-start
 // set, names itself on the response and the row — and mints nothing.
 func TestBreakpointPlanPlacesAndDiscloses(t *testing.T) {
+	t.Parallel()
 	rt := &captureTransport{responses: []string{planRespBody(0)}}
 	srv, sink := newBreakpointPlanServer(t, anthropic.New("https://upstream.test"), rt,
 		Config{BreakpointPlan: breakpointPlanModeFrontier})
@@ -124,6 +127,7 @@ func TestBreakpointPlanPlacesAndDiscloses(t *testing.T) {
 // TestBreakpointPlanNeverRunsInRecordMode: record is an unconditional
 // wire-preservation boundary, and so is the request-wide pass-through opt-out.
 func TestBreakpointPlanNeverRunsInRecordMode(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name    string
 		mode    string
@@ -156,6 +160,7 @@ func TestBreakpointPlanNeverRunsInRecordMode(t *testing.T) {
 // OpenAI's routing key is set from the session, hashed, and the raw session id
 // never leaves the proxy.
 func TestBreakpointPlanSetsOpenAISessionCacheKey(t *testing.T) {
+	t.Parallel()
 	body := `{"model":"gpt-5.6","instructions":"You are an agent.","input":"hello"}`
 	rt := &captureTransport{}
 	srv, _ := newBreakpointPlanServer(t, openai.New("https://upstream.test"), rt,
@@ -178,6 +183,7 @@ func TestBreakpointPlanSetsOpenAISessionCacheKey(t *testing.T) {
 // TestBreakpointPlanNeedsASession: without x-cave-session there is no stable
 // scope to key on, so OpenAI's arm declines rather than invent one.
 func TestBreakpointPlanNeedsASession(t *testing.T) {
+	t.Parallel()
 	body := `{"model":"gpt-5.6","instructions":"You are an agent.","input":"hello"}`
 	rt := &captureTransport{}
 	srv, _ := newBreakpointPlanServer(t, openai.New("https://upstream.test"), rt,
@@ -194,6 +200,7 @@ func TestBreakpointPlanNeedsASession(t *testing.T) {
 // end to end: a session whose cache-creation blows up after the strip ran loses
 // the strip, fails open to the untouched catalog, and is told so in a header.
 func TestTripwireFreezesTheToolSchemaStrip(t *testing.T) {
+	t.Parallel()
 	body := toolCatalogRequest("newest turn")
 	// One quiet call establishes the baseline, then three spikes strike.
 	responses := []string{
@@ -242,6 +249,7 @@ func TestTripwireFreezesTheToolSchemaStrip(t *testing.T) {
 // TestTripwireIsInertWithoutASession: a caller that does not identify its session
 // keeps every lever forever. The tripwire needs a session to attribute harm to.
 func TestTripwireIsInertWithoutASession(t *testing.T) {
+	t.Parallel()
 	body := toolCatalogRequest("newest turn")
 	responses := []string{}
 	for i := 0; i < 6; i++ {

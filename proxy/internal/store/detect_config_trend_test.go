@@ -27,6 +27,7 @@ func snapshotAt(path string, tokens, lines int, at string) ConfigSnapshot {
 // TestConfigTrendComparesAgainstTheUsersOwnHistory proves the finding is
 // growth measured against this machine's recorded past, not a static guideline.
 func TestConfigTrendComparesAgainstTheUsersOwnHistory(t *testing.T) {
+	t.Parallel()
 	store := trendStore(t)
 	if _, err := store.InsertConfigSnapshots([]ConfigSnapshot{
 		snapshotAt("/repo/CLAUDE.md", 1200, 300, "2026-07-14T00:00:00Z"),
@@ -76,6 +77,7 @@ func TestConfigTrendComparesAgainstTheUsersOwnHistory(t *testing.T) {
 // TestConfigTrendSilentWithoutHistory refuses to report a trend from one
 // observation, which would be a flat line nobody measured.
 func TestConfigTrendSilentWithoutHistory(t *testing.T) {
+	t.Parallel()
 	store := trendStore(t)
 	if _, err := store.InsertConfigSnapshots([]ConfigSnapshot{
 		snapshotAt("/repo/CLAUDE.md", 4000, 900, "2026-08-14T00:00:00Z"),
@@ -94,6 +96,7 @@ func TestConfigTrendSilentWithoutHistory(t *testing.T) {
 // TestConfigTrendIgnoresDriftAndShrinkage keeps noise and improvements out of a
 // finding whose whole subject is unwanted growth.
 func TestConfigTrendIgnoresDriftAndShrinkage(t *testing.T) {
+	t.Parallel()
 	drift := []configTrendRow{{
 		Scope: "project", Path: "/repo/CLAUDE.md", Kind: "claude_md",
 		FirstTokens: 2000, LastTokens: 2100, Observations: 2,

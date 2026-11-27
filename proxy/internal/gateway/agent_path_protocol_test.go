@@ -18,6 +18,7 @@ import (
 // intentionally unregistered slug must survive every native coding-agent wire
 // protocol while the prefix itself is removed before adapter routing.
 func TestAgentPathAttributionAcrossWireProtocols(t *testing.T) {
+	t.Parallel()
 	const agentSlug = "kilo-canary"
 
 	tests := []struct {

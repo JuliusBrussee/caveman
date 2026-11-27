@@ -16,6 +16,7 @@ import (
 // Use the real serve loop in a subprocess, with isolated persistence. The old
 // timeout is accelerated; no heartbeat or hook event keeps the process alive.
 func TestServeDoesNotExpire(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("CAVEMAN_TEST_SERVE_LIFETIME") == "1" {
 		runServe(slog.New(slog.NewTextHandler(io.Discard, nil)))
 		return

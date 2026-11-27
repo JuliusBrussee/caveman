@@ -44,6 +44,7 @@ func hotPathFacts(t *testing.T, size int) string {
 // TestHotPathFactsGolden pins those facts for a 2k, 50k and 200k request as
 // the build before this hot-path work derived them.
 func TestHotPathFactsGolden(t *testing.T) {
+	t.Parallel()
 	for _, size := range benchSizes {
 		got := hotPathFacts(t, size.bytes)
 		if os.Getenv("CAVEMAN_GOLDEN_ROWS_PRINT") != "" {
@@ -66,6 +67,7 @@ var hotPathGolden = map[string]string{
 // (same bytes both sides) counts exactly as a request whose sides differ only
 // in serialization, which still takes the two-decode path.
 func TestRequestAccountingDecodesUnchangedBytesOnce(t *testing.T) {
+	t.Parallel()
 	meta := providers.RequestMetadata{Provider: "anthropic", Model: "claude-sonnet-4-5"}
 	for _, body := range [][]byte{benchAnthropicBody(9_000, false), benchAnthropicBody(180_000, true), []byte(chatReqBody)} {
 		var spaced bytes.Buffer

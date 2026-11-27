@@ -12,6 +12,7 @@ func usd(v float64) *float64 { return &v }
 // TestWouldSaveColumnAndSummary proves the observe-estimate column persists, feeds
 // the aggregate Summary would-save totals, and never leaks into savings_usd.
 func TestWouldSaveColumnAndSummary(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -69,6 +70,7 @@ func TestWouldSaveColumnAndSummary(t *testing.T) {
 // TestWouldSaveUSDNilWhenNoPricedRow proves the aggregate would_save_usd is nil (not
 // a fabricated 0) when no row was list-price eligible.
 func TestWouldSaveUSDNilWhenNoPricedRow(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -97,6 +99,7 @@ func TestWouldSaveUSDNilWhenNoPricedRow(t *testing.T) {
 // discipline: a would_save_usd handed in for a non-list-priced row is dropped, just
 // like total_cost_usd/savings_usd are re-zeroed.
 func TestForgedWouldSaveUSDStrippedOnUnpricedRow(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -126,6 +129,7 @@ func TestForgedWouldSaveUSDStrippedOnUnpricedRow(t *testing.T) {
 // records neither would_save_tokens nor would_save_usd — a broken request never
 // inflates the would-have-saved totals.
 func TestWouldSaveZeroedOnFailedUpstream(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -161,6 +165,7 @@ func TestWouldSaveZeroedOnFailedUpstream(t *testing.T) {
 // TestObserveSummarySince proves the compact object filters by session start and
 // computes the funnel percentage over tokens sent.
 func TestObserveSummarySince(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -249,6 +254,7 @@ func TestObserveSummarySince(t *testing.T) {
 // compressed-parts before/after totals behind the saved delta, so the CLI's
 // session line can render the real pair instead of inventing one.
 func TestObserveSummaryCompressedParts(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,7 @@ import (
 )
 
 func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
+	t.Parallel()
 	key := bytes.Repeat([]byte{17}, 32)
 	marker, err := nativeruntime.SessionMarker(key, "codex:session-a")
 	if err != nil {
@@ -130,6 +131,7 @@ func TestChatGPTRecordsNativeSessionUsage(t *testing.T) {
 }
 
 func TestChatGPTMetadataRejectsOversizedZstdWindow(t *testing.T) {
+	t.Parallel()
 	var encoded bytes.Buffer
 	writer, err := zstd.NewWriter(&encoded, zstd.WithWindowSize(16<<20), zstd.WithSingleSegment(false))
 	if err != nil {

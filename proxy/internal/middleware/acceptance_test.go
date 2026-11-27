@@ -72,6 +72,7 @@ func recovered(t *testing.T, r *Runtime, scope Scope, handle, principal string) 
 }
 
 func TestMiddlewareAcceptanceCapabilitiesAndSemanticCorpus(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	cfg := f.runtime.cfg
 	cfg.Limits = Limits{}
@@ -192,6 +193,7 @@ func TestMiddlewareAcceptanceCapabilitiesAndSemanticCorpus(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceOneHundredAuthenticatedScopes(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	type saved struct {
 		scope                  Scope
@@ -279,6 +281,7 @@ func TestMiddlewareAcceptanceOneHundredAuthenticatedScopes(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceBrowserAndFetchURLRefusal(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	observed := []map[string]any{}
 	for _, header := range []struct{ key, value string }{{"Origin", "https://untrusted.example"}, {"Sec-Fetch-Site", "cross-site"}} {
@@ -311,6 +314,7 @@ func TestMiddlewareAcceptanceBrowserAndFetchURLRefusal(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceDefaultDeadlineIncludesQueue(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	cfg := f.runtime.cfg
 	cfg.Limits = Limits{}
@@ -342,6 +346,7 @@ func TestMiddlewareAcceptanceDefaultDeadlineIncludesQueue(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceCapacityRetainsLiveOriginals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	// Originals live in the middleware store, so its byte cap is what fills.
 	cfg := f.runtime.cfg
@@ -393,6 +398,7 @@ func TestMiddlewareAcceptanceCapacityRetainsLiveOriginals(t *testing.T) {
 }
 
 func TestMiddlewareAcceptancePreparedPlansAndReceipts(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	request := requestFor(f.runtime)
 	plan := optimizeOK(t, f.runtime, request)
@@ -475,6 +481,7 @@ func TestMiddlewareAcceptancePreparedPlansAndReceipts(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceBoundedExactRecoveryPages(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	plan := optimizeOK(t, f.runtime, req)
@@ -569,6 +576,7 @@ func TestMiddlewareAcceptanceBoundedExactRecoveryPages(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceSourceIdentityAndUniqueCredit(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	req.Segments[0].SourceID = "document-a"
@@ -631,6 +639,7 @@ func TestMiddlewareAcceptanceSourceIdentityAndUniqueCredit(t *testing.T) {
 }
 
 func TestMiddlewareAcceptanceScopedIdempotency(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	first := optimizeOK(t, f.runtime, req)
@@ -693,6 +702,7 @@ func (r *acceptanceDurableRecorder) Write(body []byte) (int, error) {
 }
 
 func TestMiddlewareAcceptanceConcurrentDurableWinner(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	other := openFixture(t, f.dir, "compress")
 	defer other.close()
@@ -838,6 +848,7 @@ func restartRequest(r *Runtime, role string, turn int) OptimizeRequest {
 // supplies every prepare/release gate through stdin; neither stored output nor
 // a claimed PID substitutes for starting and waiting on the real executable.
 func TestMiddlewareRestartWorkerProcess(t *testing.T) {
+	t.Parallel()
 	role := os.Getenv("CAVEMAN_MIDDLEWARE_RESTART_ROLE")
 	if role == "" {
 		t.Skip("only the parent acceptance test starts this child protocol")
@@ -1030,6 +1041,7 @@ func (p *restartProcess) finish(t *testing.T, lastTurn int) restartProcessRecord
 }
 
 func TestMiddlewareAcceptanceTwentyTurnsAcrossProcesses(t *testing.T) {
+	t.Parallel()
 	executable, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)

@@ -14,6 +14,7 @@ const testCols = 100
 const rowsPerImage = 90
 
 func TestEstimateImageCount(t *testing.T) {
+	t.Parallel()
 	if EstimateImageCount("", testCols, 1, ReadableCharsPerImage, conservativeStdParams) != 1 {
 		t.Fatal("empty estimate != 1")
 	}
@@ -42,6 +43,7 @@ func repeatString(s string, n int) []string {
 }
 
 func TestClassifyContent(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		text string
@@ -76,6 +78,7 @@ func logLines(format string) []string {
 }
 
 func TestTruncateForBudget(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("x", 1000)
 	out, omitted, truncated := TruncateForBudget(text, 10, testCols, 1, DenseContentCharsPerImage, conservativeStdParams)
 	if truncated || omitted != 0 || out != text {
@@ -119,6 +122,7 @@ func TestTruncateForBudget(t *testing.T) {
 }
 
 func TestPagingMarkerNumbersAndDegenerate(t *testing.T) {
+	t.Parallel()
 	lines := make([]string, 10000)
 	for i := range lines {
 		lines[i] = fmt.Sprintf("2026-05-18T12:00:00Z logline %d something", i)
@@ -153,6 +157,7 @@ func parseComma(s string) int {
 }
 
 func TestCompactSlabWhitespace(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"":                       "",
 		"alpha  \nbeta\t\n":      "alpha\nbeta\n",

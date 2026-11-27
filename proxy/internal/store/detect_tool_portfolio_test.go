@@ -9,6 +9,7 @@ import (
 // normalization contract: calls collapse into an actionable shape, and no
 // user path, argument, or query survives into a printable report row.
 func TestToolSignatureGroupsWithoutLeakingPaths(t *testing.T) {
+	t.Parallel()
 	cases := []struct{ name, input, want string }{
 		{"Read", "/Users/someone/secret-project/pnpm-lock.yaml", "Read(lockfile)"},
 		{"Read", "/Users/someone/secret-project/src/main.go", "Read(*.go)"},
@@ -37,6 +38,7 @@ func TestToolSignatureGroupsWithoutLeakingPaths(t *testing.T) {
 // call shape, prices it at the measured rate, and labels its token basis as the
 // local estimate rather than letting it read as provider-counted.
 func TestToolPortfolioRanksAndDisclosesItsBasis(t *testing.T) {
+	t.Parallel()
 	tracker := newToolPortfolioTracker()
 	for i := 0; i < 12; i++ {
 		tracker.observe(learnToolCall{Name: "Read", Input: "/repo/pnpm-lock.yaml", OutputTokens: 30_000})
@@ -76,6 +78,7 @@ func TestToolPortfolioRanksAndDisclosesItsBasis(t *testing.T) {
 // TestToolPortfolioSilentBelowThreshold keeps the sink off a machine with
 // nothing worth reporting.
 func TestToolPortfolioSilentBelowThreshold(t *testing.T) {
+	t.Parallel()
 	tracker := newToolPortfolioTracker()
 	tracker.observe(learnToolCall{Name: "Read", Input: "/repo/a.go", OutputTokens: 100})
 	if got := toolPortfolioSink(tracker, nil); len(got) != 0 {
@@ -90,6 +93,7 @@ func TestToolPortfolioSilentBelowThreshold(t *testing.T) {
 // on the biggest money number: it reports a measured multiplier and lists
 // per-turn hooks as candidates, and it never claims to have found the cause.
 func TestCacheEfficiencySinkNamesCandidatesNotCauses(t *testing.T) {
+	t.Parallel()
 	cold := &LearnSpend{
 		EffectiveInputMultiplier: 0.95, EffectiveInputUSDPerMTok: 14.2,
 		CatalogVersion: "2026-08-10", Basis: spendBasis,

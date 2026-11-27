@@ -8,6 +8,7 @@ import (
 )
 
 func TestCapabilityManifestStableAndComplete(t *testing.T) {
+	t.Parallel()
 	registry := Default()
 	first, err := registry.CapabilityManifest()
 	if err != nil {
@@ -56,6 +57,7 @@ func TestCapabilityManifestStableAndComplete(t *testing.T) {
 // manifestExcluded is for. Changing this constant is a deliberate ABI break that
 // requires every lock to be rebuilt.
 func TestCapabilityManifestDigestIsPinned(t *testing.T) {
+	t.Parallel()
 	const pinned = "64b06ad2a9c99a5ff6a3ad7029ff9fa439c7435f5d94d01879c9e0e11e29513f"
 	raw, err := Default().CapabilityManifest()
 	if err != nil {

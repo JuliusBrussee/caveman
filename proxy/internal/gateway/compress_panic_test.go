@@ -42,6 +42,7 @@ func (c *panickingCompressor) CompressSegmentQuery(seg []byte, query string) ([]
 // because the offending block stayed in the live zone, so the conversation
 // could not recover.
 func TestCompressSurvivesCompressorPanic(t *testing.T) {
+	t.Parallel()
 	var gotUpstreamBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -90,6 +91,7 @@ func TestCompressSurvivesCompressorPanic(t *testing.T) {
 // nothing that is forwarded, so losing the request to a panic there is pure
 // damage: the observation is optional, the inference is not.
 func TestObserveEstimateSurvivesCompressorPanic(t *testing.T) {
+	t.Parallel()
 	var gotUpstreamBody string
 	upstream := echoUpstream(t, &gotUpstreamBody)
 	defer upstream.Close()
@@ -138,6 +140,7 @@ func (c *panickingEstimator) EstimateSegment(seg []byte) (int, int) {
 // http.ErrAbortHandler turns an intended connection abort into a silent
 // success, which is the fail-open-validator shape this guard exists to avoid.
 func TestCompressDoesNotSwallowAbortHandler(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
 		_, _ = io.WriteString(w, chatRespBody)

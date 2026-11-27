@@ -10,6 +10,7 @@ import (
 // way that survives future edits: serialize the whole digest and prove none of
 // the user's data appears anywhere in the bytes.
 func TestDigestCarriesIdentityNotContent(t *testing.T) {
+	t.Parallel()
 	after := 400.0
 	plan := LearnPlan{
 		Window:           LearnWindow{Since: "30d", From: "2026-07-22T00:00:00Z", To: "2026-08-21T00:00:00Z"},
@@ -82,6 +83,7 @@ func TestDigestCarriesIdentityNotContent(t *testing.T) {
 // with a higher rung than a static estimate, so the cloud does not treat every
 // local row as equally solid.
 func TestDigestRanksByMeasurementRung(t *testing.T) {
+	t.Parallel()
 	digest := buildLearnDigest(LearnPlan{
 		Sinks: []Sink{
 			{SinkID: "a_provider", Basis: "provider_counted"},
@@ -101,6 +103,7 @@ func TestDigestRanksByMeasurementRung(t *testing.T) {
 // TestDigestStatesWhatItIsAndIsNot keeps the inspect-before-you-send framing on
 // the artifact itself rather than only in the docs.
 func TestDigestStatesWhatItIsAndIsNot(t *testing.T) {
+	t.Parallel()
 	digest := buildLearnDigest(LearnPlan{})
 	if len(digest.Contains) == 0 || len(digest.Excludes) == 0 {
 		t.Fatal("the digest must declare its own contents and exclusions")
@@ -115,6 +118,7 @@ func TestDigestStatesWhatItIsAndIsNot(t *testing.T) {
 }
 
 func TestDigestSinkIDStripsUserDataHashes(t *testing.T) {
+	t.Parallel()
 	for in, want := range map[string]string{
 		"memory_health:broken_imports:abcd1234":      "memory_health:broken_imports:*",
 		"memory_health:memory_truncation:9f8e7d6c":   "memory_health:memory_truncation:*",

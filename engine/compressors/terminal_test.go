@@ -8,6 +8,7 @@ import (
 )
 
 func TestTerminalStripsANSI(t *testing.T) {
+	t.Parallel()
 	in := []byte("\x1b[32mPASS\x1b[0m build ok\n")
 	out, ok := NewTerminal().Compress(in)
 	if !ok {
@@ -25,6 +26,7 @@ func TestTerminalStripsANSI(t *testing.T) {
 }
 
 func TestTerminalCollapsesCarriageReturns(t *testing.T) {
+	t.Parallel()
 	in := []byte("Downloading\rDownloading 50%\rDownloading 100% done\n")
 	out, ok := NewTerminal().Compress(in)
 	if !ok {
@@ -42,6 +44,7 @@ func TestTerminalCollapsesCarriageReturns(t *testing.T) {
 }
 
 func TestTerminalKeepsSignalElidesMiddle(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("$ npm test\n")
 	b.WriteString("> project@1.0.0 test\n")
@@ -79,6 +82,7 @@ func TestTerminalKeepsSignalElidesMiddle(t *testing.T) {
 }
 
 func TestTerminalPassesThroughPlainShort(t *testing.T) {
+	t.Parallel()
 	if _, ok := NewTerminal().Compress([]byte("hello\nworld\n")); ok {
 		t.Error("plain short output with nothing to strip or elide must pass through (ok=false)")
 	}
@@ -88,6 +92,7 @@ func TestTerminalPassesThroughPlainShort(t *testing.T) {
 }
 
 func TestTerminalProgressRedrawWithLFAndANSI(t *testing.T) {
+	t.Parallel()
 	in := []byte("\x1b[34mDownloading\x1b[0m 10%\r\x1b[34mDownloading\x1b[0m 50%\r\x1b[32mDownloading 100% done\x1b[0m\n")
 	out, ok := NewTerminal().Compress(in)
 	if !ok {
@@ -105,6 +110,7 @@ func TestTerminalProgressRedrawWithLFAndANSI(t *testing.T) {
 }
 
 func TestTerminalANSIColoredOutput(t *testing.T) {
+	t.Parallel()
 	in := []byte("\x1b[31merror:\x1b[0m something went wrong\n")
 	out, ok := NewTerminal().Compress(in)
 	if !ok {
@@ -119,6 +125,7 @@ func TestTerminalANSIColoredOutput(t *testing.T) {
 }
 
 func TestTerminalCRLFDocumentBehavior(t *testing.T) {
+	t.Parallel()
 	in := []byte("line one\r\nline two\r\nline three\r\n")
 	// Short CRLF text with no ANSI, no bare CR redraws, and < 4 lines should pass through.
 	if _, ok := NewTerminal().Compress(in); ok {
@@ -127,6 +134,7 @@ func TestTerminalCRLFDocumentBehavior(t *testing.T) {
 }
 
 func TestTerminalIsIdempotent(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 30; i++ {
 		fmt.Fprintf(&b, "\x1b[36mINFO\x1b[0m step %d ok\n", i)
@@ -147,6 +155,7 @@ func TestTerminalIsIdempotent(t *testing.T) {
 // content, not visual history (#1294).
 
 func TestTerminalCRTerminatedDocumentKeepsEveryLine(t *testing.T) {
+	t.Parallel()
 	// Reachable with no LF and no ANSI whenever the terminal compressor is
 	// forced rather than detected — what `caveman shrink` does to the output of
 	// the command it wraps.
@@ -165,6 +174,7 @@ func TestTerminalCRTerminatedDocumentKeepsEveryLine(t *testing.T) {
 }
 
 func TestTerminalCRTerminatedDocumentWithANSIKeepsEveryLine(t *testing.T) {
+	t.Parallel()
 	// An ANSI escape is conclusive for Detect, so this routes to the terminal
 	// compressor on the auto-detect path, not just the forced one.
 	in := []byte("\x1b[32mQuarterly Report\r\x1b[0mRevenue: $12,400\rExpenses: $9,100\rNet: $3,300\rSignatures: CEO, CFO\r")
@@ -180,6 +190,7 @@ func TestTerminalCRTerminatedDocumentWithANSIKeepsEveryLine(t *testing.T) {
 }
 
 func TestTerminalIntraLineCRKeepsDistinctSegments(t *testing.T) {
+	t.Parallel()
 	// Three bare CRs alongside LFs is enough for Detect to classify this as
 	// terminal output; every line then got truncated at its last CR.
 	in := []byte("Hello \rWorld\nAlpha \rBeta\nGamma \rDelta\nkeep me\n")
@@ -195,6 +206,7 @@ func TestTerminalIntraLineCRKeepsDistinctSegments(t *testing.T) {
 }
 
 func TestTerminalProgressRedrawStillCollapsesWithoutLF(t *testing.T) {
+	t.Parallel()
 	// The guard above must not cost the compressor its reason to exist: frames
 	// that restate the same thing are still visual history.
 	in := []byte("Downloading  10%\rDownloading  20%\rDownloading 100% done\r")
@@ -217,6 +229,7 @@ func TestTerminalProgressRedrawStillCollapsesWithoutLF(t *testing.T) {
 // digit masking makes two numbered records one class, and a line has nowhere to
 // put a marker saying one went missing.
 func TestTerminalCRNumberedRecordsAllSurvive(t *testing.T) {
+	t.Parallel()
 	in := []byte("Report\rTotal: 10\rTotal: 20\rSignature\r")
 	out, ok := NewTerminal().Compress(in)
 	if !ok {
@@ -233,6 +246,7 @@ func TestTerminalCRNumberedRecordsAllSurvive(t *testing.T) {
 // compared by their visible text. Judging the raw bytes let a frame that merely
 // gained a color read as new content and kept the stale frame beside it.
 func TestTerminalColoredFinalFrameCollapses(t *testing.T) {
+	t.Parallel()
 	in := []byte("Downloading 10%\r\x1b[32mDownloading 100%\x1b[0m\n")
 	out, ok := NewTerminal().Compress(in)
 	if !ok {

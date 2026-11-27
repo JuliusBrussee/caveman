@@ -95,6 +95,7 @@ func (c *memPrefixCache) RememberReplacement(scope string, original, replacement
 }
 
 func TestLiveZoneDuplicateReadCollapsingPreservesPrefixAndRecovers(t *testing.T) {
+	t.Parallel()
 	store, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)

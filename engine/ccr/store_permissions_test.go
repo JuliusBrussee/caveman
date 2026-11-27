@@ -10,6 +10,7 @@ import (
 )
 
 func TestOpenSecuresDatabaseAndSidecarPermissions(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
 	}
@@ -40,6 +41,7 @@ func TestOpenSecuresDatabaseAndSidecarPermissions(t *testing.T) {
 }
 
 func TestOpenRejectsDatabaseSymlink(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on Windows")
 	}
@@ -58,6 +60,7 @@ func TestOpenRejectsDatabaseSymlink(t *testing.T) {
 }
 
 func TestOpenRejectsWritableParentDirectory(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX writable-parent setup does not model a Windows DACL")
 	}
@@ -74,6 +77,7 @@ func TestOpenRejectsWritableParentDirectory(t *testing.T) {
 }
 
 func TestOpenAllowsStickyTemporaryDirectory(t *testing.T) {
+	t.Parallel()
 	dir := filepath.Join(t.TempDir(), "sticky")
 	if err := os.Mkdir(dir, 0o777); err != nil {
 		t.Fatal(err)
@@ -89,6 +93,7 @@ func TestOpenAllowsStickyTemporaryDirectory(t *testing.T) {
 }
 
 func TestOpenAllowsResolvedStickyParentSymlink(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on Windows")
 	}
@@ -112,6 +117,7 @@ func TestOpenAllowsResolvedStickyParentSymlink(t *testing.T) {
 }
 
 func TestOpenUsesCanonicalParentAfterSymlinkSwap(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on Windows")
 	}
@@ -149,6 +155,7 @@ func TestOpenUsesCanonicalParentAfterSymlinkSwap(t *testing.T) {
 }
 
 func TestPrepareSQLitePathSecuresExistingSidecars(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX permission bits are not meaningful on Windows")
 	}
@@ -176,6 +183,7 @@ func TestPrepareSQLitePathSecuresExistingSidecars(t *testing.T) {
 }
 
 func TestPrepareSQLitePathRejectsSidecarSymlinks(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("symlink creation requires privileges on Windows")
 	}
@@ -207,6 +215,7 @@ func TestPrepareSQLitePathRejectsSidecarSymlinks(t *testing.T) {
 }
 
 func TestPrepareSQLitePathRejectsNonRegularFiles(t *testing.T) {
+	t.Parallel()
 	for _, suffix := range []string{"", "-wal", "-shm"} {
 		t.Run("database"+suffix, func(t *testing.T) {
 			path := filepath.Join(t.TempDir(), "ccr.db")
@@ -221,6 +230,7 @@ func TestPrepareSQLitePathRejectsNonRegularFiles(t *testing.T) {
 }
 
 func TestChmodSQLiteFileRejectsReplacedInode(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX modes and symlink replacement require Unix")
 	}

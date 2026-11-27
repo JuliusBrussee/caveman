@@ -48,31 +48,31 @@ func pageFetches(t *testing.T, s *Store) int {
 // under test, the way a weeks-old home accumulates them.
 func seedRows(t *testing.T, s *Store, objects, recoveries int) {
 	t.Helper()
-	tx, err := s.db.Begin()
-	if err != nil {
-		t.Fatal(err)
-	}
-	payload := make([]byte, 600)
 	now := time.Now().UTC().Format(time.RFC3339Nano)
-	for i := 0; i < objects; i++ {
-		if _, err := tx.Exec(`INSERT INTO typed_objects (
-			 object_id, object_type, content_hash, source, created_at, repository_state,
-			 session_id, transform_version, currentness, lifecycle, dependencies_json,
-			 original_byte_length, stored_byte_length, data, data_ref
-			) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
-			fmt.Sprintf("ccr_obj_seed_%06d", i), ObjectTaskDecision, "seed", "native:seed", now, "",
-			fmt.Sprintf("seed-session-%d", i/100), "seed", Current, Hot, "[]", len(payload), len(payload), payload, ""); err != nil {
+	if objects > 0 {
+		if _, err := s.db.Exec(
+			`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < ?)
+			 INSERT INTO typed_objects (
+			   object_id, object_type, content_hash, source, created_at, repository_state,
+			   session_id, transform_version, currentness, lifecycle, dependencies_json,
+			   original_byte_length, stored_byte_length, data, data_ref
+			 )
+			 SELECT printf('ccr_obj_seed_%06d', v), ?, 'seed', 'native:seed', ?, '',
+			   printf('seed-session-%d', v/100), 'seed', ?, ?, '[]', 600, 600, zeroblob(600), '' FROM n`,
+			objects-1, ObjectTaskDecision, now, Current, Hot,
+		); err != nil {
 			t.Fatal(err)
 		}
 	}
-	for i := 0; i < recoveries; i++ {
-		if _, err := tx.Exec(`INSERT INTO recoveries (handle, created_at, content_type, compressor, tokens_before, tokens_after, original, metadata)
-			VALUES (?,?,?,?,?,?,?,?)`, fmt.Sprintf("seed_%06d", i), now, "text", "seed", 10, 5, payload, nil); err != nil {
+	if recoveries > 0 {
+		if _, err := s.db.Exec(
+			`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < ?)
+			 INSERT INTO recoveries (handle, created_at, content_type, compressor, tokens_before, tokens_after, original, metadata)
+			 SELECT printf('seed_%06d', v), ?, 'text', 'seed', 10, 5, zeroblob(600), NULL FROM n`,
+			recoveries-1, now,
+		); err != nil {
 			t.Fatal(err)
 		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -84,6 +84,7 @@ func seedRows(t *testing.T, s *Store, objects, recoveries int) {
 // cold page cache) and the 250 ms hook budget ran out queued behind them. A
 // write must cost the same whatever the store already holds.
 func TestWriteBudgetCheckDoesNotScanTheStore(t *testing.T) {
+	t.Parallel()
 	writeCost := func(t *testing.T, objects int) (put, putObject int) {
 		s, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), DefaultMaxStorageBytes)
 		if err != nil {
@@ -138,6 +139,7 @@ func countedUsage(t *testing.T, s *Store) int64 {
 // insert, an upsert, a dedup pointer, a raw UPDATE and DELETE, and a write by
 // another process that knows nothing of the counter (a pre-upgrade binary).
 func TestStorageUsageCounterMatchesTheScan(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	// A store from before the counter existed: rows, no counter.
 	s, err := OpenWithBudget(path, DefaultMaxStorageBytes)

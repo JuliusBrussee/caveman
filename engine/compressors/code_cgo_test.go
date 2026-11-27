@@ -47,6 +47,7 @@ export function mul(a: number, b: number): number {
 // A successful compression implies the output re-parsed without error, because
 // the compressor validates the re-parse before returning ok.
 func TestCodeCompressorPython(t *testing.T) {
+	t.Parallel()
 	c := codeCompressor(t)
 	out, ok := c.Compress([]byte(pySource))
 	if !ok {
@@ -66,6 +67,7 @@ func TestCodeCompressorPython(t *testing.T) {
 }
 
 func TestCodeCompressorTypeScript(t *testing.T) {
+	t.Parallel()
 	c := codeCompressor(t)
 	out, ok := c.Compress([]byte(tsSource))
 	if !ok {
@@ -85,6 +87,7 @@ func TestCodeCompressorTypeScript(t *testing.T) {
 }
 
 func TestCodeCompressorPythonIdempotent(t *testing.T) {
+	t.Parallel()
 	c := codeCompressor(t)
 	first, ok := c.Compress([]byte(pySource))
 	if !ok {

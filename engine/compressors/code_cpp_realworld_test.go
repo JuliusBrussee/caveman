@@ -10,6 +10,7 @@ import (
 // `#ifdef`, `#ifndef` and `typedef` all contain "def ", which the Python sniff
 // matched, so a guarded C or C++ file was parsed as Python and passed through.
 func TestSniffIfdefIsNotPython(t *testing.T) {
+	t.Parallel()
 	src := `#ifndef _WIN32
 #include <unistd.h>
 #endif
@@ -34,6 +35,7 @@ int count(const std::string &s) {
 // anonymous enum. tree-sitter recovers from both by inserting a token (a
 // MISSING node), which used to fail the whole file. Real ERROR nodes still do.
 func TestCodeCppToleratesRecoveredTokens(t *testing.T) {
+	t.Parallel()
 	src := `#include <godot_cpp/classes/object.hpp>
 
 using namespace godot;
@@ -74,6 +76,7 @@ public:
 // A macro in declaration position is a real ERROR node, not a recovered token,
 // and the file still passes through untouched.
 func TestCodeCppRealErrorsStillPassThrough(t *testing.T) {
+	t.Parallel()
 	src := `#include <godot_cpp/godot.hpp>
 
 extern "C" {

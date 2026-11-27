@@ -102,6 +102,7 @@ func storedRequestRows(t *testing.T, s *Store) [][]any {
 // stores, column for column, what one Record per row stores, the
 // persistence boundary's re-zeroing included.
 func TestRecordBatchStoresWhatRecordStores(t *testing.T) {
+	t.Parallel()
 	delta, negative := 0.0012, -1.0
 	rows := []gateway.RequestRecord{benchRow(1), benchRow(2), benchRow(3)}
 	rows[1].SessionID, rows[1].SessionCorrelationBasis, rows[1].CacheBust = "session-1", "signed_marker", true
@@ -133,6 +134,7 @@ func TestRecordBatchStoresWhatRecordStores(t *testing.T) {
 // database, uses WAL and keeps synchronous FULL, also after RecordBatch
 // committed on one of them with NORMAL.
 func TestStoreConnectionPragmas(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)

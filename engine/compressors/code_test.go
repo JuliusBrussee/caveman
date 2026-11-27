@@ -39,6 +39,7 @@ func Mul(a, b int) int {
 `
 
 func TestCodeCompressorGoElidesBodiesKeepsSignatures(t *testing.T) {
+	t.Parallel()
 	c := codeCompressor(t)
 	out, ok := c.Compress([]byte(goSource))
 	if !ok {
@@ -64,6 +65,7 @@ func TestCodeCompressorGoElidesBodiesKeepsSignatures(t *testing.T) {
 }
 
 func TestCodeCompressorGoIdempotent(t *testing.T) {
+	t.Parallel()
 	c := codeCompressor(t)
 	first, ok := c.Compress([]byte(goSource))
 	if !ok {
@@ -75,6 +77,7 @@ func TestCodeCompressorGoIdempotent(t *testing.T) {
 }
 
 func TestCodeCompressorMalformedPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := codeCompressor(t)
 	if _, ok := c.Compress([]byte("this is not source code at all, just words")); ok {
 		t.Error("non-code must pass through (!ok)")

@@ -9,6 +9,7 @@ import (
 )
 
 func TestRepetitionCollapsesIdenticalRuns(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	var b strings.Builder
 	b.WriteString("starting build\n")
@@ -42,6 +43,7 @@ func TestRepetitionCollapsesIdenticalRuns(t *testing.T) {
 }
 
 func TestRepetitionIdempotent(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	in := []byte("head line\n" + strings.Repeat("same same same line\n", 30) + "tail line\n")
 	first, ok := c.Compress(in)
@@ -60,6 +62,7 @@ func TestRepetitionIdempotent(t *testing.T) {
 }
 
 func TestRepetitionNoDuplicatesPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	in := []byte("line one is unique\nline two is unique\nline three is unique\nand a fourth distinct line here\nplus a fifth one too for good measure\n")
 	if _, ok := c.Compress(in); ok {
@@ -68,6 +71,7 @@ func TestRepetitionNoDuplicatesPassesThrough(t *testing.T) {
 }
 
 func TestRepetitionTinyInputPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	if _, ok := c.Compress([]byte("x\nx\nx\n")); ok {
 		t.Error("tiny input must pass through (ok=false)")
@@ -75,6 +79,7 @@ func TestRepetitionTinyInputPassesThrough(t *testing.T) {
 }
 
 func TestRepetitionDeterministic(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	in := []byte("alpha\n" + strings.Repeat("repeat me\n", 25) + "beta\n" + strings.Repeat("and me too\n", 25) + "gamma\n")
 	a, ok1 := c.Compress(in)
@@ -88,6 +93,7 @@ func TestRepetitionDeterministic(t *testing.T) {
 }
 
 func TestRepetitionShortRunNotCollapsed(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	// A run of 2 (< minRun=3) must not be collapsed, but the input must be large
 	// enough to clear minBytes so the no-collapse path (not the size guard) is hit.

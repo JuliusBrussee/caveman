@@ -53,6 +53,7 @@ func newTokenTestServer(upstream string, auth Authenticator, sink TelemetrySink)
 // answer must come back byte-for-byte, the operator's key must not ride along,
 // and no spend row may be written.
 func TestOAuthTokenRouteRelaysRefresh(t *testing.T) {
+	t.Parallel()
 	for _, path := range []string{"/w/claude/v1/oauth/token", "/v1/oauth/token", "/anthropic/v1/oauth/token"} {
 		t.Run(path, func(t *testing.T) {
 			upstream, reqs, bodies := tokenUpstream(t, http.StatusOK, refreshAnswer)
@@ -98,6 +99,7 @@ func TestOAuthTokenRouteRelaysRefresh(t *testing.T) {
 // Claude Code reads "invalid_grant" from the body to clear a dead refresh
 // token, so a rewritten error would leave it retrying forever.
 func TestOAuthTokenRouteRelaysRejection(t *testing.T) {
+	t.Parallel()
 	const rejection = `{"error":"invalid_grant","error_description":"refresh token revoked"}`
 	upstream, _, _ := tokenUpstream(t, http.StatusBadRequest, rejection)
 	srv := newTokenTestServer(upstream.URL, stubAuth{}, &captureSink{})
@@ -112,6 +114,7 @@ func TestOAuthTokenRouteRelaysRejection(t *testing.T) {
 // TestOAuthTokenRouteStaysFailClosed proves the token mount is one exact POST
 // route, not a new pass-through, and that it sits behind the authenticator.
 func TestOAuthTokenRouteStaysFailClosed(t *testing.T) {
+	t.Parallel()
 	upstream, reqs, _ := tokenUpstream(t, http.StatusOK, refreshAnswer)
 	for _, tc := range []struct {
 		name   string
@@ -140,6 +143,7 @@ func TestOAuthTokenRouteStaysFailClosed(t *testing.T) {
 }
 
 func TestOAuthTokenRouteRejectsOversizedBody(t *testing.T) {
+	t.Parallel()
 	upstream, reqs, _ := tokenUpstream(t, http.StatusOK, refreshAnswer)
 	srv := newTokenTestServer(upstream.URL, stubAuth{}, &captureSink{})
 	rec := httptest.NewRecorder()

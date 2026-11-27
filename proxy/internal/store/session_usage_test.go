@@ -7,6 +7,7 @@ import (
 )
 
 func TestSessionUsageCorrelatesOnlyExactSessionAndLabelsBasis(t *testing.T) {
+	t.Parallel()
 	s, err := Open(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -61,6 +62,7 @@ func TestSessionUsageCorrelatesOnlyExactSessionAndLabelsBasis(t *testing.T) {
 }
 
 func TestSessionUsagePreservesApproximateCorrelationBasis(t *testing.T) {
+	t.Parallel()
 	s, err := Open(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)

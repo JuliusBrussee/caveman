@@ -137,6 +137,7 @@ func optimizeOK(t *testing.T, r *Runtime, req OptimizeRequest) OptimizeResponse 
 }
 
 func TestExactRecoveryAndUTF8Pages(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	plan := optimizeOK(t, f.runtime, req)
@@ -189,6 +190,7 @@ func TestExactRecoveryAndUTF8Pages(t *testing.T) {
 }
 
 func TestIdenticalDocumentsKeepSeparateGrantsAndOneUniqueCredit(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	second := req.Segments[0]
@@ -229,6 +231,7 @@ func TestIdenticalDocumentsKeepSeparateGrantsAndOneUniqueCredit(t *testing.T) {
 }
 
 func TestRequiredFieldsCannotBecomeImplicitZeroValues(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	b, err := json.Marshal(requestFor(f.runtime))
 	if err != nil {
@@ -262,6 +265,7 @@ func TestRequiredFieldsCannotBecomeImplicitZeroValues(t *testing.T) {
 }
 
 func TestScopeAndBrowserAuthorization(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	plan := optimizeOK(t, f.runtime, req)
@@ -295,6 +299,7 @@ func TestScopeAndBrowserAuthorization(t *testing.T) {
 }
 
 func TestTwentyTurnsAcrossRestartAndWorkers(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	f := openFixture(t, dir, "compress")
 	req := requestFor(f.runtime)
@@ -333,6 +338,7 @@ func TestTwentyTurnsAcrossRestartAndWorkers(t *testing.T) {
 }
 
 func TestConcurrentWritersChooseOneDurableReplacement(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	other := openFixture(t, f.dir, "compress")
 	defer other.close()
@@ -387,6 +393,7 @@ func TestConcurrentWritersChooseOneDurableReplacement(t *testing.T) {
 }
 
 func TestIdempotencyRejectsDifferentInput(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	first := optimizeOK(t, f.runtime, req)
@@ -401,6 +408,7 @@ func TestIdempotencyRejectsDifferentInput(t *testing.T) {
 }
 
 func TestConservativeModesDoNotStoreOriginals(t *testing.T) {
+	t.Parallel()
 	for _, variant := range []string{"record", "no_executor", "protected", "opaque", "unknown_frozen"} {
 		t.Run(variant, func(t *testing.T) {
 			f := newFixture(t)
@@ -441,6 +449,7 @@ func TestConservativeModesDoNotStoreOriginals(t *testing.T) {
 }
 
 func TestExpiryDeletionAndFailedRecoveryStayClosed(t *testing.T) {
+	t.Parallel()
 	for _, cause := range []string{"expired", "deleted", "unavailable"} {
 		t.Run(cause, func(t *testing.T) {
 			f := newFixture(t)
@@ -489,6 +498,7 @@ func TestExpiryDeletionAndFailedRecoveryStayClosed(t *testing.T) {
 }
 
 func TestProtocolLimitsAndReceipts(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	for _, variant := range []string{"digest", "version", "policy", "unknown_field", "request_limit"} {
 		t.Run(variant, func(t *testing.T) {
@@ -541,6 +551,7 @@ func TestProtocolLimitsAndReceipts(t *testing.T) {
 // or not any request succeeds, and it purges every elapsed scope rather than
 // the same first batch on every pass (A4).
 func TestSweepReclaimsWithoutRequests(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	optimizeOK(t, f.runtime, requestFor(f.runtime))
 	ctx := context.Background()

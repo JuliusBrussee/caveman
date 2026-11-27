@@ -49,6 +49,7 @@ func tokenHash(token string) string {
 // A1: the namespace is authorized server-side on every route, and a principal
 // reaches only what its own authority owns.
 func TestNamespaceAuthorizationIsolatesPrincipals(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	var logs bytes.Buffer
 	r := tokenMapRuntime(t, f, "  - {name: team-a, namespaces: [\"team-a/*\"], token_sha256: ["+tokenHash(teamAToken)+"]}\n"+
@@ -122,6 +123,7 @@ func TestNamespaceAuthorizationIsolatesPrincipals(t *testing.T) {
 
 // Per-principal quota overrides from the token map bound only that principal.
 func TestTokenMapQuotaOverridesArePerPrincipal(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	const tightToken, roomyToken = "tight-token-0123456789abcdef", "roomy-token-0123456789abcdef"
 	r := tokenMapRuntime(t, f, "  - {name: tight, namespaces: [\"*\"], token_sha256: ["+tokenHash(tightToken)+"], quota: {requests_per_minute: 1}}\n"+
@@ -155,6 +157,7 @@ func TestTokenMapQuotaOverridesArePerPrincipal(t *testing.T) {
 // A5: an operator can declare the store ephemeral. It then reports
 // persistent:false and compresses nothing it could not recover after a restart.
 func TestEphemeralStoreIsReportedAndNotCompressed(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	if _, caps := capabilities(t, f.runtime, clientFeatures); caps["persistent"] != true {
 		t.Fatal("a file-backed store reported ephemeral")
@@ -172,6 +175,7 @@ func TestEphemeralStoreIsReportedAndNotCompressed(t *testing.T) {
 // A query retrieve ranks a middleware-owned original directly: no CCR, not even
 // a scratch one, is involved.
 func TestQueryRetrieveNarrowsOwnedOriginalWithoutCCR(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	r := withRuntime(t, f, func(c *Config) { c.Recovery = nil })
 	req := requestFor(r)

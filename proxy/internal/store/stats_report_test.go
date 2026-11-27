@@ -12,6 +12,7 @@ import (
 )
 
 func TestStatsHTMLPreservesPrivateEscapedSnapshot(t *testing.T) {
+	t.Parallel()
 	report := statsHTMLFixture()
 	attack := `</script><img src=x onerror="alert(1)">`
 	report.Groups[0].Model = attack
@@ -60,6 +61,7 @@ func TestStatsHTMLPreservesPrivateEscapedSnapshot(t *testing.T) {
 }
 
 func TestStatsHTMLAtomicReplacementDoesNotFollowTargetSymlink(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	protected := filepath.Join(dir, "protected.txt")
 	if err := os.WriteFile(protected, []byte("unchanged"), 0o600); err != nil {
@@ -80,6 +82,7 @@ func TestStatsHTMLAtomicReplacementDoesNotFollowTargetSymlink(t *testing.T) {
 }
 
 func TestStatsHTMLFixture(t *testing.T) {
+	t.Parallel()
 	var store Store
 	if err := store.WriteStatsHTML(StatsReport{}, ""); err == nil {
 		t.Fatal("empty report path accepted")
@@ -115,6 +118,7 @@ func TestStatsHTMLFixture(t *testing.T) {
 }
 
 func TestStatsHTMLInteractiveAccounting(t *testing.T) {
+	t.Parallel()
 	nodeBin, err := exec.LookPath("node")
 	if err != nil {
 		t.Skip("Node is required for the dashboard interaction check")

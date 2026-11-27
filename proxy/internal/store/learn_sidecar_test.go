@@ -10,6 +10,7 @@ import (
 )
 
 func TestWriteLearnSidecarsPersistsZeroMovesAndPrunesToEight(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	store := &Store{}
 	plan := LearnPlan{

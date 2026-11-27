@@ -9,6 +9,7 @@ import (
 // on provider-counted, DISJOINT buckets: a cache read is not billed at the
 // fresh-input rate, and the four components sum to the total.
 func TestSpendPricesDisjointBuckets(t *testing.T) {
+	t.Parallel()
 	acc := spendAccumulator{}
 	acc.observe(turnEvent{
 		BillingUsagePresent: true, ProviderKey: "anthropic", Model: "claude-opus-5",
@@ -56,6 +57,7 @@ func TestSpendPricesDisjointBuckets(t *testing.T) {
 // model contributes zero dollars and is disclosed, never priced at a sibling's
 // rate. A plausible wrong number is worse than a missing one.
 func TestSpendNeverBorrowsAnotherModelsPrice(t *testing.T) {
+	t.Parallel()
 	acc := spendAccumulator{}
 	acc.observe(turnEvent{
 		BillingUsagePresent: true, ProviderKey: "anthropic", Model: "claude-imaginary-9",
@@ -80,6 +82,7 @@ func TestSpendNeverBorrowsAnotherModelsPrice(t *testing.T) {
 // TestSpendResolvesDatedModelAlias allows exactly one alias step — the trailing
 // snapshot date, which names the same model — and nothing looser.
 func TestSpendResolvesDatedModelAlias(t *testing.T) {
+	t.Parallel()
 	if _, _, ok := resolveModelPrice("anthropic", "claude-haiku-4-5-20251001"); !ok {
 		t.Fatal("an exact dated catalog row must resolve")
 	}
@@ -97,6 +100,7 @@ func TestSpendResolvesDatedModelAlias(t *testing.T) {
 // TestSpendAbsentWithoutBillingUsage keeps a dollar figure off a machine whose
 // transcripts carry no usage blocks: no card at all beats a $0.00 card.
 func TestSpendAbsentWithoutBillingUsage(t *testing.T) {
+	t.Parallel()
 	acc := spendAccumulator{}
 	acc.observe(turnEvent{ProviderKey: "anthropic", Model: "claude-opus-5", ContextTotal: 100_000})
 	if spend := buildLearnSpend(acc, 30); spend != nil {
@@ -108,6 +112,7 @@ func TestSpendAbsentWithoutBillingUsage(t *testing.T) {
 // that would otherwise silently overcharge every OpenAI user: input_tokens
 // already CONTAINS the cached share.
 func TestCodexBillingUsageNormalizesInclusiveInput(t *testing.T) {
+	t.Parallel()
 	fresh, cached, out, ok := codexBillingUsage(map[string]any{
 		"input_tokens": float64(10_000), "cached_input_tokens": float64(8_000), "output_tokens": float64(500),
 	})
@@ -126,6 +131,7 @@ func TestCodexBillingUsageNormalizesInclusiveInput(t *testing.T) {
 // TestClaudeBillingUsageKeepsBucketsDisjoint pins the opposite convention:
 // Anthropic's input_tokens is already uncached-only.
 func TestClaudeBillingUsageKeepsBucketsDisjoint(t *testing.T) {
+	t.Parallel()
 	fresh, out, ok := claudeBillingUsage(map[string]any{
 		"message": map[string]any{"usage": map[string]any{
 			"input_tokens": float64(120), "cache_read_input_tokens": float64(9_000),
@@ -144,6 +150,7 @@ func TestClaudeBillingUsageKeepsBucketsDisjoint(t *testing.T) {
 // ACTUALLY pays after caching, not at list. A heavily-cached user's findings
 // must not be inflated by an order of magnitude.
 func TestPriceInputTokensUsesMeasuredRate(t *testing.T) {
+	t.Parallel()
 	cached := spendAccumulator{}
 	cached.observe(turnEvent{
 		BillingUsagePresent: true, ProviderKey: "anthropic", Model: "claude-opus-5",

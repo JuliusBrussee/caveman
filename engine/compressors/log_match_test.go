@@ -6,6 +6,7 @@ import (
 )
 
 func TestLogFastFilterMatchesCanonicalRegexp(t *testing.T) {
+	t.Parallel()
 	words := []string{"ERROR", "FATAL", "PANIC", "EXCEPTION", "TRACEBACK", "FAIL", "FAILED", "FAILURE", "WARN", "WARNING",
 		"ſailed", "tracebacK", "caused by", "file.go:12", "file.GO:12", "  at frame", "\tFile \"x.py\"", "  --->", "ordinary details", "", "é", "\xff"}
 	for _, word := range words {

@@ -11,6 +11,7 @@ import (
 )
 
 func TestStripToolSchemaAnnotations(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		name string
 		in   string
@@ -161,6 +162,7 @@ func TestStripToolSchemaAnnotations(t *testing.T) {
 // property: only the dropped members move, and every other byte — element order,
 // indentation, number spelling, string escapes — is copied through untouched.
 func TestStripToolSchemaAnnotationsPreservesOrderAndSpacing(t *testing.T) {
+	t.Parallel()
 	in := "[\n  { \"name\" : \"First\" ,\n    \"input_schema\" : { \"type\" : \"object\" ,\n      \"title\" : \"drop me\" ,\n      \"maxItems\" : 1.50 } } ,\n" +
 		"  { \"name\" : \"Second\" , \"description\" : \"tab\\there\" }\n]"
 	want := "[\n  { \"name\" : \"First\" ,\n    \"input_schema\" : { \"type\" : \"object\" ,\n      \"maxItems\" : 1.50 } } ,\n" +
@@ -189,6 +191,7 @@ func TestStripToolSchemaAnnotationsPreservesOrderAndSpacing(t *testing.T) {
 // the proxy relies on: the same catalog bytes always produce the same output
 // bytes, so a stripped prefix stays byte-identical on every later turn.
 func TestStripToolSchemaAnnotationsIsDeterministic(t *testing.T) {
+	t.Parallel()
 	in := []byte(`[{"name":"A","input_schema":{"title":"a","properties":{"p":{"title":"t","type":"string"}}}},{"name":"B","input_schema":{"examples":[1,2]},"cache_control":{"type":"ephemeral"}}]`)
 	first, ok := compressors.StripToolSchemaAnnotations(in)
 	if !ok {
@@ -203,6 +206,7 @@ func TestStripToolSchemaAnnotationsIsDeterministic(t *testing.T) {
 }
 
 func TestToolSchemaAnnotationsCompressorIsForcedOnlyAndS4(t *testing.T) {
+	t.Parallel()
 	c, ok := compressors.Default().For("toolschema-annotations")
 	if !ok {
 		t.Fatal("toolschema-annotations is not registered")

@@ -7,6 +7,7 @@ import (
 )
 
 func TestRequestEvidenceFromHeadersValidatesContentBlindJoin(t *testing.T) {
+	t.Parallel()
 	build := strings.Repeat("a", 64)
 	plan := strings.Repeat("b", 64)
 	prefix := strings.Repeat("c", 64)

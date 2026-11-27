@@ -43,6 +43,8 @@ func postgresReplicas(t *testing.T, n int) []*Runtime {
 	return replicas
 }
 
+var postgresSchemaSeq atomic.Uint64
+
 // postgresSchema returns CAVEMAN_TEST_POSTGRES_URL pointed at a fresh schema,
 // dropped when t ends. Skipped when the variable is unset.
 func postgresSchema(t *testing.T) string {
@@ -56,7 +58,7 @@ func postgresSchema(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := fmt.Sprintf("mw_runtime_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("mw_runtime_%d_%d", time.Now().UnixNano(), postgresSchemaSeq.Add(1))
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}
@@ -75,6 +77,7 @@ func postgresSchema(t *testing.T) string {
 // the migration's table lock times out (or deadlocks) behind a writer, rolls
 // back, and New retries it until the writer is done.
 func TestPostgresMigrationRetriesPastALiveWriter(t *testing.T) {
+	t.Parallel()
 	u := postgresSchema(t)
 	ctx := context.Background()
 	shared, err := store.OpenPostgresMiddleware(ctx, u)
@@ -209,6 +212,7 @@ func runtimeOn(t *testing.T, s store.MiddlewareStore, change func(*Config)) *Run
 // A5: a handle minted by one replica is retrieved, continued and revoked
 // through another; no affinity needed.
 func TestPostgresHandleMintedOnOneReplicaServesOnAnother(t *testing.T) {
+	t.Parallel()
 	replicas := postgresReplicas(t, 2)
 	a, b := replicas[0], replicas[1]
 	if _, caps := capabilities(t, a, clientFeatures); caps["persistent"] != true {
@@ -242,6 +246,7 @@ func TestPostgresHandleMintedOnOneReplicaServesOnAnother(t *testing.T) {
 // The SQLite single-writer guarantee, across replicas: concurrent first turns
 // of one scope publish exactly one durable replacement and all succeed.
 func TestPostgresConcurrentReplicasChooseOneDurableReplacement(t *testing.T) {
+	t.Parallel()
 	replicas := postgresReplicas(t, 3)
 	const writers = 24
 	var wg sync.WaitGroup
@@ -325,6 +330,7 @@ func (s *statements) TraceQueryEnd(context.Context, *pgx.Conn, pgx.TraceQueryEnd
 // GO-1: an optimize is a constant number of round trips to Postgres, however
 // many segments it carries; a first turn and a turn reusing every choice alike.
 func TestPostgresOptimizeStatementsDoNotGrowWithSegments(t *testing.T) {
+	t.Parallel()
 	u := postgresSchema(t)
 	config, err := pgxpool.ParseConfig(u)
 	if err != nil {

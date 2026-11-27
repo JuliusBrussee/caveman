@@ -71,6 +71,7 @@ func TestExtractCompressionQuery(t *testing.T) {
 }
 
 func TestExtractCompressionQueryBoundsWorkWithoutBreakingUTF8(t *testing.T) {
+	t.Parallel()
 	query := strings.Repeat("a", maxCompressionQueryBytes-1) + "€" + strings.Repeat("z", 32)
 	body := `{"messages":[{"role":"user","content":` + quoteJSON(query) + `}]}`
 	got := extractCompressionQuery("openai", "/v1/chat/completions", []byte(body))
@@ -103,6 +104,7 @@ func (c *queryCaptureCompressor) EstimateSegment(segment []byte) (int, int) {
 }
 
 func TestCompressModePassesLatestUserQueryToEveryLiveSegment(t *testing.T) {
+	t.Parallel()
 	var gotUpstreamBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
@@ -154,6 +156,7 @@ func TestCompressModePassesLatestUserQueryToEveryLiveSegment(t *testing.T) {
 }
 
 func TestObserveEstimateUsesSameLatestUserQuery(t *testing.T) {
+	t.Parallel()
 	var gotUpstreamBody string
 	upstream := echoUpstream(t, &gotUpstreamBody)
 	defer upstream.Close()

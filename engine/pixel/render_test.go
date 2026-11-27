@@ -10,6 +10,7 @@ import (
 )
 
 func TestMinifyForRender(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -35,6 +36,7 @@ func TestMinifyForRender(t *testing.T) {
 }
 
 func TestReflowAndDereflow(t *testing.T) {
+	t.Parallel()
 	cases := []string{
 		"",
 		"hello world",
@@ -83,6 +85,7 @@ func expandLinesForReference(text string) []string {
 }
 
 func TestExpandTabsInLine(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in   string
 		want string
@@ -103,6 +106,7 @@ func TestExpandTabsInLine(t *testing.T) {
 }
 
 func TestMeasureAndWrap(t *testing.T) {
+	t.Parallel()
 	if got := MeasureLineCols("abc中", 1); got != 5 {
 		t.Fatalf("MeasureLineCols CJK = %d, want 5", got)
 	}
@@ -120,6 +124,7 @@ func TestMeasureAndWrap(t *testing.T) {
 }
 
 func TestRenderChunkToPNG(t *testing.T) {
+	t.Parallel()
 	img, err := RenderChunkToPNG("hello", 80, RenderStyle{}, MaxHeightPx, "")
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +144,7 @@ func TestRenderChunkToPNG(t *testing.T) {
 }
 
 func TestRenderSplitsLongInput(t *testing.T) {
+	t.Parallel()
 	imgs, err := RenderTextToPNGs(strings.Repeat("a", ReadableCharsPerImage+100), 312, RenderStyle{})
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +160,7 @@ func TestRenderSplitsLongInput(t *testing.T) {
 }
 
 func TestRenderUnicodeCoverageAndDrops(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name      string
 		text      string
@@ -182,6 +189,7 @@ func TestRenderUnicodeCoverageAndDrops(t *testing.T) {
 }
 
 func TestMultiColumnRendering(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("row data data data\n", 400)
 	single, err := RenderTextToPNGs(text, 100, RenderStyle{})
 	if err != nil {
@@ -231,6 +239,7 @@ func TestMultiColumnRendering(t *testing.T) {
 }
 
 func TestMultiColumnGutterDivider(t *testing.T) {
+	t.Parallel()
 	imgs, err := RenderTextToPNGsMultiCol(strings.Repeat("abc\n", 200), 80, 2)
 	if err != nil {
 		t.Fatal(err)
@@ -258,6 +267,7 @@ func TestMultiColumnGutterDivider(t *testing.T) {
 }
 
 func TestDensePages(t *testing.T) {
+	t.Parallel()
 	imgs, err := RenderDensePages("a\nb\nc", DensePagesOptions{Reflow: true})
 	if err != nil {
 		t.Fatal(err)
@@ -274,6 +284,7 @@ func TestDensePages(t *testing.T) {
 }
 
 func TestPageGeometryPatchAligned(t *testing.T) {
+	t.Parallel()
 	const patch = AnthropicPatchPx // 28
 
 	// The framing constants must themselves be whole patches.
@@ -323,6 +334,7 @@ func TestPageGeometryPatchAligned(t *testing.T) {
 }
 
 func TestRoleSlots(t *testing.T) {
+	t.Parallel()
 	body := "hello body text"
 	seg := RoleSlotSegment("user", body, SlotMarkUser, ` t="37"`)
 	text := `<user t="37">` + "\n" + body + "\n" + `</user>`

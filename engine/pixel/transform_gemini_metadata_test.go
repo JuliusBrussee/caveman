@@ -7,6 +7,7 @@ import (
 )
 
 func TestTransformGeminiPreservesOpaquePartMetadata(t *testing.T) {
+	t.Parallel()
 	for _, field := range []string{"thoughtSignature", "thought_signature", "thought", "provider_metadata"} {
 		t.Run(field, func(t *testing.T) {
 			part := map[string]any{"text": strings.Repeat("Exact signed response payload with useful rows\n", 700), field: "opaque"}

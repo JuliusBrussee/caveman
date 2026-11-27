@@ -18,6 +18,7 @@ func outcomeAt(repo string, day int, tokens int64, turns, errors int) sessionOut
 // window contains a commit land in one cohort, the rest in the other, and the
 // dead-end cohort's token share is what gets reported.
 func TestOutcomeCohortsSplitOnCommitOverlap(t *testing.T) {
+	t.Parallel()
 	sessions := []sessionOutcome{
 		outcomeAt("/repo/a", 1, 100_000, 40, 2),
 		outcomeAt("/repo/a", 2, 100_000, 40, 2),
@@ -76,6 +77,7 @@ func TestOutcomeCohortsSplitOnCommitOverlap(t *testing.T) {
 // commitless — that would manufacture a dead-end cohort out of missing
 // evidence, which is the most damaging possible bug in this detector.
 func TestOutcomeOmitsRepositoriesGitCannotAnswer(t *testing.T) {
+	t.Parallel()
 	var sessions []sessionOutcome
 	for day := 1; day <= 10; day++ {
 		sessions = append(sessions, outcomeAt("/not/a/checkout", day, 500_000, 30, 1))
@@ -92,6 +94,7 @@ func TestOutcomeOmitsRepositoriesGitCannotAnswer(t *testing.T) {
 // TestOutcomeSilentOnThinHistory keeps cohorts off a machine where they would
 // be noise.
 func TestOutcomeSilentOnThinHistory(t *testing.T) {
+	t.Parallel()
 	restore := gitCommitTimesFn
 	gitCommitTimesFn = func(string, time.Time, time.Time) ([]time.Time, bool) { return nil, true }
 	defer func() { gitCommitTimesFn = restore }()
@@ -113,6 +116,7 @@ func TestOutcomeSilentOnThinHistory(t *testing.T) {
 // TestSessionProducedCommitBoundaries pins the overlap window, including the
 // grace period for a commit made just after the agent stopped.
 func TestSessionProducedCommitBoundaries(t *testing.T) {
+	t.Parallel()
 	session := outcomeAt("/repo/a", 1, 1000, 5, 0)
 	inside := session.Start.Add(30 * time.Minute)
 	grace := session.End.Add(outcomeCommitGraceWindow - time.Minute)
@@ -141,6 +145,7 @@ func TestSessionProducedCommitBoundaries(t *testing.T) {
 // disclosed — never folded into the dead-end cohort, which would turn a
 // performance guard into a false finding.
 func TestOutcomeBudgetSkipsRatherThanMiscounts(t *testing.T) {
+	t.Parallel()
 	var sessions []sessionOutcome
 	for day := 1; day <= 5; day++ {
 		sessions = append(sessions, outcomeAt("/repo/fast", day, 200_000, 30, 1))

@@ -3,6 +3,7 @@ package main
 import "testing"
 
 func TestStatsReportOptions(t *testing.T) {
+	t.Parallel()
 	opts, write, out, err := parseStatsReportOptions([]string{"--report", "--days", "0", "--provider", "openai", "--model", "gpt-5.6", "--auth", "subscription", "--out", "stats.html"})
 	if err != nil || opts.Days != 0 || opts.Provider != "openai" || opts.Model != "gpt-5.6" || opts.AuthMode != "subscription" || !write || out != "stats.html" {
 		t.Fatalf("options=%+v write=%v out=%q err=%v", opts, write, out, err)

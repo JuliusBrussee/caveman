@@ -35,6 +35,7 @@ type goldenImage struct {
 }
 
 func TestGoldenFixtures(t *testing.T) {
+	t.Parallel()
 	raw, err := os.ReadFile(filepath.Join("testdata", "golden", "manifest.json"))
 	if err != nil {
 		t.Fatal(err)

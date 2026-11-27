@@ -29,6 +29,7 @@ func trendMetric(t *testing.T, trends *LearnTrends, key string) LearnTrendMetric
 }
 
 func TestISOWeekBoundariesAreUTC(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		in    time.Time
 		week  string
@@ -50,6 +51,7 @@ func TestISOWeekBoundariesAreUTC(t *testing.T) {
 }
 
 func TestTrendDirectionDeadBand(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		cur, prior float64
 		better     string
@@ -77,6 +79,7 @@ func TestTrendDirectionDeadBand(t *testing.T) {
 }
 
 func TestBuildLearnTrendsBucketsAndCompares(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC) // Wednesday, 2026-W40
 	since := now.Add(-30 * 24 * time.Hour)               // 2026-08-31 12:00, Monday of W36
 	var sessions []trendSession
@@ -125,6 +128,7 @@ func TestBuildLearnTrendsBucketsAndCompares(t *testing.T) {
 }
 
 func TestBuildLearnTrendsInsufficientData(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	since := now.Add(-30 * 24 * time.Hour)
 	w39 := time.Date(2026, 9, 21, 9, 0, 0, 0, time.UTC)
@@ -151,6 +155,7 @@ func TestBuildLearnTrendsInsufficientData(t *testing.T) {
 }
 
 func TestSessionConsumerRecordsTrendSession(t *testing.T) {
+	t.Parallel()
 	beh := behaviorScan{}
 	c := newSessionEventConsumer("claude", sessionRef{relPath: "a.jsonl", repo: "/r"}, nil, &beh, newRecurringMiner())
 	start := time.Date(2026, 9, 22, 8, 0, 0, 0, time.UTC)
@@ -181,6 +186,7 @@ func writeTrendSnapshot(t *testing.T, home string, at time.Time, score int, sink
 }
 
 func TestAttachLearnTrendHistoryMoversAndScore(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	writeTrendSnapshot(t, home, now.Add(-10*24*time.Hour), 70, []Sink{
@@ -218,6 +224,7 @@ func TestAttachLearnTrendHistoryMoversAndScore(t *testing.T) {
 }
 
 func TestLearnReportRendersTrendsSection(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 9, 30, 12, 0, 0, 0, time.UTC)
 	var sessions []trendSession
 	for i, monday := range []string{"2026-09-07", "2026-09-14", "2026-09-21", "2026-09-28"} {

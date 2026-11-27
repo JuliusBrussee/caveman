@@ -16,6 +16,7 @@ import (
 // cache-prefix fix rests on: the same original always resolves to the same stored
 // replacement bytes, in this process and in the next one.
 func TestPrefixReplacementRoundTripAndDurability(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "caveman.db")
 	original := []byte("the original live-zone block bytes the agent sent")
 	replacement := []byte("COMPRESSED\n<<ccr:ccr_deadbeef>>")
@@ -61,6 +62,7 @@ func TestPrefixReplacementRoundTripAndDurability(t *testing.T) {
 // for an original, a later writer gets the stored bytes back rather than replacing
 // them, so two in-flight requests can never put two different prefixes on the wire.
 func TestPrefixReplacementFirstWriteWins(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -85,6 +87,7 @@ func TestPrefixReplacementFirstWriteWins(t *testing.T) {
 }
 
 func TestPrefixReplacementIsScopedByLockedTransform(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -112,6 +115,7 @@ func TestPrefixReplacementIsScopedByLockedTransform(t *testing.T) {
 // the store cannot honor later is refused now, so the gateway forwards the original
 // instead of sending a rewrite it could not reproduce.
 func TestPrefixReplacementIncompleteEntryRejected(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -136,30 +140,23 @@ func TestPrefixReplacementIncompleteEntryRejected(t *testing.T) {
 // TestPrefixReplacementEviction pins bounded storage after provider caches expire.
 // Warm entries are protected separately by the retention-window regression.
 func TestPrefixReplacementEviction(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
 
-	// Seed past the cap directly, in one transaction, so the test does not have
+	// Seed past the cap directly, in one statement, so the test does not have
 	// to write a hundred thousand blobs through the hot path.
 	old := time.Now().UTC().Add(-48 * time.Hour).Format(storeTSLayout)
-	tx, err := s.db.Begin()
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	for i := 0; i < prefixCacheMaxEntries+5; i++ {
-		key := prefixCacheKey("unlocked", []byte{byte(i >> 16), byte(i >> 8), byte(i)})
-		if _, err := tx.Exec(
-			`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			key, "ccr_seed", []byte("R"), old, old,
-		); err != nil {
-			t.Fatalf("seed %d: %v", i, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit seed: %v", err)
+	if _, err := s.db.Exec(
+		`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < ?)
+		 INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at)
+		 SELECT printf('seed-%06d', v), 'ccr_seed', ?, ?, ? FROM n`,
+		prefixCacheMaxEntries+4, []byte("R"), old, old,
+	); err != nil {
+		t.Fatalf("seed rows: %v", err)
 	}
 	if _, err := s.RememberReplacement("unlocked", []byte("newest block"), []byte("NEW"), "ccr_new"); err != nil {
 		t.Fatalf("remember: %v", err)
@@ -183,6 +180,7 @@ func TestPrefixReplacementEviction(t *testing.T) {
 // compression for that block. Without the DSN's WAL + busy_timeout pragmas this
 // fails ~31/32.
 func TestPrefixReplacementConcurrentWrites(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -214,6 +212,7 @@ func TestPrefixReplacementConcurrentWrites(t *testing.T) {
 // flips, non-deterministically, per turn. Without the DSN pragmas this misses
 // ~9/24.
 func TestPrefixReplacementLookupUnderWriteContention(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -260,6 +259,7 @@ func TestPrefixReplacementLookupUnderWriteContention(t *testing.T) {
 // compression of the same bytes — and a compression recorded first outranks a
 // later raw decision.
 func TestPrefixReplacementRawDecision(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "caveman.db")
 	s, err := Open(path, nil)
 	if err != nil {
@@ -298,6 +298,7 @@ func TestPrefixReplacementRawDecision(t *testing.T) {
 // only needs coarse recency: a hit touches a row once it is older than
 // prefixCacheTouchInterval, and reads it without writing otherwise.
 func TestPrefixReplacementLookupTouchesOnlyStaleRows(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -347,36 +348,28 @@ func TestPrefixReplacementLookupTouchesOnlyStaleRows(t *testing.T) {
 // row), so 100k of them is gigabytes. Pixel rows are trimmed to their own cap,
 // least recently used first, and the trim leaves every other row alone.
 func TestPrefixReplacementPixelRowsHaveTheirOwnCap(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
 	}
 	defer s.Close()
-	tx, err := s.db.Begin()
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
 	old := time.Now().UTC().Add(-48 * time.Hour).Format(storeTSLayout)
-	for i := 0; i < prefixCachePixelMaxEntries+5; i++ {
-		key := prefixCacheKey("pixel:anthropic:claude-fable-5", []byte(fmt.Sprintf("rendered text %d", i)))
-		if _, err := tx.Exec(
-			`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			key, gateway.PixelHandle, []byte("PNG"), old, old,
-		); err != nil {
-			t.Fatalf("seed pixel row %d: %v", i, err)
-		}
+	if _, err := s.db.Exec(
+		`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < ?)
+		 INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at)
+		 SELECT printf('pixel-seed-%06d', v), ?, ?, ?, ? FROM n`,
+		prefixCachePixelMaxEntries+4, gateway.PixelHandle, []byte("PNG"), old, old,
+	); err != nil {
+		t.Fatalf("seed pixel rows: %v", err)
 	}
-	for i := 0; i < 10; i++ {
-		key := prefixCacheKey("unlocked", []byte(fmt.Sprintf("text row %d", i)))
-		if _, err := tx.Exec(
-			`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			key, "ccr_text", []byte("R"), old, old,
-		); err != nil {
-			t.Fatalf("seed text row %d: %v", i, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit seed: %v", err)
+	if _, err := s.db.Exec(
+		`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < 9)
+		 INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at)
+		 SELECT printf('text-seed-%06d', v), 'ccr_text', ?, ?, ? FROM n`,
+		[]byte("R"), old, old,
+	); err != nil {
+		t.Fatalf("seed text rows: %v", err)
 	}
 	newest := []byte("the newest rendered text")
 	if _, err := s.RememberReplacement("pixel:anthropic:claude-fable-5", newest, []byte("PNG"), gateway.PixelHandle); err != nil {
@@ -408,6 +401,7 @@ func TestPrefixReplacementPixelRowsHaveTheirOwnCap(t *testing.T) {
 // it protects. Evicting it re-substitutes that conversation over the raw
 // prefix the provider cached, so pin rows are kept out of the eviction.
 func TestPrefixReplacementEvictionKeepsRawPins(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -415,27 +409,19 @@ func TestPrefixReplacementEvictionKeepsRawPins(t *testing.T) {
 	defer s.Close()
 	oldest := time.Now().UTC().Add(-48 * time.Hour).Format(storeTSLayout)
 	pinKey := prefixCacheKey("rawpin", []byte("a conversation identity and slot"))
-	tx, err := s.db.Begin()
-	if err != nil {
-		t.Fatalf("begin: %v", err)
-	}
-	if _, err := tx.Exec(
+	if _, err := s.db.Exec(
 		`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
 		pinKey, gateway.RawPinHandle, []byte("PIN"), oldest, oldest,
 	); err != nil {
 		t.Fatalf("seed pin: %v", err)
 	}
-	for i := 0; i < prefixCacheMaxEntries+5; i++ {
-		key := prefixCacheKey("unlocked", []byte{byte(i >> 16), byte(i >> 8), byte(i)})
-		if _, err := tx.Exec(
-			`INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at) VALUES (?,?,?,?,?)`,
-			key, "ccr_seed", []byte("R"), oldest, oldest,
-		); err != nil {
-			t.Fatalf("seed %d: %v", i, err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		t.Fatalf("commit seed: %v", err)
+	if _, err := s.db.Exec(
+		`WITH RECURSIVE n(v) AS (SELECT 0 UNION ALL SELECT v+1 FROM n WHERE v < ?)
+		 INSERT INTO prefix_replacements (original_sha256, handle, replacement, created_at, last_used_at)
+		 SELECT printf('seed-%06d', v), 'ccr_seed', ?, ?, ? FROM n`,
+		prefixCacheMaxEntries+4, []byte("R"), oldest, oldest,
+	); err != nil {
+		t.Fatalf("seed rows: %v", err)
 	}
 	if _, err := s.RememberReplacement("unlocked", []byte("newest block"), []byte("NEW"), "ccr_new"); err != nil {
 		t.Fatalf("remember: %v", err)

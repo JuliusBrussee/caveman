@@ -9,6 +9,7 @@ import (
 )
 
 func TestFactSheetExtraction(t *testing.T) {
+	t.Parallel()
 	text := strings.Join([]string{
 		"Edited src/lib/__tests__/livekit-egress.test.ts and agents/transcription/agent.ts",
 		"opened https://github.com/Keplogic/atlas/pull/93 at commit 6d80bd6",
@@ -33,6 +34,7 @@ func TestFactSheetExtraction(t *testing.T) {
 }
 
 func TestFactSheetBudgetAndPriority(t *testing.T) {
+	t.Parallel()
 	many := make([]string, 200)
 	for i := range many {
 		many[i] = fmt.Sprintf("/dir%d/file%d.ts", i, i)
@@ -61,6 +63,7 @@ func TestFactSheetBudgetAndPriority(t *testing.T) {
 }
 
 func TestFactSheetTicketsAndCounts(t *testing.T) {
+	t.Parallel()
 	toks := ExtractFactSheetTokens("audit marker AUDIT-ZX9 tracked as PROJ-1482, see CVE-2024-30078 for details")
 	for _, want := range []string{"AUDIT-ZX9", "PROJ-1482", "CVE-2024-30078"} {
 		if !containsString(toks, want) {
@@ -81,6 +84,7 @@ func TestFactSheetTicketsAndCounts(t *testing.T) {
 }
 
 func TestFactSheetAllPagesCounts(t *testing.T) {
+	t.Parallel()
 	lines := make([]string, 300)
 	for i := range lines {
 		lines[i] = fmt.Sprintf("2026-07-26T09:40:41Z WARN svc=ingest req=%x shard=12 msg=processed batch %d ok", 0x10000000+i*7919, 10000+i)

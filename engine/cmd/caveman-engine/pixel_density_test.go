@@ -1,12 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"image/png"
 	"math"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/JuliusBrussee/caveman/engine/pixel"
@@ -63,23 +65,41 @@ func TestStdDensityCapacityRatios(t *testing.T) {
 // expected page-count ordering, and each report's resolved `density` field must
 // echo the level actually drawn. This pins renderer geometry.
 func TestPixelRenderDensityPageRatios(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
-	file := filepath.Join(dir, "doc.txt")
 	// Many 1500-char spaceless lines: long enough that WrapLines packs near-full
 	// lines at both column widths (so the column advantage shows as the capacity
 	// ratio predicts), short enough to avoid the per-line quadratic wrap cost of one
 	// giant line. Newline-delimited keeps the render fast.
 	line := strings.Repeat("a", 1500) + "\n"
-	if err := os.WriteFile(file, []byte(strings.Repeat(line, 380)), 0o644); err != nil {
-		t.Fatal(err)
+	content := []byte(strings.Repeat(line, 380))
+
+	levels := []string{"conservative", "balanced", "max"}
+	summaries := make([]pixelRenderSummary, len(levels))
+	var wg sync.WaitGroup
+	for i, level := range levels {
+		file := filepath.Join(dir, level+".txt")
+		if err := os.WriteFile(file, content, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		wg.Add(1)
+		go func(i int, level, file string) {
+			defer wg.Done()
+			var buf bytes.Buffer
+			runPixelRenderTo([]string{"--density", level, "--no-reflow", file}, &buf)
+			summary := lastPixelRenderSummary(t, buf.String())
+			summaries[i] = summary
+			// Clean the emitted page PNGs so they never pile up.
+			for p := 1; p <= summary.Pages; p++ {
+				_ = os.Remove(file + ".px" + itoa(p) + ".png")
+			}
+		}(i, level, file)
 	}
+	wg.Wait()
 
 	pages := map[string]int{}
-	for _, level := range []string{"conservative", "balanced", "max"} {
-		out := captureStdout(t, func() {
-			runPixelRender([]string{"--density", level, "--no-reflow", file})
-		})
-		summary := lastPixelRenderSummary(t, out)
+	for i, level := range levels {
+		summary := summaries[i]
 		if summary.Density != level {
 			t.Fatalf("%s: summary density = %q, want %q", level, summary.Density, level)
 		}
@@ -93,10 +113,6 @@ func TestPixelRenderDensityPageRatios(t *testing.T) {
 		}
 		if level != "max" && summary.Layers != 0 {
 			t.Fatalf("%s summary must not report a layer count, got %d", level, summary.Layers)
-		}
-		// Clean the emitted page PNGs between levels so they never pile up.
-		for i := 1; i <= summary.Pages; i++ {
-			_ = os.Remove(file + ".px" + itoa(i) + ".png")
 		}
 	}
 

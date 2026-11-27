@@ -385,6 +385,9 @@ func TestMovingToTheFileStoreDropsTheKeychainCopyEvenWithoutKeychainWrites(t *te
 // A refresh whose save meets a held lock tries once more, so a single-use
 // refresh token is not lost to contention.
 func TestRefreshRetriesASaveThatMetTheLock(t *testing.T) {
+	prev := lockTimeout
+	lockTimeout = 100 * time.Millisecond
+	defer func() { lockTimeout = prev }()
 	issuer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, `{"access_token":"rotated","refresh_token":"rotated-refresh","expires_in":3600,"scope":"chatgpt.tokens.use.direct"}`)
 	}))
@@ -398,7 +401,7 @@ func TestRefreshRetriesASaveThatMetTheLock(t *testing.T) {
 	token.Issuer = issuer.URL
 	lock := filepath.Join(dir, indexFile+".lock")
 	_ = os.WriteFile(lock, []byte("busy"), 0o600)
-	go func() { time.Sleep(3500 * time.Millisecond); _ = os.Remove(lock) }()
+	go func() { time.Sleep(150 * time.Millisecond); _ = os.Remove(lock) }()
 	store.refreshChatGPT(token)
 	if secret, _ := os.ReadFile(filepath.Join(dir, secretDir, "chatgpt")); !strings.Contains(string(secret), "rotated-refresh") {
 		t.Fatalf("the rotated token was lost: %s", secret)

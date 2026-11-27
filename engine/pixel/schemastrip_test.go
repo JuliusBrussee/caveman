@@ -9,6 +9,7 @@ import (
 )
 
 func TestStripSchemaDescriptionsCases(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string
@@ -85,6 +86,7 @@ func TestStripSchemaDescriptionsCases(t *testing.T) {
 }
 
 func TestStripSchemaDepthCapAndStructure(t *testing.T) {
+	t.Parallel()
 	deep := map[string]any{"type": "string", "description": "leaf"}
 	cur := deep
 	for i := 0; i < 25; i++ {

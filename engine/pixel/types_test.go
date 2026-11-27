@@ -5,6 +5,7 @@ package pixel
 import "testing"
 
 func TestDefaultTransformOptions(t *testing.T) {
+	t.Parallel()
 	opts := DefaultTransformOptions("claude-fable-5")
 	if opts.Model != "claude-fable-5" ||
 		!opts.Compress ||

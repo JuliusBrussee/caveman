@@ -56,6 +56,7 @@ func openTestStore(t *testing.T, path string) *Store {
 }
 
 func TestOwnerTieBreakUsesSmallestObjectID(t *testing.T) {
+	t.Parallel()
 	s := openTestStore(t, filepath.Join(t.TempDir(), "ccr.db"))
 	data := []byte("same repository map")
 	created := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
@@ -106,6 +107,7 @@ func checkOwnerPlan(t *testing.T, db *sql.DB) {
 }
 
 func TestOwnerLookupUsesIndex(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	s := openTestStore(t, path)
 	checkOwnerPlan(t, s.db)
@@ -122,6 +124,7 @@ func TestOwnerLookupUsesIndex(t *testing.T) {
 }
 
 func TestOwnerIndexCreatedOnStoreWithoutDataRefColumn(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	old, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -160,6 +163,7 @@ func seedRefChain(t *testing.T, s *Store) (a, b, c string, data []byte) {
 }
 
 func TestReferenceToReferenceResolvesThroughFallback(t *testing.T) {
+	t.Parallel()
 	s := openTestStore(t, filepath.Join(t.TempDir(), "ccr.db"))
 	a, b, c, data := seedRefChain(t, s)
 	if _, err := s.db.Exec(`UPDATE typed_objects SET data=x'', data_ref=? WHERE object_id=?`, a, b); err != nil {
@@ -186,6 +190,7 @@ func TestReferenceToReferenceResolvesThroughFallback(t *testing.T) {
 }
 
 func TestFallbackReportsStorageErrorsAsErrors(t *testing.T) {
+	t.Parallel()
 	s := openTestStore(t, filepath.Join(t.TempDir(), "ccr.db"))
 	_, _, c, _ := seedRefChain(t, s)
 	if _, err := s.db.Exec(`UPDATE typed_objects SET data=x'' WHERE object_id='obj-b'`); err != nil {
@@ -228,6 +233,7 @@ func readerSnapshotSetup(t *testing.T) (reader, writer *Store, data []byte) {
 }
 
 func TestGetObjectReadsOneSnapshot(t *testing.T) {
+	t.Parallel()
 	reader, _, data := readerSnapshotSetup(t)
 	got, err := reader.GetObject("obj-c")
 	if err != nil || !bytes.Equal(got.Data, data) {
@@ -239,6 +245,7 @@ func TestGetObjectReadsOneSnapshot(t *testing.T) {
 }
 
 func TestListSessionObjectsReadsOneSnapshot(t *testing.T) {
+	t.Parallel()
 	reader, _, data := readerSnapshotSetup(t)
 	got, err := reader.ListSessionObjects("sess-c", 10)
 	if err != nil || len(got) != 1 || !bytes.Equal(got[0].Data, data) {
@@ -247,6 +254,7 @@ func TestListSessionObjectsReadsOneSnapshot(t *testing.T) {
 }
 
 func TestConcurrentMapPutsNeverChainReferences(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	stores := []*Store{openTestStore(t, path), openTestStore(t, path)}
 	const rounds = 40
@@ -299,6 +307,7 @@ func TestConcurrentMapPutsNeverChainReferences(t *testing.T) {
 }
 
 func TestConcurrentPutsKeepPayloadBudget(t *testing.T) {
+	t.Parallel()
 	const budget = 600000
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	open := func() *Store {

@@ -35,6 +35,7 @@ func fields(pairs ...string) []field {
 }
 
 func TestSummarizeElidedStatesOnlyWhatHoldsEverywhere(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		units [][]field
@@ -245,6 +246,7 @@ func TestSummarizeElidedStatesOnlyWhatHoldsEverywhere(t *testing.T) {
 }
 
 func TestSummarizeElidedRespectsItsBudget(t *testing.T) {
+	t.Parallel()
 	wide := func() []field {
 		var f []field
 		for i := 0; i < 12; i++ {
@@ -289,6 +291,7 @@ func TestSummarizeElidedRespectsItsBudget(t *testing.T) {
 // averaging two units or fewer per bucket barely describes a class, so it goes
 // before the range and the constants do.
 func TestIdentifierEnumerationsAreShedFirst(t *testing.T) {
+	t.Parallel()
 	var units [][]field
 	for i := 0; i < 8; i++ {
 		state := "fulfilled"
@@ -313,6 +316,7 @@ func TestIdentifierEnumerationsAreShedFirst(t *testing.T) {
 // TestBudgetShedsRangesBeforeEnumerations pins the shedding order. An enumeration
 // answers whether anything in state X was elided; a range only bounds a column.
 func TestBudgetShedsRangesBeforeEnumerations(t *testing.T) {
+	t.Parallel()
 	var units [][]field
 	for i := 0; i < 6; i++ {
 		state := "fulfilled"
@@ -340,6 +344,7 @@ func TestBudgetShedsRangesBeforeEnumerations(t *testing.T) {
 // the counts must account for the whole run, or an agent reading them would
 // conclude something about units the marker never saw.
 func TestEnumeratedCountsCoverEveryElidedUnit(t *testing.T) {
+	t.Parallel()
 	units := [][]field{
 		fields("status", "fulfilled"), fields("status", "fulfilled"), fields("status", "fulfilled"),
 		fields("status", "shipped"), fields("status", "shipped"),
@@ -391,6 +396,7 @@ func TestEnumeratedCountsCoverEveryElidedUnit(t *testing.T) {
 }
 
 func TestLogfmtFieldsExtraction(t *testing.T) {
+	t.Parallel()
 	got := logfmtFields([]byte(`ts=2026-08-08T09:00:00Z level=INFO msg="settled ok" empty= trailing=1`))
 	want := []field{
 		{"ts", "2026-08-08T09:00:00Z"},
@@ -412,6 +418,7 @@ func TestLogfmtFieldsExtraction(t *testing.T) {
 }
 
 func TestRowFieldsSkipsUnnamedAndEmptyCells(t *testing.T) {
+	t.Parallel()
 	got := rowFields([]string{"id", "", "state"}, []string{"7", "x", " charged "})
 	want := []field{{"id", "7"}, {"state", "charged"}}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
@@ -420,6 +427,7 @@ func TestRowFieldsSkipsUnnamedAndEmptyCells(t *testing.T) {
 }
 
 func TestObjectFieldsTakesScalarsInSortedOrder(t *testing.T) {
+	t.Parallel()
 	var v any
 	dec := json.NewDecoder(strings.NewReader(`{"state":"charged","amount":5.50,"ok":true,"meta":{"a":1},"tags":[1],"nil":null}`))
 	dec.UseNumber()
@@ -456,6 +464,7 @@ func settleLog(lines int) []byte {
 }
 
 func TestTabularMarkerCarriesRowInvariants(t *testing.T) {
+	t.Parallel()
 	out, ok := NewTabular().Compress(ledgerCSV(400))
 	if !ok {
 		t.Fatal("ledger CSV must compress")
@@ -476,6 +485,7 @@ func TestTabularMarkerCarriesRowInvariants(t *testing.T) {
 }
 
 func TestLogMarkerCarriesLineInvariants(t *testing.T) {
+	t.Parallel()
 	out, ok := NewLog().Compress(settleLog(600))
 	if !ok {
 		t.Fatal("settle log must compress")
@@ -493,6 +503,7 @@ func TestLogMarkerCarriesLineInvariants(t *testing.T) {
 }
 
 func TestJSONMarkerCarriesElementInvariants(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`{"rows":[`)
 	for i := 0; i < 200; i++ {
@@ -534,6 +545,7 @@ func TestJSONMarkerCarriesElementInvariants(t *testing.T) {
 // extractors cannot read must produce exactly the marker this compressor emitted
 // before invariants existed, byte for byte.
 func TestUnstructuredRunsKeepTheBareMarker(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 400; i++ {
 		fmt.Fprintf(&b, "processing item %d of 400\n", i)
@@ -552,6 +564,7 @@ func TestUnstructuredRunsKeepTheBareMarker(t *testing.T) {
 }
 
 func TestSmallElisionsDoNotBuyTheContractLine(t *testing.T) {
+	t.Parallel()
 	out, ok := NewLog().Compress(settleLog(12))
 	if !ok {
 		t.Fatal("expected compression")
@@ -565,6 +578,7 @@ func TestSmallElisionsDoNotBuyTheContractLine(t *testing.T) {
 // must re-serialize identically on every later turn, so re-compressing enriched
 // output must return the same bytes rather than annotate the annotation.
 func TestEnrichedMarkersAreIdempotent(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name  string
 		c     Compressor
@@ -602,6 +616,7 @@ func TestEnrichedMarkersAreIdempotent(t *testing.T) {
 // against the rows the marker actually replaced. This is the honesty gate: a
 // stated invariant that does not hold for every elided unit is a correctness bug.
 func TestStatedInvariantsAreLiterallyTrue(t *testing.T) {
+	t.Parallel()
 	header := []string{"order_id", "state", "amount", "currency"}
 	run := [][]string{
 		{"ord-1", "charged", "5.00", "EUR"},
@@ -711,6 +726,7 @@ func TestStatedInvariantsAreLiterallyTrue(t *testing.T) {
 // constants; a bounded one only rules values out and goes before them. Both
 // outlive the range, and the class enumeration outlives everything.
 func TestCoverageShedPriority(t *testing.T) {
+	t.Parallel()
 	build := func(dense bool) [][]field {
 		var units [][]field
 		id := 40000
@@ -784,6 +800,7 @@ func TestCoverageShedPriority(t *testing.T) {
 // units are emitted verbatim unless
 // collapsing both summarizes and halves their bytes.
 func TestTinyClassesAreNotElided(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`{"orders":[`)
 	for i := 0; i < 40; i++ {
@@ -824,6 +841,7 @@ func TestTinyClassesAreNotElided(t *testing.T) {
 }
 
 func TestTinyCSVClassesAreNotElided(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("txn_id,order_id,state,amount\n")
 	for i := 0; i < 120; i++ {
@@ -845,6 +863,7 @@ func TestTinyCSVClassesAreNotElided(t *testing.T) {
 }
 
 func TestTinyLogClassesAreNotElided(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 60; i++ {
 		if i%9 == 4 {
@@ -868,6 +887,7 @@ func TestTinyLogClassesAreNotElided(t *testing.T) {
 // one, not run through the logfmt matcher that cannot see `"k":"v"`. Without this
 // the entire NDJSON event-stream class summarized to a bare count.
 func TestMalformedNDJSONSuffixDoesNotProduceJSONInvariants(t *testing.T) {
+	t.Parallel()
 	const event = `{"id":"event-123","state":"delivered"}`
 	if fields := lineFields([]byte(event)); len(fields) == 0 {
 		t.Fatal("valid fixture must expose JSON event fields")
@@ -880,6 +900,7 @@ func TestMalformedNDJSONSuffixDoesNotProduceJSONInvariants(t *testing.T) {
 }
 
 func TestNDJSONLinesSummarizeAsEvents(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 60; i++ {
 		for _, status := range []string{"attempted", "delivered"} {
@@ -907,6 +928,7 @@ func TestNDJSONLinesSummarizeAsEvents(t *testing.T) {
 // a field's absence as "it wasn't constant everywhere" is most of what the
 // marker is good for, so a summary that sheds must say that it did.
 func TestTrimmedSummaryDeclaresWhatItShed(t *testing.T) {
+	t.Parallel()
 	// Six constant fields, plus class-enumeration fields that compete for the
 	// same budget. Constants shed 4th of six kinds, so raising the number of
 	// enumerations squeezes them out one at a time.
@@ -977,6 +999,7 @@ func TestTrimmedSummaryDeclaresWhatItShed(t *testing.T) {
 // all. Such a field must leave the numeric track instead and be reported by a
 // form that counts every unit.
 func TestNonFiniteValuesLeaveTheNumericTrack(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name     string
 		values   []string
@@ -1025,6 +1048,7 @@ func TestNonFiniteValuesLeaveTheNumericTrack(t *testing.T) {
 // column's real extrema stopped being kept — the exact rows this function
 // exists to hold back from elision.
 func TestKeepNumericExtremaIgnoresNonFinite(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		values []string
@@ -1071,6 +1095,7 @@ func TestKeepNumericExtremaIgnoresNonFinite(t *testing.T) {
 // an elided row exceeds. Ordinary money and measurement columns must stay on
 // the numeric track regardless.
 func TestInvariantNumberRefusesUnorderableLiterals(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		value   string
 		numeric bool
@@ -1121,6 +1146,7 @@ func TestInvariantNumberRefusesUnorderableLiterals(t *testing.T) {
 // high-precision decimals must leave the numeric track entirely rather than
 // reach a marker as `name=min..max`.
 func TestInvariantHighPrecisionDecimalStatesNoNumericRange(t *testing.T) {
+	t.Parallel()
 	units := make([][]field, 0, 24)
 	for i := 0; i < 24; i++ {
 		units = append(units, []field{{name: "amount", value: fmt.Sprintf("123456789012345.%d", i+10)}})

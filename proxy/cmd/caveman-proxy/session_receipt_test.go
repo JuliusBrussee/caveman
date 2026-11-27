@@ -24,6 +24,7 @@ func (receiptTestAuth) Authenticate(context.Context, *http.Request) (gateway.Req
 }
 
 func TestChatGPTUsageReachesNativeReceipt(t *testing.T) {
+	t.Parallel()
 	for _, model := range []string{"gpt-6.1-sol", gateway.AutoModel} {
 		t.Run(model, func(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

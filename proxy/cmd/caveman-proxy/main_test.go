@@ -12,6 +12,7 @@ import (
 )
 
 func TestInitializeNativePersistenceCorruptCCRForcesRecordPassThrough(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	path := filepath.Join(home, "ccr.db")
 	if err := os.WriteFile(path, []byte("not a sqlite database"), 0o600); err != nil {
@@ -28,6 +29,7 @@ func TestInitializeNativePersistenceCorruptCCRForcesRecordPassThrough(t *testing
 }
 
 func TestInitializeNativePersistenceHealthyCCRRetainsRequestedMode(t *testing.T) {
+	t.Parallel()
 	home := t.TempDir()
 	cfg := config.Config{Mode: "compress"}
 	recovery, key := initializeNativePersistence(home, filepath.Join(home, "ccr.db"), &cfg, slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -41,6 +43,7 @@ func TestInitializeNativePersistenceHealthyCCRRetainsRequestedMode(t *testing.T)
 }
 
 func TestReadNativeHookPayloadReturnsBeforeEOF(t *testing.T) {
+	t.Parallel()
 	reader, writer := io.Pipe()
 	defer reader.Close()
 	defer writer.Close()
@@ -74,6 +77,7 @@ func TestReadNativeHookPayloadReturnsBeforeEOF(t *testing.T) {
 }
 
 func TestLearnRetroOptionsCarriesBothPassBudgets(t *testing.T) {
+	t.Parallel()
 	got := learnRetroOptions([]string{
 		"--retro",
 		"--behavior-budget-ms", "20000",
@@ -85,6 +89,7 @@ func TestLearnRetroOptionsCarriesBothPassBudgets(t *testing.T) {
 }
 
 func TestFirstPositionalDoesNotConsumeValueAfterBooleanFlag(t *testing.T) {
+	t.Parallel()
 	if got := firstPositional([]string{"--dry-run", "claude_md_weight:user"}); got != "claude_md_weight:user" {
 		t.Fatalf("boolean flag positional = %q", got)
 	}
@@ -94,6 +99,7 @@ func TestFirstPositionalDoesNotConsumeValueAfterBooleanFlag(t *testing.T) {
 }
 
 func TestCompatUpstreamsPublishesBuiltinAndUserMounts(t *testing.T) {
+	t.Parallel()
 	cfg := config.Config{Compat: map[string]config.CompatConfig{
 		"myprovider": {BaseURL: "http://127.0.0.1:4000", APIKeyEnv: "MYPROVIDER_API_KEY"},
 	}}

@@ -35,6 +35,7 @@ func warmStore(t *testing.T) *Store {
 }
 
 func TestSummaryDisclosesCacheWarms(t *testing.T) {
+	t.Parallel()
 	stats, err := warmStore(t).Summary()
 	if err != nil {
 		t.Fatalf("summary: %v", err)
@@ -45,6 +46,7 @@ func TestSummaryDisclosesCacheWarms(t *testing.T) {
 }
 
 func TestSessionUsageCountsNoWarmAsARequest(t *testing.T) {
+	t.Parallel()
 	u, err := warmStore(t).SessionUsage("sess-1")
 	if err != nil {
 		t.Fatal(err)
@@ -58,6 +60,7 @@ func TestSessionUsageCountsNoWarmAsARequest(t *testing.T) {
 }
 
 func TestWrapMeasuredCountsNoWarm(t *testing.T) {
+	t.Parallel()
 	m := warmStore(t).wrapMeasuredSince(time.Time{})
 	if m == nil || m.Requests != 1 {
 		t.Fatalf("wrap measured = %+v", m)
@@ -65,6 +68,7 @@ func TestWrapMeasuredCountsNoWarm(t *testing.T) {
 }
 
 func TestRequestOriginsCountNoWarm(t *testing.T) {
+	t.Parallel()
 	rows, err := warmStore(t).requestOrigins("t1")
 	if err != nil || len(rows) != 1 {
 		t.Fatalf("origins = %+v %v", rows, err)
@@ -75,6 +79,7 @@ func TestRequestOriginsCountNoWarm(t *testing.T) {
 }
 
 func TestExportSpansLeaveWarmsOut(t *testing.T) {
+	t.Parallel()
 	s := warmStore(t)
 	f, err := os.Create(filepath.Join(t.TempDir(), "spans.jsonl"))
 	if err != nil {
@@ -91,6 +96,7 @@ func TestExportSpansLeaveWarmsOut(t *testing.T) {
 }
 
 func TestStatsReportKeepsWarmSpendOutOfRequests(t *testing.T) {
+	t.Parallel()
 	report, err := warmStore(t).BuildStatsReport(StatsReportOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -107,6 +113,7 @@ func TestStatsReportKeepsWarmSpendOutOfRequests(t *testing.T) {
 }
 
 func TestRequestViewsLeaveWarmsOut(t *testing.T) {
+	t.Parallel()
 	s := warmStore(t)
 	stats, err := s.Summary()
 	if err != nil {

@@ -19,6 +19,7 @@ func show2(b []byte) string {
 // The compressor collapses them and emits its own marker. On a second pass
 // (or visually) this is indistinguishable from a real elision.
 func TestProbe2_RunOfMarkerLines(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	marker := "… caveman: 7 identical lines elided …"
 	in := []byte(strings.Repeat(marker+"\n", 5) + strings.Repeat("realdistinct padding line content here yes ok\n", 4))
@@ -40,6 +41,7 @@ func TestProbe2_RunOfMarkerLines(t *testing.T) {
 // the marker insertion created adjacency. Construct: A A A B A A A where after
 // collapse we get A <m> B A <m> ... can two markers ever become adjacent+identical?
 func TestProbe2_AdjacentMarkersAfterCollapse(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	// Two separate runs of the SAME line, separated by one differing line that is ALSO
 	// going to vanish? It can't vanish. But: runN-1 == runM-1 makes identical markers.
@@ -69,6 +71,7 @@ func TestProbe2_AdjacentMarkersAfterCollapse(t *testing.T) {
 // The compressor returns ok=true regardless; only the engine's TOKEN guard catches it.
 // Question: can a whole input be byte-LARGER yet token-SMALLER, or vice versa, falsely claimed?
 func TestProbe2_SingleShortRunGrowsWholeInput(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	// One short run of 3, everything else unique, padded over minBytes.
 	pad := strings.Repeat("unique padding line number to clear the byte floor here\n", 4)
@@ -87,6 +90,7 @@ func TestProbe2_SingleShortRunGrowsWholeInput(t *testing.T) {
 // same line with the same (runLen-1) are adjacent with the kept line dropped — impossible
 // since kept lines sit between markers. Confirm structurally.
 func TestProbe2_MarkerNeverFormsCollapsibleRun(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewRepetition()
 	A := "aaaa repeated payload one here padding\n"
 	B := "bbbb repeated payload two here padding\n"

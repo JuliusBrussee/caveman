@@ -25,6 +25,7 @@ const articleHTML = `<!doctype html>
 </body></html>`
 
 func TestHTMLExtractsArticleDropsBoilerplate(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewHTML()
 	out, ok := c.Compress([]byte(articleHTML))
 	if !ok {
@@ -49,6 +50,7 @@ func TestHTMLExtractsArticleDropsBoilerplate(t *testing.T) {
 }
 
 func TestHTMLDeterministic(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewHTML()
 	a, ok1 := c.Compress([]byte(articleHTML))
 	b, ok2 := c.Compress([]byte(articleHTML))
@@ -61,6 +63,7 @@ func TestHTMLDeterministic(t *testing.T) {
 }
 
 func TestHTMLLinkFarmBails(t *testing.T) {
+	t.Parallel()
 	// A nav/index page that is almost all links must bail (claim nothing) rather
 	// than emit a link dump as if it were an article.
 	var b strings.Builder
@@ -75,6 +78,7 @@ func TestHTMLLinkFarmBails(t *testing.T) {
 }
 
 func TestHTMLInlineTagsKeepWordBoundary(t *testing.T) {
+	t.Parallel()
 	doc := `<!doctype html><html><body><article>
 <h1>Pricing Headline Here For The Article Body</h1>
 <p>The price is <b>fifty</b><i>dollars</i> total, and you can <a href="/x">read the docs</a>here for more information about everything involved.</p>
@@ -91,6 +95,7 @@ func TestHTMLInlineTagsKeepWordBoundary(t *testing.T) {
 }
 
 func TestHTMLKeepsAllSections(t *testing.T) {
+	t.Parallel()
 	doc := `<!doctype html><html><body><main>
 <section><h1>INTRO_HEADLINE</h1><p>The introduction section has enough prose, with commas, to score, and it opens the piece with substance for the reader.</p></section>
 <section><p>The middle section continues the article with more sentences, commas, and the kind of body text the extractor is built to keep around.</p></section>
@@ -109,6 +114,7 @@ func TestHTMLKeepsAllSections(t *testing.T) {
 }
 
 func TestHTMLPreservesPreIndentation(t *testing.T) {
+	t.Parallel()
 	doc := "<!doctype html><html><body><article>" +
 		"<h1>Article With A Code Block Inside The Body Here</h1>" +
 		"<p>Here is an explanatory paragraph with commas, clauses, and enough text to score the article container well above threshold for the reader.</p>" +
@@ -124,6 +130,7 @@ func TestHTMLPreservesPreIndentation(t *testing.T) {
 }
 
 func TestHTMLNonDocumentBails(t *testing.T) {
+	t.Parallel()
 	if _, ok := compressors.NewHTML().Compress([]byte("just a tiny <b>fragment</b>")); ok {
 		t.Error("a tiny fragment with no real article must pass through")
 	}

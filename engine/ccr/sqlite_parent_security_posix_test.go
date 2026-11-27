@@ -10,6 +10,7 @@ import (
 )
 
 func TestPublishSQLiteFileFallsBackWhenHardLinksDenied(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	source := filepath.Join(dir, "temp")
 	target := filepath.Join(dir, "ccr.db")

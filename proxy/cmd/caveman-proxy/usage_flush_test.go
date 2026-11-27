@@ -10,6 +10,7 @@ import (
 // A receipt reads session usage only after the rows still being finished are
 // written: the flush lands the session's last row before the sum.
 func TestUsageAfterFlushWritesPendingRowsFirst(t *testing.T) {
+	t.Parallel()
 	spend, err := store.Open(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)

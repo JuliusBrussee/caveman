@@ -9,6 +9,7 @@ import (
 )
 
 func TestMCPSurfaceParsesObservedClaudeJSONShapesAndSharesPrefixWithoutAttribution(t *testing.T) {
+	t.Parallel()
 	cwd := t.TempDir()
 	croot := t.TempDir()
 	global := filepath.Join(t.TempDir(), ".claude.json")

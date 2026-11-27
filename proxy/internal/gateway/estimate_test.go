@@ -55,6 +55,7 @@ func newObserveTestServer(t *testing.T, upstream string, sink TelemetrySink, com
 // would_save_tokens accumulates the engine's estimate and would_save_usd is priced
 // (list-price eligible openai PAYG). Basis stays inferred.
 func TestObserveEstimateForwardsByteIdenticalAndRecordsWouldSave(t *testing.T) {
+	t.Parallel()
 	var gotUpstreamBody string
 	upstream := echoUpstream(t, &gotUpstreamBody)
 	defer upstream.Close()
@@ -116,6 +117,7 @@ func TestObserveEstimateForwardsByteIdenticalAndRecordsWouldSave(t *testing.T) {
 // TestObserveEstimateOffRecordsNothing proves record mode with observe-estimate off
 // (the default) records no would-have-saved figure even with an estimator wired.
 func TestObserveEstimateOffRecordsNothing(t *testing.T) {
+	t.Parallel()
 	var gotUpstreamBody string
 	upstream := echoUpstream(t, &gotUpstreamBody)
 	defer upstream.Close()
