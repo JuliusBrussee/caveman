@@ -12,3 +12,8 @@ packages:
   - "packages/subagent-tax"
   - "shrink"
   - "skills/caveman-learn"
+
+# Security floor for a transitive pin: @mastra/core 1.65.0 pins
+# @modelcontextprotocol/server 2.0.0 exactly; 2.3.0 closes its advisories (#1601).
+overrides:
+  "@mastra/core>@modelcontextprotocol/server": 2.3.0

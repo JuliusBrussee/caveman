@@ -22,7 +22,7 @@ try {
   pnpm(['pack', '--out', middleware], root);
   const consumer = join(directory, 'app'); await mkdir(consumer);
   await writeFile(join(consumer, 'package.json'), JSON.stringify({ private: true, type: 'module', packageManager, dependencies: {
-    '@caveman-ai/sdk': `file:${sdk}`, '@caveman-ai/middleware': `file:${middleware}`, ai: '7.0.94', '@ai-sdk/provider': '4.0.11', zod: '4.4.3',
+    '@caveman-ai/sdk': `file:${sdk}`, '@caveman-ai/middleware': `file:${middleware}`, ai: '7.0.94', '@ai-sdk/provider': '4.0.11', zod: '4.6.7',
     // @langchain/core without `langchain`: the model-only subpath must work alone.
     '@langchain/core': '1.2.9', typescript: '5.9.3',
   // The middleware's own ^SDK range must resolve to this tarball too, not an older registry release.
