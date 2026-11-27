@@ -22,6 +22,7 @@ func noisyLog() []byte {
 }
 
 func TestLogKeepsErrorsDropsNoise(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewLog()
 	out, ok := c.Compress(noisyLog())
 	if !ok {
@@ -42,6 +43,7 @@ func TestLogKeepsErrorsDropsNoise(t *testing.T) {
 }
 
 func TestLogKeepsSyslogEmergencySeverities(t *testing.T) {
+	t.Parallel()
 	var input strings.Builder
 	input.WriteString("INFO starting\n")
 	for i := 0; i < 40; i++ {
@@ -69,6 +71,7 @@ func TestLogKeepsSyslogEmergencySeverities(t *testing.T) {
 }
 
 func TestLogIdempotent(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewLog()
 	first, ok := c.Compress(noisyLog())
 	if !ok {
@@ -81,6 +84,7 @@ func TestLogIdempotent(t *testing.T) {
 }
 
 func TestLogPreservesCRLF(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewLog()
 	var b strings.Builder
 	b.WriteString("[INFO] a\r\n")
@@ -101,6 +105,7 @@ func TestLogPreservesCRLF(t *testing.T) {
 }
 
 func TestLogInvalidUTF8PassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewLog()
 	if _, ok := c.Compress([]byte{0xff, 0xfe, 0x00, 0x01, '\n', 0xff}); ok {
 		t.Error("invalid UTF-8 must pass through (!ok)")
@@ -108,6 +113,7 @@ func TestLogInvalidUTF8PassesThrough(t *testing.T) {
 }
 
 func TestLogTooShortPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewLog()
 	if _, ok := c.Compress([]byte("[INFO] one\n[INFO] two\n")); ok {
 		t.Error("a tiny log must pass through (!ok)")
@@ -115,6 +121,7 @@ func TestLogTooShortPassesThrough(t *testing.T) {
 }
 
 func TestLogQueryKeepsRelevantNonErrorLine(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("[INFO] starting\n")
 	for i := 0; i < 50; i++ {

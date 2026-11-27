@@ -17,6 +17,7 @@ import (
 )
 
 func TestMiddlewareQuotaCountersPersistAndRollback(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareQuotaCountersPersistAndRollback)
 }
 
@@ -98,6 +99,7 @@ func testMiddlewareQuotaCountersPersistAndRollback(t *testing.T, s middlewareBac
 }
 
 func TestMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone)
 }
 
@@ -179,6 +181,7 @@ func testMiddlewareExpiryReclaimsPayloadAndKeepsTypedTombstone(t *testing.T, s m
 // 100,000-row admission cap stayed tripped forever once a few thousand sessions
 // had elapsed. Fill past the cap with elapsed scopes and prove expiry drains it.
 func TestMiddlewareExpiryReclaimsCapacityFromElapsedScopes(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareExpiryReclaimsCapacityFromElapsedScopes)
 }
 
@@ -229,6 +232,7 @@ INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'sco
 // the same window an elapsed scope's tombstone gets, and only then reclaim:
 // neither earlier (the replay guarantee) nor never (the capacity leak this fixes).
 func TestMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareRevocationTombstoneSurvivesGraceThenReclaims)
 }
 
@@ -288,6 +292,7 @@ func testMiddlewareRevocationTombstoneSurvivesGraceThenReclaims(t *testing.T, s 
 // for a grace period: every revoked session's tombstones counted against the
 // row cap. They count for nothing now, and Expire still reclaims them.
 func TestMiddlewareExpiryReclaimsCapacityFromRevokedScopes(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareExpiryReclaimsCapacityFromRevokedScopes)
 }
 
@@ -346,6 +351,7 @@ INSERT INTO middleware_choices(scope,id,payload,grant_id,ccr_handle) SELECT 'sco
 // payloads become collectable would collapse the revocation grace to zero on
 // this path while leaving it at a full week on the other.
 func TestMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod)
 }
 
@@ -420,6 +426,7 @@ func testMiddlewareRevokedGrantAnswersDeletedThroughItsGracePeriod(t *testing.T,
 // the same 128 and the other scopes kept their payload until grace ended
 // (reviewer repro: 300 scopes, 50 passes, 172 choices and plans left).
 func TestMiddlewareExpiryPurgesEveryElapsedScopeInsideGrace(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareExpiryPurgesEveryElapsedScopeInsideGrace)
 }
 
@@ -450,6 +457,7 @@ INSERT INTO middleware_plans(scope,id,digest,payload,expires_at) SELECT 'scope-'
 
 // A principal at its quota gets capacity; another principal is unaffected.
 func TestMiddlewarePrincipalQuotaIsolatesPrincipals(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewarePrincipalQuotaIsolatesPrincipals)
 }
 
@@ -482,6 +490,7 @@ func testMiddlewarePrincipalQuotaIsolatesPrincipals(t *testing.T, s middlewareBa
 }
 
 func TestMiddlewareDeleteCountsAndRemovesOriginals(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareDeleteCountsAndRemovesOriginals)
 }
 
@@ -530,6 +539,7 @@ func testMiddlewareDeleteCountsAndRemovesOriginals(t *testing.T, s middlewareBac
 // under the new triggers, scopes get a max-retention clock, and legacy CCR
 // grants keep resolving.
 func TestMiddlewareMigratesProtocol10Store(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "store.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -617,6 +627,7 @@ INSERT INTO middleware_originals VALUES ('auth','digest');`); err != nil {
 // GO-7: a protocol 1.0 credit row that gets its body filled belongs to the
 // principal that filled it, so the body counts against that principal's quota.
 func TestMiddlewareFilledCreditCountsAgainstThePrincipal(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		ctx := context.Background()
 		s.exec(t, `INSERT INTO middleware_originals(authority,digest) VALUES ('auth','one'),('auth','two')`)
@@ -644,6 +655,7 @@ func TestMiddlewareFilledCreditCountsAgainstThePrincipal(t *testing.T) {
 // S7: the WAL and shared-memory files hold the same plaintext originals as the
 // database, so they get its 0600 mode, not the umask's.
 func TestSQLiteSidecarFilesArePrivate(t *testing.T) {
+	t.Parallel()
 	if runtime.GOOS == "windows" {
 		t.Skip("POSIX file modes")
 	}
@@ -678,6 +690,7 @@ func TestSQLiteSidecarFilesArePrivate(t *testing.T) {
 // backfilled from each choice's payload, so the first sweep after the upgrade
 // does not reclaim originals that live choices still reference.
 func TestMiddlewareMigrationBackfillsChoiceOriginals(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		digest := strings.Repeat("ab", 32)
 		s.exec(t, `DROP INDEX middleware_choices_original`)
@@ -707,6 +720,7 @@ func TestMiddlewareMigrationBackfillsChoiceOriginals(t *testing.T) {
 // originals with a body it deleted; credit-only rows go uncounted, in their
 // own bounded step.
 func TestMiddlewarePurgeResumesAcrossBatches(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		ctx := context.Background()
 		const n, limit = 300, 128
@@ -779,6 +793,7 @@ func TestMiddlewarePurgeResumesAcrossBatches(t *testing.T) {
 // largest limit the sweep reaches. The sweep reports more while another
 // unfinished delete waits, and the backlog gauge counts both until done.
 func TestMiddlewareSweepFinishesAnAbandonedPurge(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		ctx := context.Background()
 		const n, limit = 600, 1024
@@ -848,6 +863,7 @@ func TestMiddlewareSweepFinishesAnAbandonedPurge(t *testing.T) {
 // The sweep and the backlog gauge look for unfinished deletes on every pass:
 // an index range, never a scan of a grace period's worth of tombstones.
 func TestSQLiteRevokedUnpurgedLookupUsesTheIndex(t *testing.T) {
+	t.Parallel()
 	db := sqliteBackend(t).MiddlewareStore.(*Store).db
 	for _, query := range []string{`SELECT count(*)>0 FROM (` + nextRevoked + `) n`, middlewareBacklog("?1")} {
 		rows, err := db.Query(`EXPLAIN QUERY PLAN `+query, 60)
@@ -873,6 +889,7 @@ func TestSQLiteRevokedUnpurgedLookupUsesTheIndex(t *testing.T) {
 // A plan is replaced only once it has expired: a live one is never
 // overwritten, whatever its writer last read.
 func TestMiddlewareSavePlanReplacesOnlyAnExpiredPlan(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		save := func(digest string, now int64) error {
 			return s.WithMiddleware(context.Background(), func(tx *MiddlewareTx) error {
@@ -897,6 +914,7 @@ func TestMiddlewareSavePlanReplacesOnlyAnExpiredPlan(t *testing.T) {
 // A principal at its row quota frees it by deleting a session: tombstones do
 // not count.
 func TestMiddlewareDeleteFreesAPrincipalsQuota(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		ctx := context.Background()
 		session := func(authority string) error {
@@ -930,6 +948,7 @@ func TestMiddlewareDeleteFreesAPrincipalsQuota(t *testing.T) {
 // Counters written by accounting that counted tombstones (or drifted any other
 // way) are recomputed once, when the store is upgraded.
 func TestMiddlewareUpgradeRecountsUsage(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		ctx := context.Background()
 		if err := s.WithMiddleware(ctx, func(tx *MiddlewareTx) error {
@@ -971,6 +990,7 @@ func TestMiddlewareUpgradeRecountsUsage(t *testing.T) {
 // Receipts are deduplicated on their id: a retry with another body stores
 // nothing and succeeds.
 func TestMiddlewareRetriedReceiptKeepsTheFirst(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		ctx := context.Background()
 		for _, digest := range []string{"first", "second"} {
@@ -990,6 +1010,7 @@ func TestMiddlewareRetriedReceiptKeepsTheFirst(t *testing.T) {
 // checks CREATE on the schema even for CREATE TABLE IF NOT EXISTS on an
 // existing table, so InitMiddleware must not run DDL on a current store.
 func TestPostgresMiddlewareRestartsWithoutCreatePrivilege(t *testing.T) {
+	t.Parallel()
 	base := os.Getenv("CAVEMAN_TEST_POSTGRES_URL")
 	if base == "" {
 		t.Skip("CAVEMAN_TEST_POSTGRES_URL is unset")

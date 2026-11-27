@@ -326,8 +326,7 @@ function hasCmd(cmd) {
     if (process.platform === 'win32') {
       return PORTABLE.resolveWindowsCommand(cmd, process.env) !== null;
     }
-    const r = child_process.spawnSync('sh', ['-c', `command -v ${shellEscape(cmd)}`], { stdio: 'ignore' });
-    return r.status === 0;
+    return PORTABLE.resolvePosixCommand(cmd, process.env) !== null;
   } catch (_) { return false; }
 }
 
@@ -2217,7 +2216,9 @@ function newerBundledCli() {
     const bin = path.join(path.dirname(manifest), pkg.bin.caveman);
     const want = /^(\d+)\.(\d+)\.(\d+)/.exec(pkg.version || '');
     // A foreign `caveman` that never answers must not stall uninstall.
-    const probe = captureSpawn('caveman', ['--version'], { timeout: 10000, killSignal: 'SIGKILL' });
+    const rawProbeTimeout = Number(process.env.CAVEMAN_PROBE_TIMEOUT_MS);
+    const probeTimeout = Number.isInteger(rawProbeTimeout) && rawProbeTimeout > 0 && rawProbeTimeout <= 2147483647 ? rawProbeTimeout : 10000;
+    const probe = captureSpawn('caveman', ['--version'], { timeout: probeTimeout, killSignal: 'SIGKILL' });
     const have = /(\d+)\.(\d+)\.(\d+)/.exec(probe.stdout || '');
     if (!want || !have || !spawnOk(probe) || !fs.existsSync(bin)) return null;
     for (let i = 1; i <= 3; i++) {

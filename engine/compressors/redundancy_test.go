@@ -42,6 +42,7 @@ func assertNothingElided(t *testing.T, input, out []byte, ok bool) {
 // A document of distinct records must survive intact. Eliding it deletes part of
 // the answer and can force the agent to recover the source repeatedly.
 func TestElisionRefusesDocumentOfDistinctRecords(t *testing.T) {
+	t.Parallel()
 	input := bibliographyLike()
 	out, ok := compressors.NewText().Compress(input)
 	assertNothingElided(t, input, out, ok)
@@ -51,6 +52,7 @@ func TestElisionRefusesDocumentOfDistinctRecords(t *testing.T) {
 // payload that is mostly repetition still elides, and the repeated class stays
 // visible through one surviving representative.
 func TestElisionKeepsOneRepresentativeOfEachClass(t *testing.T) {
+	t.Parallel()
 	var sections []string
 	sections = append(sections, "# Incident Report", "Summary: checkout latency increased.")
 	for i := 0; i < 18; i++ {
@@ -84,6 +86,7 @@ func TestElisionKeepsOneRepresentativeOfEachClass(t *testing.T) {
 // despite them: two log lines differing only in a timestamp and a request id are
 // the same class, so all but the first elide.
 func TestElisionTreatsDigitVaryingLinesAsOneClass(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 200; i++ {
 		fmt.Fprintf(&b, "2026-07-30T10:%02d:%02dZ level=INFO service=catalog request=req-%04d status=200 message=completed\n", i/60, i%60, i)
@@ -99,6 +102,7 @@ func TestElisionTreatsDigitVaryingLinesAsOneClass(t *testing.T) {
 
 // Distinct log lines are a document, not a stream, and must survive.
 func TestElisionRefusesLogOfDistinctLines(t *testing.T) {
+	t.Parallel()
 	lines := []string{
 		"2026-07-30T10:00:01Z level=INFO starting migration of the accounts table",
 		"2026-07-30T10:00:02Z level=INFO connected to primary replica in frankfurt",
@@ -122,6 +126,7 @@ func TestElisionRefusesLogOfDistinctLines(t *testing.T) {
 // different are a list of distinct entities, and dropping most of them deletes
 // the answer to any question about the list.
 func TestJSONElisionRefusesArrayOfDistinctRecords(t *testing.T) {
+	t.Parallel()
 	input := []byte(`{"results":[` +
 		`{"id":0,"name":"alice","team":"platform"},{"id":1,"name":"bob","team":"payments"},` +
 		`{"id":2,"name":"carol","team":"identity"},{"id":3,"name":"dan","team":"search"},` +
@@ -136,6 +141,7 @@ func TestJSONElisionRefusesArrayOfDistinctRecords(t *testing.T) {
 // A uniform array of the same event repeated is the shape elision exists for, and
 // it must keep working.
 func TestJSONElisionStillCollapsesRepeatedRecords(t *testing.T) {
+	t.Parallel()
 	rows := make([]string, 0, 200)
 	for i := 0; i < 200; i++ {
 		rows = append(rows, fmt.Sprintf(`{"seq":%d,"status":"healthy","region":"eu-west-1"}`, i))
@@ -170,6 +176,7 @@ func BenchmarkElisionGateOnLargeDistinctPayload(b *testing.B) {
 // gate were order- or map-dependent the upstream prefix would rotate and every
 // turn would miss the provider cache the previous turn paid to create.
 func TestElisionIsDeterministic(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 120; i++ {
 		fmt.Fprintf(&b, "worker-%02d processed batch %04d in %dms with status ok\n", i%7, i, 12+i%40)

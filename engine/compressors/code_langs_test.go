@@ -27,6 +27,7 @@ func elides(t *testing.T, src, mustKeep string) []byte {
 }
 
 func TestCodeRust(t *testing.T) {
+	t.Parallel()
 	elides(t, `use std::collections::HashMap;
 
 pub fn process(items: Vec<String>) -> usize {
@@ -43,6 +44,7 @@ pub fn process(items: Vec<String>) -> usize {
 }
 
 func TestCodeJava(t *testing.T) {
+	t.Parallel()
 	elides(t, `package com.example;
 
 import java.util.List;
@@ -61,6 +63,7 @@ public class Processor {
 }
 
 func TestCodeC(t *testing.T) {
+	t.Parallel()
 	elides(t, `#include <stdio.h>
 
 int process(int n) {
@@ -74,6 +77,7 @@ int process(int n) {
 }
 
 func TestCodeCpp(t *testing.T) {
+	t.Parallel()
 	elides(t, `#include <vector>
 #include <string>
 
@@ -89,6 +93,7 @@ int Process(const std::vector<std::string>& items) {
 }
 
 func TestCodeCommentRemove(t *testing.T) {
+	t.Parallel()
 	src := `package main
 
 // PackageDoc explains the package in a long comment that we want gone.
@@ -120,6 +125,7 @@ func Run() int {
 }
 
 func TestCodePythonDocstringRemove(t *testing.T) {
+	t.Parallel()
 	src := `"""Module docstring that should be removable."""
 import os
 
@@ -143,6 +149,7 @@ class Worker:
 }
 
 func TestCodeCommentRemovePreservesDirectives(t *testing.T) {
+	t.Parallel()
 	// Directive comments carry build/embed/linkage semantics that survive a
 	// re-parse — CommentRemove must keep them while still dropping prose.
 	src := `//go:build linux && amd64
@@ -172,6 +179,7 @@ func F() int { return 1 }
 }
 
 func TestCodePythonDocstringRejectsFStringAndBytes(t *testing.T) {
+	t.Parallel()
 	// A leading f-string (may have side effects) or bytes literal is NOT a
 	// docstring and must not be removed.
 	src := `f"""evaluated {1 + 1} expression, not a docstring"""
@@ -190,6 +198,7 @@ def run():
 }
 
 func TestCodePythonDocstringOnlyModulePreserved(t *testing.T) {
+	t.Parallel()
 	// A module whose ONLY statement is a docstring must not be emptied (would be
 	// invalid). Removing it is guarded; the compressor should pass through.
 	src := strings.Repeat(`"""Only a docstring lives here, nothing else at all in this module file."""
@@ -203,6 +212,7 @@ func TestCodePythonDocstringOnlyModulePreserved(t *testing.T) {
 // A React component is TSX, not TypeScript: the TypeScript grammar stops at the
 // first JSX element and the file used to pass through untouched.
 func TestCodeTSXReactComponent(t *testing.T) {
+	t.Parallel()
 	out := elides(t, `import { useState, useEffect } from "react";
 import type { Item } from "./types";
 

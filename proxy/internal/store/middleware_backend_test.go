@@ -6,11 +6,14 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 )
+
+var postgresTestSchemaSeq atomic.Uint64
 
 // middlewareBackend is one middleware store under test, with raw SQL for seeding
 // and assertions. Seeds are written in the SQL both dialects accept.
@@ -113,7 +116,7 @@ func postgresTestSchema(t *testing.T, base string) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	schema := fmt.Sprintf("mw_test_%d", time.Now().UnixNano())
+	schema := fmt.Sprintf("mw_test_%d_%d", time.Now().UnixNano(), postgresTestSchemaSeq.Add(1))
 	if _, err := admin.Exec(ctx, "CREATE SCHEMA "+schema); err != nil {
 		t.Fatal(err)
 	}

@@ -31,11 +31,7 @@ jobs:
       - name: Installer test suite
         run: node --test tests/installer/*.test.mjs tests/hooks/*.test.mjs
       - name: Standalone hook/tool tests
-        run: |
-          for f in tests/test_*.js; do
-            echo "== $f"
-            node "$f"
-          done
+        run: node --test tests/test_*.js
 
   # The Python suites run on ubuntu in engine-ci's root-surfaces job and on
   # macOS below; no separate ubuntu Python job here.

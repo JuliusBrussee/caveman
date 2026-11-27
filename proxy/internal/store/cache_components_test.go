@@ -152,6 +152,7 @@ func assertComponentsOutsideRequestsRow(t *testing.T, s *Store, want map[string]
 }
 
 func TestRecordStoresCacheComponentsOutsideRequestsRow(t *testing.T) {
+	t.Parallel()
 	s := openEvidenceStore(t)
 	want := map[string]string{"with": componentList(300, 1), "without": ""}
 	s.Record(evidenceRow("with", want["with"]))
@@ -160,6 +161,7 @@ func TestRecordStoresCacheComponentsOutsideRequestsRow(t *testing.T) {
 }
 
 func TestRecordBatchStoresCacheComponentsOutsideRequestsRow(t *testing.T) {
+	t.Parallel()
 	s := openEvidenceStore(t)
 	want := map[string]string{"b1": componentList(5, 2), "b2": "", "b3": componentList(1024, 3)}
 	s.RecordBatch([]gateway.RequestRecord{evidenceRow("b1", want["b1"]), evidenceRow("b2", ""), evidenceRow("b3", want["b3"])})
@@ -173,6 +175,7 @@ func TestRecordBatchStoresCacheComponentsOutsideRequestsRow(t *testing.T) {
 // cannot be inserted fails the batch; every other row then goes through Record
 // and must land in the same shape.
 func TestRecordBatchFallbackStoresCacheComponentsOutsideRequestsRow(t *testing.T) {
+	t.Parallel()
 	s := openEvidenceStore(t)
 	if _, err := s.db.Exec(`CREATE TRIGGER poison_row BEFORE INSERT ON requests WHEN NEW.request_id = 'poison'
 		BEGIN SELECT RAISE(ABORT, 'poison row'); END`); err != nil {
@@ -196,6 +199,7 @@ func TestRecordBatchFallbackStoresCacheComponentsOutsideRequestsRow(t *testing.T
 // TestRefusedComponentListIsUnavailable: sanitizeRequestRecord blanks a list it
 // refuses, so the stored row has no list and the evidence says so.
 func TestRefusedComponentListIsUnavailable(t *testing.T) {
+	t.Parallel()
 	s := openEvidenceStore(t)
 	refused := evidenceRow("refused", strings.Repeat("z", 64))
 	s.Record(refused)
@@ -257,6 +261,7 @@ func migratedMark(t *testing.T, s *Store) int64 {
 }
 
 func TestMigrateMovesLegacyComponentListsOutOfRequestsRows(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "caveman.db")
 	s, err := Open(path, nil)
 	if err != nil {
@@ -338,6 +343,7 @@ func TestMigrateMovesLegacyComponentListsOutOfRequestsRows(t *testing.T) {
 }
 
 func TestExpireCacheComponentsKeepsAccounting(t *testing.T) {
+	t.Parallel()
 	s := openEvidenceStore(t)
 	lists := map[string]string{"fresh": componentList(20, 11), "stale": componentList(20, 12)}
 	fresh := evidenceRow("fresh", lists["fresh"])
@@ -368,6 +374,7 @@ func TestExpireCacheComponentsKeepsAccounting(t *testing.T) {
 }
 
 func TestCacheComponentMaintenanceStopsWithContext(t *testing.T) {
+	t.Parallel()
 	s := openEvidenceStore(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan struct{})

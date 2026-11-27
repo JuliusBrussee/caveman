@@ -8,6 +8,7 @@ import (
 )
 
 func TestClassifyAuthModeTable(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		h    http.Header
@@ -35,6 +36,7 @@ func TestClassifyAuthModeTable(t *testing.T) {
 }
 
 func TestClassifyResolvedAuthModeUsesConfiguredCredential(t *testing.T) {
+	t.Parallel()
 	if got := ClassifyResolvedAuthMode(http.Header{}, providers.Credential{Key: "sk-ant-oat-configured"}); got != AuthModeSubscription {
 		t.Fatalf("configured subscription = %s", got)
 	}
@@ -47,6 +49,7 @@ func TestClassifyResolvedAuthModeUsesConfiguredCredential(t *testing.T) {
 }
 
 func TestClassifyResolvedAuthModeBedrockCredentialsArePAYG(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name       string
 		header     http.Header

@@ -6,6 +6,7 @@ import (
 )
 
 func TestRereadFloorExcludesFirstReadAndNormalizesOnePath(t *testing.T) {
+	t.Parallel()
 	tracker := newReadActivityTracker()
 	events := []turnEvent{
 		{Repo: "/repo", ToolCalls: []turnToolCall{{Name: "Read", InputSummary: "/repo/a.go", OutputText: strings.Repeat("x", 4_000)}}},

@@ -11,6 +11,7 @@ import (
 // (⌈w/28⌉ × ⌈h/28⌉, capped) against Anthropic's own worked examples, with no
 // safety margin applied so the geometry is pinned exactly.
 func TestAnthropicImageTokensWorkedExamples(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		w, h int
@@ -37,6 +38,7 @@ func TestAnthropicImageTokensWorkedExamples(t *testing.T) {
 
 // TestAnthropicImageTokensEdges pins the degenerate inputs and the cap boundary.
 func TestAnthropicImageTokensEdges(t *testing.T) {
+	t.Parallel()
 	if got := AnthropicImageTokens(0, 728, StandardPixelTier); got != 0 {
 		t.Fatalf("zero width = %d, want 0", got)
 	}
@@ -59,6 +61,7 @@ func TestAnthropicImageTokensEdges(t *testing.T) {
 // TestImageCostSafetyMarginApplication asserts the 1.10 margin is applied on
 // top of the raw patch tokens, tested separately from the raw geometry.
 func TestImageCostSafetyMarginApplication(t *testing.T) {
+	t.Parallel()
 	raw := AnthropicImageTokens(1568, 728, StandardPixelTier) // 1456
 	if raw != 1456 {
 		t.Fatalf("raw = %d, want 1456", raw)

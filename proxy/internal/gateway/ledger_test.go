@@ -24,6 +24,7 @@ func warm(l *sessionLedger, session string, lv lever, calls, tokens int) {
 }
 
 func TestLedgerIsInertWithoutASessionID(t *testing.T) {
+	t.Parallel()
 	l := newSessionLedger()
 	for i := 0; i < tripwireStrikesToFreeze+2; i++ {
 		if froze := l.Observe("", []lever{leverToolSchemaStrip}, creation(10_000_000)); froze != nil {
@@ -44,6 +45,7 @@ func TestLedgerIsInertWithoutASessionID(t *testing.T) {
 // TestLedgerFreezesAfterThreeStrikes walks the whole tripwire: a quiet baseline,
 // three anomalous calls, the freeze, and the fail-open consequence.
 func TestLedgerFreezesAfterThreeStrikes(t *testing.T) {
+	t.Parallel()
 	l := newSessionLedger()
 	warm(l, "s1", leverToolSchemaStrip, 4, 1_000)
 
@@ -88,6 +90,7 @@ func TestLedgerFreezesAfterThreeStrikes(t *testing.T) {
 // alone: a huge ratio under the floor is noise, and a huge absolute number that
 // matches the session's own normal is just how this session bills.
 func TestLedgerRequiresBothThresholds(t *testing.T) {
+	t.Parallel()
 	t.Run("under the absolute floor", func(t *testing.T) {
 		l := newSessionLedger()
 		warm(l, "s", leverBreakpointPlan, 4, 10)
@@ -114,6 +117,7 @@ func TestLedgerRequiresBothThresholds(t *testing.T) {
 // request had to pay to re-cache the prefix it produced. A spike on a request
 // whose predecessor ran no lever belongs to the traffic, not to us.
 func TestLedgerJudgesThePreviousRequestsLevers(t *testing.T) {
+	t.Parallel()
 	l := newSessionLedger()
 	warm(l, "s", leverToolSchemaStrip, 4, 1_000)
 	// Every spike is preceded by a request with no lever active.
@@ -136,6 +140,7 @@ func TestLedgerJudgesThePreviousRequestsLevers(t *testing.T) {
 // mints a fresh session per request cannot grow it without limit — and the
 // session still in use survives the churn.
 func TestLedgerEvictsLeastRecentlyUsed(t *testing.T) {
+	t.Parallel()
 	l := newSessionLedger()
 	l.Observe("keeper", []lever{leverBreakpointPlan}, creation(1_000))
 
@@ -163,6 +168,7 @@ func TestLedgerEvictsLeastRecentlyUsed(t *testing.T) {
 // It is the fail-open direction, and it is bounded by the cap being far larger
 // than any real operator's concurrent session count.
 func TestLedgerEvictionForgetsAFreeze(t *testing.T) {
+	t.Parallel()
 	l := newSessionLedger()
 	warm(l, "victim", leverBreakpointPlan, 4, 1_000)
 	spike := creation(10 * tripwireCacheCreationFloorTokens)
@@ -184,6 +190,7 @@ func TestLedgerEvictionForgetsAFreeze(t *testing.T) {
 }
 
 func TestLedgerTracksSessionTotals(t *testing.T) {
+	t.Parallel()
 	l := newSessionLedger()
 	l.Observe("s", nil, providers.UsageObservation{InputTokens: 100, CachedInputTokens: 60, CacheCreationInputTokens: 10})
 	l.Observe("s", nil, providers.UsageObservation{InputTokens: 200, CachedInputTokens: 150, CacheCreationInputTokens: 20})
@@ -201,6 +208,7 @@ func TestLedgerTracksSessionTotals(t *testing.T) {
 // TestLedgerNilReceiverIsPermissive: a Server built without a ledger must not
 // take a lever away or panic. The tripwire only ever subtracts capability.
 func TestLedgerNilReceiverIsPermissive(t *testing.T) {
+	t.Parallel()
 	var l *sessionLedger
 	if !l.LeverAllowed("s", leverBreakpointPlan) {
 		t.Fatal("a nil ledger denied a lever")

@@ -6,6 +6,7 @@ import (
 )
 
 func TestPracticeIDForSink(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		sinkID string
 		want   string
@@ -38,6 +39,7 @@ func TestPracticeIDForSink(t *testing.T) {
 }
 
 func TestSinkPatternsForPracticeID(t *testing.T) {
+	t.Parallel()
 	if got, want := sinkPatternsForPracticeID("context-compression"), []string{
 		"claude_md_sections:*",
 		"claude_md_weight:*",
@@ -52,6 +54,7 @@ func TestSinkPatternsForPracticeID(t *testing.T) {
 }
 
 func TestGeneratedLearnSinksCarryPracticeIDOrHonestEmpty(t *testing.T) {
+	t.Parallel()
 	cfg := configScan{
 		ClaudeMDUser: &ConfigSnapshot{
 			Scope:  "user",

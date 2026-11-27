@@ -7,6 +7,7 @@ import (
 )
 
 func TestRepositoryMapDedupedAcrossSessions(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -88,6 +89,7 @@ func TestRepositoryMapDedupedAcrossSessions(t *testing.T) {
 }
 
 func TestNonRepositoryMapTypesStillStoreFullCopyPerSession(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -134,6 +136,7 @@ func TestNonRepositoryMapTypesStillStoreFullCopyPerSession(t *testing.T) {
 // involved. On the reporter's db that is 21 rows collapsing to 4 distinct
 // content hashes.
 func TestRepositoryMapDedupedAcrossRepositoryStates(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -199,6 +202,7 @@ func TestRepositoryMapDedupedAcrossRepositoryStates(t *testing.T) {
 // than an empty blob (proxy/internal/nativeruntime/receipt.go unmarshals
 // object.Data to count repository files).
 func TestRepositoryMapDedupSurvivesSessionListing(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)

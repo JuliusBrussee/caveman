@@ -6,6 +6,7 @@ import (
 )
 
 func TestDecodeTOONFailsClosedOnImpossibleCountsAndDuplicateKeys(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{
 		"rows[1000000000]{id}:\n  1",
 		"rows[1]{id,id}:\n  1,2",
@@ -18,6 +19,7 @@ func TestDecodeTOONFailsClosedOnImpossibleCountsAndDuplicateKeys(t *testing.T) {
 }
 
 func TestParseJSONTOONRejectsDuplicateKeys(t *testing.T) {
+	t.Parallel()
 	for _, input := range []string{
 		`{"id":0,"id":""}`,
 		`{"rows":[{"id":0,"id":""}]}`,

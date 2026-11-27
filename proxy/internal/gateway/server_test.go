@@ -90,6 +90,7 @@ func newStandaloneTestServer(t *testing.T, upstream string, rc RequestContext, s
 // --- tests --------------------------------------------------------------------
 
 func TestHealthReadyIdentifiesCavemanProxyRuntime(t *testing.T) {
+	t.Parallel()
 	srv := New(Config{Adapters: []providers.Adapter{openai.New("https://api.openai.com")}})
 	rec := httptest.NewRecorder()
 	srv.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/health/ready", nil))
@@ -117,6 +118,7 @@ func TestHealthReadyIdentifiesCavemanProxyRuntime(t *testing.T) {
 // byte-for-byte, no optimizer is applied, and one truthful spend row is recorded
 // with a positive cost labeled `inferred` (never `verified`).
 func TestRecordModePassThrough(t *testing.T) {
+	t.Parallel()
 	const reqBody = `{"model":"gpt-5.5","input":"hello"}`
 	const respBody = `{"id":"resp_stub","object":"response","model":"gpt-5.5","output":[{"type":"message","content":[{"type":"output_text","text":"hello"}]}],"usage":{"input_tokens":1000,"output_tokens":120,"total_tokens":1120,"input_tokens_details":{"cached_tokens":700}}}`
 
@@ -182,6 +184,7 @@ func TestRecordModePassThrough(t *testing.T) {
 }
 
 func TestExplicitPassThroughSuppressesProviderNativeTransform(t *testing.T) {
+	t.Parallel()
 	const requestBody = `{"model":"gpt-5.5","input":"original"}`
 	var upstreamBody string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +223,7 @@ func TestExplicitPassThroughSuppressesProviderNativeTransform(t *testing.T) {
 // buffering the client copy: time-to-first-byte is a real positive value below
 // total latency, and usage is parsed from the final stream event.
 func TestRoundTripStreamTTFB(t *testing.T) {
+	t.Parallel()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "text/event-stream")
 		w.Header().Set("x-request-id", "upstream-stream-1")
@@ -262,6 +266,7 @@ func TestRoundTripStreamTTFB(t *testing.T) {
 // the proxy unprefixed: a bare POST /v1/messages routes to Anthropic, forwards to
 // {base}/v1/messages with no prefix trimmed, and lands a truthful-spend row.
 func TestBareAnthropicRoute(t *testing.T) {
+	t.Parallel()
 	const respBody = `{"id":"msg_1","type":"message","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":1000,"output_tokens":50}}`
 	var gotPath string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -327,6 +332,7 @@ func TestBareAnthropicRoute(t *testing.T) {
 // mode, when the optimizer step errors, the proxy forwards the ORIGINAL request
 // bytes unchanged with HTTP 200 — it never returns the managed loop's HTTP 400.
 func TestTransformErrorFailsOpen(t *testing.T) {
+	t.Parallel()
 	const reqBody = `{"model":"gpt-5.5","input":"hello"}`
 	const respBody = `{"id":"r","model":"gpt-5.5","usage":{"input_tokens":10,"output_tokens":5}}`
 	var gotUpstreamBody string
@@ -373,6 +379,7 @@ func TestTransformErrorFailsOpen(t *testing.T) {
 // to "unlabeled-agent" when the header is absent. This is the standalone half of
 // the per-agent attribution the managed gateway already records.
 func TestAgentAttribution(t *testing.T) {
+	t.Parallel()
 	const respBody = `{"id":"resp_stub","object":"response","model":"gpt-5.5","usage":{"input_tokens":10,"output_tokens":5}}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("content-type", "application/json")
@@ -406,6 +413,7 @@ func TestAgentAttribution(t *testing.T) {
 }
 
 func TestAgentPathAttribution(t *testing.T) {
+	t.Parallel()
 	const reqBody = `{"model":"claude-sonnet-4-6","messages":[{"role":"user","content":"hi"}]}`
 	const respBody = `{"id":"msg_1","type":"message","model":"claude-sonnet-4-6","content":[{"type":"text","text":"hi"}],"usage":{"input_tokens":10,"output_tokens":5}}`
 	var gotUpstreamPath string
@@ -492,6 +500,7 @@ func TestAgentPathAttribution(t *testing.T) {
 // TestUnknownRouteFailsClosed proves an unrecognized path is a 404, never a
 // blind pass-through.
 func TestUnknownRouteFailsClosed(t *testing.T) {
+	t.Parallel()
 	sink := &captureSink{}
 	srv := newStandaloneTestServer(t, "http://127.0.0.1:0", RequestContext{Label: "local", RuntimeMode: "record"}, sink)
 	req := httptest.NewRequest(http.MethodPost, "/not/a/provider/route", strings.NewReader(`{}`))
@@ -503,6 +512,7 @@ func TestUnknownRouteFailsClosed(t *testing.T) {
 }
 
 func TestCompatEncodedSeparatorCannotClaimNamedCredentialRoute(t *testing.T) {
+	t.Parallel()
 	named, err := openaicompat.NewNamed("groq", "https://api.groq.com/openai")
 	if err != nil {
 		t.Fatal(err)

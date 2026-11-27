@@ -92,6 +92,7 @@ func fastRetrieve(t *testing.T, server *httptest.Server, scope Scope, handle str
 // S1: a principal allowed no namespace can use no scoped route, so it is
 // refused before it can hold a queue slot, however slowly it sends.
 func TestNamespacelessPrincipalHoldsNoQueueSlot(t *testing.T) {
+	t.Parallel()
 	nobody, err := ident.NewPrincipal("nobody", "test", nil, ident.Quota{})
 	if err != nil {
 		t.Fatal(err)
@@ -125,6 +126,7 @@ func TestNamespacelessPrincipalHoldsNoQueueSlot(t *testing.T) {
 // S1: one principal's slow bodies take at most its share of a queue, so every
 // other principal still gets a slot.
 func TestOnePrincipalCannotFillAQueue(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	r := f.runtime
 	req := requestFor(r)
@@ -148,6 +150,7 @@ func TestOnePrincipalCannotFillAQueue(t *testing.T) {
 // S3: with more than one principal configured, one principal filling its
 // default share leaves the store open to the others.
 func TestOnePrincipalCannotFillTheStore(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		r := runtimeOn(t, b.store, func(c *Config) { c.Capacity = store.MiddlewareLimits{Rows: 40} })
 		full := false
@@ -177,6 +180,7 @@ func (c *countingStore) MiddlewareWritable(ctx context.Context) error {
 // S13: readiness is unauthenticated, so a probe flood must not become a flood
 // of write transactions.
 func TestReadinessProbesTheStoreAtMostOncePerSecond(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	counting := &countingStore{MiddlewareStore: f.state}
 	r := withRuntime(t, f, func(c *Config) { c.Store = counting })
@@ -193,6 +197,7 @@ func TestReadinessProbesTheStoreAtMostOncePerSecond(t *testing.T) {
 // GO-2: a swept grant keeps answering 410 expired until its grace ends, and
 // only then becomes unknown.
 func TestSweptGrantAnswersExpiredUntilGraceEnds(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		now := time.Unix(2_000_000_000, 0)
 		r := runtimeOn(t, b.store, func(c *Config) { c.Now = func() time.Time { return now } })
@@ -223,6 +228,7 @@ func TestSweptGrantAnswersExpiredUntilGraceEnds(t *testing.T) {
 // GO-3: a revoked session stays revoked when the same authority comes back
 // under another adapter or serialization revision (a new scope id).
 func TestRevokedSessionStaysRevokedUnderANewScopeID(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		r := runtimeOn(t, b.store, nil)
 		req := requestFor(r)
@@ -252,6 +258,7 @@ func TestRevokedSessionStaysRevokedUnderANewScopeID(t *testing.T) {
 // provider cache keeps its prefix): the request's verified content is sealed
 // under the current key, and the old grant recovers again.
 func TestOriginalUnderAMissingKeyIsResealed(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		old, current := newKey(t), newKey(t)
 		before := runtimeOn(t, b.store, func(c *Config) { c.Keys = old })
@@ -285,6 +292,7 @@ func TestOriginalUnderAMissingKeyIsResealed(t *testing.T) {
 // this store, so only its segment goes unreplaced: a 1.0 client gets a plan,
 // not a 503 on every turn until the scope expires.
 func TestLostCCROriginalSkipsOnlyItsSegment(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	seedLostCCRChoice(t, f.state, req)
@@ -333,6 +341,7 @@ func (s *racingWriter) ReadMiddleware(ctx context.Context, fn func(*store.Middle
 // S10: once a key is configured, plaintext originals are refused unless the
 // operator is migrating, and each refusal is counted.
 func TestPlaintextOriginalsRefusedOnceAKeyIsConfigured(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		plain := runtimeOn(t, b.store, nil)
 		req := requestFor(plain)
@@ -357,6 +366,7 @@ func TestPlaintextOriginalsRefusedOnceAKeyIsConfigured(t *testing.T) {
 // GO-6: a protocol 1.0 grant's original lives in CCR, which delete cannot
 // reach; a retried delete, or one after a sweep, must still say so.
 func TestRetriedDeleteStillReportsLegacyOriginals(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		now := time.Unix(2_000_000_000, 0)
 		r := runtimeOn(t, b.store, func(c *Config) { c.Now = func() time.Time { return now } })
@@ -398,6 +408,7 @@ func TestRetriedDeleteStillReportsLegacyOriginals(t *testing.T) {
 // GO-8: an original is reclaimed with the last scope that references it, not
 // kept alive by a sibling scope of the same authority.
 func TestOriginalsDoNotOutliveTheirScopeThroughASibling(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		start := time.Unix(2_000_000_000, 0)
 		now := start
@@ -431,6 +442,7 @@ func TestOriginalsDoNotOutliveTheirScopeThroughASibling(t *testing.T) {
 
 // GO-9: the sweep stops at its time budget, and whatever it left is reported.
 func TestSweepBudgetAndBacklogGauge(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		now := time.Unix(2_000_000_000, 0)
 		r := runtimeOn(t, b.store, func(c *Config) { c.Now = func() time.Time { return now } })
@@ -467,6 +479,7 @@ INSERT INTO middleware_scopes(id,authority,manifest,sequence,expires_at,created_
 // GO-10 (A2): a stored plan references its replacements' text through their
 // choices; it never keeps a second copy for the plan's lifetime.
 func TestStoredPlansKeepNoReplacementText(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		r := runtimeOn(t, b.store, nil)
 		plan := optimizeOK(t, r, requestFor(r))
@@ -482,6 +495,7 @@ func TestStoredPlansKeepNoReplacementText(t *testing.T) {
 // starts a new epoch for a 1.1 client instead of failing every later turn;
 // its grants keep recovering. A 1.0 client keeps 1.0's epoch_changed.
 func TestTrimmedHistoryStartsANewEpoch(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		r := runtimeOn(t, b.store, nil)
 		full := uniqueRequest(r, "trim", "turn-1")
@@ -526,6 +540,7 @@ func TestTrimmedHistoryStartsANewEpoch(t *testing.T) {
 // not have its cancellation cached as "store not writable" for every probe,
 // and a flood of concurrent probes still costs one write.
 func TestCancelledProbeDoesNotMakeTheReplicaUnready(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	counting := &countingStore{MiddlewareStore: f.state}
 	r := withRuntime(t, f, func(c *Config) { c.Store = counting })
@@ -554,6 +569,7 @@ func TestCancelledProbeDoesNotMakeTheReplicaUnready(t *testing.T) {
 // leave a slot for a principal holding none: its optimize and retrieve answer
 // within budget.
 func TestTwoPrincipalsCannotFillAQueue(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	r := withRuntime(t, f, func(c *Config) {
 		c.Identify = func(req *http.Request) (ident.Principal, error) {
@@ -635,6 +651,7 @@ func deleteSession(t *testing.T, r *Runtime, scope Scope) (*httptest.ResponseRec
 // delete that fails midway already answers "deleted" everywhere, and its retry
 // finishes the purge. A store conflict is a failed delete: 503, never 409.
 func TestInterruptedDeleteIsRevokedAndResumes(t *testing.T) {
+	t.Parallel()
 	eachStore(t, func(t *testing.T, b backend) {
 		faulty := &failingStore{MiddlewareStore: b.store}
 		r := runtimeOn(t, faulty, nil)
@@ -672,6 +689,7 @@ func TestInterruptedDeleteIsRevokedAndResumes(t *testing.T) {
 // by one request under the default limits: delete has retrieve's deadline and
 // purges in batches.
 func TestLargeSessionDeletesUnderTheDefaultDeadline(t *testing.T) {
+	t.Parallel()
 	if testing.Short() {
 		t.Skip("writes 500 MiB of originals")
 	}
@@ -690,8 +708,10 @@ func TestLargeSessionDeletesUnderTheDefaultDeadline(t *testing.T) {
 			b.exec(t, fmt.Sprintf(`INSERT INTO middleware_originals(authority,digest,body,key_id,principal)
 SELECT '%s', lpad(v::text,64,'0'), decode(repeat(md5(v::text),%d),'hex'), '', 'alice' FROM generate_series(1,%d) v`, auth, size/16, originals))
 		} else {
+			// SQLite stores zeroblob uncompressed on real overflow pages, so this
+			// writes the same 500 MiB without burning CPU in randomblob().
 			b.exec(t, fmt.Sprintf(`WITH RECURSIVE n(v) AS (SELECT 1 UNION ALL SELECT v+1 FROM n WHERE v<%d)
-INSERT INTO middleware_originals(authority,digest,body,key_id,principal) SELECT '%s', printf('%%064d',v), randomblob(%d), '', 'alice' FROM n`, originals, auth, size))
+INSERT INTO middleware_originals(authority,digest,body,key_id,principal) SELECT '%s', printf('%%064d',v), zeroblob(%d), '', 'alice' FROM n`, originals, auth, size))
 		}
 		// A call that runs out of its deadline answers 504 and a retry resumes
 		// (§12), so a loaded runner may need a second call; what must never
@@ -720,6 +740,7 @@ INSERT INTO middleware_originals(authority,digest,body,key_id,principal) SELECT 
 
 // §12: once deleted, a receipt answers "deleted" and stores nothing.
 func TestReceiptAfterDeleteAnswersDeleted(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	optimizeOK(t, f.runtime, req)
@@ -744,6 +765,7 @@ func TestReceiptAfterDeleteAnswersDeleted(t *testing.T) {
 // event_kind): first write wins, so a changed body is not a retryable conflict
 // the client could never resolve.
 func TestRetriedReceiptWithADifferentBodyKeepsTheFirst(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	receipt := Receipt{SchemaVersion: 1, Scope: req.Scope, LogicalCallID: req.LogicalCallID, AttemptID: req.AttemptID, EventKind: "failed"}
@@ -762,6 +784,7 @@ func TestRetriedReceiptWithADifferentBodyKeepsTheFirst(t *testing.T) {
 
 // §1: an unknown route is 404 whatever its body, before it takes a quota count.
 func TestUnknownRouteIsNotFoundBeforeQuotaAndBody(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	r := withRuntime(t, f, func(c *Config) { c.Limits.QuotaRequestsPerMinute = 1 })
 	for range 3 {
@@ -782,6 +805,7 @@ func TestUnknownRouteIsNotFoundBeforeQuotaAndBody(t *testing.T) {
 // §4: encoding/json would match "Scope" to scope; a key that differs from a
 // defined field only by case is refused, at any depth, not given its meaning.
 func TestCaseFoldedKeysAreRefused(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	plan := optimizeOK(t, f.runtime, req)
@@ -816,6 +840,7 @@ func TestCaseFoldedKeysAreRefused(t *testing.T) {
 
 // §6: an unsupported schema_version is unsupported_version on every route.
 func TestDeleteWithAnUnsupportedVersion(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	w := send(t, f.runtime, "sessions/delete", SessionDeleteRequest{SchemaVersion: 2, Scope: Scope{"app", "s", "main", "0"}}, "alice", clientFeatures)
 	if w.Code != 400 || failureCode(t, w.Body.Bytes()) != CodeUnsupportedVersion {
@@ -826,6 +851,7 @@ func TestDeleteWithAnUnsupportedVersion(t *testing.T) {
 // A plan row exists for idempotent replay only, so it lasts the replay
 // window, not the whole retention.
 func TestPlanRowsLastTheReplayWindow(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	now := time.Unix(2_000_000_000, 0)
 	r := withRuntime(t, f, func(c *Config) { c.Now = func() time.Time { return now } })

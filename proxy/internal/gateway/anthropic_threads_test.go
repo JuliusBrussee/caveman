@@ -44,6 +44,7 @@ func (rt *threadRoundTripper) RoundTrip(r *http.Request) (*http.Response, error)
 // Turn 2's delta compresses and memoizes in prefixCache so a Turn 3 fallback
 // reproduces the exact compressed bytes without busting prefix stability.
 func TestAnthropicMessageThreadsMCPCompressAndFallbackReplay(t *testing.T) {
+	t.Parallel()
 	rt := &threadRoundTripper{}
 	prefixCache := newTestPrefixCache()
 	comp := &stubCompressor{out: []byte("COMPRESSED_BLOCK"), before: 400, after: 12}
@@ -104,6 +105,7 @@ func TestAnthropicMessageThreadsMCPCompressAndFallbackReplay(t *testing.T) {
 // inject the server-side caveman_retrieve tool: thread:continue omits tools (400)
 // and thread:create binds server state per reply.
 func TestAnthropicMessageThreadsSkipServerRetrieve(t *testing.T) {
+	t.Parallel()
 	rt := &threadRoundTripper{}
 	srv := New(Config{
 		Adapters:   []providers.Adapter{anthropic.New("https://api.anthropic.com")},
@@ -144,6 +146,7 @@ func TestAnthropicMessageThreadsSkipServerRetrieve(t *testing.T) {
 // treat thread:continue as non-fresh, and keep Auto on Turn 1's Anthropic model
 // rather than swapping models or pool hosts mid-thread.
 func TestAnthropicMessageThreadsPreserveFingerprintAndModel(t *testing.T) {
+	t.Parallel()
 	createBody := `{"model":"caveman-auto","max_tokens":1024,"thread":{"type":"create"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"turn 1"}]}`
 	continueBody := `{"model":"caveman-auto","max_tokens":1024,"thread":{"type":"continue","previous_message_id":"msg_1"},"output_config":{"effort":"high"},"messages":[{"role":"user","content":"turn 2"}]}`
 

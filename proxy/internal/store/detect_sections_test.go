@@ -8,6 +8,7 @@ import (
 )
 
 func TestSectionCorpusCapsSessionsAndBytes(t *testing.T) {
+	t.Parallel()
 	beh := behaviorScan{}
 	for i := 0; i < maxSectionSessions+8; i++ {
 		local := behaviorScan{}
@@ -28,6 +29,7 @@ func TestSectionCorpusCapsSessionsAndBytes(t *testing.T) {
 }
 
 func TestClaudeMDSectionEchoPositiveExcludesEchoedSection(t *testing.T) {
+	t.Parallel()
 	repo := t.TempDir()
 	path := filepath.Join(repo, "CLAUDE.md")
 	line := "Preserve byte exact request ordering whenever provider cache state changes between turns."
@@ -45,6 +47,7 @@ func TestClaudeMDSectionEchoPositiveExcludesEchoedSection(t *testing.T) {
 }
 
 func TestClaudeMDSectionEchoZeroCapabilityEmitsNothing(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 	line := "Run the repository boundary verifier before changing any public provider adapter surface."
@@ -62,6 +65,7 @@ func TestClaudeMDSectionEchoZeroCapabilityEmitsNothing(t *testing.T) {
 }
 
 func TestClaudeMDSectionEchoPositiveControlEmitsOnlyUnechoedSection(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	path := filepath.Join(dir, "CLAUDE.md")
 	echoed := "Preserve byte exact request ordering whenever provider cache state changes between turns."

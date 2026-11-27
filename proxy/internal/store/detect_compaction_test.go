@@ -7,6 +7,7 @@ import (
 )
 
 func TestCompactionChurnParsesObservedBoundaryAndCompactSummaryShape(t *testing.T) {
+	t.Parallel()
 	var boundary, summary map[string]any
 	if err := json.Unmarshal([]byte(`{"type":"system","subtype":"compact_boundary"}`), &boundary); err != nil {
 		t.Fatal(err)
@@ -37,6 +38,7 @@ func TestCompactionChurnParsesObservedBoundaryAndCompactSummaryShape(t *testing.
 }
 
 func TestCompactionChurnResetsPreBoundaryPathsAtEachCompaction(t *testing.T) {
+	t.Parallel()
 	tracker := newReadActivityTracker()
 	tracker.observe(turnEvent{Repo: "/repo", ToolCalls: []turnToolCall{
 		{Name: "Read", InputSummary: "a.go", OutputText: "first"},

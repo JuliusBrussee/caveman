@@ -4,7 +4,39 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync, mkdirSync } from "nod
 import { tmpdir } from "node:os";
 import { join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
+
+function spawnAsync(cmd, args, opts = {}) {
+  return new Promise((resolve) => {
+    const child = spawn(cmd, args, {
+      cwd: opts.cwd,
+      env: opts.env,
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+    let timedOut = false;
+    let timer = null;
+    if (opts.timeout) {
+      timer = setTimeout(() => {
+        timedOut = true;
+        child.kill("SIGKILL");
+      }, opts.timeout);
+    }
+    child.stdout.on("data", (d) => { stdout += d; });
+    child.stderr.on("data", (d) => { stderr += d; });
+    child.on("error", (error) => {
+      if (timer) clearTimeout(timer);
+      resolve({ status: null, stdout, stderr, error });
+    });
+    child.on("close", (status) => {
+      if (timer) clearTimeout(timer);
+      resolve({ status, stdout, stderr, error: timedOut ? new Error("ETIMEDOUT") : undefined });
+    });
+    if (opts.input !== undefined) child.stdin.end(opts.input);
+    else child.stdin.end();
+  });
+}
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..", "..");
 const shellShim = readFileSync(join(root, "install.sh"), "utf8");
@@ -137,21 +169,30 @@ test("shell install ends by naming the first-run command when no terminal is att
 // npx would install its pinned CLI over a newer one on PATH, so the caveman on
 // PATH takes the first run when it is this release or newer. A prerelease ranks
 // below its own release; a version that cannot be read counts as older.
-test("shell install hands the first run to a caveman on PATH that is this release or newer", { skip: process.platform === "win32" }, () => {
-  const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-path-cli-"));
-  const fakeBin = join(cwd, "fake-bin");
-  mkdirSync(fakeBin);
-  writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
-  writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
+test("shell install hands the first run to a caveman on PATH that is this release or newer", { skip: process.platform === "win32" }, async () => {
   const cli = JSON.parse(readFileSync(join(root, "packages", "cli", "package.json"), "utf8")).version;
   const [major, minor, patch] = cli.split(".").map(Number);
-  const run = (body) => {
-    writeFileSync(join(fakeBin, "caveman"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
-    return spawnSync("bash", ["-s", "--"], { cwd, input: shellShim, encoding: "utf8", timeout: 55_000, env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin` } });
+  const runCase = async (body, extraEnv = {}) => {
+    const cwd = mkdtempSync(join(tmpdir(), "caveman-shim-path-cli-"));
+    try {
+      const fakeBin = join(cwd, "fake-bin");
+      mkdirSync(fakeBin);
+      writeFileSync(join(fakeBin, "node"), `#!/bin/sh\nif [ "$1" = "-p" ]; then echo 24; else exec ${JSON.stringify(process.execPath)} "$@"; fi\n`, { mode: 0o755 });
+      writeFileSync(join(fakeBin, "npx"), "#!/bin/sh\necho installer-ran\n", { mode: 0o755 });
+      writeFileSync(join(fakeBin, "caveman"), `#!/bin/sh\n${body}\n`, { mode: 0o755 });
+      return await spawnAsync("bash", ["-s", "--"], {
+        cwd,
+        input: shellShim,
+        timeout: 55_000,
+        env: { ...process.env, PATH: `${fakeBin}:/usr/bin:/bin`, ...extraEnv },
+      });
+    } finally {
+      rmSync(cwd, { recursive: true, force: true });
+    }
   };
   const viaPath = "installer-ran\nNext: caveman setup\n";
   const viaNpx = `installer-ran\nNext: npx -y @caveman-ai/cli@${cli} setup\n`;
-  for (const [version, want] of [
+  const cases = [
     [cli, viaPath],
     [`${major}.${minor}.${patch + 1}`, viaPath],
     [`${major + 1}.0.0`, viaPath],
@@ -160,13 +201,27 @@ test("shell install hands the first run to a caveman on PATH that is this releas
     [`${major - 1}.99.99`, viaNpx],
     ["0.0.1", viaNpx],
     ["banana", viaNpx],
-  ]) {
-    assert.equal(run(`printf '%s\\n' '${JSON.stringify({ version })}'`).stdout, want, version);
+  ];
+  const [versionResults, badJson, hung, invalidTimeout] = await Promise.all([
+    Promise.all(cases.map(async ([version, want]) => [version, want, await runCase(`printf '%s\\n' '${JSON.stringify({ version })}'`)])),
+    runCase("echo not json"),
+    // A `caveman --version` that never answers is given up on after 10s
+    // (overridden here so the test does not sleep 10s; default 1e4 is pinned below).
+    runCase("exec sleep 120", { CAVEMAN_PROBE_TIMEOUT_MS: "300" }),
+    // Invalid timeout values fall back to 1e4 rather than causing spawnSync to throw.
+    Promise.all(["-5", "0", "1.5", "Infinity", "nope"].map(async (bad) => [
+      bad,
+      await runCase(`printf '%s\\n' '${JSON.stringify({ version: cli })}'`, { CAVEMAN_PROBE_TIMEOUT_MS: bad }),
+    ])),
+  ]);
+  for (const [version, want, res] of versionResults) {
+    assert.equal(res.stdout, want, version);
   }
-  assert.equal(run("echo not json").stdout, viaNpx);
-  // A `caveman --version` that never answers is given up on after 10s.
-  const hung = run("exec sleep 120");
+  assert.equal(badJson.stdout, viaNpx);
   assert.equal(hung.stdout, viaNpx, hung.error?.message);
+  for (const [bad, res] of invalidTimeout) {
+    assert.equal(res.stdout, viaPath, `invalid CAVEMAN_PROBE_TIMEOUT_MS=${bad} must fall back to default timeout`);
+  }
 });
 
 // Both shims ask the caveman on PATH the same question in the same words.
@@ -177,7 +232,7 @@ test("both shims carry the same PATH CLI probe", () => {
   assert.equal(ps1, sh, "install.ps1 probes the PATH CLI differently from install.sh");
   // PowerShell 5.1 drops a double quote inside an argument to a native command (#249).
   assert.doesNotMatch(sh, /"/);
-  assert.match(sh, /timeout:1e4/);
+  assert.match(sh, /timeout:Number\.isInteger\(t\)&&t>0&&t<=2147483647\?t:1e4/);
 });
 
 // Two prereleases of one release rank by semver precedence: a PATH CLI at

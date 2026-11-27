@@ -20,6 +20,7 @@ func writeExport(t *testing.T, body string) string {
 // gap between the bill and what transcripts explain is where untracked spend
 // lives, and it is the one number no detector can produce.
 func TestReconcileFindsTheUnattributedShare(t *testing.T) {
+	t.Parallel()
 	billed, err := parseUsageExport(writeExport(t, strings.Join([]string{
 		"model,input_tokens,output_tokens,cache_read_input_tokens",
 		"claude-opus-5,1000000,200000,3000000",
@@ -60,6 +61,7 @@ func TestReconcileFindsTheUnattributedShare(t *testing.T) {
 // changing its export must produce an error naming the problem, never a
 // confident wrong gap read off column positions.
 func TestReconcileFailsClosedOnUnknownSchema(t *testing.T) {
+	t.Parallel()
 	if _, err := parseUsageExport(writeExport(t, "a,b,c\n1,2,3\n")); err == nil {
 		t.Fatal("an unrecognizable header must fail, not be guessed by position")
 	}
@@ -77,6 +79,7 @@ func TestReconcileFailsClosedOnUnknownSchema(t *testing.T) {
 // TestReconcileAcceptsProviderHeaderVariants covers the shapes the two major
 // exports actually ship, including a BOM and thousands separators.
 func TestReconcileAcceptsProviderHeaderVariants(t *testing.T) {
+	t.Parallel()
 	openai, err := parseUsageExport(writeExport(t,
 		"\ufeffmodel,n_context_tokens_total,n_generated_tokens_total\ngpt-5.6,\"1,000\",250\n"))
 	if err != nil {
@@ -98,6 +101,7 @@ func TestReconcileAcceptsProviderHeaderVariants(t *testing.T) {
 // TestReconcileNeverBorrowsAnotherModelsCoverage keeps model matching exact
 // (plus the dated alias), so coverage cannot be manufactured.
 func TestReconcileNeverBorrowsAnotherModelsCoverage(t *testing.T) {
+	t.Parallel()
 	billed := map[string]int64{"claude-opus-5-20260401": 1_000_000, "claude-sonnet-5": 1_000_000}
 	spend := &LearnSpend{Models: []LearnSpendModel{
 		{Model: "claude-opus-5", Tokens: 1_000_000},
@@ -118,6 +122,7 @@ func TestReconcileNeverBorrowsAnotherModelsCoverage(t *testing.T) {
 // TestReconcileFlagsMismatchedWindows catches the most likely user error before
 // they read a nonsense coverage figure.
 func TestReconcileFlagsMismatchedWindows(t *testing.T) {
+	t.Parallel()
 	report := buildLearnReconcile(
 		map[string]int64{"claude-opus-5": 100},
 		&LearnSpend{Models: []LearnSpendModel{{Model: "claude-opus-5", Tokens: 900_000}}},

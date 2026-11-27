@@ -28,6 +28,7 @@ func csvFixture() []byte {
 }
 
 func TestTabularCSVStaysValidAndKeepsHeaderExtremaAndErrors(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTabular()
 	if c.SafetyClass() != safety.S4 {
 		t.Fatal("tabular compressor must be S4")
@@ -60,6 +61,7 @@ func TestTabularCSVStaysValidAndKeepsHeaderExtremaAndErrors(t *testing.T) {
 }
 
 func TestTabularKeepsPercentExtrema(t *testing.T) {
+	t.Parallel()
 	// A coverage export: every file is fully covered except one in the middle.
 	// Its row differs from the others only in a digit, so only the numeric
 	// extrema keep it, and "12%" has to count as a number for that.
@@ -82,6 +84,7 @@ func TestTabularKeepsPercentExtrema(t *testing.T) {
 }
 
 func TestTabularQueryKeepsRelevantMiddleRows(t *testing.T) {
+	t.Parallel()
 	c, ok := compressors.NewTabular().(compressors.QueryAwareCompressor)
 	if !ok {
 		t.Fatal("tabular compressor must be query-aware")
@@ -100,6 +103,7 @@ func TestTabularQueryKeepsRelevantMiddleRows(t *testing.T) {
 }
 
 func TestTabularTSVStaysValidAndKeepsQueryRow(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("name\tregion\trevenue\tstatus\n")
 	for i := 0; i < 50; i++ {
@@ -128,6 +132,7 @@ func TestTabularTSVStaysValidAndKeepsQueryRow(t *testing.T) {
 }
 
 func TestTabularMarkdownKeepsShapeAndIsIdempotent(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("| name | region | revenue |\n| --- | --- | ---: |\n")
 	for i := 0; i < 40; i++ {
@@ -150,6 +155,7 @@ func TestTabularMarkdownKeepsShapeAndIsIdempotent(t *testing.T) {
 }
 
 func TestTabularMarkdownKeepsEscapedPipesInsideCells(t *testing.T) {
+	t.Parallel()
 	// GFM writes a literal pipe in a cell as \|. Splitting rows on every pipe
 	// gave that row an extra cell, so the whole table failed the column check
 	// and was passed through uncompressed.
@@ -182,6 +188,7 @@ func TestTabularMarkdownKeepsEscapedPipesInsideCells(t *testing.T) {
 }
 
 func TestTabularMalformedOrTinyPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTabular()
 	for _, input := range [][]byte{
 		[]byte("a,b\n1,2\n"),
@@ -195,6 +202,7 @@ func TestTabularMalformedOrTinyPassesThrough(t *testing.T) {
 }
 
 func TestTabularCSVMarkerHasStableFieldCount(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewTabular()
 	out, ok := c.Compress(csvFixture())
 	if !ok {
@@ -216,6 +224,7 @@ func TestTabularCSVMarkerHasStableFieldCount(t *testing.T) {
 }
 
 func TestTabularCSVPreservesCRLFWithoutAddingTrailingNewline(t *testing.T) {
+	t.Parallel()
 	input := bytes.ReplaceAll(bytes.TrimSuffix(csvFixture(), []byte("\n")), []byte("\n"), []byte("\r\n"))
 	out, ok := compressors.NewTabular().Compress(input)
 	if !ok {
@@ -241,6 +250,7 @@ func TestTabularCSVPreservesCRLFWithoutAddingTrailingNewline(t *testing.T) {
 // amount at all was gone, under a contract line telling the agent to answer
 // from this view.
 func TestTabularNonFiniteCellIsNotAbsorbedIntoARange(t *testing.T) {
+	t.Parallel()
 	ledger := func(row10 string) []byte {
 		var b strings.Builder
 		b.WriteString("region,status,note,amount\n")
@@ -277,6 +287,7 @@ func TestTabularNonFiniteCellIsNotAbsorbedIntoARange(t *testing.T) {
 // that an elided row exceeds. Whatever bounds the marker states for the column
 // must cover every elided row.
 func TestTabularLargeIntegerRangeCoversEveryElidedRow(t *testing.T) {
+	t.Parallel()
 	const first, step, rows = 1234567890123456000, 100, 30
 	var b strings.Builder
 	b.WriteString("id,status\n")

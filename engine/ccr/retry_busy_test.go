@@ -9,6 +9,7 @@ import (
 )
 
 func TestRetryOnBusyCapsTotalBackoff(t *testing.T) {
+	t.Parallel()
 	busy := errors.New("SQLITE_BUSY")
 	now := time.Unix(0, 0)
 	var slept time.Duration
@@ -37,6 +38,7 @@ func TestRetryOnBusyCapsTotalBackoff(t *testing.T) {
 }
 
 func TestRetryOnBusyReturnsNonBusyErrorWithoutSleeping(t *testing.T) {
+	t.Parallel()
 	want := errors.New("migration failed")
 	slept := false
 	err := retryOnBusy(
@@ -54,6 +56,7 @@ func TestRetryOnBusyReturnsNonBusyErrorWithoutSleeping(t *testing.T) {
 }
 
 func TestRetryOnBusyRetriesAfterSQLiteTimeout(t *testing.T) {
+	t.Parallel()
 	busy := errors.New("SQLITE_BUSY")
 	now := time.Unix(0, 0)
 	calls := 0

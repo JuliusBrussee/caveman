@@ -108,6 +108,7 @@ func e2eServe(srv *gateway.Server, body string) {
 // that sends t1's original bytes is a cross-turn prefix divergence. Before the
 // store's WAL + busy_timeout DSN pragmas this failed ~7/16.
 func TestE2EPrefixStabilityWithRealStore(t *testing.T) {
+	t.Parallel()
 	st, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)
@@ -179,6 +180,7 @@ func (*e2eAlternatingCompressor) StoreOriginal(b []byte) (string, error) { retur
 // Each records its decision before it forwards and follows the row the store
 // answers with, so the provider never sees the block in two forms.
 func TestE2EConcurrentDecisionsAgree(t *testing.T) {
+	t.Parallel()
 	st, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

@@ -220,6 +220,7 @@ func condition(t *testing.T, name string, v2 bool) *httptest.ResponseRecorder {
 }
 
 func TestLegacyConditionsFromParityFixture(t *testing.T) {
+	t.Parallel()
 	for _, c := range loadParity(t).LegacyConditions {
 		for _, v2 := range []bool{false, true} {
 			t.Run(fmt.Sprintf("%s/http_status_v2=%t", c.Condition, v2), func(t *testing.T) {
@@ -248,6 +249,7 @@ func TestLegacyConditionsFromParityFixture(t *testing.T) {
 }
 
 func TestServerErrorCodesFromParityFixture(t *testing.T) {
+	t.Parallel()
 	p := loadParity(t)
 	if !slices.Equal(p.Constants.Features.Known, serverFeatures) || p.Constants.Headers["features"] != HeaderFeatures ||
 		p.Constants.Headers["client"] != HeaderClient || p.Constants.Headers["retry_after"] != HeaderRetryAfter {
@@ -344,6 +346,7 @@ func TestProtocol11ClientFlow(t *testing.T)   { flow(t, true) }
 
 // Every response the runtime can emit, checked against the contract schemas.
 func TestMiddlewareGoldenResponsesMatchContractSchemas(t *testing.T) {
+	t.Parallel()
 	goldens := map[string][]byte{}
 	for _, v2 := range []bool{false, true} {
 		maps.Copy(goldens, flow(t, v2))
@@ -393,6 +396,7 @@ func TestMiddlewareGoldenResponsesMatchContractSchemas(t *testing.T) {
 }
 
 func TestRevisionTolerantAndTolerantReader(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	req.Policy.Revision = "middleware-v1:cached-before-an-upgrade"
@@ -425,6 +429,7 @@ func TestRevisionTolerantAndTolerantReader(t *testing.T) {
 // Scope identity no longer includes the policy revision, so an upgrade that
 // changes the revision keeps every persisted choice and its exact bytes.
 func TestPersistedChoicesSurviveARevisionChange(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	req.Policy.Revision = "middleware-v1:before-upgrade"
@@ -441,6 +446,7 @@ func TestPersistedChoicesSurviveARevisionChange(t *testing.T) {
 }
 
 func TestReusedChoiceNeedsItsTransformInPolicy(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	optimizeOK(t, f.runtime, req)
@@ -454,6 +460,7 @@ func TestReusedChoiceNeedsItsTransformInPolicy(t *testing.T) {
 }
 
 func TestOriginalsFollowTheirScope(t *testing.T) {
+	t.Parallel()
 	t.Run("not_smaller_stores_nothing", func(t *testing.T) {
 		f := newFixture(t)
 		req := requestFor(f.runtime)
@@ -485,6 +492,7 @@ func TestOriginalsFollowTheirScope(t *testing.T) {
 }
 
 func TestMaxRetentionCapsSlidingRenewal(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	start := time.Unix(2_000_000_000, 0)
 	now := start
@@ -517,6 +525,7 @@ func TestMaxRetentionCapsSlidingRenewal(t *testing.T) {
 }
 
 func TestOriginalsSealedAtRestAndKeysRotate(t *testing.T) {
+	t.Parallel()
 	key := func() string {
 		b := make([]byte, 32)
 		_, _ = rand.Read(b)
@@ -564,6 +573,7 @@ func TestOriginalsSealedAtRestAndKeysRotate(t *testing.T) {
 // Grants a protocol 1.0 runtime issued point at CCR; they keep recovering until
 // their scope expires, and delete says their originals were not deleted.
 func TestProtocol10GrantStillRetrievesFromCCR(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	content := noisy()
 	handle, err := f.recovery.Put(ccr.Recovery{Original: []byte(content)})
@@ -593,6 +603,7 @@ func TestProtocol10GrantStillRetrievesFromCCR(t *testing.T) {
 }
 
 func TestAuditLogAndMetricsCarryNoContent(t *testing.T) {
+	t.Parallel()
 	var log bytes.Buffer
 	f := newFixture(t)
 	r := withRuntime(t, f, func(c *Config) { c.Logger = slog.New(slog.NewJSONHandler(&log, nil)) })
@@ -633,6 +644,7 @@ func TestAuditLogAndMetricsCarryNoContent(t *testing.T) {
 }
 
 func TestRequestQuotaIsPerPrincipal(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	r := withRuntime(t, f, func(c *Config) { c.Limits.QuotaRequestsPerMinute = 1 })
 	if _, caps := capabilities(t, r, clientFeatures); caps["limits"].(map[string]any)["quota_requests_per_minute"] != float64(1) {
@@ -655,6 +667,7 @@ func TestRequestQuotaIsPerPrincipal(t *testing.T) {
 }
 
 func TestRetrieveHasItsOwnQueue(t *testing.T) {
+	t.Parallel()
 	f := newFixture(t)
 	req := requestFor(f.runtime)
 	plan := optimizeOK(t, f.runtime, req)

@@ -83,6 +83,7 @@ func damagedStore(t *testing.T, path string, mode string) []string {
 }
 
 func TestDamagedStoreRefusesWritesAfterIntegrityCheck(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	handles := damagedStore(t, path, "double-parent")
 	store, err := Open(path)
@@ -120,6 +121,7 @@ func TestDamagedStoreRefusesWritesAfterIntegrityCheck(t *testing.T) {
 }
 
 func TestSQLiteCorruptionMidOperationStopsWrites(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	handles := damagedStore(t, path, "bad-leaf")
 	store, err := Open(path)
@@ -144,6 +146,7 @@ func TestSQLiteCorruptionMidOperationStopsWrites(t *testing.T) {
 }
 
 func TestReclaimNeverWritesToADamagedStore(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	damagedStore(t, path, "double-parent")
 	store, err := Open(path)
@@ -179,6 +182,7 @@ func TestReclaimNeverWritesToADamagedStore(t *testing.T) {
 }
 
 func TestCheckIntegrityOnceRecordsAPassPerBuild(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	store := openTestStore(t, path)
 	first, err := store.CheckIntegrityOnce("bin-v9.9.9")
@@ -203,6 +207,7 @@ func TestCheckIntegrityOnceRecordsAPassPerBuild(t *testing.T) {
 }
 
 func TestCheckIntegrityOnceNeverRecordsADamagedStore(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	damagedStore(t, path, "double-parent")
 	store, err := Open(path)

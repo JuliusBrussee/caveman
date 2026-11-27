@@ -19,6 +19,7 @@ func completeUsageForPricing() providers.UsageObservation {
 }
 
 func TestStandalonePricingMatchesManagedRegionalRules(t *testing.T) {
+	t.Parallel()
 	usage := completeUsageForPricing()
 	// Vertex retired gemini-2.5-pro on 2026-10-20 and its row left the catalog
 	// on 2026-11-06. Its traffic must price to an honest zero. It must not
@@ -102,6 +103,7 @@ const standaloneRegionAgnosticFixture = `
 // rows covered this. Vertex retired both models, so no current row carries the
 // flag, and this fixture keeps the rule tested.
 func TestStandaloneVertexRegionAgnosticPricingOnFixtureCatalog(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "catalog.yaml")
 	if err := os.WriteFile(path, []byte(standaloneRegionAgnosticFixture), 0o600); err != nil {
 		t.Fatal(err)
@@ -120,6 +122,7 @@ func TestStandaloneVertexRegionAgnosticPricingOnFixtureCatalog(t *testing.T) {
 // TestStandaloneVertexRegionAgnosticFixtureProbe does nothing in a normal run.
 // It is the child process of the test above.
 func TestStandaloneVertexRegionAgnosticFixtureProbe(t *testing.T) {
+	t.Parallel()
 	if os.Getenv(standaloneRegionAgnosticProbeEnv) != "1" {
 		return
 	}
@@ -141,6 +144,7 @@ func TestStandaloneVertexRegionAgnosticFixtureProbe(t *testing.T) {
 }
 
 func TestOpenAIPromptCacheKeyCannotClaimCausalSavings(t *testing.T) {
+	t.Parallel()
 	if hasCacheOptimizer([]string{"openai-prompt-cache-key"}) {
 		t.Fatal("OpenAI cache affinity is not proof the hint caused an automatic cache hit")
 	}
@@ -150,12 +154,14 @@ func TestOpenAIPromptCacheKeyCannotClaimCausalSavings(t *testing.T) {
 }
 
 func TestAnthropicAutomaticPromptCacheCannotClaimCausalSavings(t *testing.T) {
+	t.Parallel()
 	if hasCacheOptimizer([]string{anthropic.AutomaticPromptCacheOptimizerID}) {
 		t.Fatal("Anthropic automatic placement must remain measured-only, never a causal cache-savings optimizer")
 	}
 }
 
 func TestStandaloneCostBreakdownUsesDistinctReasoningRate(t *testing.T) {
+	t.Parallel()
 	usage := completeUsageForPricing()
 	usage.OutputTokens = 100
 	usage.ReasoningTokens = 40

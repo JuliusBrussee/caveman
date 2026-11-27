@@ -1,6 +1,6 @@
-import { test } from 'node:test';
+import { describe, test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -12,6 +12,7 @@ const shells = ['pwsh', ...(process.platform === 'win32' ? ['powershell.exe'] : 
   .filter(command => spawnSync(command, ['-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.ToString()'], { encoding: 'utf8' }).status === 0);
 const quote = value => `'${String(value).replaceAll("'", "''")}'`;
 const ref = 'v0.0.0-bun-test';
+const suiteConcurrency = Math.max(1, Math.min(4, os.cpus().length - 1));
 
 // Exercise both PowerShell editions where available; mocks test shim control
 // flow and argument construction, not native Windows executable marshalling.
@@ -58,16 +59,32 @@ $InstallArgs = @(${args.map(quote).join(',')})
 ${local ? `& ${quote(script)} @InstallArgs` : `& ([scriptblock]::Create([IO.File]::ReadAllText(${quote(script)}))) @InstallArgs\nWrite-Host 'session-alive'`}
 exit $LASTEXITCODE
 `;
-  const r = spawnSync(shell, ['-NoProfile', '-NonInteractive', '-Command', harness], {
-    cwd: dir, encoding: 'utf8', timeout: 30000,
-    env: { ...process.env, POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off' },
+  return new Promise((resolve) => {
+    const child = spawn(shell, ['-NoProfile', '-NonInteractive', '-Command', harness], {
+      cwd: dir,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env, POWERSHELL_TELEMETRY_OPTOUT: '1', POWERSHELL_UPDATECHECK: 'Off' },
+    });
+    let stdout = '';
+    let stderr = '';
+    const timer = setTimeout(() => child.kill('SIGKILL'), 30000);
+    child.stdout.on('data', d => { stdout += d; });
+    child.stderr.on('data', d => { stderr += d; });
+    child.on('error', (error) => {
+      clearTimeout(timer);
+      resolve({ status: null, stdout, stderr, error, calls: [], dir });
+    });
+    child.on('close', (code) => {
+      clearTimeout(timer);
+      const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').replace(/^\uFEFF/, '').trim().split(/\r?\n/).map(line => JSON.parse(line.replace(/^\uFEFF/, ''))) : [];
+      resolve({ status: code, stdout, stderr, calls, dir });
+    });
   });
-  const calls = fs.existsSync(log) ? fs.readFileSync(log, 'utf8').replace(/^\uFEFF/, '').trim().split(/\r?\n/).map(line => JSON.parse(line.replace(/^\uFEFF/, ''))) : [];
-  return { ...r, calls, dir };
 }
+describe(`${shell || 'PowerShell unavailable'} bun fallback`, { skip: !shell, concurrency: suiteConcurrency }, () => {
 for (const local of [false, true]) {
-  test(`${shell || 'PowerShell unavailable'}: Bun fallback preserves args and pin (${local ? 'file' : 'pipe'})`, { skip: !shell }, t => {
-    const r = run(t, { local });
+  test(`${shell || 'PowerShell unavailable'}: Bun fallback preserves args and pin (${local ? 'file' : 'pipe'})`, async t => {
+    const r = await run(t, { local });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(r.calls, [{name:'bun', args:[
       ...(local ? [path.join(r.dir, 'installer/install.js')] : ['x', '--bun', `github:JuliusBrussee/caveman#${ref}`]),
@@ -75,37 +92,41 @@ for (const local of [false, true]) {
     ]}]);
     if (!local) assert.match(r.stdout, /session-alive/);
   });
-  test(`${shell || 'PowerShell unavailable'}: Bun failure propagates (${local ? 'file' : 'pipe'})`, { skip: !shell }, t => {
-    const r = run(t, { local, status: 7, args: [] });
+  test(`${shell || 'PowerShell unavailable'}: Bun failure propagates (${local ? 'file' : 'pipe'})`, async t => {
+    const r = await run(t, { local, status: 7, args: [] });
     assert.equal(r.status, 7, r.stdout + r.stderr);
     assert.doesNotMatch(r.stdout, /installer finished/);
     if (!local) assert.match(r.stdout, /session-alive/);
   });
 }
-test(`${shell || 'PowerShell unavailable'}: keeps Node first and npm 12 flags`, { skip: !shell }, t => {
-  const r = run(t, { node: true });
+test(`${shell || 'PowerShell unavailable'}: keeps Node first and npm 12 flags`, async t => {
+  const r = await run(t, { node: true });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(r.calls[0].name, 'npx');
   assert.deepEqual(r.calls[0].args.slice(0, 3), ['--allow-git=root', '-y', `github:JuliusBrussee/caveman#${ref}`]);
 });
-test(`${shell || 'PowerShell unavailable'}: rejects old Node or missing npx rather than using Bun`, { skip: !shell }, t => {
-  for (const options of [{ node: true, major: 16 }, { node: true, npx: false }]) {
-    const r = run(t, options);
+test(`${shell || 'PowerShell unavailable'}: rejects old Node or missing npx rather than using Bun`, async t => {
+  const results = await Promise.all([
+    run(t, { node: true, major: 16 }),
+    run(t, { node: true, npx: false }),
+  ]);
+  for (const r of results) {
     assert.notEqual(r.status, 0, r.stdout + r.stderr);
     assert.deepEqual(r.calls, []);
   }
 });
-test(`${shell || 'PowerShell unavailable'}: requires a runtime and stops before launching packages`, { skip: !shell }, t => {
-  const r = run(t, { bun: false });
+test(`${shell || 'PowerShell unavailable'}: requires a runtime and stops before launching packages`, async t => {
+  const r = await run(t, { bun: false });
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /or Bun required/);
   assert.deepEqual(r.calls, []);
 });
-test(`${shell || 'PowerShell unavailable'}: Bun first run leaves the session open and names the Node requirement`, { skip: !shell }, t => {
-  const r = run(t, { args: ['--non-interactive'] });
+test(`${shell || 'PowerShell unavailable'}: Bun first run leaves the session open and names the Node requirement`, async t => {
+  const r = await run(t, { args: ['--non-interactive'] });
   assert.equal(r.status, 0, r.stdout + r.stderr);
   assert.equal(r.calls.length, 1);
   assert.match(r.stdout, /needs Node 22\.13\+/);
   assert.match(r.stdout, /session-alive/);
+});
 });
 }

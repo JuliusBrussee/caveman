@@ -10,6 +10,7 @@ import (
 )
 
 func TestGeminiSessionSourceCountsInputOnceAndRoundTripsMessageIndexLocator(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	block := strings.TrimSuffix("SHARED GEMINI CONTEXT\n"+strings.Repeat("preserve provider semantics and exact local locator bytes\n", 20), "\n")
 	for index := 0; index < 3; index++ {

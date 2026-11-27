@@ -69,6 +69,10 @@ func (s sseWriter) flush() {
 // only its usage may still come, so an upstream that keeps the connection
 // open holds nothing.
 func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(d time.Duration)) {
+	return sseLinesWith(upstream, pingInterval, gateHold)
+}
+
+func sseLinesWith(upstream io.Reader, ping, holdDur time.Duration) (iter.Seq[[]byte], func() error, func(), func(d time.Duration)) {
 	// Buffered: a burst of lines crosses to the caller without a handoff per
 	// line.
 	raw := make(chan []byte, 64)
@@ -99,7 +103,7 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(
 	}()
 	var deadline <-chan time.Time // armed by the fourth result
 	lines := func(yield func([]byte) bool) {
-		timer, hold := time.NewTimer(pingInterval), time.NewTimer(gateHold)
+		timer, hold := time.NewTimer(ping), time.NewTimer(holdDur)
 		defer timer.Stop()
 		defer hold.Stop()
 		for {
@@ -129,7 +133,7 @@ func sseLines(upstream io.Reader) (iter.Seq[[]byte], func() error, func(), func(
 			case <-done:
 				return
 			}
-			timer.Reset(pingInterval)
+			timer.Reset(ping)
 		}
 	}
 	var once sync.Once

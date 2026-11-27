@@ -13,6 +13,7 @@ import (
 )
 
 func TestRepairRebuildsDamagedStoreAndKeepsEveryVerifiedRow(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	handles := damagedStore(t, path, "double-parent")
 	// A row whose bytes no longer match its handle, as in #1369.
@@ -97,6 +98,7 @@ func TestRepairRebuildsDamagedStoreAndKeepsEveryVerifiedRow(t *testing.T) {
 }
 
 func TestRepairRefusesAStoreAnotherConnectionHolds(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	damagedStore(t, path, "double-parent")
 	holder, err := Open(path)
@@ -125,6 +127,7 @@ func TestRepairRefusesAStoreAnotherConnectionHolds(t *testing.T) {
 }
 
 func TestRepairLeavesAnIntactStoreAlone(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	store, err := Open(path)
 	if err != nil {
@@ -161,6 +164,7 @@ func TestRepairLeavesAnIntactStoreAlone(t *testing.T) {
 }
 
 func TestRepairResolvesReferencesThroughAnyVerifiedCopy(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	store, err := Open(path)
 	if err != nil {
@@ -201,6 +205,7 @@ func TestRepairResolvesReferencesThroughAnyVerifiedCopy(t *testing.T) {
 }
 
 func TestInspectStoreNeverCreatesOrWrites(t *testing.T) {
+	t.Parallel()
 	dir := t.TempDir()
 	missing := filepath.Join(dir, "ccr.db")
 	report, err := InspectStore(missing, DefaultMaxStorageBytes, true)
@@ -227,6 +232,7 @@ func TestInspectStoreNeverCreatesOrWrites(t *testing.T) {
 }
 
 func TestInspectStoreReportsAFullStore(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	const budget = 256 << 10
 	store, err := OpenWithBudget(path, budget)

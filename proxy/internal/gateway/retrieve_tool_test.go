@@ -8,6 +8,7 @@ import (
 )
 
 func TestServerRetrieveSupportedOnlyForImplementedWireGrammars(t *testing.T) {
+	t.Parallel()
 	tests := []struct {
 		provider string
 		path     string
@@ -29,6 +30,7 @@ func TestServerRetrieveSupportedOnlyForImplementedWireGrammars(t *testing.T) {
 }
 
 func TestInjectRetrieveToolStaticOpenAIPreservesMessageBytes(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"gpt-5.5","messages":[{"role":"system","content":"sys"},{"role":"user","content":"hello"}]}`)
 	out1, ok := injectRetrieveTool("openai", "/v1/chat/completions", body)
 	if !ok {
@@ -50,6 +52,7 @@ func TestInjectRetrieveToolStaticOpenAIPreservesMessageBytes(t *testing.T) {
 }
 
 func TestInjectRetrieveToolAppendsToExistingAnthropicTools(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"model":"claude","tools":[{"name":"read","description":"existing","input_schema":{"type":"object"}}],"messages":[{"role":"user","content":"hi"}]}`)
 	out, ok := injectRetrieveTool("anthropic", "/v1/messages", body)
 	if !ok {
@@ -67,6 +70,7 @@ func TestInjectRetrieveToolAppendsToExistingAnthropicTools(t *testing.T) {
 }
 
 func TestParseRetrieveCallReadsHandleAndQuery(t *testing.T) {
+	t.Parallel()
 	openAI := []byte(`{"choices":[{"message":{"tool_calls":[{"id":"call_1","type":"function","function":{"name":"caveman_retrieve","arguments":"{\"handle\":\"ccr_block\",\"query\":\"postgres\"}"}}]}}]}`)
 	id, handle, query, ok := parseRetrieveCall("openai", "/v1/chat/completions", openAI)
 	if !ok || id != "call_1" || handle != "ccr_block" || query != "postgres" {
@@ -81,6 +85,7 @@ func TestParseRetrieveCallReadsHandleAndQuery(t *testing.T) {
 }
 
 func TestResponsesRetrieveWireRoundTrip(t *testing.T) {
+	t.Parallel()
 	reqBody := []byte(`{"model":"gpt-5.5","input":[{"role":"user","content":[{"type":"input_text","text":"compressed <<ccr:ccr_responses>>"}]}]}`)
 	injected, ok := injectRetrieveTool("openai", "/v1/responses", reqBody)
 	if !ok {
@@ -129,6 +134,7 @@ func TestResponsesRetrieveWireRoundTrip(t *testing.T) {
 }
 
 func TestGeminiRetrieveWireRoundTrip(t *testing.T) {
+	t.Parallel()
 	const route = "/v1beta/models/gemini-2.5-flash:generateContent"
 	reqBody := []byte(`{"contents":[{"role":"user","parts":[{"text":"compressed <<ccr:ccr_gemini>>"}]}]}`)
 	injected, ok := injectRetrieveTool("gemini", route, reqBody)
@@ -212,6 +218,7 @@ func TestGeminiRetrieveWireRoundTrip(t *testing.T) {
 }
 
 func TestRetrieveToolSchemaValid(t *testing.T) {
+	t.Parallel()
 	var schema map[string]any
 	if err := json.Unmarshal(retrieveToolSchema, &schema); err != nil {
 		t.Fatalf("schema invalid: %v", err)
@@ -234,6 +241,7 @@ func TestRetrieveToolSchemaValid(t *testing.T) {
 //   - appendRetrieveResult rewrites the REQUEST re-sent upstream, so the whole
 //     conversation history is rewritten on every recovery round trip.
 func TestRetrieveRewritesPreserveLargeIntegerLiterals(t *testing.T) {
+	t.Parallel()
 	const largeInt = "9007199254740993" // 2^53 + 1, not representable as float64
 
 	t.Run("stripRetrieveCall/anthropic", func(t *testing.T) {
@@ -291,6 +299,7 @@ func TestRetrieveRewritesPreserveLargeIntegerLiterals(t *testing.T) {
 // must not start accepting a document with trailing bytes and silently drop
 // them on the re-marshal. Both rewrites hand the body back untouched instead.
 func TestRetrieveRewritesRejectTrailingBytes(t *testing.T) {
+	t.Parallel()
 	base := `{"id":"msg_1","type":"message","role":"assistant","stop_reason":"tool_use","content":[` +
 		`{"type":"tool_use","id":"tu_1","name":"caveman_retrieve","input":{"handle":"ccr_1","query":"schema"}}` +
 		`]}`

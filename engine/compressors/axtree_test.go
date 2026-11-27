@@ -58,6 +58,7 @@ const sampleAXTree = `[
 ]`
 
 func TestAXTreeCuratesIgnoredAndGenericNodes(t *testing.T) {
+	t.Parallel()
 	out, ok := NewAXTree().Compress([]byte(sampleAXTree))
 	if !ok {
 		t.Fatal("expected valid AX tree to compress")
@@ -88,6 +89,7 @@ func TestAXTreeCuratesIgnoredAndGenericNodes(t *testing.T) {
 }
 
 func TestAXTreeMalformedFailsClosed(t *testing.T) {
+	t.Parallel()
 	c := NewAXTree()
 	for _, input := range [][]byte{
 		[]byte(`{not json`),
@@ -109,6 +111,7 @@ func TestAXTreeMalformedFailsClosed(t *testing.T) {
 // through; after the fix the frame-visible nodes still curate into a usable uid
 // map, with the iframe boundary treated as a leaf.
 func TestAXTreeDanglingChildBecomesLeaf(t *testing.T) {
+	t.Parallel()
 	input := `[
 	  {"nodeId":"1","role":{"value":"RootWebArea"},"name":{"value":"Host Page"},"backendDOMNodeId":1,"childIds":["2","3"]},
 	  {"nodeId":"2","role":{"value":"button"},"name":{"value":"Save settings"},"backendDOMNodeId":10},
@@ -141,6 +144,7 @@ func TestAXTreeDanglingChildBecomesLeaf(t *testing.T) {
 }
 
 func TestAXTreeUIDsAreUniqueAcrossFramesAndDuplicates(t *testing.T) {
+	t.Parallel()
 	input := `[
 	  {"nodeId":"1","role":{"value":"RootWebArea"},"childIds":["2","3"]},
 	  {"nodeId":"2","role":{"value":"button"},"name":{"value":"First"},"backendDOMNodeId":42,"frameId":"frame-a"},
@@ -165,6 +169,7 @@ func TestAXTreeUIDsAreUniqueAcrossFramesAndDuplicates(t *testing.T) {
 }
 
 func TestAXTreeUnknownStateTokenIsNotInvented(t *testing.T) {
+	t.Parallel()
 	input := `[
 	  {"nodeId":"1","role":{"value":"RootWebArea"},"childIds":["2"]},
 	  {"nodeId":"2","role":{"value":"button"},"name":{"value":"Run"},"backendDOMNodeId":42,
@@ -180,6 +185,7 @@ func TestAXTreeUnknownStateTokenIsNotInvented(t *testing.T) {
 }
 
 func TestAXTreeHighNoiseFixtureReducesIgnoredNodesAndTokens(t *testing.T) {
+	t.Parallel()
 	input, err := os.ReadFile("testdata/axtree_high_noise.json")
 	if err != nil {
 		t.Fatal(err)
@@ -220,6 +226,7 @@ func TestAXTreeHighNoiseFixtureReducesIgnoredNodesAndTokens(t *testing.T) {
 }
 
 func TestAXTreeCapturedFixtureCompactGoldenAndTokenBudget(t *testing.T) {
+	t.Parallel()
 	input, err := os.ReadFile("testdata/axtree_cdp_local_page.json")
 	if err != nil {
 		t.Fatal(err)
@@ -246,6 +253,7 @@ func TestAXTreeCapturedFixtureCompactGoldenAndTokenBudget(t *testing.T) {
 }
 
 func TestAXTreeQueryKeepsBestMatchesAncestorsAndVisibleUIDsOnly(t *testing.T) {
+	t.Parallel()
 	input, err := os.ReadFile("testdata/axtree_cdp_local_page.json")
 	if err != nil {
 		t.Fatal(err)
@@ -272,6 +280,7 @@ func TestAXTreeQueryKeepsBestMatchesAncestorsAndVisibleUIDsOnly(t *testing.T) {
 }
 
 func TestAXTreeQueryKeepsWholeRowForLineItemMatches(t *testing.T) {
+	t.Parallel()
 	input := []byte(`[
 	  {"nodeId": "1", "role": {"type": "role", "value": "RootWebArea"}, "name": {"type": "computedString", "value": "Orders"}, "backendDOMNodeId": 1, "childIds": ["2"]},
 	  {"nodeId": "2", "role": {"type": "role", "value": "table"}, "name": {"type": "computedString", "value": "Orders awaiting review"}, "backendDOMNodeId": 2, "childIds": ["3", "9"]},
@@ -301,6 +310,7 @@ func TestAXTreeQueryKeepsWholeRowForLineItemMatches(t *testing.T) {
 }
 
 func TestAXTreeQueryMissIsExplicitAndHasNoGuessableTargets(t *testing.T) {
+	t.Parallel()
 	input, err := os.ReadFile("testdata/axtree_cdp_local_page.json")
 	if err != nil {
 		t.Fatal(err)

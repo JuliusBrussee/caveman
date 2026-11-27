@@ -13,6 +13,7 @@ import (
 // compression-eligible requests, and refuses a headline compression saving when the
 // window was dominated by cache writes.
 func TestObserveSummaryCacheColumnsAndEligibleCount(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -78,6 +79,7 @@ func TestObserveSummaryCacheColumnsAndEligibleCount(t *testing.T) {
 // opened, closed, and reopened (simulating an upgrade over an existing DB) still
 // reports the new columns without error and never double-adds them.
 func TestObserveSummaryOldDBTolerated(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "caveman.db")
 	s1, err := Open(path, nil)
 	if err != nil {
@@ -117,6 +119,7 @@ func TestObserveSummaryOldDBTolerated(t *testing.T) {
 // before the column existed, and only caveman-caused busts are counted as
 // caveman's — a client editing its own history is not caveman's bug.
 func TestCavemanCacheBustCountedOnOldDB(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "caveman.db")
 	s1, err := Open(path, nil)
 	if err != nil {

@@ -45,6 +45,7 @@ func (rejectingAuth) Authenticate(context.Context, *http.Request) (RequestContex
 const modelsCatalog = `{"object":"list","data":[{"id":"Main","object":"model","context_length":1000000}]}`
 
 func TestInterruptedMetadataResponseAbortsClientFraming(t *testing.T) {
+	t.Parallel()
 	for _, http2 := range []bool{false, true} {
 		t.Run(fmt.Sprintf("http2=%v", http2), func(t *testing.T) {
 			var calls atomic.Int32
@@ -89,6 +90,7 @@ func TestInterruptedMetadataResponseAbortsClientFraming(t *testing.T) {
 // provider-prefixed mount and the /w/<agent> attribution mount, and the
 // upstream's own JSON (context_length included) must come back byte-for-byte.
 func TestModelsMetadataRouteForwardsUnchanged(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		path         string
@@ -140,6 +142,7 @@ func TestModelsMetadataRouteForwardsUnchanged(t *testing.T) {
 // TestAnthropicModelsMetadataRoute covers the sibling adapter: the Anthropic
 // wire protocol defines GET /v1/models too, and it shared the same gap.
 func TestAnthropicModelsMetadataRoute(t *testing.T) {
+	t.Parallel()
 	upstream, gotReq, _ := modelsUpstream(t, modelsCatalog)
 	srv := New(Config{
 		Adapters:   []providers.Adapter{anthropic.New(upstream.URL)},
@@ -170,6 +173,7 @@ func TestAnthropicModelsMetadataRoute(t *testing.T) {
 // protocol decides instead: anthropic-version or x-api-key means Anthropic, a
 // Google key (header or ?key=) matches neither, anything else is OpenAI.
 func TestBareModelsRouteChoosesAdapterByProtocol(t *testing.T) {
+	t.Parallel()
 	var reached []string
 	upstream := func(name string) *httptest.Server {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -234,6 +238,7 @@ func TestBareModelsRouteChoosesAdapterByProtocol(t *testing.T) {
 // TestMetadataRouteStaysFailClosed proves the new read-only surface did not
 // turn the closed route allowlist into a prefix pass-through.
 func TestMetadataRouteStaysFailClosed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name   string
 		method string
@@ -284,6 +289,7 @@ func TestMetadataRouteStaysFailClosed(t *testing.T) {
 // unauthenticated metadata read answers 401 like every other mount, so the
 // 401/404 split cannot be used to enumerate which providers this proxy serves.
 func TestMetadataRouteAuthenticatesFirst(t *testing.T) {
+	t.Parallel()
 	upstream, _, _ := modelsUpstream(t, modelsCatalog)
 	srv := New(Config{
 		Adapters:   []providers.Adapter{openai.New(upstream.URL)},
@@ -303,6 +309,7 @@ func TestMetadataRouteAuthenticatesFirst(t *testing.T) {
 // the same gap: Groq, Ollama, vLLM and friends all serve GET /v1/models, and a
 // named mount is how caveman reaches them.
 func TestCompatModelsMetadataRoute(t *testing.T) {
+	t.Parallel()
 	upstream, gotReq, _ := modelsUpstream(t, modelsCatalog)
 
 	named, err := openaicompat.NewNamed("groq", upstream.URL)
@@ -354,6 +361,7 @@ func TestCompatModelsMetadataRoute(t *testing.T) {
 // Double prefix: /w/<agent> attribution and the /openai provider prefix compose,
 // and the agent-mount cases above only ever pair /w/<agent> with a bare path.
 func TestModelsMetadataRoutePreservesQueryAndDoublePrefix(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name         string
 		path         string

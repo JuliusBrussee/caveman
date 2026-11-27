@@ -93,6 +93,7 @@ func serveChat(srv *gateway.Server, body string) {
 // database file with a compressor that now emits different bytes. The second
 // process must still forward the FIRST process's replacement for the frozen turn.
 func TestE2EOpenAIPrefixStabilityAcrossRestart(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "caveman.db")
 	t1 := strings.Repeat("turn one client bytes ", 40)
 	t2 := strings.Repeat("turn two client bytes ", 40)
@@ -137,6 +138,7 @@ func TestE2EOpenAIPrefixStabilityAcrossRestart(t *testing.T) {
 // so each lookup races a write, and a lookup that degrades into a miss would put
 // the client's original bytes upstream non-deterministically.
 func TestE2EOpenAIPrefixStabilityUnderConcurrency(t *testing.T) {
+	t.Parallel()
 	st, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open store: %v", err)

@@ -57,6 +57,7 @@ func readNumberFixture(t *testing.T, raw []byte) map[string]any {
 }
 
 func TestTransformAnthropicPreservesExactToolNumbers(t *testing.T) {
+	t.Parallel()
 	for _, rewriteTools := range []bool{false, true} {
 		name := "system only"
 		if rewriteTools {
@@ -94,6 +95,7 @@ func TestTransformAnthropicPreservesExactToolNumbers(t *testing.T) {
 }
 
 func TestTransformOpenAIPreservesExactToolSchemaNumbers(t *testing.T) {
+	t.Parallel()
 	for _, responses := range []bool{false, true} {
 		name := "chat completions"
 		if responses {
@@ -132,6 +134,7 @@ func TestTransformOpenAIPreservesExactToolSchemaNumbers(t *testing.T) {
 }
 
 func TestAnthropicHistoryKeepsExactNumbersInLiveTail(t *testing.T) {
+	t.Parallel()
 	values, _ := precisionFixture()
 	messages := anthropicConvo(15, 3500)
 	messages[len(messages)-2] = Message{Role: "assistant", Content: []any{

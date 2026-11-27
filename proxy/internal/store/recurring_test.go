@@ -22,6 +22,7 @@ func filler(seed string) string {
 // always-loaded setup (claude_md_weight), so mining them double-counts them
 // and crowds genuine repeated pastes out of a capped report.
 func TestRecurringMinerIgnoresHostAndHookInjectedContext(t *testing.T) {
+	t.Parallel()
 	reminder := "<system-reminder>\nCodebase and user instructions are shown below. Be sure to adhere to these instructions. IMPORTANT: These instructions OVERRIDE any default behavior.\n\n" + filler("claude md line") + "\n</system-reminder>"
 	hookResult := "SessionStart:startup hook success: CAVEMAN MODE ACTIVE — mode: caveman. " + filler("ruleset body")
 	ruleset := "Respond terse like smart caveman. All technical substance stay. Only fluff die.\n\n" + filler("rule headline")
@@ -67,6 +68,7 @@ func TestRecurringMinerIgnoresHostAndHookInjectedContext(t *testing.T) {
 // A user's own paste in the same turn as a system-reminder still counts, and a
 // block that merely mentions caveman is not caveman's ruleset.
 func TestRecurringMinerKeepsHumanBlocksThatOnlyMentionInjectedText(t *testing.T) {
+	t.Parallel()
 	mentions := "I read the <system-reminder> docs and want the same shape here; CAVEMAN MODE ACTIVE is what the hook prints.\n\n" + filler("my own notes")
 
 	miner := newRecurringMiner()
@@ -82,6 +84,7 @@ func TestRecurringMinerKeepsHumanBlocksThatOnlyMentionInjectedText(t *testing.T)
 // The predicate's contract, stated directly: every rule is anchored at the
 // payload start, so a human block that quotes one of these is still mined.
 func TestInjectedContextPayload(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name string
 		in   string

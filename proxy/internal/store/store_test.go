@@ -9,6 +9,7 @@ import (
 )
 
 func TestRecordAndSummary_InferredBasis(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -63,6 +64,7 @@ func TestRecordAndSummary_InferredBasis(t *testing.T) {
 }
 
 func TestRecordForcesInferredAndSanitizesInvalidAccounting(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -85,6 +87,7 @@ func TestRecordForcesInferredAndSanitizesInvalidAccounting(t *testing.T) {
 }
 
 func TestRecentRequests(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatalf("open: %v", err)
@@ -131,6 +134,7 @@ func TestRecentRequests(t *testing.T) {
 // A pool attempt is on its row: the entry, why it fell back, and the host's
 // own answer id to look the call up there.
 func TestRecordKeepsThePoolAttempt(t *testing.T) {
+	t.Parallel()
 	s, err := Open(filepath.Join(t.TempDir(), "caveman.db"), nil)
 	if err != nil {
 		t.Fatal(err)

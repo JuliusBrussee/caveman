@@ -13,6 +13,7 @@ const openAIOpeningMarker = "OPENING_PROMPT_SHOULD_BE_HISTORY"
 const openAILiveMarker = "LIVE_CURRENT_PROMPT_SHOULD_STAY_TEXT"
 
 func TestOpenAIHistoryTurnLowering(t *testing.T) {
+	t.Parallel()
 	responses := OpenAIResponsesItemsToTurns([]any{
 		map[string]any{"role": "user", "content": "hello"},
 		map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "output_text", "text": "hi there"}}},
@@ -55,6 +56,7 @@ func TestOpenAIHistoryTurnLowering(t *testing.T) {
 }
 
 func TestPlanGptCollapseGatesAndClosedBoundaries(t *testing.T) {
+	t.Parallel()
 	yes := func(string, int) bool { return true }
 	no := func(string, int) bool { return false }
 
@@ -115,6 +117,7 @@ func TestPlanGptCollapseGatesAndClosedBoundaries(t *testing.T) {
 }
 
 func TestPlanGptCollapseTokenFloorAndAppendOnlyImages(t *testing.T) {
+	t.Parallel()
 	yes := func(string, int) bool { return true }
 	opts := DefaultGptHistoryOptions()
 	opts.MinCollapseTokens = 10_000_000
@@ -158,6 +161,7 @@ func TestPlanGptCollapseTokenFloorAndAppendOnlyImages(t *testing.T) {
 }
 
 func TestPlanGptCollapsePinsLatestUserRequest(t *testing.T) {
+	t.Parallel()
 	yes := func(string, int) bool { return true }
 	turns := openAITurnsWithUser(40, map[int]bool{0: true})
 	plan, err := PlanGptCollapse(turns, 0, yes, GptHistoryOptions{})
@@ -204,6 +208,7 @@ func TestPlanGptCollapsePinsLatestUserRequest(t *testing.T) {
 }
 
 func TestTransformOpenAIHistoryCollapseResponsesAndChat(t *testing.T) {
+	t.Parallel()
 	opts := DefaultTransformOptions("gpt-5.6")
 	opts.MinCompressChars = 1
 	opts.CharsPerToken = 1

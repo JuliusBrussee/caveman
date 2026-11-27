@@ -65,6 +65,7 @@ func objectData(id string, size int, i int) []byte {
 }
 
 func TestFullStoreExpiresEndedSessionsAndAcceptsNewRecovery(t *testing.T) {
+	t.Parallel()
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), 512<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -132,6 +133,7 @@ func TestFullStoreExpiresEndedSessionsAndAcceptsNewRecovery(t *testing.T) {
 }
 
 func TestIdleSessionExpiresOnlyAfterIdleRetention(t *testing.T) {
+	t.Parallel()
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), 512<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -167,6 +169,7 @@ func TestIdleSessionExpiresOnlyAfterIdleRetention(t *testing.T) {
 }
 
 func TestFullStoreWithNothingExpirableStaysRefusedAndKeepsEverything(t *testing.T) {
+	t.Parallel()
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), 256<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -193,6 +196,7 @@ func TestFullStoreWithNothingExpirableStaysRefusedAndKeepsEverything(t *testing.
 }
 
 func TestExpiryKeepsAnOwnerThatAKeptReferenceReads(t *testing.T) {
+	t.Parallel()
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), 512<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -235,6 +239,7 @@ func TestExpiryKeepsAnOwnerThatAKeptReferenceReads(t *testing.T) {
 // A store full of those copies now consolidates them on the first refused
 // write, keeps every handle byte-exact and accepts the write.
 func TestFullStoreConsolidatesDuplicateRepositoryMaps(t *testing.T) {
+	t.Parallel()
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), 256<<10)
 	if err != nil {
 		t.Fatal(err)
@@ -304,6 +309,7 @@ func TestFullStoreConsolidatesDuplicateRepositoryMaps(t *testing.T) {
 }
 
 func TestConsolidationOwnerMustVerify(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "ccr.db"))
 	data := bytes.Repeat([]byte("map"), 2000)
 	broken := bytes.Repeat([]byte("other map"), 2000)
@@ -342,6 +348,7 @@ func TestConsolidationOwnerMustVerify(t *testing.T) {
 }
 
 func TestExpiredObjectAnswersExpiredThroughEveryReadPath(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "ccr.db"))
 	if _, err := store.db.Exec(`INSERT INTO expired_objects (object_id, expired_at) VALUES ('ccr_obj_gone', '2026-11-01T00:00:00Z')`); err != nil {
 		t.Fatal(err)
@@ -368,6 +375,7 @@ func TestExpiredObjectAnswersExpiredThroughEveryReadPath(t *testing.T) {
 // Each reclaim lookup must use an index: on a 500 MB store a full scan per
 // candidate walks every large object's overflow pages.
 func TestReclaimLookupsUseIndexes(t *testing.T) {
+	t.Parallel()
 	store := openTestStore(t, filepath.Join(t.TempDir(), "ccr.db"))
 	for _, c := range []struct {
 		query string

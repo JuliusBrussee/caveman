@@ -5,6 +5,7 @@ package pixel
 import "testing"
 
 func TestAtlasRank(t *testing.T) {
+	t.Parallel()
 	if got := AtlasRank('A'); got < 0 {
 		t.Fatalf("AtlasRank('A') = %d, want present", got)
 	}
@@ -17,6 +18,7 @@ func TestAtlasRank(t *testing.T) {
 }
 
 func TestAtlasDecodedLengths(t *testing.T) {
+	t.Parallel()
 	loadAtlas()
 	if got, want := len(atlasCodepoints), 35501; got != want {
 		t.Fatalf("atlas glyph count = %d, want %d", got, want)
@@ -27,6 +29,7 @@ func TestAtlasDecodedLengths(t *testing.T) {
 }
 
 func TestAtlasGlyphA(t *testing.T) {
+	t.Parallel()
 	rank := AtlasRank('A')
 	if rank < 0 {
 		t.Fatal("A missing from atlas")
@@ -46,6 +49,7 @@ func TestAtlasGlyphA(t *testing.T) {
 }
 
 func TestAtlasWideCJK(t *testing.T) {
+	t.Parallel()
 	rank := AtlasRank('\u4E00')
 	if rank < 0 {
 		t.Fatal("U+4E00 missing from atlas")

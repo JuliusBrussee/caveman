@@ -58,6 +58,7 @@ func heldWhile(t *testing.T, s MiddlewareStore, first, second func(*MiddlewareTx
 // single writer; Postgres from its per-authority lock, which a scope that does
 // not exist yet takes on its id.
 func TestMiddlewareWritersOfOneAuthorityDoNotInterleave(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, testMiddlewareWritersOfOneAuthorityDoNotInterleave)
 }
 
@@ -98,6 +99,7 @@ func testMiddlewareWritersOfOneAuthorityDoNotInterleave(t *testing.T, s middlewa
 // under, a transaction writing the same data: an authority's writer, or a
 // replica whose clock still renews a scope this one sees elapsed.
 func TestPostgresSweepIsExclusiveAndSkipsBusyAuthorities(t *testing.T) {
+	t.Parallel()
 	eachMiddlewareBackend(t, func(t *testing.T, s middlewareBackend) {
 		if _, ok := s.MiddlewareStore.(*PostgresMiddleware); !ok {
 			t.Skip("SQLite has one writer; there is nothing to skip")
@@ -142,6 +144,7 @@ func TestPostgresSweepIsExclusiveAndSkipsBusyAuthorities(t *testing.T) {
 // Replicas that start together migrate one after another under the advisory
 // lock; without it, concurrent CREATE ... IF NOT EXISTS collide in the catalog.
 func TestPostgresMigrationsAreSafeFromConcurrentReplicas(t *testing.T) {
+	t.Parallel()
 	base := os.Getenv("CAVEMAN_TEST_POSTGRES_URL")
 	if base == "" {
 		t.Skip("CAVEMAN_TEST_POSTGRES_URL is unset")

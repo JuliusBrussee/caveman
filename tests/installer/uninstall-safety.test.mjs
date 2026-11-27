@@ -374,8 +374,13 @@ test('uninstall stays quiet when no native integration is journaled', () => {
 });
 
 // A foreign `caveman` whose --version never answers must not stall uninstall:
-// the probe gives up after 10s and the PATH caveman keeps its turn.
+// the probe gives up after 10s (overridden via CAVEMAN_PROBE_TIMEOUT_MS in
+// this test so the suite does not sleep 10s) and the PATH caveman keeps its turn.
 test('uninstall gives up on a caveman --version that hangs', { skip: process.platform === 'win32' && 'POSIX fake CLI' }, () => {
+  assert.match(
+    fs.readFileSync(INSTALLER, 'utf8'),
+    /Number\.isInteger\(rawProbeTimeout\)\s*&&\s*rawProbeTimeout\s*>\s*0\s*&&\s*rawProbeTimeout\s*<=\s*2147483647\s*\?\s*rawProbeTimeout\s*:\s*10000/,
+  );
   const dir = freshTmpDir();
   const configDir = path.join(dir, 'claude');
   try {
@@ -389,11 +394,20 @@ test('uninstall gives up on a caveman --version that hangs', { skip: process.pla
     fs.mkdirSync(bin);
     fs.writeFileSync(path.join(bin, 'caveman'), '#!/bin/sh\n[ "$1" = --version ] && exec sleep 120\nexit 0\n', { mode: 0o755 });
     const r = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
-      env: { ...isolatedEnv(dir, [bin]), CLAUDE_CONFIG_DIR: configDir, NODE_PATH: nodePath, NO_COLOR: '1' },
+      env: { ...isolatedEnv(dir, [bin]), CLAUDE_CONFIG_DIR: configDir, NODE_PATH: nodePath, NO_COLOR: '1', CAVEMAN_PROBE_TIMEOUT_MS: '300' },
       encoding: 'utf8', timeout: 60_000,
     });
     assert.equal(r.status, 0, r.error?.message || r.stderr || r.stdout);
     assert.match(r.stdout, /would run: caveman disable --all/);
+    // An invalid CAVEMAN_PROBE_TIMEOUT_MS must fall back to the default timeout
+    // instead of throwing and skipping the bundled-CLI comparison.
+    fs.writeFileSync(path.join(bin, 'caveman'), '#!/bin/sh\n[ "$1" = --version ] && echo \'{"version":"1.0.0"}\'\nexit 0\n', { mode: 0o755 });
+    const badTimeout = spawnSync(process.execPath, [INSTALLER, '--uninstall', '--dry-run', '--config-dir', configDir, '--non-interactive', '--no-mcp-shrink'], {
+      env: { ...isolatedEnv(dir, [bin]), CLAUDE_CONFIG_DIR: configDir, NODE_PATH: nodePath, NO_COLOR: '1', CAVEMAN_PROBE_TIMEOUT_MS: '-5' },
+      encoding: 'utf8', timeout: 60_000,
+    });
+    assert.equal(badTimeout.status, 0, badTimeout.error?.message || badTimeout.stderr || badTimeout.stdout);
+    assert.match(badTimeout.stdout, /dist[\\/]index\.js'? disable --all/);
   } finally {
     fs.rmSync(dir, { recursive: true, force: true });
   }

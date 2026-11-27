@@ -6,6 +6,7 @@ import (
 )
 
 func TestChatGPTRequestHeadersRemovePrivateAndHopByHopFields(t *testing.T) {
+	t.Parallel()
 	in := http.Header{}
 	in.Set("Authorization", "Bearer keep")
 	in.Set("ChatGPT-Account-ID", "acct_keep")
@@ -26,6 +27,7 @@ func TestChatGPTRequestHeadersRemovePrivateAndHopByHopFields(t *testing.T) {
 }
 
 func TestRelayedResponseHeadersForbidContentSniffing(t *testing.T) {
+	t.Parallel()
 	src := http.Header{}
 	src.Set("Content-Type", "text/html")
 	src.Add("X-Content-Type-Options", "sniff")

@@ -17,6 +17,7 @@ var maxOverlayStyle = RenderStyle{AA: true, PitchY: 6, CellWBonus: -1}
 // hand-computed pixel values, including the canonical full red+blue overlap from
 // pxcore.py overlay(): (215,15,15)·(15,15,215)/255 → (13,1,13).
 func TestCompositeTwoLayersReferenceNumbers(t *testing.T) {
+	t.Parallel()
 	red := overlayLayerColors[0]  // (215,15,15)
 	blue := overlayLayerColors[1] // (15,15,215)
 	cases := []struct {
@@ -69,6 +70,7 @@ func composePixelRef(c1, c2 uint8, col1, col2 [3]uint8) color.RGBA {
 // pixel) and checks each decoded pixel equals the subtractive multiply computed
 // from the gray atlas coverage.
 func TestTwoLayerOverlapMatchesReferenceComposite(t *testing.T) {
+	t.Parallel()
 	img, err := renderTwoLayerChunk([]string{"M"}, []string{"M"}, 1, maxOverlayStyle, MaxHeightPx)
 	if err != nil {
 		t.Fatal(err)
@@ -110,6 +112,7 @@ func TestTwoLayerOverlapMatchesReferenceComposite(t *testing.T) {
 // odd (shorter blue), single-line (black not red), empty, and spill into a
 // second image whose tail is a single-layer black page.
 func TestTwoLayerSplitter(t *testing.T) {
+	t.Parallel()
 	// maxHeightPx 28 → linesPerLayer = (28-8-8)/6 + 1 = 3; each image holds ≤6.
 	const maxH = 28
 	line := "aaa"
@@ -187,6 +190,7 @@ func layersOf(imgs []RenderedImage) []int {
 // a max image costs the SAME tokens as a balanced page (identical pixels) while
 // holding double the characters, so for equal text volume max is cheaper.
 func TestTwoLayerGateParityAndCapacity(t *testing.T) {
+	t.Parallel()
 	bal := ResolveDensity("gpt-5.6", DensityBalanced) // std, 1 layer
 	mx := ResolveDensity("gpt-5.6", DensityMax)       // std, 2 layers, same geometry
 
@@ -221,6 +225,7 @@ func TestTwoLayerGateParityAndCapacity(t *testing.T) {
 // just under 2×N lines fits ONE max image with zero omitted chars, while the
 // identical content needs two balanced images (and truncates at maxImages=1).
 func TestTwoLayerCapacitySeam(t *testing.T) {
+	t.Parallel()
 	bal := ResolveDensity("gpt-5.6", DensityBalanced) // std, 1 layer, N rows/image
 	mx := ResolveDensity("gpt-5.6", DensityMax)       // std, 2 layers, 2N rows/image
 	cols := bal.pageCols()

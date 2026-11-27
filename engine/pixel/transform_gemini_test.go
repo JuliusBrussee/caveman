@@ -12,6 +12,7 @@ import (
 )
 
 func TestTransformGeminiStructural(t *testing.T) {
+	t.Parallel()
 	req := map[string]any{
 		"model": "gemini-3.6-flash",
 		"systemInstruction": map[string]any{
@@ -143,6 +144,7 @@ func TestTransformGeminiStructural(t *testing.T) {
 }
 
 func TestTransformGeminiPassThroughByteIdentity(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"contents":[{"role":"user","parts":[{"text":"small"}]}],"stream":true}`)
 	out, info, err := TransformGemini(body, TransformOptions{Model: "gemini-3.6-flash"})
 	if err != nil {
@@ -170,6 +172,7 @@ func TestTransformGeminiPassThroughByteIdentity(t *testing.T) {
 }
 
 func TestTransformGeminiUnknownModelFailsClosedBeforeTokenGate(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"systemInstruction":{"parts":[{"text":"` + strings.Repeat("long policy ", 5000) + `"}]},"contents":[{"role":"user","parts":[{"text":"small"}]}]}`)
 	out, info, err := TransformGemini(body, TransformOptions{Model: "future-gemini"})
 	if err != nil {
@@ -184,6 +187,7 @@ func TestTransformGeminiUnknownModelFailsClosedBeforeTokenGate(t *testing.T) {
 }
 
 func TestTransformGeminiNonHighGlobalMediaResolutionFailsClosed(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, key, value string
 	}{
@@ -229,6 +233,7 @@ func TestTransformGeminiNonHighGlobalMediaResolutionFailsClosed(t *testing.T) {
 }
 
 func TestTransformGeminiExplicitHighMediaResolutionUsesHighBudget(t *testing.T) {
+	t.Parallel()
 	body := mustJSONGemini(t, map[string]any{
 		"systemInstruction": map[string]any{"parts": []any{map[string]any{"text": strings.Repeat("long policy ", 5000)}}},
 		"contents":          []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "small"}}}},
@@ -247,6 +252,7 @@ func TestTransformGeminiExplicitHighMediaResolutionUsesHighBudget(t *testing.T) 
 }
 
 func TestTransformGeminiMalformedBody(t *testing.T) {
+	t.Parallel()
 	out, info, err := TransformGemini([]byte(`{"contents":[`), TransformOptions{Model: "gemini-3.6-flash"})
 	if err == nil {
 		t.Fatal("expected malformed-body error")
@@ -260,6 +266,7 @@ func TestTransformGeminiMalformedBody(t *testing.T) {
 }
 
 func TestTransformGeminiUnknownTopLevelRawPreserved(t *testing.T) {
+	t.Parallel()
 	body := []byte(`{"systemInstruction":{"parts":[{"text":"` + strings.Repeat("policy line with many chars ", 1500) + `"}]},"contents":[{"role":"user","parts":[{"text":"hi"}]}],"x_raw":{"b":[2,1],"a":"x"}}`)
 	out, info, err := TransformGemini(body, TransformOptions{Model: "gemini-3.6-flash"})
 	if err != nil {
@@ -278,6 +285,7 @@ func TestTransformGeminiUnknownTopLevelRawPreserved(t *testing.T) {
 }
 
 func TestTransformGeminiUsesModelSpecificMediaResolutionGate(t *testing.T) {
+	t.Parallel()
 	text := strings.Repeat("x", 8000)
 	eval := evalGeminiProfitability("gemini-3.6-flash", "default", text, DenseContentCols, 10, 1, CharsPerToken, 0, 0, true, DenseContentCharsPerImage, true)
 	if eval == nil || !eval.profitable || eval.imageTokens != 1232 { // 1120 high/default * 1.10 margin
@@ -299,6 +307,7 @@ func TestTransformGeminiUsesModelSpecificMediaResolutionGate(t *testing.T) {
 }
 
 func TestTransformGeminiKeepsFunctionResponsePairing(t *testing.T) {
+	t.Parallel()
 	payload := strings.Repeat("lookup row with useful payload fields and values\n", 1200)
 	response := map[string]any{
 		"functionResponse": map[string]any{

@@ -21,6 +21,7 @@ func writeTempFile(t *testing.T, body string) string {
 // change we proposed is still the change on disk — rather than assuming it and
 // crediting caveman for someone else's edit.
 func TestFingerprintProvesTheEditIsStillOurs(t *testing.T) {
+	t.Parallel()
 	path := writeTempFile(t, "# trimmed\n\nshort file\n")
 	sink := Sink{SinkID: "claude_md_weight:project", Evidence: map[string]any{"path": path}}
 
@@ -56,6 +57,7 @@ func TestFingerprintProvesTheEditIsStillOurs(t *testing.T) {
 // TestBehavioralSinksAreNotFingerprinted keeps the mechanism honest in the
 // other direction: a sink with no file to edit must not invent a target.
 func TestBehavioralSinksAreNotFingerprinted(t *testing.T) {
+	t.Parallel()
 	if got := fingerprintFixTarget(Sink{SinkID: "context_dumbzone", Evidence: map[string]any{}}); got != nil {
 		t.Fatalf("behavioral sink must have no fingerprint target: %+v", got)
 	}
@@ -65,6 +67,7 @@ func TestBehavioralSinksAreNotFingerprinted(t *testing.T) {
 // be read as a strong one: every rung names what it cannot rule out, and a
 // broken provenance drops confidence regardless of method.
 func TestAttributionRungsCarryTheirConfounders(t *testing.T) {
+	t.Parallel()
 	strong := buildAttribution(attrDeterministic, provenanceIntact, "/x/CLAUDE.md")
 	if strong.Confidence != "high" || strong.Rung != 4 {
 		t.Fatalf("deterministic + intact must be the top rung: %+v", strong)
@@ -95,6 +98,7 @@ func TestAttributionRungsCarryTheirConfounders(t *testing.T) {
 // re-measure and a before/after guess must never collapse into one headline,
 // because that is exactly how a weak number gets read as a strong one.
 func TestSavingsNeverSumAcrossRungs(t *testing.T) {
+	t.Parallel()
 	after := 400.0
 	plan := LearnPlan{
 		Window:        LearnWindow{Since: "30d"},
@@ -139,6 +143,7 @@ func TestSavingsNeverSumAcrossRungs(t *testing.T) {
 // TestRegressionIsNeverPriced keeps a regression from rendering as money
 // returned. It stays visible, in tokens, with its verdict.
 func TestRegressionIsNeverPriced(t *testing.T) {
+	t.Parallel()
 	after := 2400.0
 	plan := LearnPlan{
 		Window: LearnWindow{Since: "30d"}, observedTurns: 100,
@@ -165,6 +170,7 @@ func TestRegressionIsNeverPriced(t *testing.T) {
 // TestEmptyLedgerSaysSoPlainly refuses a zero-row card that looks like a
 // measurement.
 func TestEmptyLedgerSaysSoPlainly(t *testing.T) {
+	t.Parallel()
 	savings := buildLearnSavings(LearnPlan{Window: LearnWindow{Since: "30d"}})
 	if len(savings.Rows) != 0 {
 		t.Fatalf("no fixes means no rows: %+v", savings.Rows)

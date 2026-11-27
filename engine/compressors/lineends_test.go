@@ -13,6 +13,7 @@ import (
 // nothing.
 
 func TestTerminalKeepsMixedLineEndings(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("HTTP/1.1 200 OK\r\n") // what `curl -i` emits, inside an LF capture
 	for i := 0; i < 40; i++ {
@@ -30,6 +31,7 @@ func TestTerminalKeepsMixedLineEndings(t *testing.T) {
 }
 
 func TestLogCompressesMixedLineEndings(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 200; i++ {
 		if i%40 == 0 {
@@ -50,6 +52,7 @@ func TestLogCompressesMixedLineEndings(t *testing.T) {
 }
 
 func TestDiffKeepsChangeLinesStartingWithDash(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("diff --git a/doc.md b/doc.md\n")
 	b.WriteString("--- a/doc.md\n")
@@ -74,6 +77,7 @@ func TestDiffKeepsChangeLinesStartingWithDash(t *testing.T) {
 }
 
 func TestTextKeepsFencedBlockWhole(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 0; i < 12; i++ {
 		fmt.Fprintf(&b, "Paragraph %d of surrounding prose that carries no signal at all and exists only to give the compressor something it is willing to drop.\n\n", i)

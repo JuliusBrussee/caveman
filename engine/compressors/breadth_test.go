@@ -11,6 +11,7 @@ import (
 )
 
 func TestDiffCompressorKeepsChangesAndElidesContext(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("diff --git a/app.go b/app.go\nindex 111..222 100644\n--- a/app.go\n+++ b/app.go\n@@ -1,30 +1,30 @@\n")
 	for i := 0; i < 18; i++ {
@@ -43,6 +44,7 @@ func TestDiffCompressorKeepsChangesAndElidesContext(t *testing.T) {
 // line. It was elided as context under a marker claiming only context was
 // dropped — the change vanished with nothing saying so.
 func TestDiffCompressorKeepsBlankLineChanges(t *testing.T) {
+	t.Parallel()
 	for _, change := range []string{"-", "+"} {
 		var b strings.Builder
 		b.WriteString("diff --git a/app.go b/app.go\nindex 111..222 100644\n--- a/app.go\n+++ b/app.go\n@@ -1,30 +1,30 @@\n")
@@ -70,6 +72,7 @@ func TestDiffCompressorKeepsBlankLineChanges(t *testing.T) {
 // stopped saying that the file is unterminated. GNU diff translates the text
 // after the backslash, so a localized marker must survive too.
 func TestDiffCompressorKeepsNoNewlineMarker(t *testing.T) {
+	t.Parallel()
 	for _, marker := range []string{"\\ No newline at end of file", "\\ Kein Zeilenumbruch am Dateiende."} {
 		var b strings.Builder
 		b.WriteString("diff --git a/app.go b/app.go\nindex 111..222 100644\n--- a/app.go\n+++ b/app.go\n@@ -1,20 +1,20 @@\n unchanged line 01\n unchanged line 02\n")
@@ -94,6 +97,7 @@ func TestDiffCompressorKeepsNoNewlineMarker(t *testing.T) {
 // only the first three lines, so the new path — the whole point of the block —
 // was elided as context.
 func TestDiffCompressorKeepsRenameTarget(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("diff --git a/old_name.py b/new_name.py\nsimilarity index 100%\nrename from old_name.py\nrename to new_name.py\n")
 	for i := 0; i < 10; i++ {
@@ -115,6 +119,7 @@ func TestDiffCompressorKeepsRenameTarget(t *testing.T) {
 // it keeps its leading ' ', '+' or '-' — so the extended-header prefixes must
 // not capture it.
 func TestDiffCompressorKeepsHunkLinesThatLookLikeHeaders(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("diff --git a/notes.md b/notes.md\nindex 111..222 100644\n--- a/notes.md\n+++ b/notes.md\n@@ -1,20 +1,20 @@\n")
 	for i := 0; i < 8; i++ {
@@ -141,6 +146,7 @@ func TestDiffCompressorKeepsHunkLinesThatLookLikeHeaders(t *testing.T) {
 // the elided run. A matcher loosened to TrimSpace or substring matching would
 // promote it to structural and keep it; this pins that it is not.
 func TestDiffCompressorElidesContextLinesThatLookLikeHeaders(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString("diff --git a/mode.sh b/mode.sh\nindex 111..222 100644\n--- a/mode.sh\n+++ b/mode.sh\n@@ -1,24 +1,24 @@\n")
 	for i := 0; i < 24; i++ {
@@ -169,6 +175,7 @@ func TestDiffCompressorElidesContextLinesThatLookLikeHeaders(t *testing.T) {
 }
 
 func TestSearchResultCompressorKeepsImportantHits(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 1; i <= 28; i++ {
 		text := "ordinary match"
@@ -194,6 +201,7 @@ func TestSearchResultCompressorKeepsImportantHits(t *testing.T) {
 }
 
 func TestSearchResultQueryKeepsRelevantMiddleHit(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	for i := 1; i <= 40; i++ {
 		text := "ordinary cache match"
@@ -213,6 +221,7 @@ func TestSearchResultQueryKeepsRelevantMiddleHit(t *testing.T) {
 }
 
 func TestTextCompressorKeepsHeadingsAndImportantSections(t *testing.T) {
+	t.Parallel()
 	var sections []string
 	sections = append(sections, "# Incident Report", "Summary: checkout latency increased.")
 	for i := 0; i < 18; i++ {
@@ -239,6 +248,7 @@ func TestTextCompressorKeepsHeadingsAndImportantSections(t *testing.T) {
 }
 
 func TestTextQueryKeepsRelevantMiddleSection(t *testing.T) {
+	t.Parallel()
 	var sections []string
 	sections = append(sections, "# Architecture", "Summary: system overview.")
 	for i := 0; i < 20; i++ {
@@ -261,6 +271,7 @@ func TestTextQueryKeepsRelevantMiddleSection(t *testing.T) {
 }
 
 func TestTextCompressorRejectsTinyOrBinaryInput(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewText()
 	if _, ok := c.Compress([]byte("short prose")); ok {
 		t.Fatal("tiny prose must pass through")

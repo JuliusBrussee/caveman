@@ -9,6 +9,7 @@ import (
 )
 
 func TestCacheChurnFloorSumsOnlyPostFirstTurnSpikes(t *testing.T) {
+	t.Parallel()
 	makeSession := func(first int, spikes ...int) cacheHygieneSession {
 		tracker := cacheHygieneTracker{}
 		tracker.observe(cacheUsageTurn{ContextTotal: 60_000, CacheCreation: first, Present: true})
@@ -54,6 +55,7 @@ func TestCacheChurnFloorSumsOnlyPostFirstTurnSpikes(t *testing.T) {
 }
 
 func TestCacheSpikeAttribution(t *testing.T) {
+	t.Parallel()
 	now := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
 	for _, tc := range []struct {
 		name, reason, model, want string
@@ -105,6 +107,7 @@ func TestCacheSpikeAttribution(t *testing.T) {
 }
 
 func TestCacheChurnSourceMixedSessions(t *testing.T) {
+	t.Parallel()
 	root := t.TempDir()
 	writeSession := func(name string, reasons ...string) {
 		var lines []string
@@ -175,6 +178,7 @@ func TestCacheChurnSourceMixedSessions(t *testing.T) {
 }
 
 func TestClaudeCacheTTL(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		usage string
 		want  time.Duration
@@ -198,6 +202,7 @@ func TestClaudeCacheTTL(t *testing.T) {
 }
 
 func TestCacheTTLRefreshAcrossReadOnlyHits(t *testing.T) {
+	t.Parallel()
 	for _, model := range []string{"model", "other"} {
 		tracker := cacheHygieneTracker{}
 		now := time.Date(2026, 10, 1, 0, 0, 0, 0, time.UTC)

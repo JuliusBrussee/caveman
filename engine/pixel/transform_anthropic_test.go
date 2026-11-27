@@ -20,6 +20,7 @@ import (
 )
 
 func TestTransformAnthropicCacheControlNeverAdds(t *testing.T) {
+	t.Parallel()
 	body := mustJSONBytes(t, map[string]any{
 		"model":  "claude-fable-5",
 		"system": strings.Repeat("static slab ", 12000),
@@ -40,6 +41,7 @@ func TestTransformAnthropicCacheControlNeverAdds(t *testing.T) {
 }
 
 func TestTransformAnthropicRelocatesExistingCacheControlToHistory(t *testing.T) {
+	t.Parallel()
 	body := mustJSONBytes(t, map[string]any{
 		"model":    "claude-fable-5",
 		"system":   []any{map[string]any{"type": "text", "text": strings.Repeat("static slab ", 12000), "cache_control": map[string]any{"type": "ephemeral"}}},
@@ -66,6 +68,7 @@ func TestTransformAnthropicRelocatesExistingCacheControlToHistory(t *testing.T) 
 }
 
 func TestTransformAnthropicKeepSharpAndRecoverable(t *testing.T) {
+	t.Parallel()
 	big := strings.Repeat("tool-result-exact-id-abc123\n", 2500)
 	// Non-hi-res model → std geometry, where this 2500-narrow-line tool result is
 	// profitable to image. (On a hi-res model the same content spreads across
@@ -173,6 +176,7 @@ func TestObserveStaticTagChurnConcurrent(t *testing.T) {
 }
 
 func TestTransformAnthropicMalformedAndPassThroughShapes(t *testing.T) {
+	t.Parallel()
 	out, info, err := TransformAnthropic([]byte(`{"model":`), TransformOptions{})
 	if err == nil || out != nil || !strings.HasPrefix(info.Reason, "parse_error:") {
 		t.Fatalf("bad parse contract: out=%v info=%+v err=%v", out, info, err)
@@ -195,6 +199,7 @@ func TestTransformAnthropicMalformedAndPassThroughShapes(t *testing.T) {
 }
 
 func TestTransformAnthropicHistoryRunsOnEarlyExit(t *testing.T) {
+	t.Parallel()
 	body := mustJSONBytes(t, map[string]any{
 		"model":    "claude-fable-5",
 		"system":   "short",
@@ -213,6 +218,7 @@ func TestTransformAnthropicHistoryRunsOnEarlyExit(t *testing.T) {
 }
 
 func TestTransformAnthropicGoldenFixtures(t *testing.T) {
+	t.Parallel()
 	// These fixtures pin the transform's std-canvas conservative output byte-for-
 	// byte (decoded image pixels + structure). They read as a non-hi-res model
 	// (claude-3-5-sonnet), which ResolveDensity fails closed to conservative + std

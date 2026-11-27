@@ -9,6 +9,7 @@ import (
 )
 
 func TestWindowsACLRejectsBroadWriteGrant(t *testing.T) {
+	t.Parallel()
 	descriptor, err := windows.SecurityDescriptorFromString("D:(A;OICI;GA;;;WD)")
 	if err != nil {
 		t.Fatal(err)
@@ -27,6 +28,7 @@ func TestWindowsACLRejectsBroadWriteGrant(t *testing.T) {
 }
 
 func TestWindowsACLAllowsBroadReadOnlyGrant(t *testing.T) {
+	t.Parallel()
 	descriptor, err := windows.SecurityDescriptorFromString("D:(A;OICI;GRGX;;;WD)")
 	if err != nil {
 		t.Fatal(err)

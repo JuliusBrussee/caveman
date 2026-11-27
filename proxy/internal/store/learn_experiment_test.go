@@ -36,6 +36,7 @@ func armSession(day int, tokens int64, turns, errors int) sessionOutcome {
 // on-arm, switching closes it and opens the other, and switching to the arm
 // already running does not fragment the history.
 func TestExperimentArmsRecordIntervals(t *testing.T) {
+	t.Parallel()
 	store := experimentStore(t)
 	fixedClock(t, time.Date(2026, 8, 1, 0, 0, 0, 0, time.UTC))
 	experiment, err := store.StartExperiment("pytest-loop", "procedure_repeat:abc", "skill_distillation", "trying the distilled loop")
@@ -82,6 +83,7 @@ func TestExperimentArmsRecordIntervals(t *testing.T) {
 // TestExperimentAssignsSessionsByStartTime pins the assignment rule: a session
 // belongs to the arm it BEGAN in, so one straddling a switch counts once.
 func TestExperimentAssignsSessionsByStartTime(t *testing.T) {
+	t.Parallel()
 	experiment := Experiment{
 		Label: "x",
 		Arms: []ExperimentArm{
@@ -104,6 +106,7 @@ func TestExperimentAssignsSessionsByStartTime(t *testing.T) {
 // the harness produces a controlled verdict at the holdout rung, prices the
 // per-session saving, and still ships its confounder.
 func TestExperimentReportGradesAHoldout(t *testing.T) {
+	t.Parallel()
 	experiment := Experiment{
 		Label: "pytest-loop", SinkID: "procedure_repeat:abc", FixKind: "skill_distillation",
 		Arms: []ExperimentArm{
@@ -143,6 +146,7 @@ func TestExperimentReportGradesAHoldout(t *testing.T) {
 // TestExperimentRefusesUnderpoweredVerdict proves an under-powered holdout
 // drops to unattributed rather than emitting a weak-but-official-looking win.
 func TestExperimentRefusesUnderpoweredVerdict(t *testing.T) {
+	t.Parallel()
 	experiment := Experiment{
 		Label: "thin",
 		Arms: []ExperimentArm{
@@ -166,6 +170,7 @@ func TestExperimentRefusesUnderpoweredVerdict(t *testing.T) {
 // TestExperimentFlagsCheaperButWorse guards the failure mode that makes token
 // savings dangerous: an arm that is cheaper because it fails more.
 func TestExperimentFlagsCheaperButWorse(t *testing.T) {
+	t.Parallel()
 	experiment := Experiment{
 		Label: "risky",
 		Arms: []ExperimentArm{

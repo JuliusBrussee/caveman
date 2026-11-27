@@ -7,6 +7,7 @@ import (
 )
 
 func TestAddUsageOverflowFailsClosed(t *testing.T) {
+	t.Parallel()
 	maxInt := int(^uint(0) >> 1)
 	got := addUsage(
 		providers.UsageObservation{InputTokens: maxInt, InputTokensReported: true, OutputTokensReported: true, ObservationCount: 1},

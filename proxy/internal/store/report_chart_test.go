@@ -3,6 +3,7 @@ package store
 import "testing"
 
 func TestCostChartBlendsEachModelsCatalogCachePrice(t *testing.T) {
+	t.Parallel()
 	// Fable 5.1: $10 in, $0.25 cache read -> 0.1*10 + 0.9*0.25 = 1.225, not
 	// the 1.90 a flat tenth-of-list cache price gave.
 	if got := cachedRate(10, 0.25); got < 1.2249 || got > 1.2251 {
@@ -31,6 +32,7 @@ func TestCostChartBlendsEachModelsCatalogCachePrice(t *testing.T) {
 }
 
 func TestTopSinksCapsAt20(t *testing.T) {
+	t.Parallel()
 	sinks := make([]Sink, 25)
 	if got := len(topSinks(sinks)); got != 20 {
 		t.Fatalf("topSinks(25) = %d sinks, want 20", got)

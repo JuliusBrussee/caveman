@@ -13,6 +13,7 @@ import (
 )
 
 func TestPutObjectReturnsStorageFullInsteadOfMintingHandle(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "ccr.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -34,6 +35,7 @@ func TestPutObjectReturnsStorageFullInsteadOfMintingHandle(t *testing.T) {
 }
 
 func TestReplacedConnectionKeepsPageCap(t *testing.T) {
+	t.Parallel()
 	const budget = 1 << 20
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {
@@ -77,6 +79,7 @@ func TestReplacedConnectionKeepsPageCap(t *testing.T) {
 }
 
 func TestPageCapUsesActualPageSize(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	raw, err := sql.Open("sqlite", path)
 	if err != nil {
@@ -114,6 +117,7 @@ func TestPageCapUsesActualPageSize(t *testing.T) {
 }
 
 func TestPageExhaustionBelowPayloadBudgetReportsPageCap(t *testing.T) {
+	t.Parallel()
 	const budget = 64 << 10
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {
@@ -162,6 +166,7 @@ func TestPageExhaustionBelowPayloadBudgetReportsPageCap(t *testing.T) {
 }
 
 func TestRefusedWriteBelowPageCapReportsDiskFull(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "ccr.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -178,6 +183,7 @@ func TestRefusedWriteBelowPageCapReportsDiskFull(t *testing.T) {
 }
 
 func TestPayloadExhaustionReportsPayloadBudget(t *testing.T) {
+	t.Parallel()
 	store, err := Open(filepath.Join(t.TempDir(), "ccr.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -198,6 +204,7 @@ func TestPayloadExhaustionReportsPayloadBudget(t *testing.T) {
 }
 
 func TestLargeWriteBelowPageCapReportsPageCap(t *testing.T) {
+	t.Parallel()
 	const budget = 1 << 20
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {
@@ -232,6 +239,7 @@ func TestLargeWriteBelowPageCapReportsPageCap(t *testing.T) {
 }
 
 func TestFreePagesBelowPageCapAreRoom(t *testing.T) {
+	t.Parallel()
 	const budget = 64 << 10
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {
@@ -275,6 +283,7 @@ func TestFreePagesBelowPageCapAreRoom(t *testing.T) {
 }
 
 func TestPayloadBudgetRefusalReportsPayloadBudget(t *testing.T) {
+	t.Parallel()
 	// Large enough that the schema's own pages leave the file below its page
 	// cap, so the payload budget is the only limit this test reaches.
 	const budget = 128 << 10
@@ -313,6 +322,7 @@ func TestPayloadBudgetRefusalReportsPayloadBudget(t *testing.T) {
 }
 
 func TestReopenOversizedDatabaseUsesAppliedCap(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	store, err := OpenWithBudget(path, 16<<20)
 	if err != nil {
@@ -362,6 +372,7 @@ func TestReopenOversizedDatabaseUsesAppliedCap(t *testing.T) {
 }
 
 func TestUnchangedObjectKeepsRefusalState(t *testing.T) {
+	t.Parallel()
 	const budget = 1 << 20
 	store, err := OpenWithBudget(filepath.Join(t.TempDir(), "ccr.db"), budget)
 	if err != nil {

@@ -38,6 +38,7 @@ func serviceTable(rows, critical int) string {
 }
 
 func TestHTMLArticleTableIsShaped(t *testing.T) {
+	t.Parallel()
 	in := inArticle(serviceTable(400, 287))
 	out, ok := compressors.NewHTML().Compress([]byte(in))
 	if !ok {
@@ -64,6 +65,7 @@ func TestHTMLArticleTableIsShaped(t *testing.T) {
 }
 
 func TestHTMLArticleTableQueryKeepsMatchingRow(t *testing.T) {
+	t.Parallel()
 	in := []byte(inArticle(serviceTable(200, -1)))
 	c, isQueryAware := compressors.NewHTML().(compressors.QueryAwareCompressor)
 	if !isQueryAware {
@@ -86,6 +88,7 @@ func TestHTMLArticleTableQueryKeepsMatchingRow(t *testing.T) {
 }
 
 func TestHTMLArticleTableKeepsRows(t *testing.T) {
+	t.Parallel()
 	// The article extractor used to render a table one cell per line, which left
 	// a number unattributable to its column.
 	out, ok := compressors.NewHTML().Compress([]byte(inArticle(
@@ -104,6 +107,7 @@ func TestHTMLArticleTableKeepsRows(t *testing.T) {
 }
 
 func TestHTMLArticleWithoutTableUnchanged(t *testing.T) {
+	t.Parallel()
 	// Byte-for-byte what the article extractor produced before tables were
 	// rendered: a page with no table must not change.
 	want := "The Title Of The Article\n\n" +
@@ -117,6 +121,7 @@ func TestHTMLArticleWithoutTableUnchanged(t *testing.T) {
 }
 
 func TestHTMLArticleTableWithPreKeepsIndentation(t *testing.T) {
+	t.Parallel()
 	// A cell cannot carry line breaks, so a table with <pre> in a cell is left to
 	// the plain walk, which keeps <pre> verbatim.
 	out, ok := compressors.NewHTML().Compress([]byte(inArticle(
@@ -130,6 +135,7 @@ func TestHTMLArticleTableWithPreKeepsIndentation(t *testing.T) {
 }
 
 func TestHTMLMergedCellsAreNotTabulated(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<table><tr><th colspan="2">Totals</th></tr>`)
 	for i := 0; i < 30; i++ {
@@ -151,6 +157,7 @@ func TestHTMLMergedCellsAreNotTabulated(t *testing.T) {
 }
 
 func TestHTMLCellTextKeepsPathsWhole(t *testing.T) {
+	t.Parallel()
 	// coverage.py splits each path with <span class="sep">/</span>; syntax
 	// highlighters and link renderers also split paths across adjacent spans
 	// (<span>/usr</span><span>/local/bin</span>, <span>/home/dev/</span><span>app.py</span>).
@@ -180,6 +187,7 @@ func TestHTMLCellTextKeepsPathsWhole(t *testing.T) {
 }
 
 func TestHTMLBlankTrailingHeaderKeepsColumnCount(t *testing.T) {
+	t.Parallel()
 	out, ok := compressors.NewHTML().Compress([]byte(inArticle(
 		`<table><thead><tr><th>Service</th><th>Status</th><th></th></tr></thead>` +
 			`<tbody><tr><td>api</td><td>ok</td><td>logs</td></tr></tbody></table>`)))
@@ -192,6 +200,7 @@ func TestHTMLBlankTrailingHeaderKeepsColumnCount(t *testing.T) {
 }
 
 func TestHTMLInlineEdgesKeepWordsApart(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<table><tr><th>Test</th><th>Result</th></tr>`)
 	for i := 0; i < 3; i++ {
@@ -210,6 +219,7 @@ func TestHTMLInlineEdgesKeepWordsApart(t *testing.T) {
 }
 
 func TestHTMLPipeInCellIsEscaped(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<table><tr><th>Command</th><th>Exit</th></tr>`)
 	for i := 0; i < 3; i++ {
@@ -229,6 +239,7 @@ func TestHTMLPipeInCellIsEscaped(t *testing.T) {
 }
 
 func TestHTMLTableWithMarkerTextIsNotReshaped(t *testing.T) {
+	t.Parallel()
 	// A page that quotes a caveman view (a bug report, these docs) holds marker
 	// text in a cell. That table is rendered whole, and its rows keep their cells.
 	var b strings.Builder
@@ -247,6 +258,7 @@ func TestHTMLTableWithMarkerTextIsNotReshaped(t *testing.T) {
 }
 
 func TestHTMLDuplicateColumnNamesStayApart(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<table><tr><th>Host</th><th>Count</th><th>Count</th></tr>`)
 	for i := 0; i < 40; i++ {
@@ -267,6 +279,7 @@ func TestHTMLDuplicateColumnNamesStayApart(t *testing.T) {
 }
 
 func TestHTMLArticleTableDeterministicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewHTML()
 	in := []byte(inArticle(serviceTable(300, 150)))
 	first, ok := c.Compress(in)

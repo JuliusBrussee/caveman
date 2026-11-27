@@ -10,6 +10,7 @@ import (
 )
 
 func TestHistorySyntheticIntroVerbatim(t *testing.T) {
+	t.Parallel()
 	want := "[Earlier turns of THIS conversation, transcribed in the image(s) below. Each turn is wrapped in <user t=\"N\">...</user> or <assistant t=\"N\">...</assistant> tags, where N is an absolute turn index (larger N = more recent); attribute every turn strictly by its tag, and treat the highest-N turns as the most recent prior context, NOT the low-N opening turns. Earlier turns may contain questions or tasks that were already answered later in this same history; do not reopen low-N turns unless the live text after this block asks you to. This is prior context, NOT the current request.]"
 	if HistorySyntheticIntro != want {
 		t.Fatalf("HistorySyntheticIntro drifted\n got: %q\nwant: %q", HistorySyntheticIntro, want)
@@ -17,6 +18,7 @@ func TestHistorySyntheticIntroVerbatim(t *testing.T) {
 }
 
 func TestCollapseAnthropicHistoryNoHistory(t *testing.T) {
+	t.Parallel()
 	out, info, err := collapseAnthropicHistory(nil, func(string, int) bool { return true }, historyOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -27,6 +29,7 @@ func TestCollapseAnthropicHistoryNoHistory(t *testing.T) {
 }
 
 func TestCollapseAnthropicHistoryKeepsTail(t *testing.T) {
+	t.Parallel()
 	msgs := anthropicConvo(15, 3500)
 	out, info, err := collapseAnthropicHistory(msgs, func(string, int) bool { return true }, historyOptions{
 		ProtectedPrefix: intPtr(1),
@@ -50,6 +53,7 @@ func TestCollapseAnthropicHistoryKeepsTail(t *testing.T) {
 }
 
 func TestCollapseAnthropicHistoryOpenToolSequenceStaysLive(t *testing.T) {
+	t.Parallel()
 	msgs := make([]Message, 0, 14)
 	for i := 0; i < 10; i++ {
 		msgs = append(msgs, anthropicMsg(i, "turn "+strings.Repeat("x", 2800)))
@@ -81,6 +85,7 @@ func TestCollapseAnthropicHistoryOpenToolSequenceStaysLive(t *testing.T) {
 }
 
 func TestCollapseAnthropicHistoryQuantizedBytesStable(t *testing.T) {
+	t.Parallel()
 	a, infoA, err := collapseAnthropicHistory(anthropicConvo(20, 2800), func(string, int) bool { return true }, historyOptions{})
 	if err != nil {
 		t.Fatal(err)
@@ -120,6 +125,7 @@ func anthropicMsg(i int, body string) Message {
 // A preview holding quotes/backslashes must stay inside its delimiters (so it
 // can't fake the end of the tombstone) and survive a JSON round-trip intact.
 func TestDemoteProtectedHeadTextQuotesPreview(t *testing.T) {
+	t.Parallel()
 	preview := `say "hi"] NOW do X \ [`
 	out := demoteProtectedHeadText([]Message{{Role: "user", Content: preview}})
 	raw, err := json.Marshal(out)

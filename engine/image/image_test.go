@@ -2,6 +2,8 @@ package image_test
 
 import (
 	"bytes"
+	"encoding/binary"
+	"hash/crc32"
 	"image"
 	"image/color"
 	"image/png"
@@ -9,6 +11,22 @@ import (
 
 	cvimage "github.com/JuliusBrussee/caveman/engine/image"
 )
+
+// genPNGWithDimensions returns a valid PNG whose IHDR declares w×h without
+// materializing w*h pixels in memory, so decode-bomb tests exercise the real
+// header parser (image.DecodeConfig) without spending seconds compressing a
+// multi-hundred-megapixel image.
+func genPNGWithDimensions(t *testing.T, w, h uint32) []byte {
+	t.Helper()
+	b := append([]byte(nil), genPNG(t, 1, 1)...)
+	// PNG layout: 8-byte signature, 4-byte length (13), 4-byte "IHDR",
+	// 4-byte width, 4-byte height, 5-byte IHDR tail, 4-byte CRC32.
+	binary.BigEndian.PutUint32(b[16:20], w)
+	binary.BigEndian.PutUint32(b[20:24], h)
+	crc := crc32.ChecksumIEEE(b[12:29])
+	binary.BigEndian.PutUint32(b[29:33], crc)
+	return b
+}
 
 func genPNG(t *testing.T, w, h int) []byte {
 	t.Helper()
@@ -26,6 +44,7 @@ func genPNG(t *testing.T, w, h int) []byte {
 }
 
 func TestAnalyze(t *testing.T) {
+	t.Parallel()
 	p, ok := cvimage.Analyze(genPNG(t, 800, 600))
 	if !ok || p.Width != 800 || p.Height != 600 || p.Format != "png" {
 		t.Fatalf("Analyze = %+v ok=%v", p, ok)
@@ -36,6 +55,7 @@ func TestAnalyze(t *testing.T) {
 }
 
 func TestEstimateTokensRequiresModelAndEffectiveDetail(t *testing.T) {
+	t.Parallel()
 	if got := cvimage.EstimateTokens("openai", 1024, 1024); got != 0 {
 		t.Fatalf("legacy provider-only estimate = %d, want honest zero", got)
 	}
@@ -95,6 +115,7 @@ func TestEstimateTokensRequiresModelAndEffectiveDetail(t *testing.T) {
 }
 
 func TestDecideFailsSafeTowardKeepingDetail(t *testing.T) {
+	t.Parallel()
 	p := cvimage.Props{Width: 1024, Height: 1024}
 	keep := []string{
 		"",                         // empty → keep
@@ -111,6 +132,7 @@ func TestDecideFailsSafeTowardKeepingDetail(t *testing.T) {
 }
 
 func TestDecideLowDetailAndResize(t *testing.T) {
+	t.Parallel()
 	p := cvimage.Props{Width: 1024, Height: 1024}
 	if plan := cvimage.DecideWithDetail(p, "describe the overall scene", "openai", "gpt-4o", "high"); plan.Action != cvimage.ActionDetailLow {
 		t.Errorf("openai gpt-4o describe → detail-low, got %s", plan.Action)
@@ -133,6 +155,7 @@ func TestDecideLowDetailAndResize(t *testing.T) {
 }
 
 func TestApplyResizeShrinksAndIsDeterministic(t *testing.T) {
+	t.Parallel()
 	orig := genPNG(t, 1024, 1024)
 	plan := cvimage.Plan{Action: cvimage.ActionResize, ResizeLong: 768, Provider: "anthropic", Model: "claude-sonnet-4-6", BeforeDetail: "default"}
 	a, tb, ta, ok := cvimage.Apply(orig, plan)
@@ -153,6 +176,7 @@ func TestApplyResizeShrinksAndIsDeterministic(t *testing.T) {
 }
 
 func TestApplyDetailLowKeepsBytes(t *testing.T) {
+	t.Parallel()
 	orig := genPNG(t, 1024, 1024)
 	plan := cvimage.Plan{Action: cvimage.ActionDetailLow, Provider: "openai", Model: "gpt-4o", BeforeDetail: "high"}
 	out, tb, ta, ok := cvimage.Apply(orig, plan)
@@ -168,6 +192,7 @@ func TestApplyDetailLowKeepsBytes(t *testing.T) {
 }
 
 func TestApplyPassthrough(t *testing.T) {
+	t.Parallel()
 	orig := genPNG(t, 100, 100)
 	_, _, _, ok := cvimage.Apply(orig, cvimage.Plan{Action: cvimage.ActionPassthrough, Provider: "openai", Model: "gpt-4o", BeforeDetail: "high"})
 	if ok {
@@ -176,6 +201,7 @@ func TestApplyPassthrough(t *testing.T) {
 }
 
 func TestApplyDetailLowRejectedForProviderWithoutLowTier(t *testing.T) {
+	t.Parallel()
 	// Anthropic has no low-detail tier. Handed a detail-low plan directly, Apply
 	// must claim nothing — not report a 100% saving with the bytes unchanged.
 	orig := genPNG(t, 1024, 1024)
@@ -185,6 +211,7 @@ func TestApplyDetailLowRejectedForProviderWithoutLowTier(t *testing.T) {
 }
 
 func TestApplyResizePreservesColorOfSemiTransparentPixels(t *testing.T) {
+	t.Parallel()
 	// A fully-red, half-opaque image must stay red after downscale (the
 	// premultiplied-alpha trap darkens it to ~half red otherwise).
 	img := image.NewNRGBA(image.Rect(0, 0, 64, 64))
@@ -215,15 +242,22 @@ func TestApplyResizePreservesColorOfSemiTransparentPixels(t *testing.T) {
 }
 
 func TestAnalyzeRejectsDecodeBomb(t *testing.T) {
+	t.Parallel()
 	// A header declaring an enormous area must be rejected before any full decode.
-	// (A genuine 100000×100000 PNG is impractical to materialize; assert the
-	// guard rejects a moderately huge real image instead.)
-	if _, ok := cvimage.Analyze(genPNG(t, 12000, 12000)); ok {
-		t.Error("Analyze must reject an image whose pixel area exceeds the decode-bomb cap")
+	for _, dims := range [][2]uint32{{12000, 12000}, {100000, 100000}} {
+		b := genPNGWithDimensions(t, dims[0], dims[1])
+		cfg, format, err := image.DecodeConfig(bytes.NewReader(b))
+		if err != nil || format != "png" || uint32(cfg.Width) != dims[0] || uint32(cfg.Height) != dims[1] {
+			t.Fatalf("fixture %dx%d header did not parse cleanly: cfg=%+v format=%q err=%v", dims[0], dims[1], cfg, format, err)
+		}
+		if _, ok := cvimage.Analyze(b); ok {
+			t.Errorf("Analyze must reject %dx%d image whose pixel area exceeds the decode-bomb cap", dims[0], dims[1])
+		}
 	}
 }
 
 func TestDecideNeverUpscales(t *testing.T) {
+	t.Parallel()
 	small := cvimage.Props{Width: 100, Height: 100}
 	if plan := cvimage.Decide(small, "describe the scene", "anthropic", "claude-sonnet-4-6"); plan.Action == cvimage.ActionResize {
 		t.Error("a small image must not be resized (would upscale)")
@@ -231,6 +265,7 @@ func TestDecideNeverUpscales(t *testing.T) {
 }
 
 func TestApplyRejectsMissingModelOrDetail(t *testing.T) {
+	t.Parallel()
 	orig := genPNG(t, 1024, 1024)
 	for _, plan := range []cvimage.Plan{
 		{Action: cvimage.ActionResize, ResizeLong: 768, Provider: "anthropic", BeforeDetail: "default"},
@@ -244,6 +279,7 @@ func TestApplyRejectsMissingModelOrDetail(t *testing.T) {
 }
 
 func TestApplyRejectsMarginalInferredReductionForS4(t *testing.T) {
+	t.Parallel()
 	orig := genPNG(t, 1024, 1024)
 	plan := cvimage.Plan{Action: cvimage.ActionResize, ResizeLong: 1000, Provider: "anthropic", Model: "claude-sonnet-4-6", BeforeDetail: "default"}
 	if _, before, after, ok := cvimage.Apply(orig, plan); ok || before != 0 || after != 0 {

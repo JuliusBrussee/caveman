@@ -9,6 +9,7 @@ import (
 // the sink reports the measured split and the per-type spawn counts, and it
 // never argues that any spawn was unnecessary.
 func TestSubagentSpendMeasuresCostWithoutClaimingWaste(t *testing.T) {
+	t.Parallel()
 	tracker := subagentSpendTracker{}
 	for i := 0; i < 20; i++ {
 		tracker.observeTurn(30_000, true)
@@ -63,6 +64,7 @@ func TestSubagentSpendMeasuresCostWithoutClaimingWaste(t *testing.T) {
 // TestSubagentSpendSilentWithoutFanOut keeps the sink off a machine that does
 // not delegate.
 func TestSubagentSpendSilentWithoutFanOut(t *testing.T) {
+	t.Parallel()
 	tracker := subagentSpendTracker{sessions: 10}
 	for i := 0; i < 50; i++ {
 		tracker.observeTurn(50_000, false)
@@ -86,6 +88,7 @@ func TestSubagentSpendSilentWithoutFanOut(t *testing.T) {
 // started detecting. This is the shared sink for every source, not a
 // Claude-only path.
 func TestSubagentSpendCountsAgentNamedSpawns(t *testing.T) {
+	t.Parallel()
 	tracker := subagentSpendTracker{}
 	tracker.observeSpawn("Agent", `{"subagent_type":"Explore","prompt":"find the thing"}`)
 	tracker.observeSpawn("agent", `{"subagent_type":"Explore"}`)

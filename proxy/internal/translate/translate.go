@@ -97,8 +97,24 @@ type Reply struct {
 	stream         bool // the caller asked for a stream
 	upstreamStream bool // the upstream was asked for one
 	tools          toolBridge
-	upstreamID     string // the host's own id for the answer (UpstreamID)
-	includeUsage   bool   // a streamed chat caller asked for the usage chunk
+	upstreamID     string        // the host's own id for the answer (UpstreamID)
+	includeUsage   bool          // a streamed chat caller asked for the usage chunk
+	ping           time.Duration // optional per-reply override for pingInterval (tests)
+	hold           time.Duration // optional per-reply override for gateHold (tests)
+}
+
+func (r *Reply) pingOrDefault() time.Duration {
+	if r.ping > 0 {
+		return r.ping
+	}
+	return pingInterval
+}
+
+func (r *Reply) holdOrDefault() time.Duration {
+	if r.hold > 0 {
+		return r.hold
+	}
+	return gateHold
 }
 
 // UpstreamID is the host's own id for the answer it gave (OpenRouter's gen-…,
@@ -368,7 +384,7 @@ func chatgptLoginBody(body map[string]json.RawMessage) {
 // fails, or ends, before that returns ErrNotServed with w untouched, so the
 // caller can still run the request elsewhere.
 func (r *Reply) Serve(w http.ResponseWriter, upstream *http.Response) (Usage, error) {
-	g := &gate{w: w, header: http.Header{}, started: time.Now()}
+	g := &gate{w: w, header: http.Header{}, started: time.Now(), hold: r.holdOrDefault()}
 	head := &headBuffer{}
 	tapped := *upstream
 	tapped.Body = struct {
@@ -395,6 +411,7 @@ type gate struct {
 	buf     bytes.Buffer
 	open    bool
 	started time.Time
+	hold    time.Duration
 }
 
 // gateHold is how long an upstream without content keeps the answer behind
@@ -406,8 +423,14 @@ var gateHold = 10 * time.Second
 
 // heartbeat is called on each silence tick, before a ping or keepalive.
 func heartbeat(w io.Writer) {
-	if g, ok := w.(*gate); ok && !g.open && time.Since(g.started) >= gateHold {
-		g.commit()
+	if g, ok := w.(*gate); ok && !g.open {
+		hold := g.hold
+		if hold <= 0 {
+			hold = gateHold
+		}
+		if time.Since(g.started) >= hold {
+			g.commit()
+		}
 	}
 }
 
@@ -563,7 +586,7 @@ func (r *Reply) relay(w http.ResponseWriter, body io.Reader, shown string) (Usag
 	terminal := false       // the upstream ended the answer itself
 	upstreamFailed := false // with a failure of its own
 	gotUsage := false       // chat's usage chunk came
-	lines, cut, stop, endBy := sseLines(body)
+	lines, cut, stop, endBy := sseLinesWith(body, r.pingOrDefault(), r.holdOrDefault())
 	defer stop()
 	boundary := true  // the upstream's last line ended an event
 	openData := false // a data line came since the last blank line

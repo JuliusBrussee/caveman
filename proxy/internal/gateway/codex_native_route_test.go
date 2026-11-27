@@ -20,6 +20,7 @@ import (
 // different repositories' worth of code, and nothing else fails when they stop
 // agreeing — the user just gets a 404 the first time they run `codex exec`.
 func TestCodexNativeRouteNeedsV1(t *testing.T) {
+	t.Parallel()
 	adapter := openai.New("https://api.openai.com")
 
 	for _, tc := range []struct {

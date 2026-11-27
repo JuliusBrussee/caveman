@@ -38,6 +38,7 @@ func opsDashboard(rows, critical int) string {
 }
 
 func TestHTMLDashboardTableKeepsOutlierRow(t *testing.T) {
+	t.Parallel()
 	in := opsDashboard(400, 287)
 	out, ok := compressors.NewHTML().Compress([]byte(in))
 	if !ok {
@@ -68,6 +69,7 @@ func TestHTMLDashboardTableKeepsOutlierRow(t *testing.T) {
 }
 
 func TestHTMLStructuralQueryKeepsMatchingRow(t *testing.T) {
+	t.Parallel()
 	in := []byte(opsDashboard(200, -1))
 	c, isQueryAware := compressors.NewHTML().(compressors.QueryAwareCompressor)
 	if !isQueryAware {
@@ -90,6 +92,7 @@ func TestHTMLStructuralQueryKeepsMatchingRow(t *testing.T) {
 }
 
 func TestHTMLRecordRunBecomesTable(t *testing.T) {
+	t.Parallel()
 	// A CI page built from <div>s with no whitespace between fields, as a
 	// component framework renders it. The failed job has a modifier class, so it
 	// is not part of the run and is shown on its own.
@@ -116,6 +119,7 @@ func TestHTMLRecordRunBecomesTable(t *testing.T) {
 }
 
 func TestHTMLARIAGridBecomesTable(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html><body><div class="app"><div role="grid" aria-label="Pods">` +
 		`<div role="row"><div role="columnheader">Name</div><div role="columnheader">Phase</div><div role="columnheader">Restarts</div></div>`)
@@ -140,6 +144,7 @@ func TestHTMLARIAGridBecomesTable(t *testing.T) {
 }
 
 func TestHTMLInlineRoleStaysInline(t *testing.T) {
+	t.Parallel()
 	doc := `<!doctype html><html><body><div><p>Click <a role="button">Retry</a> to run job 7 again.</p>` +
 		`<table><tr><th>Job</th><th>State</th></tr><tr><td>7</td><td>failed</td></tr></table></div></body></html>`
 	out, ok := compressors.NewHTML().Compress([]byte(doc))
@@ -152,6 +157,7 @@ func TestHTMLInlineRoleStaysInline(t *testing.T) {
 }
 
 func TestHTMLStructuralPassesThrough(t *testing.T) {
+	t.Parallel()
 	rows := func(n int) string {
 		var b strings.Builder
 		for i := 0; i < n; i++ {
@@ -175,6 +181,7 @@ func TestHTMLStructuralPassesThrough(t *testing.T) {
 }
 
 func TestHTMLChromeAndHiddenAreDropped(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html><body><nav>NAVLINK</nav><div role="navigation">ROLENAV</div>` +
 		`<div hidden>HIDDENTEXT</div><span aria-hidden="true">ICONTEXT</span><main>` +
@@ -204,6 +211,7 @@ func TestHTMLChromeAndHiddenAreDropped(t *testing.T) {
 }
 
 func TestHTMLStructuralDeterministicAndIdempotent(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewHTML()
 	in := []byte(opsDashboard(300, 150))
 	first, ok := c.Compress(in)
@@ -220,6 +228,7 @@ func TestHTMLStructuralDeterministicAndIdempotent(t *testing.T) {
 }
 
 func TestHTMLRecordsWithDifferentFieldsAreNotTabulated(t *testing.T) {
+	t.Parallel()
 	// Every seventh job fills the "blocked" slot instead of "done". The records
 	// have the same shape and field count, but lining them up by position would
 	// file "blocked" under "done" and make the marker's tally false.
@@ -247,6 +256,7 @@ func TestHTMLRecordsWithDifferentFieldsAreNotTabulated(t *testing.T) {
 }
 
 func TestHTMLFragmentIsNotRestructured(t *testing.T) {
+	t.Parallel()
 	// A README with inline HTML is Markdown: its line breaks are its structure.
 	readme := "<p align=\"center\"><img src=\"logo.png\" alt=\"logo\"></p>\n\n" +
 		"<div align=\"center\">\n\n<table><tr><th>Contributor</th><th>Commits</th></tr><tr><td>ana</td><td>12</td></tr></table>\n\n</div>\n\n" +
@@ -257,6 +267,7 @@ func TestHTMLFragmentIsNotRestructured(t *testing.T) {
 }
 
 func TestHTMLPreformattedTextKeepsLines(t *testing.T) {
+	t.Parallel()
 	doc := `<!doctype html><html><body><main><h2>Build 812</h2>` +
 		"<div class=\"log\" style=\"white-space: pre-wrap\">step one: compiling\nstep two: linking\n    FAILED at main.go:12</div>" +
 		`<table><tr><th>Stage</th><th>Result</th></tr><tr><td>link</td><td>failed</td></tr></table></main></body></html>`
@@ -270,6 +281,7 @@ func TestHTMLPreformattedTextKeepsLines(t *testing.T) {
 }
 
 func TestHTMLFooterInsideContentIsKept(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html><body><div class="app"><table><tr><th>Node</th><th>Load</th></tr>`)
 	for i := 0; i < 20; i++ {
@@ -291,6 +303,7 @@ func TestHTMLFooterInsideContentIsKept(t *testing.T) {
 }
 
 func TestHTMLARIAGridWithNestedRowsIsNotTabulated(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html><body><div><table><tr><th>Bucket</th><th>Objects</th></tr><tr><td>logs</td><td>4210</td></tr></table>` +
 		`<div role="treegrid"><div role="row"><div role="columnheader">Path</div><div role="columnheader">Size</div></div>`)
@@ -311,6 +324,7 @@ func TestHTMLARIAGridWithNestedRowsIsNotTabulated(t *testing.T) {
 }
 
 func TestHTMLInlineWrapperAroundTableIsABlock(t *testing.T) {
+	t.Parallel()
 	var b strings.Builder
 	b.WriteString(`<!doctype html><html><body><div><table><tr><th>A</th><th>B</th></tr><tr><td>x</td><td>y</td></tr></table>` +
 		`<center><table><tr><th>Key</th><th>Value</th></tr>`)
@@ -328,6 +342,7 @@ func TestHTMLInlineWrapperAroundTableIsABlock(t *testing.T) {
 }
 
 func TestHTMLLabelsSitAboveTables(t *testing.T) {
+	t.Parallel()
 	doc := `<!doctype html><html><body><div><div role="alert"><table><tr><th>Check</th><th>State</th></tr><tr><td>disk</td><td>full</td></tr></table></div>` +
 		`<dl>orphan note<dt>Owner</dt><dd>sre</dd></dl></div></body></html>`
 	out, ok := compressors.NewHTML().Compress([]byte(doc))

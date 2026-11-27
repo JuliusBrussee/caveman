@@ -8,6 +8,7 @@ import (
 )
 
 func TestAgentEvidenceForBuildReturnsExactContentBlindRequests(t *testing.T) {
+	t.Parallel()
 	store, err := Open(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -73,6 +74,7 @@ func TestAgentEvidenceForBuildReturnsExactContentBlindRequests(t *testing.T) {
 }
 
 func TestAgentEvidenceMarksIncompleteRequestHashes(t *testing.T) {
+	t.Parallel()
 	store, err := Open(":memory:", nil)
 	if err != nil {
 		t.Fatal(err)

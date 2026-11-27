@@ -132,6 +132,7 @@ func fake_header():
 `
 
 func TestGDScriptElidesBodiesKeepsDeclarations(t *testing.T) {
+	t.Parallel()
 	out, ok := compressGDScript([]byte(gdSource))
 	if !ok {
 		t.Fatal("expected the GDScript sample to compress")
@@ -142,6 +143,7 @@ func TestGDScriptElidesBodiesKeepsDeclarations(t *testing.T) {
 }
 
 func TestGDScriptIdempotent(t *testing.T) {
+	t.Parallel()
 	once, ok := compressGDScript([]byte(gdSource))
 	if !ok {
 		t.Fatal("first pass must compress")
@@ -152,6 +154,7 @@ func TestGDScriptIdempotent(t *testing.T) {
 }
 
 func TestGDScriptSpaceIndentation(t *testing.T) {
+	t.Parallel()
 	src := "extends Node\n\n\nfunc _ready() -> void:\n    var x = 1\n    print(x)\n\n\nfunc helper(a, b):\n    return a + b\n"
 	want := "extends Node\n\n\nfunc _ready() -> void:\n    pass # caveman: body elided\n\n\nfunc helper(a, b):\n    pass # caveman: body elided\n"
 	out, ok := compressGDScript([]byte(src))
@@ -164,6 +167,7 @@ func TestGDScriptSpaceIndentation(t *testing.T) {
 }
 
 func TestGDScriptBodyEndsAtDedentNotAtBlankLine(t *testing.T) {
+	t.Parallel()
 	// A blank line inside a body does not end it; trailing blank lines after a
 	// body are kept as spacing rather than swallowed into the elision.
 	src := "extends Node\n\nfunc a():\n\tvar x = 1\n\n\tprint(x)\n\nvar after := 2\n"
@@ -178,6 +182,7 @@ func TestGDScriptBodyEndsAtDedentNotAtBlankLine(t *testing.T) {
 }
 
 func TestGDScriptNothingToElidePassesThrough(t *testing.T) {
+	t.Parallel()
 	for name, src := range map[string]string{
 		"declarations only": "extends Node\n\n@export var speed := 1.0\nsignal done\n",
 		"one-line bodies":   "extends Node\n\nfunc a(): return 1\nfunc b(): pass\n",
@@ -190,6 +195,7 @@ func TestGDScriptNothingToElidePassesThrough(t *testing.T) {
 }
 
 func TestIsGDScriptRejectsOtherLanguages(t *testing.T) {
+	t.Parallel()
 	for name, src := range map[string]string{
 		"python": "import os\n\ndef main():\n    return os.getcwd()\n",
 		"go":     "package main\n\nfunc main() {\n\tprintln(1)\n}\n",
@@ -209,6 +215,7 @@ func TestIsGDScriptRejectsOtherLanguages(t *testing.T) {
 // build: the cgo build has no GDScript grammar and the pure-Go build has no
 // grammar at all.
 func TestCodeCompressorHandlesGDScriptInEveryBuild(t *testing.T) {
+	t.Parallel()
 	out, ok := newCode().Compress([]byte(gdSource))
 	if !ok {
 		t.Fatal("the code compressor must accept GDScript")

@@ -12,6 +12,7 @@ import (
 )
 
 func TestJSONCompressorOutputIsValidJSON(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	// A repetitive array: every row says the same thing but for its id. An array
 	// whose rows each say something different is a list of distinct entities and
@@ -33,6 +34,7 @@ func TestJSONCompressorOutputIsValidJSON(t *testing.T) {
 }
 
 func TestJSONCompressorPreservesErrorSubtree(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	// The data array repeats one record shape; the error subtree is a bare numeric
 	// series, which is now kept whole in its own right (a series' values are its
@@ -50,6 +52,7 @@ func TestJSONCompressorPreservesErrorSubtree(t *testing.T) {
 }
 
 func TestJSONCompressorIdempotent(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	in := []byte(`{"results":[{"n":1,"ok":true},{"n":2,"ok":true},{"n":3,"ok":true},{"n":4,"ok":true},{"n":5,"ok":true},{"n":6,"ok":true},{"n":7,"ok":true},{"n":8,"ok":true},{"n":9,"ok":true},{"n":10,"ok":true},{"n":11,"ok":true},{"n":12,"ok":true},{"n":13,"ok":true},{"n":14,"ok":true},{"n":15,"ok":true}]}`)
 	first, ok := c.Compress(in)
@@ -90,6 +93,7 @@ func smartCrusherInput(t *testing.T) []byte {
 }
 
 func TestJSONCompressorKeepsMiddleSignal(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	in := smartCrusherInput(t)
 	out, ok := c.Compress(in)
@@ -115,6 +119,7 @@ func TestJSONCompressorKeepsMiddleSignal(t *testing.T) {
 }
 
 func TestJSONCompressorDeterministic(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	in := smartCrusherInput(t)
 	a, ok1 := c.Compress(in)
@@ -128,6 +133,7 @@ func TestJSONCompressorDeterministic(t *testing.T) {
 }
 
 func TestJSONCompressorCanonicalElisionNote(t *testing.T) {
+	t.Parallel()
 	row, err := json.Marshal(map[string]string{"kind": "sample", "data": strings.Repeat("x", 256)})
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +223,7 @@ func TestJSONCompressorCanonicalElisionNote(t *testing.T) {
 }
 
 func TestJSONCompressorQueryBias(t *testing.T) {
+	t.Parallel()
 	c, ok := compressors.NewJSON().(compressors.QueryAwareCompressor)
 	if !ok {
 		t.Fatal("JSON compressor should be query-aware")
@@ -248,6 +255,7 @@ func TestJSONCompressorQueryBias(t *testing.T) {
 }
 
 func TestJSONCompressorMalformedPassesThrough(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	if _, ok := c.Compress([]byte(`{"a":[1,2,3, oops`)); ok {
 		t.Error("malformed JSON must report !ok (pass-through)")
@@ -255,6 +263,7 @@ func TestJSONCompressorMalformedPassesThrough(t *testing.T) {
 }
 
 func TestJSONCompressorShortArrayUnchanged(t *testing.T) {
+	t.Parallel()
 	c := compressors.NewJSON()
 	in := []byte(`{"a":[1,2,3]}`)
 	out, ok := c.Compress(in)
@@ -295,6 +304,7 @@ func cyclingDeployments(t *testing.T, rows int, mutate func(i int, row map[strin
 // ones, and a third of the rows were force-kept as "anomalies" — 515 of 551 rows
 // survived and the reduction was ~6%.
 func TestJSONElisionCollapsesCyclingCategoricalFields(t *testing.T) {
+	t.Parallel()
 	rows := cyclingDeployments(t, 550, nil)
 	needle := map[string]any{"deployment_id": "dep-prod-incident-774", "environment": "production", "region": "eu-central-1", "status": "rollback_required", "commit": "9f6a21cd", "owner": "checkout-runtime", "rollback_target": "4c12aa90"}
 	rows = append(rows, needle)
@@ -334,6 +344,7 @@ func TestJSONElisionCollapsesCyclingCategoricalFields(t *testing.T) {
 // out-varies latency_ms, so the change-point series is bytes_out and only the
 // anomaly rule can keep row 300.
 func TestJSONElisionKeepsRealAnomalyInCyclingArray(t *testing.T) {
+	t.Parallel()
 	rows := cyclingDeployments(t, 550, func(i int, row map[string]any) {
 		row["bytes_out"] = 1000 + (i*7919)%5000
 		row["latency_ms"] = 40 + i%5
@@ -359,6 +370,7 @@ func TestJSONElisionKeepsRealAnomalyInCyclingArray(t *testing.T) {
 // exactly 503 / 30000ms share one value, so a rarity rule must not apply to
 // them; only element length tolerates frequent levels.
 func TestJSONElisionKeepsFrequentNumericOutlierCluster(t *testing.T) {
+	t.Parallel()
 	rows := make([]map[string]any, 0, 500)
 	bad := 0
 	for i := 0; i < 500; i++ {
@@ -384,6 +396,7 @@ func TestJSONElisionKeepsFrequentNumericOutlierCluster(t *testing.T) {
 // rollback_required state share one length, far from the jittered normal
 // rows, with no numeric or error-word signal: every one must stay visible.
 func TestJSONElisionKeepsMinorityStateClusterByLength(t *testing.T) {
+	t.Parallel()
 	owners := []string{"ana", "bo", "carmen", "dmitri", "eve", "francesca", "gu"}
 	rows := make([]map[string]any, 0, 500)
 	bad := 0

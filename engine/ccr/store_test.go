@@ -11,6 +11,7 @@ import (
 )
 
 func TestPutGetByteExact(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -31,6 +32,7 @@ func TestPutGetByteExact(t *testing.T) {
 }
 
 func TestTypedObjectRoundTripAndCurrentness(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -89,6 +91,7 @@ func TestTypedObjectRoundTripAndCurrentness(t *testing.T) {
 }
 
 func TestPutObjectRejectsImmutableIDCollision(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -123,6 +126,7 @@ func TestPutObjectRejectsImmutableIDCollision(t *testing.T) {
 }
 
 func TestTypedObjectFailsClosedAndIsSessionScoped(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -149,6 +153,7 @@ func TestTypedObjectFailsClosedAndIsSessionScoped(t *testing.T) {
 }
 
 func TestFindTaskDecision(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -168,6 +173,7 @@ func TestFindTaskDecision(t *testing.T) {
 }
 
 func TestTypedObjectPersistsOnDisk(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	s, err := ccr.Open(path)
 	if err != nil {
@@ -190,6 +196,7 @@ func TestTypedObjectPersistsOnDisk(t *testing.T) {
 }
 
 func TestPutGetMetadata(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -216,6 +223,7 @@ func TestPutGetMetadata(t *testing.T) {
 }
 
 func TestMetadataPreservedAcrossIdempotentPuts(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -255,6 +263,7 @@ func TestMetadataPreservedAcrossIdempotentPuts(t *testing.T) {
 }
 
 func TestHandleIsContentAddressedAndIdempotent(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -272,6 +281,7 @@ func TestHandleIsContentAddressedAndIdempotent(t *testing.T) {
 }
 
 func TestIdempotentZeroAccountingPutCannotEraseMeasuredStats(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -294,6 +304,7 @@ func TestIdempotentZeroAccountingPutCannotEraseMeasuredStats(t *testing.T) {
 }
 
 func TestGetUnknownHandleFailsClosed(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -305,6 +316,7 @@ func TestGetUnknownHandleFailsClosed(t *testing.T) {
 }
 
 func TestSummary(t *testing.T) {
+	t.Parallel()
 	s, err := ccr.OpenMemory()
 	if err != nil {
 		t.Fatal(err)
@@ -328,6 +340,7 @@ func TestSummary(t *testing.T) {
 }
 
 func TestOnDiskPersists(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr.db")
 	s, err := ccr.Open(path)
 	if err != nil {
@@ -348,6 +361,7 @@ func TestOnDiskPersists(t *testing.T) {
 }
 
 func TestPersistentStoreBudgetRefusesNewRecoveryAndPreservesExisting(t *testing.T) {
+	t.Parallel()
 	path := filepath.Join(t.TempDir(), "ccr-budget.db")
 	const budget = int64(1 << 20)
 	store, err := ccr.OpenWithBudget(path, budget)

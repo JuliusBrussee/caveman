@@ -10,6 +10,7 @@ import (
 // TestCompressionSavingsUSD_ZeroWithoutOptimizer proves the no-fake-savings gate:
 // a token reduction is worth nothing unless the caveman-compression id is present.
 func TestCompressionSavingsUSD_ZeroWithoutOptimizer(t *testing.T) {
+	t.Parallel()
 	price := cost.Price{InputPerMillion: 3.0}
 	if got := compressionSavingsUSD(price, 1000, 600, nil, providers.UsageObservation{InputTokens: 1000, InputTokensReported: true, OutputTokensReported: true}); got != 0 {
 		t.Errorf("savings without optimizer id = %v, want 0", got)
@@ -22,6 +23,7 @@ func TestCompressionSavingsUSD_ZeroWithoutOptimizer(t *testing.T) {
 // TestCompressionSavingsUSD_NonzeroWithOptimizer proves the removed tokens are
 // valued at the model's input rate once the optimizer id is present (uncached traffic).
 func TestCompressionSavingsUSD_NonzeroWithOptimizer(t *testing.T) {
+	t.Parallel()
 	price := cost.Price{InputPerMillion: 3.0}
 	got := compressionSavingsUSD(price, 1000, 600, []string{compressionOptimizerID}, providers.UsageObservation{InputTokens: 1000, InputTokensReported: true, OutputTokensReported: true})
 	want := cost.RoundUSD(cost.EstimateUSD(cost.Price{InputPerMillion: 3.0}, cost.Usage{InputTokens: 400}))
@@ -36,6 +38,7 @@ func TestCompressionSavingsUSD_NonzeroWithOptimizer(t *testing.T) {
 // TestCompressionSavingsUSD_PreservesRegressions keeps overhead visible as a
 // negative inferred delta rather than silently clipping it.
 func TestCompressionSavingsUSD_PreservesRegressions(t *testing.T) {
+	t.Parallel()
 	price := cost.Price{InputPerMillion: 3.0}
 	if got := compressionSavingsUSD(price, 600, 600, []string{compressionOptimizerID}, providers.UsageObservation{InputTokens: 1000, InputTokensReported: true, OutputTokensReported: true}); got != 0 {
 		t.Errorf("savings when equal = %v, want 0", got)
@@ -48,6 +51,7 @@ func TestCompressionSavingsUSD_PreservesRegressions(t *testing.T) {
 // TestCompressionSavingsUSD_CacheHeavyUsesWeightedRate avoids a discontinuous
 // majority-cache heuristic while accounting for the small uncached share.
 func TestCompressionSavingsUSD_CacheHeavyUsesWeightedRate(t *testing.T) {
+	t.Parallel()
 	price := cost.Price{InputPerMillion: 3.0, CacheReadPerMillion: 0.3}
 	// A request served almost entirely from cache: 144k cache reads, ~100 fresh input.
 	usage := providers.UsageObservation{InputTokens: 144100, CachedInputTokens: 144000, InputTokensReported: true, OutputTokensReported: true}

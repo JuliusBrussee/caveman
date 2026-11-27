@@ -25,6 +25,7 @@ func decodePNG(t *testing.T, raw []byte) image.Image {
 // drawn at its FULL 5px width at 4px advance (not truncated to 4px) — the glyph
 // ink is byte-identical to the 5px-advance render.
 func TestCellAdvanceFourReferenceWidth(t *testing.T) {
+	t.Parallel()
 	adv5 := RenderStyle{}               // CellWBonus 0 → advance 5 (glyph width)
 	adv4 := RenderStyle{CellWBonus: -1} // advance 4 → adjacent cells overlap 1px
 
@@ -67,6 +68,7 @@ func TestCellAdvanceFourReferenceWidth(t *testing.T) {
 // 2*pad + (rows-1)*pitch + glyphH (descenders/ascenders both fit), and a
 // height-capped page holds 119 rows at pitch 6 on the 728px std canvas.
 func TestPitchSixGeometry(t *testing.T) {
+	t.Parallel()
 	style := RenderStyle{PitchY: 6}
 	img, err := RenderChunkToPNG("a\nb\nc", 8, style, MaxHeightPx, "")
 	if err != nil {
@@ -98,6 +100,7 @@ func TestPitchSixGeometry(t *testing.T) {
 // TestZebraRowColors verifies each visual row is coloured from the 3-colour
 // zebra cycle in order dark-red, dark-blue, black (row % 3).
 func TestZebraRowColors(t *testing.T) {
+	t.Parallel()
 	// Default pitch (8) so rows do not overlap and each band is one pure colour.
 	img, err := RenderChunkToPNG("X\nX\nX\nX", 4, RenderStyle{Zebra: true}, MaxHeightPx, "")
 	if err != nil {

@@ -9,6 +9,7 @@ import "testing"
 // raw patch tokens ≤ tier.MaxTokens. If either is exceeded Anthropic downscales
 // server-side and destroys the glyphs, so the gate must never emit such a page.
 func TestDensityEnvelopeStaysNoResize(t *testing.T) {
+	t.Parallel()
 	cases := []struct {
 		name  string
 		model string
@@ -44,6 +45,7 @@ func TestDensityEnvelopeStaysNoResize(t *testing.T) {
 // the standard canvas. Geometry changes must update this test and its renderer
 // contract together.
 func TestCharsPerPageBalancedVsConservative(t *testing.T) {
+	t.Parallel()
 	cons := ResolveDensity("gpt-5.6", DensityConservative) // std, 5/8/mono
 	bal := ResolveDensity("gpt-5.6", DensityBalanced)      // std, 4/6/zebra
 	consChars := cons.charsPerPage(MaxWidthPx, MaxHeightPx)
@@ -66,6 +68,7 @@ func TestCharsPerPageBalancedVsConservative(t *testing.T) {
 // page lands on a whole 52-patch height, fills the 92-patch width inside the
 // 2576px long edge, and costs exactly the tier's 4784-token ceiling.
 func TestHiResPageGeometryPatchAligned(t *testing.T) {
+	t.Parallel()
 	const patch = AnthropicPatchPx
 	for _, level := range []DensityLevel{DensityConservative, DensityBalanced} {
 		rp := ResolveDensity("claude-fable-5", level) // hi-res tier
@@ -105,6 +108,7 @@ func TestHiResPageGeometryPatchAligned(t *testing.T) {
 // column pages always price at conservative geometry (density never applies to
 // the multi-column renderer).
 func TestImageTokensForRowsPerLevel(t *testing.T) {
+	t.Parallel()
 	cons := conservativeStdParams
 	bal := ResolveDensity("gpt-5.6", DensityBalanced)
 

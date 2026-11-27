@@ -55,6 +55,7 @@ func runeTokenizeOracle(unit []byte, maskDigits bool) (map[string]struct{}, int)
 }
 
 func TestTokenVocabularyMatchesRuneOracle(t *testing.T) {
+	t.Parallel()
 	check := func(input []byte) {
 		t.Helper()
 		for _, masked := range []bool{false, true} {

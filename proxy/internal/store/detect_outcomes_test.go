@@ -113,6 +113,7 @@ func TestOutcomeSilentOnThinHistory(t *testing.T) {
 // TestSessionProducedCommitBoundaries pins the overlap window, including the
 // grace period for a commit made just after the agent stopped.
 func TestSessionProducedCommitBoundaries(t *testing.T) {
+	t.Parallel()
 	session := outcomeAt("/repo/a", 1, 1000, 5, 0)
 	inside := session.Start.Add(30 * time.Minute)
 	grace := session.End.Add(outcomeCommitGraceWindow - time.Minute)

@@ -11,6 +11,7 @@ import (
 // A text part can carry cache breakpoints or provider metadata. Replacing the
 // whole part must not silently discard fields the renderer does not understand.
 func TestPixelPreservesOpaqueContentPartMetadata(t *testing.T) {
+	t.Parallel()
 	for _, tc := range []struct {
 		name, prefix, suffix, field string
 		family                      pixelFamily

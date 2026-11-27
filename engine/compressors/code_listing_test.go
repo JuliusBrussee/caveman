@@ -35,6 +35,7 @@ func gutter(source, sep string) string {
 }
 
 func TestSplitLineNumberedListingRoundTrips(t *testing.T) {
+	t.Parallel()
 	for _, sep := range []string{"\t", " | ", ": "} {
 		source, numbers, ok := SplitLineNumberedListing([]byte(gutter(listingSource, sep)))
 		if !ok {
@@ -52,6 +53,7 @@ func TestSplitLineNumberedListingRoundTrips(t *testing.T) {
 // Recognition must be strict: a false positive corrupts content that merely
 // begins with digits.
 func TestSplitLineNumberedListingRejectsNonListings(t *testing.T) {
+	t.Parallel()
 	cases := map[string]string{
 		"plain source":     listingSource,
 		"too short":        "1\ta\n2\tb\n3\tc\n",
@@ -72,6 +74,7 @@ func TestSplitLineNumberedListingRejectsNonListings(t *testing.T) {
 // all. Renumbering 1..n would point the model at the wrong code while looking
 // authoritative.
 func TestRestoreKeepsOriginalNumbersOnLineElidingOutput(t *testing.T) {
+	t.Parallel()
 	sourceLines := strings.Split(strings.TrimSuffix(listingSource, "\n"), "\n")
 	numbers := make([]int, len(sourceLines))
 	for i := range numbers {
@@ -108,6 +111,7 @@ func TestRestoreKeepsOriginalNumbersOnLineElidingOutput(t *testing.T) {
 // numbering describes. Decorating it with numbers would be a confident fiction,
 // so the gutter is declined instead.
 func TestRestoreDeclinesGutterOnRestructuredOutput(t *testing.T) {
+	t.Parallel()
 	source := []byte("{\n  \"a\": 1,\n  \"b\": 2,\n  \"c\": 3,\n  \"d\": 4,\n  \"e\": 5,\n  \"f\": 6,\n  \"g\": 7\n}\n")
 	numbers := []int{1, 2, 3, 4, 5, 6, 7, 8, 9}
 	restructured := []byte(`{"a":1,"b":2,"c":3,"d":4,"e":5,"f":6,"g":7}`)

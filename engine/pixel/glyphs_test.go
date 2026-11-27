@@ -98,6 +98,7 @@ func symDiff(a, b [8]string) int {
 }
 
 func TestGlyphAtlasSurgery(t *testing.T) {
+	t.Parallel()
 	// Each edited glyph must match the intended bitmap in BOTH atlas planes.
 	for cp, want := range intendedGlyphs {
 		rank := AtlasRank(cp)
@@ -153,6 +154,7 @@ func TestGlyphAtlasSurgery(t *testing.T) {
 // with intendedGlyphs applied. Glyph dimensions are unchanged, so the offset,
 // codepoint and wide-flag tables stay valid — only the two pixel planes move.
 func TestRegenGlyphAtlas(t *testing.T) {
+	t.Parallel()
 	if os.Getenv("REGEN_GLYPHS") == "" {
 		t.Skip("set REGEN_GLYPHS=1 to regenerate the glyph atlas")
 	}

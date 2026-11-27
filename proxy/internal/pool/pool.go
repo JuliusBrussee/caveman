@@ -323,7 +323,7 @@ func (s *Store) CloudOff() bool {
 func lockIndex(home string) (func(), error) {
 	path := filepath.Join(home, indexFile+".lock")
 	token := randomToken()
-	deadline := time.Now().Add(3 * time.Second)
+	deadline := time.Now().Add(lockTimeout)
 	for {
 		file, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
 		if err == nil {
@@ -361,6 +361,9 @@ func lockIndex(home string) (func(), error) {
 
 // lockStale is when a lock counts as a crashed writer's.
 const lockStale = 10 * time.Second
+
+// lockTimeout bounds how long lockIndex waits for a live writer's lock.
+var lockTimeout = 3 * time.Second
 
 var errIndexLocked = errors.New("provider-logins.json is locked")
 
