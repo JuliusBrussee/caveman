@@ -80,7 +80,7 @@ jobs:
   # `go test -list` at run time and shard.mjs fails unless the shards are
   # exactly that list; subtests run with their parent.
   middleware-postgres:
-    name: middleware-postgres / ${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }}
+    name: middleware-postgres / ${{ matrix.suite }} ${{ matrix.solo && 'solo' || format('{0}/{1}', matrix.shard, matrix.shards) }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -92,6 +92,8 @@ jobs:
           - {suite: middleware, shard: 1, shards: 3}
           - {suite: middleware, shard: 2, shards: 3}
           - {suite: middleware, shard: 3, shards: 3}
+          # Runs the middleware SOLO subtest below, which the shards skip.
+          - {suite: middleware, solo: true}
     services:
       postgres:
         image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -119,12 +121,29 @@ jobs:
           PACKAGES: ./proxy/internal/${{ matrix.suite }}/...
           SHARD: ${{ matrix.shard }}
           SHARDS: ${{ matrix.shards }}
+          # One subtest takes about 4 minutes alone under -race (500 MiB of
+          # originals in SQLite), longer than any shard: it gets its own job
+          # and every shard skips it. Its other backends stay in the shards.
+          SOLO: ${{ matrix.suite == 'middleware' && 'TestLargeSessionDeletesUnderTheDefaultDeadline/sqlite' || '' }}
+          SOLO_JOB: ${{ matrix.solo == true }}
         run: |
           set -euo pipefail
           # -race here too, so the test build below comes from the cache.
-          tests="$(go test -race -list '.*' "$PACKAGES" | grep -E '^(Test|Example|Fuzz)' | sort -u \
-            | node .github/scripts/shard.mjs "$SHARD" "$SHARDS")"
-          go test -count=1 -race -run "^($(paste -sd'|' - <<<"$tests"))\$" "$PACKAGES"
+          list="$(go test -race -list '.*' "$PACKAGES" | grep -E '^(Test|Example|Fuzz)' | sort -u)"
+          skip=()
+          if [[ -n "$SOLO" ]]; then
+            grep -qx "${SOLO%%/*}" <<<"$list" || { echo "::error::$SOLO no longer exists; update this job" >&2; exit 1; }
+            solo="^${SOLO%%/*}\$/^${SOLO#*/}\$"
+            if [[ "$SOLO_JOB" == true ]]; then
+              go test -count=1 -race -v -run "$solo" "$PACKAGES" | tee "$RUNNER_TEMP/solo.log"
+              # go test passes when -run matches nothing; prove it ran.
+              grep -q -- "--- PASS: $SOLO (" "$RUNNER_TEMP/solo.log"
+              exit 0
+            fi
+            skip=(-skip "$solo")
+          fi
+          tests="$(node .github/scripts/shard.mjs "$SHARD" "$SHARDS" <<<"$list")"
+          go test -count=1 -race "${skip[@]}" -run "^($(paste -sd'|' - <<<"$tests"))\$" "$PACKAGES"
 
   # Every workspace suite except the ones below, which have jobs of their own:
   # the CLI (sharded), the pi extension, and the SDK and middleware. `pnpm -r
@@ -435,8 +454,34 @@ jobs:
       - if: matrix.part == 'root'
         run: npm --prefix extension test
 
+      # test:windows cross-compiles every package for windows/amd64 and arm64
+      # into its own GOCACHE under the temp dir, cold on every run (~4 min).
+      # Restore the newest saved one; Go's cache is content-addressed, so a
+      # stale entry only means more to compile. Pull requests only restore
+      # (main's entry), so they never pay for the upload or write a cache
+      # another run reads; main pushes and manual runs save.
+      - name: Locate the Windows compat gate's Go cache
+        id: compat-cache
+        if: matrix.part == 'compat'
+        shell: bash
+        run: |
+          dir="$(node -e 'const fs=require("fs"),p=require("path").join(require("os").tmpdir(),"caveman-windows-go-cache");fs.mkdirSync(p,{recursive:true});console.log(fs.realpathSync.native(p))')"
+          echo "dir=$dir" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.part == 'compat'
+        with:
+          path: ${{ steps.compat-cache.outputs.dir }}
+          key: windows-compat-gocache-${{ hashFiles('go.sum') }}-${{ github.run_id }}
+          restore-keys: |
+            windows-compat-gocache-${{ hashFiles('go.sum') }}-
+            windows-compat-gocache-
       - if: matrix.part == 'compat'
         run: npm run test:windows
+      - uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        if: matrix.part == 'compat' && github.event_name != 'pull_request'
+        with:
+          path: ${{ steps.compat-cache.outputs.dir }}
+          key: windows-compat-gocache-${{ hashFiles('go.sum') }}-${{ github.run_id }}
 
       - name: Prebuild caveman-proxy for conformance tests
         if: matrix.part == 'workspace'
