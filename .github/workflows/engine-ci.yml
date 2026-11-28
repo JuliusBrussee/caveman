@@ -19,10 +19,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - run: go build ./...
@@ -42,10 +42,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -74,10 +74,16 @@ jobs:
 
   # The middleware store suite on both backends, and the multi-replica runtime
   # tests, against a real Postgres. Locally they skip unless
-  # CAVEMAN_TEST_POSTGRES_URL is set.
+  # CAVEMAN_TEST_POSTGRES_URL is set. One job per package tree: together under
+  # -race they ran 8 minutes and once hit go test's 10-minute default timeout.
   middleware-postgres:
+    name: middleware-postgres / ${{ matrix.suite }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [store, middleware]
     services:
       postgres:
         image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -93,24 +99,28 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - run: go test -count=1 -race ./proxy/internal/store/... ./proxy/internal/middleware/...
+      - run: go test -count=1 -race "./proxy/internal/${{ matrix.suite }}/..."
         env:
           CAVEMAN_TEST_POSTGRES_URL: postgres://caveman:caveman@localhost:5432/caveman_test?sslmode=disable
 
+  # Every workspace suite except the ones below, which have jobs of their own:
+  # the CLI (sharded), the pi extension, and the SDK and middleware. `pnpm -r
+  # test` stops at the first failing package, so a red suite elsewhere cannot
+  # skip those either.
   typescript:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -132,12 +142,80 @@ jobs:
       - name: CLI device-auth copy matches packages/device-auth
         run: node packages/cli/scripts/gen-device-auth.mjs --check
       - run: pnpm -r build
-      # The SDK and middleware suites run in middleware-typescript below, so a
-      # failure elsewhere in the workspace cannot skip them.
-      - run: pnpm -r --filter "!@caveman-ai/sdk" --filter "!@caveman-ai/middleware" test
+      - run: pnpm -r --filter "!@caveman-ai/sdk" --filter "!@caveman-ai/middleware" --filter "!@caveman-ai/cli" --filter "!@caveman-ai/pi" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+
+  # The CLI suite (four minutes in one job) split by test file across jobs.
+  # Each shard runs the package's own `test` script, minus the build it starts
+  # with, on its slice of tests/*.runtime.mjs; shard.mjs fails unless the
+  # slices together are exactly that file list.
+  typescript-cli:
+    name: typescript / cli ${{ matrix.shard }}/${{ strategy.job-total }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - name: Allow unprivileged user namespaces for sandbox tests
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Prebuild caveman-proxy for conformance tests
+        run: go build -o "$RUNNER_TEMP/caveman-proxy" ./proxy/cmd/caveman-proxy
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - name: CLI tests, shard ${{ matrix.shard }} of ${{ strategy.job-total }}
+        working-directory: packages/cli
+        env:
+          CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}/caveman-proxy
+          CAVEMAN_REQUIRE_FRAMEWORKS: "1"
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ strategy.job-total }}
+        run: |
+          set -euo pipefail
+          build="$(node -p 'require("./package.json").scripts.build')"
+          suite="$(node -p 'require("./package.json").scripts.test')"
+          run="${suite#"$build && "}"
+          # The step above already ran the build; what is left must be one
+          # node --test over tests/*.runtime.mjs, or this job no longer runs
+          # what `pnpm test` runs.
+          if [[ "$run" == "$suite" || "$run" == *"&&"* || "$run" != "node "*" tests/*.runtime.mjs" ]]; then
+            echo "::error::packages/cli test script is not '<build> && node ... tests/*.runtime.mjs'; update this job: $suite" >&2
+            exit 1
+          fi
+          files="$(printf '%s\n' tests/*.runtime.mjs | node ../../.github/scripts/shard.mjs "$SHARD" "$SHARDS")"
+          # shellcheck disable=SC2086 # word-split the command and file list
+          pnpm exec ${run% tests/\*.runtime.mjs} $files
+
+  typescript-pi:
+    name: typescript / pi
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm -r build
+      - run: pnpm --filter @caveman-ai/pi test
 
   # The CLI's fast suite on macOS, where most of its users are. test:fast builds
   # the CLI from source and stubs every Go binary, so no Go toolchain, proxy
@@ -146,7 +224,7 @@ jobs:
     runs-on: macos-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -168,7 +246,7 @@ jobs:
       matrix:
         node: [22, 24]
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
@@ -183,14 +261,15 @@ jobs:
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
       - run: pnpm --dir packages/middleware/typescript test:consumer
 
-  root-surfaces:
+  # Decides whether a PR runs the Windows suite. Its own job, checkout only, so
+  # the Windows jobs start within seconds instead of after root-surfaces' tests.
+  changes:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
-    # Read by the windows job below; job-level `if` cannot see changed paths.
+    timeout-minutes: 5
     outputs:
       windows: ${{ steps.windows-scope.outputs.windows }}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 2
@@ -206,6 +285,14 @@ jobs:
             || grep -qvE '^(docs|benchmarks|evals|deploy|supabase)/|^[^/]+\.md$|(^|/)(README|CHANGELOG)\.md$' <<<"$changed"; then
             echo "windows=true" >> "$GITHUB_OUTPUT"
           fi
+
+  root-surfaces:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 22
@@ -229,7 +316,7 @@ jobs:
       run:
         working-directory: extension
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -241,22 +328,43 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - run: npm run package
 
-  # ~15 min per run, the whole suite again on Windows. It runs after merge, on
-  # manual dispatch, and on PRs that touch Windows-relevant code (root-surfaces
-  # decides which), not on every PR push: ci.yml's windows-powershell job keeps
-  # the Windows-only hook contract on every PR in under a minute.
-  windows:
-    needs: root-surfaces
-    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.root-surfaces.outputs.windows == 'true') }}
+  # The whole suite again on Windows. It runs after merge, on manual dispatch,
+  # and on PRs that touch Windows-relevant code (the changes job decides), not
+  # on every PR push: ci.yml's windows-powershell job keeps the Windows-only
+  # hook contract on every PR in under a minute.
+  #
+  # One job took ~15 minutes, the slowest gate in the repo, so it runs as
+  # parallel parts. Every part gets the same toolchain and `pnpm install` the
+  # single job had (some Go tests validate against node_modules), and together
+  # the parts run every step it ran: go test over every package (sharded;
+  # shard.mjs fails unless the shards are exactly `go list ./...`), the root,
+  # Python and extension suites, the Windows compatibility gate, and the
+  # workspace suites. The `windows` job below is the single verdict.
+  windows-suite:
+    name: windows / ${{ matrix.part }}${{ matrix.shard && format(' {0}/{1}', matrix.shard, matrix.shards) || '' }}
+    needs: changes
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || needs.changes.outputs.windows == 'true') }}
     runs-on: windows-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {part: go, shard: 1, shards: 2}
+          - {part: go, shard: 2, shards: 2}
+          - {part: root}
+          - {part: compat}
+          - {part: workspace}
+          - {part: pi}
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v5
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
+          # Only these parts compile Go; the rest skip the cache restore.
+          cache: ${{ contains(fromJSON('["go","compat","workspace"]'), matrix.part) }}
       - uses: pnpm/action-setup@73e46992e05b19abd31f2f3c20e0e7370d762115 # v6.1.1
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -266,40 +374,87 @@ jobs:
         with:
           python-version: "3.13"
       - run: pnpm install --frozen-lockfile
-      - run: python -m pip install pytest==9.0.3
-      - run: go test ./...
-      - run: npm test
-      - run: node --test --test-force-exit tests/*.js
-      - run: python -m unittest discover -s tests -p 'test_*.py'
+
+      - name: go test, shard ${{ matrix.shard }} of ${{ matrix.shards }}
+        if: matrix.part == 'go'
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages="$(go list ./... | node .github/scripts/shard.mjs "${{ matrix.shard }}" "${{ matrix.shards }}")"
+          # shellcheck disable=SC2086 # one argument per package
+          go test $packages
+
+      - if: matrix.part == 'root'
+        run: python -m pip install pytest==9.0.3
+      - if: matrix.part == 'root'
+        run: npm test
+      - if: matrix.part == 'root'
+        run: node --test --test-force-exit tests/*.js
+      - if: matrix.part == 'root'
+        run: python -m unittest discover -s tests -p 'test_*.py'
         env:
           LOCALAPPDATA: ${{ runner.temp }}\caveman-data
-      - run: python -m pytest -q tests
+      - if: matrix.part == 'root'
+        run: python -m pytest -q tests
         working-directory: mem/py
-      - run: python -m pytest -q
+      - if: matrix.part == 'root'
+        run: python -m pytest -q
         working-directory: packages/sdk/python
-      - run: python -m pip install --no-deps -e packages/sdk/python
-      - run: python -m pip install -c packages/middleware/python/constraints/latest.txt "./packages/middleware/python[langchain,openai]"
-      - run: python -m pytest -q
+      - if: matrix.part == 'root'
+        run: python -m pip install --no-deps -e packages/sdk/python
+      - if: matrix.part == 'root'
+        run: python -m pip install -c packages/middleware/python/constraints/latest.txt "./packages/middleware/python[langchain,openai]"
+      - if: matrix.part == 'root'
+        run: python -m pytest -q
         working-directory: packages/middleware/python
         env:
           CAVEMAN_REQUIRED_ADAPTERS: langchain,openai
-      - run: python tests/verify_repo.py
-      - run: npm --prefix extension ci
-      - run: npm --prefix extension test
-      - run: npm run test:windows
-      # The workspace suites run last: a hang in one of them (the job timeout
-      # cut a run off there) must not skip the suites above.
+      - if: matrix.part == 'root'
+        run: python tests/verify_repo.py
+      - if: matrix.part == 'root'
+        run: npm --prefix extension ci
+      - if: matrix.part == 'root'
+        run: npm --prefix extension test
+
+      - if: matrix.part == 'compat'
+        run: npm run test:windows
+
       - name: Prebuild caveman-proxy for conformance tests
+        if: matrix.part == 'workspace'
         run: go build -o "$env:RUNNER_TEMP\caveman-proxy.exe" ./proxy/cmd/caveman-proxy
-      - run: pnpm -r build
+      - if: matrix.part == 'workspace' || matrix.part == 'pi'
+        run: pnpm -r build
       # @caveman-ai/cli's POSIX-harnessed suite has never executed on Windows
       # and is excluded until its harness is ported, not because coverage is
       # unwanted (149 failures — shebang-script stub agent binaries; Windows
       # contracts run in the curated `npm run test:windows` gate above via
       # windows-platform/portable-command/delegate-windows). Every other
-      # workspace suite passes on Windows and stays in.
-      - run: pnpm -r --filter "!@caveman-ai/cli" test
+      # workspace suite passes on Windows and stays in; the pi extension's
+      # runs as its own part.
+      - if: matrix.part == 'workspace'
+        run: pnpm -r --filter "!@caveman-ai/cli" --filter "!@caveman-ai/pi" test
         env:
           CAVEMAN_TEST_PROXY_BIN: ${{ runner.temp }}\caveman-proxy.exe
           CAVEMAN_REQUIRE_FRAMEWORKS: "1"
-      - run: pnpm --dir packages/middleware/typescript test:consumer
+      - if: matrix.part == 'workspace'
+        run: pnpm --dir packages/middleware/typescript test:consumer
+      - if: matrix.part == 'pi'
+        run: pnpm --filter @caveman-ai/pi test
+
+  # One verdict for the Windows suite: green when every part passed, or when
+  # the PR touched nothing Windows can break and the parts were skipped.
+  windows:
+    needs: [changes, windows-suite]
+    if: ${{ always() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every Windows part passed (or none had to run)
+        env:
+          SCOPE: ${{ needs.changes.result }}
+          RESULT: ${{ needs.windows-suite.result }}
+          WANTED: ${{ github.event_name != 'pull_request' || needs.changes.outputs.windows == 'true' }}
+        run: |
+          echo "changes=$SCOPE windows-suite=$RESULT windows wanted=$WANTED"
+          [[ "$SCOPE" == success ]] || exit 1
+          [[ "$RESULT" == success || ( "$WANTED" == false && "$RESULT" == skipped ) ]]
