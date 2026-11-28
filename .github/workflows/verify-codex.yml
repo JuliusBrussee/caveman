@@ -5,6 +5,9 @@ on:
       - "agents/profiles/codex.json"
       - "packages/cli/**"
       - "installer/lib/portable-process.js"
+      # The probe this job runs, and the module it imports.
+      - "agents/probe-installed.mjs"
+      - "agents/version.mjs"
       - ".github/scripts/verify-codex-route.mjs"
       - ".github/workflows/verify-codex.yml"
   workflow_dispatch:
@@ -25,7 +28,7 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 15
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
