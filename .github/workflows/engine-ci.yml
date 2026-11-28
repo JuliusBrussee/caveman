@@ -411,7 +411,7 @@ jobs:
           python-version: "3.13"
       - run: pnpm install --frozen-lockfile
 
-      - name: go test, shard ${{ matrix.shard }} of ${{ matrix.shards }}
+      - name: go test over this part's shard of the packages
         if: matrix.part == 'go'
         shell: bash
         run: |
