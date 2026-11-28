@@ -3,6 +3,11 @@
 // prints shard <index> (1-based), one item per line.
 //
 //   go list ./... | node .github/scripts/shard.mjs 1 2
+//   ... | node .github/scripts/shard.mjs 1 2 --first slow/pkg/a,slow/pkg/b
+//
+// Items are dealt round-robin in sorted order. --first deals the named items
+// before the rest, so known-slow items land in different shards; each must be
+// in the input, so a renamed item fails here instead of silently clumping.
 //
 // CI shards a suite across jobs with this, so it refuses to print anything
 // unless every shard together is exactly the input: each item in exactly one
@@ -16,9 +21,16 @@ function fail(message) {
   process.exit(1);
 }
 
-const [index, total] = process.argv.slice(2).map((value) => Number.parseInt(value, 10));
-if (!Number.isInteger(total) || total < 1 || !Number.isInteger(index) || index < 1 || index > total) {
-  fail("usage: shard.mjs <index 1..total> <total> < items");
+const args = process.argv.slice(2);
+let first = [];
+const at = args.indexOf("--first");
+if (at !== -1) {
+  first = (args[at + 1] ?? "").split(",").map((item) => item.trim()).filter(Boolean);
+  args.splice(at, 2);
+}
+const [index, total] = args.map((value) => Number.parseInt(value, 10));
+if (args.length !== 2 || !Number.isInteger(total) || total < 1 || !Number.isInteger(index) || index < 1 || index > total) {
+  fail("usage: shard.mjs <index 1..total> <total> [--first a,b] < items");
 }
 
 const items = readFileSync(0, "utf8")
@@ -28,10 +40,13 @@ const items = readFileSync(0, "utf8")
 if (new Set(items).size !== items.length) fail("input has duplicate items");
 if (items.length < total) fail(`${items.length} items cannot fill ${total} shards`);
 
-// Sorted first, so every job computes the same partition from the same list.
-const sorted = [...items].sort();
+const unknown = first.filter((item) => !items.includes(item));
+if (unknown.length) fail(`--first names items not in the input: ${unknown.join(", ")}`);
+
+// Sorted, so every job computes the same partition from the same list.
+const order = [...new Set(first), ...[...items].filter((item) => !first.includes(item)).sort()];
 const shards = Array.from({ length: total }, () => []);
-sorted.forEach((item, i) => shards[i % total].push(item));
+order.forEach((item, i) => shards[i % total].push(item));
 
 const seen = new Map();
 for (const [n, shard] of shards.entries()) {

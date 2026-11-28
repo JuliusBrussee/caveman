@@ -74,16 +74,24 @@ jobs:
 
   # The middleware store suite on both backends, and the multi-replica runtime
   # tests, against a real Postgres. Locally they skip unless
-  # CAVEMAN_TEST_POSTGRES_URL is set. One job per package tree: together under
-  # -race they ran 8 minutes and once hit go test's 10-minute default timeout.
+  # CAVEMAN_TEST_POSTGRES_URL is set. On main the two packages took 3-6 and
+  # 5-8 minutes under -race, one run hit go test's 10-minute default timeout,
+  # so each is split by top-level test name across jobs. The names come from
+  # `go test -list` at run time and shard.mjs fails unless the shards are
+  # exactly that list; subtests run with their parent.
   middleware-postgres:
-    name: middleware-postgres / ${{ matrix.suite }}
+    name: middleware-postgres / ${{ matrix.suite }} ${{ matrix.shard }}/${{ matrix.shards }}
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
       fail-fast: false
       matrix:
-        suite: [store, middleware]
+        include:
+          - {suite: store, shard: 1, shards: 2}
+          - {suite: store, shard: 2, shards: 2}
+          - {suite: middleware, shard: 1, shards: 3}
+          - {suite: middleware, shard: 2, shards: 3}
+          - {suite: middleware, shard: 3, shards: 3}
     services:
       postgres:
         image: postgres:17-alpine@sha256:b0f9560a2de083e2cc7382e75f808c7381a32852a7ec49117deedb300e552b24
@@ -105,9 +113,18 @@ jobs:
       - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
         with:
           go-version-file: go.mod
-      - run: go test -count=1 -race "./proxy/internal/${{ matrix.suite }}/..."
+      - name: go test -race, ${{ matrix.suite }} tests shard ${{ matrix.shard }} of ${{ matrix.shards }}
         env:
           CAVEMAN_TEST_POSTGRES_URL: postgres://caveman:caveman@localhost:5432/caveman_test?sslmode=disable
+          PACKAGES: ./proxy/internal/${{ matrix.suite }}/...
+          SHARD: ${{ matrix.shard }}
+          SHARDS: ${{ matrix.shards }}
+        run: |
+          set -euo pipefail
+          # -race here too, so the test build below comes from the cache.
+          tests="$(go test -race -list '.*' "$PACKAGES" | grep -E '^(Test|Example|Fuzz)' | sort -u \
+            | node .github/scripts/shard.mjs "$SHARD" "$SHARDS")"
+          go test -count=1 -race -run "^($(paste -sd'|' - <<<"$tests"))\$" "$PACKAGES"
 
   # Every workspace suite except the ones below, which have jobs of their own:
   # the CLI (sharded), the pi extension, and the SDK and middleware. `pnpm -r
@@ -380,7 +397,9 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          packages="$(go list ./... | node .github/scripts/shard.mjs "${{ matrix.shard }}" "${{ matrix.shards }}")"
+          # The two slowest packages (about 3 minutes each here) go to different shards.
+          slow=github.com/JuliusBrussee/caveman/proxy/internal/middleware,github.com/JuliusBrussee/caveman/proxy/internal/store
+          packages="$(go list ./... | node .github/scripts/shard.mjs "${{ matrix.shard }}" "${{ matrix.shards }}" --first "$slow")"
           # shellcheck disable=SC2086 # one argument per package
           go test $packages
 
